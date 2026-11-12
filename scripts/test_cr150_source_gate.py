@@ -1241,7 +1241,10 @@ class RealTree(unittest.TestCase):
         # The refusal of a script timeframe the input timeframe cannot build
         # adds three groups (its failure arguments, its rule text and its
         # message text): 62 + 3 = 65.
-        self.assertEqual(c['OPEN'], 1356 + 65 + 184)
+        # The per-site run warning of a requested timeframe adds ten groups (the
+        # native execution consumer's warning records and their strings, and the
+        # host's argument text): 65 + 10 = 75.
+        self.assertEqual(c['OPEN'], 1356 + 75 + 184)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
         strict = run_gate(ROOT, '--strict')

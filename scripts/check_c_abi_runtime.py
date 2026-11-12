@@ -103,6 +103,7 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_set_recorded_series",
     "strategy_get_last_error_code",
     "strategy_get_last_error_args",
+    "strategy_get_run_warnings",
     # Recorded outputs (group pf_outputs): the switch and the readers. The
     # group's three per-library declarations (strategy_outputs_api_version,
     # strategy_outputs_manifest, strategy_signal_safety_receipt) are generated
@@ -154,10 +155,10 @@ RUNTIME_HEADERS = (
     "report_sink.h",
 )
 
-# Source inventory: pineforge.h 113 + observer 3 + window 3 + sink 5.
-EXPECTED_PUBLIC_DECLARATIONS = 124
-# c_abi.cpp implements 104 of those declarations; twenty remain generated.
-EXPECTED_RUNTIME_IMPLEMENTATIONS = 104
+# Source inventory: pineforge.h 114 + observer 3 + window 3 + sink 5.
+EXPECTED_PUBLIC_DECLARATIONS = 125
+# c_abi.cpp implements 105 of those declarations; twenty remain generated.
+EXPECTED_RUNTIME_IMPLEMENTATIONS = 105
 
 # Per-module implementations, never static-runtime implementations. The
 # capability has its own declaration in native_module.hpp; the other eight

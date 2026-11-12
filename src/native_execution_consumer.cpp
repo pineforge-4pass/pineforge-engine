@@ -1,4 +1,5 @@
 #include "native_execution_consumer.hpp"
+#include "canonical_json.hpp"
 #include "native_issued_range_state.hpp"
 #include "engine_internal.hpp"
 #include "engine_value_invalid.hpp"
@@ -1490,6 +1491,46 @@ const char* NativeExecutionConsumer::failure_args_of(const BacktestEngine& engin
         }
     }
     return engine.last_error_.empty() ? "" : "{}";
+}
+
+const char* NativeExecutionConsumer::run_warnings_of(const BacktestEngine& engine) noexcept {
+    const auto* consumer = static_cast<const NativeExecutionConsumer*>(
+        engine.execution_consumer_slot_.ptr.get());
+    if (consumer == nullptr || !consumer->rows_current_) return "[]";
+    if (consumer->run_warnings_unavailable_)
+        return "[{\"args\":{},\"code\":\"run_warnings_unavailable\"}]";
+    return consumer->run_warnings_json_.c_str();
+}
+
+const char* native_run_warnings(const BacktestEngine* engine) noexcept {
+    return engine ? NativeExecutionConsumer::run_warnings_of(*engine) : nullptr;
+}
+
+void NativeExecutionConsumer::mark_run_warnings_unavailable(BacktestEngine& engine) noexcept {
+    if (auto* consumer = engine.execution_consumer_slot_.ptr.get())
+        static_cast<NativeExecutionConsumer*>(consumer)->run_warnings_unavailable_ = true;
+}
+
+void NativeExecutionConsumer::record_run_warning(
+        int sec_id, std::string code, std::string args_json) {
+    run_warning_records_.try_emplace(
+        std::make_pair(sec_id, std::move(code)), std::move(args_json));
+}
+
+void NativeExecutionConsumer::finish_run_warnings() {
+    std::string json = "[";
+    bool first = true;
+    for (const auto& record : run_warning_records_) {
+        if (!first) json.push_back(',');
+        first = false;
+        json += "{\"args\":";
+        json += record.second;
+        json += ",\"code\":";
+        internal::canonical_json::append_json_string(json, record.first.second);
+        json.push_back('}');
+    }
+    json.push_back(']');
+    run_warnings_json_.swap(json);
 }
 
 RunFailureValue NativeExecutionConsumer::failure_value_of(const BacktestEngine& engine) noexcept {
@@ -3136,6 +3177,9 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     for (auto& run : run_command_scratch_) run.reset();
     dependency_scratch_stats_ = {};
     run_cache_diagnostics_.begin_run();
+    run_warning_records_.clear();
+    run_warnings_json_ = "[]";
+    run_warnings_unavailable_ = false;
     engine.reset_run_state();
     engine.runtime_contexts().reset();
     engine.reset_trade_percent_prefix();

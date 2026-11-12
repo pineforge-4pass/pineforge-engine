@@ -8520,6 +8520,30 @@ if(TARGET pineforge_selected_admit_test_identity)
 endif()
 # --- CR-150 selected-admit-helper end ---
 
+# --- CR-150 run-json-run-warnings begin ---
+# Test-only stub strategy libraries for the run-warnings rows: one exports the
+# optional warnings getter, the other is built without it (an older module).
+# The rows reach their paths through $<TARGET_FILE:...> in the lane file.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    add_library(run_json_run_warnings_strategy MODULE
+        test_run_json_run_warnings_strategy.cpp ${PROJECT_SOURCE_DIR}/src/sha256.cpp)
+    target_include_directories(run_json_run_warnings_strategy PRIVATE
+        ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(run_json_run_warnings_strategy PRIVATE -ffp-contract=off)
+    set_target_properties(run_json_run_warnings_strategy PROPERTIES
+        PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/run_json_run_warnings")
+    add_library(run_json_no_run_warnings_strategy MODULE
+        test_run_json_run_warnings_strategy.cpp ${PROJECT_SOURCE_DIR}/src/sha256.cpp)
+    target_include_directories(run_json_no_run_warnings_strategy PRIVATE
+        ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(run_json_no_run_warnings_strategy PRIVATE -ffp-contract=off)
+    target_compile_definitions(run_json_no_run_warnings_strategy PRIVATE
+        PINEFORGE_TEST_OMIT_RUN_WARNINGS)
+    set_target_properties(run_json_no_run_warnings_strategy PROPERTIES
+        PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/run_json_run_warnings")
+endif()
+# --- CR-150 run-json-run-warnings end ---
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")

@@ -9,7 +9,8 @@
  *     BEFORE shipping a .so that consumers depend on.
  *   - The runtime-library-side `extern "C"` symbols (the closed-trade
  *     incarnation accessor, setters, strategy_get_last_error,
- *     strategy_get_last_error_code, strategy_get_last_error_args, the
+ *     strategy_get_last_error_code, strategy_get_last_error_args,
+ *     strategy_get_run_warnings, the
  *     security-feed and symbol-data setters (including the borrowed feed
  *     export), the strategy_stream_*
  *     lifecycle, the strategy_outputs_* readers, native stream bar
@@ -85,6 +86,7 @@ bool native_c_host_in_postrun_hook_frame(BacktestEngine* engine) noexcept;
 inline namespace engine_script_run_v20 { void native_stream_snapshot_report(BacktestEngine* engine, ReportC* out); }
 inline namespace engine_script_run_v20 { bool native_selected_query_closed(const BacktestEngine* engine) noexcept; }
 inline namespace engine_script_run_v20 {
+const char* native_run_warnings(const BacktestEngine*) noexcept;
 // The private bridges behind the execution observer and selected-window
 // exports at the end of this file. The native consumer defines them and owns
 // every null, size, version and state check; the exports only delegate.
@@ -621,6 +623,16 @@ PF_API const char* strategy_get_last_error_code(pf_strategy_t s) {
 PF_API const char* strategy_get_last_error_args(pf_strategy_t s) {
     if (!s) return nullptr;
     return pineforge::run_failure_args_of(*static_cast<pineforge::BacktestEngine*>(s));
+}
+
+PF_API const char* strategy_get_run_warnings(pf_strategy_t s) {
+    if (!s) return nullptr;
+    const char* result = "[{\"args\":{},\"code\":\"run_warnings_unavailable\"}]";
+    pf_cabi_void([&] {
+        result = pineforge::native_run_warnings(
+            static_cast<const pineforge::BacktestEngine*>(s));
+    });
+    return result;
 }
 
 PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms) {

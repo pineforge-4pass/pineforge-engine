@@ -10,6 +10,7 @@
 #include "../report_replay.hpp"
 #include "../timezone.hpp"
 #include "../native_execution_consumer.hpp"
+#include "../canonical_json.hpp"
 #include "../scratch_table_binders.hpp"
 #include "pine_host_reads.hpp"
 #include "pine_intent_state.hpp"
@@ -30,6 +31,7 @@
 #include <ctime>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -2049,6 +2051,45 @@ int multi_day_count(const std::string& tf) {
     return parsed->count() >= 2 ? parsed->count() : 0;
 }
 
+template <typename SecurityStates>
+void capture_security_timeframe_warnings(
+        BacktestEngine& host, const std::string& input_tf,
+        const SecurityStates& states,
+        const std::map<int, source::PineSecurityEvalState>& pine_states) noexcept {
+    try {
+        const auto input = native_calendar::parse_timeframe(input_tf);
+        if (!input) return;
+        auto& consumer = NativeExecutionConsumer::bound(host);
+        for (const auto& state : states) {
+            if (state.tf.empty()) continue;
+            const auto pine = pine_states.find(state.sec_id);
+            if (pine != pine_states.end()
+                && (pine->second.lower_tf_array_requested || pine->second.lower_tf_requested
+                    || pine->second.no_loaded_bars)) {
+                continue;
+            }
+            const auto requested = native_calendar::parse_timeframe(state.tf);
+            if (!requested
+                || native_calendar::compatibility(*input, *requested).pairing
+                    != native_calendar::TimeframePairing::IndivisibleFixed) {
+                continue;
+            }
+            std::string args = "{\"input_tf\":";
+            internal::canonical_json::append_json_string(args, input_tf);
+            args += ",\"requested_tf\":";
+            internal::canonical_json::append_json_string(args, state.tf);
+            args += ",\"sec_id\":";
+            args += std::to_string(state.sec_id);
+            args.push_back('}');
+            consumer.record_run_warning(
+                state.sec_id, "request_timeframe_not_multiple", std::move(args));
+        }
+        consumer.finish_run_warnings();
+    } catch (...) {
+        NativeExecutionConsumer::mark_run_warnings_unavailable(host);
+    }
+}
+
 }  // namespace
 
 void source::PineStrategyHost::scheduler_prepare_security_sequence(
@@ -2058,6 +2099,8 @@ void source::PineStrategyHost::scheduler_prepare_security_sequence(
     if (aux_security_feed_enabled()) security_input_tf_ = aux_security_input_tf_;
 #endif
     validate_security_timeframes(security_input_tf_);
+    capture_security_timeframe_warnings(
+        *this, security_input_tf_, security_eval_states_, pine_security_states_);
     security_first_chart_bar_ms_ = bars.empty() ? 0 : bars.front().timestamp;
     if (declare_security_sites_to_kernel()) {
         // The kernel registers the declared sites after this callback returns
