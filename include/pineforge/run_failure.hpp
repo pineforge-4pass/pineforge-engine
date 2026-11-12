@@ -92,7 +92,8 @@
 //          (line -1: none)
 //   pine_string_stop(const char* reason, const char* english)
 //       -> pine_string_error {reason}
-//          reason: substring_out_of_range | format_index_overflow
+//          reason: substring_out_of_range | format_index_overflow |
+//                  invalid_regex_pattern | regex_resource_limit
 //   pine_engine_invariant(const char* english)
 //       -> engine_invariant {}
 //
@@ -245,6 +246,10 @@ const char* run_failure_code_name(RunFailureCode code) noexcept;
 /// The code's catalog class and retryable flag.
 RunFailureClass run_failure_code_class(RunFailureCode code) noexcept;
 bool run_failure_code_retryable(RunFailureCode code) noexcept;
+
+/// Stops using TradingView's text prepend "Error on bar N: " when a bar
+/// context is installed, otherwise "Error before the first bar: ".
+std::string run_error_bar_prefix();
 
 /// The code an exception carries: a coded exception's own; else the safety
 /// net by type (std::bad_alloc -> out_of_memory, std::logic_error ->

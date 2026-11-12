@@ -1233,7 +1233,9 @@ class RealTree(unittest.TestCase):
         # retained scalar group form 54 distinct groups after the merge.
         # The selected-capacity Source stage adds three groups (its chunk
         # buffer, its record window and its stored message): 54 + 3 = 57.
-        self.assertEqual(c['OPEN'], 1356 + 57 + 184)
+        # The run-error bar prefix function adds two groups (its declaration in
+        # the installed header and in its source): 57 + 2 = 59.
+        self.assertEqual(c['OPEN'], 1356 + 59 + 184)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
         strict = run_gate(ROOT, '--strict')
