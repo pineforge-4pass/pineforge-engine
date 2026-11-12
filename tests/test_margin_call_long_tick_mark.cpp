@@ -166,37 +166,61 @@ void owed_sale(bool next_point_calls) {
 }
 
 void owed_sale_sized_at_close() {
-    // T=99999.000048, F=.1, E=9999.90000546, tick=.1, lot=.000001.
-    // At the check P=2, required=199998.0001 and equity=199998.00009666,
-    // so the shortfall is .00000334. The first sale is
-    // floor(.00000334 / 2 / lot) * lot = floor(1.67) lots = .000001,
-    // hence 4 lots=.000004. The same-price re-check leaves the .00000334
-    // shortfall owed. The bar close .11 rounds to C=.1. If the owed sale
-    // were sized at the check, it would again be .000004. The close-sized
-    // rule is floor(.00000334 / .1 / lot) * lot
-    // = floor(33.4) lots = .000033, hence 4 lots=.000132; the one-unit
-    // fallback is unused because the floor is 33 lots.
-    // The open 2.01 is nearer the high 3.01 than the low .91, so the next
-    // waypoint is P=3, where the reduced book is covered and the owed sale
-    // must execute before the script closes the position. After the first
-    // sale, R=99999.000044 and at P=3 its requirement is
-    // r10(299997.000132)=299997.0001, while equity is the cash left after
-    // the entry (.00000066) plus the first sale (.000008) plus R*3 =
-    // 299997.00014066, so the owed sale executes there. After that sale,
-    // R2=99998.999912; at P=3, r10(299996.999736)=299996.9997,
-    // below the unchanged equity. The remaining low and close are P=.9 and
-    // P=.1: requirements are r10(89999.0999208)=89999.09992 and
-    // r10(9999.8999912)=9999.899991, against equities (cash .00040466 after
-    // both sales plus R2*P) 89999.10032546 and 9999.90039586, so no
-    // further call occurs.
-    LongBook book(9999.90000546, 0.1, 99999.000048);
+    // T=99999.000048, F=.1, E=9999.9000055, tick=.1, lot=.000001.
+    // This explicit quantity is a margin-100 long. At the signal's
+    // tick-rounded F=.1, required=T*F=9999.9000048 and
+    // r10(required)=9999.900005 < E. pine_adapter.cpp:7938-7939 forms
+    // the raw required value from the explicit units and margin;
+    // pine_adapter.cpp:7745-7751 keeps this finite quantity as explicit
+    // fixed units through sizing, and 7883-7907 sends it through source
+    // admission. The margin-100 explicit market entry enters the
+    // signal-close scope at pine_adapter.cpp:7964-7970. Its admission at
+    // 7971-7982 rounds .11 to F=.1, passes the money comparison above, and
+    // has no-slippage per-unit price at least .1. The generic rejection at
+    // 8003-8005 is guarded off for this admitted scope. Thus the entry
+    // fills, with equity_at_fill=E.
+    // Cash after the fill is C0=E-T*F=.0000007, and the fill assertion
+    // below requires entered=T and equity_at_fill=9999.9000055.
+    //
+    // At the check P=2, T*P=199998.000096,
+    // required=r10(T*P)=199998.0001, and equity=C0+T*P
+    // =199998.0000967. The shortfall is .0000033. Its check-sized
+    // quotient is .0000033 / 2 / lot = 1.65 lots (at least .2 from an
+    // integer), so floor=1 lot and the first sale is .000004. Its cash is
+    // .000004*2=.000008, leaving C1=.0000087 and
+    // R1=T-.000004=99999.000044.
+    // The same-price re-check has required=r10(R1*2)=199998.0001 and
+    // equity=C1+R1*2=199998.0000967, so the same .0000033 shortfall is
+    // owed.
+    //
+    // The open 2.01 is nearer the high 3.01 than the low .91, so P=3 is
+    // next. There, required=r10(R1*3)=r10(299997.000132)=299997.0001
+    // and equity=C1+R1*3=299997.0001407, so only the owed sale executes.
+    // The owed sale is sized from the bar close C=round_tick(.21)=.2:
+    // .0000033 / .2 / lot = 16.5 lots (at least .2 from an integer),
+    // floor=16 lots, so it is .000064, distinct from the .000004
+    // check-sized sale. Cash becomes
+    // C2=C1+.000064*3=.0002007 and R2=R1-.000064=99998.999980.
+    // The same P=3 re-check then has required=r10(R2*3)
+    // =r10(299996.999940)=299996.9999 and equity
+    // C2+R2*3=299997.0001407.
+    // The remaining waypoints are P=.9 and P=.2: their requirements and
+    // equities are respectively
+    // r10(R2*.9)=r10(89999.099982)=89999.09998 versus
+    // C2+R2*.9=89999.1001827, and
+    // r10(R2*.2)=r10(19999.799996)=19999.80000 versus
+    // C2+R2*.2=19999.8001967. The scheduled close executes at bar 3's
+    // repeated P=.2, so no other call occurs.
+    LongBook book(9999.9000055, 0.1, 99999.000048);
     const std::vector<Bar> bars = {
         bar(0, 0.11, 0.11, 0.11, 0.11),
         bar(1, 0.11, 0.11, 0.11, 0.11),
-        bar(2, 2.01, 3.01, 0.91, 0.11),
-        bar(3, 0.11, 0.11, 0.11, 0.11)};
+        bar(2, 2.01, 3.01, 0.91, 0.21),
+        bar(3, 0.21, 0.21, 0.21, 0.21)};
     book.run(bars.data(), static_cast<int>(bars.size()));
-    expect_calls(book, {{2, 2.0, 0.000004}, {2, 3.0, 0.000132}});
+    assert(book.entered == 99999.000048);
+    assert(std::abs(book.equity_at_fill - 9999.9000055) < 1e-9);
+    expect_calls(book, {{2, 2.0, 0.000004}, {2, 3.0, 0.000064}});
 }
 
 void one_unit() {
@@ -574,18 +598,14 @@ void export3_open_sale_then_close() {
 }
 
 double requirement_at(double units, double mark, double quantity_step,
-                      double tick, int pyramiding, bool expect_long_tick_book,
-                      double entered_tolerance = 0.0) {
+                      double tick, int pyramiding, bool expect_long_tick_book) {
     LongBook book(units + 100.0, tick, units, 0.0, 100.0, pyramiding, 0,
                   quantity_step);
     book.requirement_mark = mark;
     const std::vector<Bar> bars = {
         bar(0, 1.0, 1.0, 1.0, 1.0), bar(1, 1.0, 1.0, 1.0, 1.0)};
     book.run(bars.data(), static_cast<int>(bars.size()));
-    if (entered_tolerance > 0.0)
-        assert(std::abs(book.entered - units) <= entered_tolerance);
-    else
-        assert(book.entered == units);
+    assert(book.entered == units);
     assert(book.requirement.valid);
     if (expect_long_tick_book)
         assert(book.requirement.long_tick_book);
@@ -604,20 +624,18 @@ void requirement_below_ten_digits() {
 }
 
 void requirement_binary_rounding_selected() {
-    // Exact product: 9999999999.4 * 1.0 = 9999999999.4. The .000001
-    // quantity count is 9,999,999,999,400,000, above 2^53 =
-    // 9,007,199,254,740,991, so the decimal count guard rejects it and
-    // binary rounding is selected. The ten-significant-digit result is
-    // 9999999999.0 (the product is below 1e10), GREEN on both the pre-fix
-    // and fixed products. At this magnitude a binary64 step is larger than
-    // a half-lot comparison can resolve, so entered uses four upward
-    // nextafter steps as its tolerance; every other row keeps exact entry
-    // equality.
-    const double units = 9999999999.4;
-    const double entered_tolerance = 4.0 * (std::nextafter(
-        units, std::numeric_limits<double>::infinity()) - units);
-    assert(requirement_at(units, 1.0, 0.000001, 1.0, 1, true,
-                          entered_tolerance) == 9999999999.0);
+    // A long-tick book on a lot grid that is not a power of ten: the decimal
+    // routine refuses such a grid (decimal_grid_exponent finds no power of
+    // ten for .25), so the requirement stays on the binary path.
+    // 5000000000.5 units on the .25 grid are 20,000,000,002 lots, an exact
+    // count below 2^53, so the entry fills exactly; .25 * bar high 1.0 and
+    // .25 * mark 2.0 are below one, so the book is a qualifying long and
+    // the sub-unit-lot ladder applies. The exact product is
+    // 5000000000.5 * 2.0 = 10000000001.0: the pre-fix ten-significant-digit
+    // ladder gives 10000000000.0, the one-unit cap gives 10000000001.0.
+    // RED at stage A, GREEN at the head.
+    assert(requirement_at(5000000000.5, 2.0, 0.25, 1.0, 1, true)
+        == 10000000001.0);
 }
 
 void requirement_above_ten_digits() {
