@@ -8195,7 +8195,7 @@ exit "$lookup_exit"
                 self.assertIn('amd64 smoke: skipped', result.stdout)
                 self.assertIn('arm64 smoke: skipped', result.stdout)
         # Native x86 must succeed on every event, a passing docs-only push included:
-        # every other lane is set as in that passing run, so only this result decides.
+        # every other leg is set as in that passing run, so only this result decides.
         for outcome in ('failure', 'cancelled', 'skipped', ''):
             with self.subTest(native_x86=outcome):
                 result = subprocess.run(
@@ -8350,7 +8350,7 @@ finally:
                          {'build': 'BUILD_RESULT', 'build-debug': 'DEBUG_RESULT',
                           'build-arm': 'ARM_RESULT',
                           'corpus-parity-subset': 'PARITY_RESULT'})
-        # Every CI round fits 15 minutes: ci-post's own lanes are the amd64 and arm64
+        # Every CI round fits 15 minutes: ci-post's own legs are the amd64 and arm64
         # smoke matrices and the sanitizer smoke (preflight-slow, the leg aggregates,
         # kernel-only, native-live and the full parity call left ci-post for the
         # lab's verify and parity steps).

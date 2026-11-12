@@ -104,9 +104,9 @@ classification selects the ordinary fast tier and fails the aggregate.
 also avoids the Doxygen build.
 
 `preflight --tier fast` excludes `verifier-tests`, `kernel-residuals-tests`,
-`unittest-shards-tests` and `run-json-harness-tests`; `preflight-slow` runs
-exactly those stages with `--tier slow`. Toolchain setup and the hash-pinned
-pytest install stay in the slow job. A plain local invocation below retains
+`unittest-shards-tests` and `run-json-harness-tests`. No GitHub job runs
+`--tier slow` any more: the lab's `preflight` step runs every tier, those
+four stages included. A plain local invocation below retains
 all stages and its existing event-aware verifier-class selection. `runner-allowlist` independently scans workflow runner labels against the committed mirror in the fast tier's parallel group; `preflight-tests` runs every discovered method across up to eight shards, sized to available CPUs, with separate logs in `build-ci-preflight/preflight-tests-shards/`.
 
 The smoke configures Release, builds `pineforge_pr_smoke` and directly runs
@@ -675,7 +675,7 @@ checks every runner compile unit for instrumentation, and stops on a race.
 Both matrices keep `fail-fast: false` and build pinned WebSocket curl cold. A failed cell does not cancel its peers.
 Native diagnostic artifacts carry the shard index; compiler and curl installations have no Actions cache.
 The `native-live (native)` aggregate requires all four successful summary proofs;
-`native-live-gate` requires it and both sanitizer cells, refusing missing or skipped work; the caller's `build` aggregate still requires the reusable workflow to succeed.
+`native-live-gate` requires it and both sanitizer cells, refusing missing or skipped work. `ci-post.yml` no longer calls this workflow, so no `build` aggregate waits for it.
 Only native shards accept the caller's existing PR-only slow-label exclusion; dispatch always runs the full set.
 
 `native_live_equivalence_e2e_<probe>` names eight rows in `runner/CMakeLists.txt`,
@@ -1138,8 +1138,8 @@ judge <1 s — **94 s** end to end over an up-to-date build directory, against
 
 `gke-pr` inlines the corpus subset for ordinary code PRs and skips it only
 after the base classifier proves docs-only or GitHub-only. `ci-post.yml`
-retains the subset through `corpus-parity.yml` (`mode: subset`) alongside its
-full-parity call.
+retains the subset through `corpus-parity.yml` (`mode: subset`) and makes no
+full-parity call: the full parity is the lab's `parity` step.
 The merge ruleset requires `pineforge/verify` and
 `pineforge/parity`, posted by the maintainers' `lab verify` tooling after
 full verification on the PR head's exact tree.
@@ -1540,8 +1540,8 @@ result on `main` in an excluded row or class (the Release and kernel-only
 `slow` rows, or a SLOW verifier class) BLOCKS the next release cut, and the
 author or the release owner fixes or reverts the change within the hour; the
 red is not carried into a release.
-The GKE Linux arm64 Debug leg runs after merge; a red result there blocks
-the next release cut under the same fix-or-revert rule. The GKE Linux arm64 Debug leg also runs before merge when `arm_relevant=true`; a red post-merge result blocks the next release cut under the same rule.
+The Linux arm64 Debug smoke runs after merge; a red result there blocks
+the next release cut under the same fix-or-revert rule. The same smoke also runs before merge when `arm_relevant=true`. The full arm64 Debug profile no longer runs in GitHub CI (see "Where the full suites run").
 
 ### Documentation-only changes
 
@@ -1765,11 +1765,11 @@ reader, so a preceding job cannot authorize a GitHub-only skip. Full CI keeps
 every proof dependency and both preflight tiers. Docs deployment and parity's
 HTTPS submodule clone retain their existing credential handling behind authz.
 
-**2026-10-24 clarification:** the full-profile commands in `ci-post.yml`
-carry no explicit `--exclude-label` arguments. The verifier's Debug-type
-default excludes `slow` from Debug and sanitizer runs on every event,
+**2026-10-24 clarification, updated 2026-11-13:** the full-profile commands
+(now run by the lab's verify; `ci-post.yml` keeps smoke legs only) carry no
+explicit `--exclude-label` arguments. The verifier's Debug-type default excludes `slow` from Debug and sanitizer runs on every event,
 including non-PR events; Release, kernel and native retain every row.
-PR CI keeps the Release smoke selected by CTest label `fast`.
+GitHub CI keeps the smoke selected by CTest label `fast`.
 
 Baseline promotion uses hosted `ubuntu-24.04` for its GitHub App
 secrets and inherited `id-token: write` permission, behind its `release-bot` environment
@@ -1867,15 +1867,15 @@ measurements on the new runners.
 | Job | Platform maximum (min; no declared limit) | Measured basis |
 | --- | --- | --- |
 | `preflight` | 360 (was 45) | 7.3-9.8 min on the standard runner through 1a0e7ea1; cancelled at 10.3 min at 0d76a099, 593 s into `verifier-tests`, which takes about 15 min there at that tree (above), so preflight about 16 min. 4.8-8.2 min on the verification hosts. Preflight supplies no stage deadline -- the old 2400 s stage bound is gone (owner rule, 2026-10-12), and owner #827 (2026-10-20) removed every declared job timeout; the native-live aggregate job names a stop at GitHub's own 6 h platform maximum `HANG (re-run)` in its log; the check still fails. |
-| `build`, `build-arm` | 360 (was 75) | Pull requests run the Ubuntu amd64 Release smoke; post-merge runs Ubuntu amd64 and arm64 Release/Debug. Both architectures use the same full-profile commands. The following historical measurements include retired macOS Debug cells on pull requests. Measured while Release ran its full population on every event, a fork's pull request included: 30.3 min Ubuntu and 32.0 min macOS on the standard runners at 0d76a099, where the full Debug legs took 43.5 and 37.0 min. Pull-request Debug sets then took 17.2-17.7 min. 11.1-18.4 min on the verification hosts. GKE Linux arm64 timings await measurement. |
-| `sanitizers` | 360 (was 120; the verifier's CTest stage bound was 60 min full, 30 min PR) | A fork's pull-request set took 35.2 min on the standard runner, whose compile alone took 1277-1335 s (pull-request run 36139176292, and main at 0d76a099). Full runs on the standard runner took 34.0-69.4 min (at 0d76a099 30 min of build and ABI providers, then 39 min of CTest, 1768 s of it the serial `test_ci_verify` row), and 18.2-19.0 min on the verification hosts. |
-| `kernel-only` | 360 (was 60) | Push and dispatch events run the whole kernel set; a pull request's kernel-only leg excludes the `slow` rows, and that pull-request time is to be measured on real PR runs. Measured while every event ran the whole kernel set: 7.9-22.3 min on the standard runner, 6.5-9.8 min on the verification hosts. The hosted kernel-only run of 2026-10-12 lost its job to the old 1800 s stage bound (exit 124). |
+| `build`, `build-arm` | 360 (was 75) | Pull requests run the Ubuntu amd64 Release and Debug smokes and, when `arm_relevant`, the arm64 Debug smoke; post-merge runs the Release and Debug smokes on Ubuntu amd64 and arm64. The full-profile commands run in the lab's verify since 2026-11-13. The following historical measurements include retired macOS Debug cells on pull requests. Measured while Release ran its full population on every event, a fork's pull request included: 30.3 min Ubuntu and 32.0 min macOS on the standard runners at 0d76a099, where the full Debug legs took 43.5 and 37.0 min. Pull-request Debug sets then took 17.2-17.7 min. 11.1-18.4 min on the verification hosts. GKE Linux arm64 timings await measurement. |
+| `sanitizers` | 360 (was 120; the verifier's CTest stage bound was 60 min full, 30 min PR) | Since 2026-11-13 the post-merge job is a smoke under ASan and UBSan, and the full profile is the lab's `sanitizers` step. The measurements below are of that full profile. A fork's pull-request set took 35.2 min on the standard runner, whose compile alone took 1277-1335 s (pull-request run 36139176292, and main at 0d76a099). Full runs on the standard runner took 34.0-69.4 min (at 0d76a099 30 min of build and ABI providers, then 39 min of CTest, 1768 s of it the serial `test_ci_verify` row), and 18.2-19.0 min on the verification hosts. |
+| `kernel-only` | 360 (was 60) | No GitHub job since 2026-11-13: the kernel profile is the lab's `kernel` step. What follows describes the former job. Push and dispatch events run the whole kernel set; a pull request's kernel-only leg excludes the `slow` rows, and that pull-request time is to be measured on real PR runs. Measured while every event ran the whole kernel set: 7.9-22.3 min on the standard runner, 6.5-9.8 min on the verification hosts. The hosted kernel-only run of 2026-10-12 lost its job to the old 1800 s stage bound (exit 124). |
 | `native-live (native)` | 360 (was 75; verification step 65) | Main runs 37398893123, 37461653250 and 37478400505 spent 35.40–40.65 min in native, including 25.32–29.53 min in full CTest. Their matching PRs took 2.39–5.67 min in native CTest with the existing slow exclusion. The longest measured `test_ci_verify` row was 1695 s there and 2178 s on a c5.4xlarge Spot host, cut off by a trial deadline. The verifier supplies no default row or stage deadline and the workflow supplies no step deadline: its old 3600 s row bound is what collided with the 2820 s stage deadline on main's push run 38217844683. These are observed GitHub and Spot timings; final-head cold proof remains required. |
 | `native-live (live-sanitizers)` | 360 (was 45; verification step 35) | The same three main runs spent 15.10–16.33 min in this profile after native. Its old per-row 900 s and stage 1200 s deadlines are gone; the verifier supplies no replacement, and the platform's job maximum catches a hang. |
 | `native-live (live-tsan)` | 360 (was 45; verification step 35) | The old shared 60-min job left only 9.20, 4.67 and 2.67 min for TSan before cancellation. Matching passing PR profiles took 10.87, 10.93 and 7.70 min. Its old 900/1200-s row/stage bounds are gone like live-sanitizers'; the verifier supplies no replacement. |
 | `native-live-gate` | 360 (was 5) | Seconds; failure, cancellation and unexpected skip all fail the aggregate. |
 | `corpus-parity` | 360 (was 120) | 16.3-26.2 min on the standard runner, 10.1-10.3 min on the verification hosts. |
-| `corpus-parity-subset` | 360 (was 30) | 1.8-4.7 min on the standard runner, 2.4-3.8 min on the verification hosts. |
+| `corpus-parity-subset` | 360 (was 30) | 1.8-4.7 min on the standard runner, 2.4-3.8 min on the verification hosts. Those are of a shorter probe list. With 54 probes the job ran 13.5 and 14.3 min in runs 43205609467 and 43242369382, and 6.8 min in run 43308686886 once its strategy libraries built in parallel. |
 | `build` (aggregate) | 360 (was 5) | Seconds. |
 | `gke-pr / result` | Platform maximum | Seconds after the second compare read and job-result checks. |
 
