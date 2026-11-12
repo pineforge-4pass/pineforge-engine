@@ -27,7 +27,7 @@ struct Call {
 class LongBook final : public source::PineStrategyHost {
 public:
     LongBook(double capital, double tick, double quantity, double fee = 0.0,
-             double share = 100.0, int pyramiding = 1)
+             double share = 100.0, int pyramiding = 1, int slippage = 0)
         : quantity_(quantity), tick_(tick) {
         attach_pine_execution_adapter();
         set_syminfo_mintick(tick);
@@ -40,6 +40,7 @@ public:
         config_.margin_long = 100.0;
         config_.margin_short = 100.0;
         config_.pyramiding = pyramiding;
+        config_.slippage = slippage;
         configure_pine_strategy(config_);
     }
 
@@ -66,7 +67,9 @@ public:
             equity_at_fill = reader.source_margin_money(
                 position_avg_price(), 0).equity;
             if (std::isfinite(requirement_mark))
-                requirement = adapter_.source_margin_money(requirement_mark, 0);
+                requirement = read_shared_requirement
+                    ? reader.source_margin_money(requirement_mark, 0)
+                    : adapter_.source_margin_money(requirement_mark, 0);
         }
     }
 
@@ -86,6 +89,7 @@ public:
     double position_at_bar_3 = nan;
     double equity_at_fill = nan;
     double requirement_mark = nan;
+    bool read_shared_requirement = false;
     source::PineExecutionAdapter::SourceMarginMoney requirement;
 
 private:
@@ -530,6 +534,96 @@ void requirement_decimal_above_ten_digits() {
     assert(required == 12345678905.0);
     assert(required == requirement_at(12345678904.99, 1.0));
 }
+
+void rule_derived_shared_requirement() {
+    // Rule-derived shared requirement, sampled without the long tick policy.
+    // Q=100000.00006, P=100000: Q*P=10000000006.
+    // Step 10 gives 10000000010; the one-unit cap gives 10000000006.
+    // The live feed stays at 1, so neither rounding can liquidate the book
+    // before the independent reader samples the requirement at P.
+    // no TradingView observation above 1e10 on this path; the expected value follows the one-unit rule TradingView showed for the long requirement
+    LongBook book(100100.00006, 1.0, 100000.00006);
+    book.requirement_mark = 100000.0;
+    book.read_shared_requirement = true;
+    const std::vector<Bar> bars = {
+        bar(0, 1.0, 1.0, 1.0, 1.0), bar(1, 1.0, 1.0, 1.0, 1.0)};
+    book.run(bars.data(), static_cast<int>(bars.size()));
+    assert(std::abs(book.entered - 100000.00006) < 1e-10);
+    assert(book.requirement.valid && !book.requirement.long_tick_book);
+    assert(book.requirement.required == 10000000006.0);
+    expect_calls(book, {});
+}
+
+void rule_derived_slipped_long_requirement() {
+    // Rule-derived slipped-long opening check: Q=100000.00006, tick=1,
+    // slippage=1, entry print=2, E=200003.95012, free cash=3.95.
+    // At the next open P=100000, Q*P=10000000006 and marked equity
+    // =E+Q*(P-2)=10000000009.95. Step 10 requires 10000000010,
+    // a .05 deficit: floor(.05/100000/.000001)=0, so it sells one unit.
+    // The cap requires 10000000006 < equity, hence no call.
+    // Slippage excludes the long tick policy; the .05 deficit is safely
+    // inside the .1 lot value despite binary multiplication roundoff.
+    // no TradingView observation above 1e10 on this path; the expected value follows the one-unit rule TradingView showed for the long requirement
+    LongBook book(200003.95012, 1.0, 100000.00006, 0.0, 100.0, 1, 1);
+    const std::vector<Bar> bars = {
+        bar(0, 1.0, 1.0, 1.0, 1.0), bar(1, 1.0, 1.0, 1.0, 1.0),
+        bar(2, 100000.0, 100000.0, 100000.0, 100000.0)};
+    book.run(bars.data(), static_cast<int>(bars.size()));
+    assert(std::abs(book.entered - 100000.00006) < 1e-10);
+    expect_calls(book, {});
+}
+
+void rule_derived_long_residual() {
+    // Rule-derived long residual: Q=100000.00006, entry=1,
+    // E=100001.00006, free cash=1. Pyramiding=2 excludes the long tick
+    // policy and trail scheduling; the .1 lot value admits the residual
+    // check. At the next open P=100000, Q*P=10000000006.
+    // Step 10 gives 10000000010, residual=4 > free cash, selling one unit.
+    // The cap gives 10000000006, residual=0 < free cash, hence no call.
+    // Both gaps exceed binary roundoff, including the guarded alternative
+    // comparison against marked equity 10000000007.
+    // no TradingView observation above 1e10 on this path; the expected value follows the one-unit rule TradingView showed for the long requirement
+    LongBook book(100001.00006, 1.0, 100000.00006, 0.0, 100.0, 2);
+    const std::vector<Bar> bars = {
+        bar(0, 1.0, 1.0, 1.0, 1.0), bar(1, 1.0, 1.0, 1.0, 1.0),
+        bar(2, 100000.0, 100000.0, 100000.0, 100000.0)};
+    book.run(bars.data(), static_cast<int>(bars.size()));
+    assert(std::abs(book.entered - 100000.00006) < 1e-10);
+    expect_calls(book, {});
+}
+
+void rule_derived_lagged_follow_up_deficit() {
+    // Rule-derived lagged long follow-up, sampled directly: required=1e11,
+    // equity=89999999993.75, shortfall=10000000006.25. One called unit
+    // with entry cost 1 leaves the unbooked-lot shortfall 10000000005.25.
+    // Step 10 gives 10000000010; the cap gives 10000000005.
+    // Unit margin=1 and grid=.5 give minimum restores 10000000010 and
+    // 10000000005, respectively, hence follow-ups 40000000040 versus
+    // 40000000020. Both fit in the remaining 99999999999 units.
+    // no TradingView observation above 1e10 on this path; the expected value follows the one-unit rule TradingView showed for the long requirement
+    LongBook book(1000.0, 1.0, 1.0);
+    source::PineExecutionAdapter reader(book);
+    source::PineStrategyConfig config;
+    reader.set_configuration(config);
+    source::StagedConfiguration staged;
+    staged.syminfo.pointvalue = 1.0;
+    staged.quantity_grid = 0.5;
+    reader.set_staged_configuration(staged);
+    source::PineExecutionAdapter::SourceMarginMoney money;
+    money.valid = true;
+    money.mark = 1.0;
+    money.held = 100000000000.0;
+    money.unit_margin = 1.0;
+    money.exact_required = 100000000000.0;
+    money.required = 100000000000.0;
+    money.equity = 89999999993.75;
+    money.scale = 1.0;
+    NativeOpenLot open_lot;
+    open_lot.signed_units = money.held;
+    open_lot.entry_price = 1.0;
+    assert(reader.lagged_margin_follow_up_units(
+        {open_lot}, money, 1.0, 1.0, 0) == 40000000020.0);
+}
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -565,6 +659,10 @@ int main(int argc, char* argv[]) {
         {"requirement_above_ten_digits", requirement_above_ten_digits},
         {"requirement_unit_half", requirement_unit_half},
         {"requirement_decimal_above_ten_digits", requirement_decimal_above_ten_digits},
+        {"rule_derived_shared_requirement", rule_derived_shared_requirement},
+        {"rule_derived_slipped_long_requirement", rule_derived_slipped_long_requirement},
+        {"rule_derived_long_residual", rule_derived_long_residual},
+        {"rule_derived_lagged_follow_up_deficit", rule_derived_lagged_follow_up_deficit},
     };
     if (argc == 1) {
         for (const auto& row : rows)

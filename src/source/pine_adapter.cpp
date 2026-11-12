@@ -18362,9 +18362,7 @@ PineExecutionAdapter::SourceMarginMoney PineExecutionAdapter::source_margin_mone
         if (std::isfinite(lot_value) && lot_value < 1.0) {
             // ab9714be pine_fills.cpp:11491-11499: a sub-unit lot puts the
             // requirement on TradingView's ten-significant-digit money ladder.
-            money.required = money.long_tick_book
-                ? source_money_round_unit_capped(money.exact_required)
-                : source_money_round(money.exact_required);
+            money.required = source_money_round_unit_capped(money.exact_required);
             if (money.long_tick_book) {
                 if (const auto rounded = decimal_long_margin_requirement(
                         money.held, *staged_.quantity_grid, mark_price,
@@ -18428,7 +18426,7 @@ double PineExecutionAdapter::source_margin_units(
         // Other books retain the shortfall ladder their fixtures pin.
         const double floor_basis = opening_basis || money.long_tick_book
             ? raw_minimum
-            : source_money_round(money.required - money.equity) / money.unit_margin;
+            : source_money_round_unit_capped(money.required - money.equity) / money.unit_margin;
         minimum = std::floor(floor_basis / *staged_.quantity_grid)
             * *staged_.quantity_grid;
     }
@@ -18549,7 +18547,7 @@ double PineExecutionAdapter::lagged_margin_follow_up_units(
     }
     if (!(last_short > 0.0) || !std::isfinite(last_short)) return 0.0;
     const double grid = *staged_.quantity_grid;
-    const double minimum = std::floor(source_money_round(last_short) / money.unit_margin / grid)
+    const double minimum = std::floor(source_money_round_unit_capped(last_short) / money.unit_margin / grid)
         * grid;
     double units = std::floor(4.0 * minimum / grid + 1e-6) * grid;
     units = std::min(units, money.held - called);
@@ -19255,7 +19253,7 @@ double PineExecutionAdapter::slipped_long_margin_units(double quote) const {
     const double held = position.signed_units;
     const double step = *staged_.quantity_grid;
     if (!pine || !finite_positive(quote) || !(held > 0.0)) return 0.0;
-    const double required = source_money_round(held * quote);
+    const double required = source_money_round_unit_capped(held * quote);
     const double gain_loss = gain_loss_closed_equity();
     const double marked = (std::isfinite(gain_loss) ? gain_loss : pine->closed_trade_equity())
         + held * (quote - pine->position_entry_price_);
@@ -19264,7 +19262,7 @@ double PineExecutionAdapter::slipped_long_margin_units(double quote) const {
     // Only the one-unit call is pinned for a long: a shortfall whose
     // lot-floored quotient is a lot or more (four times it called) stays
     // with the engine's existing checkpoints.
-    if (std::floor(source_money_round(deficit) / quote / step) > 0.0 || !(deficit / quote < 1.0))
+    if (std::floor(source_money_round_unit_capped(deficit) / quote / step) > 0.0 || !(deficit / quote < 1.0))
         return 0.0;
     // Margin rule 3: the unit is called on negative free cash too; switched
     // off, a book whose cash is below its entry cost keeps it.
@@ -19286,11 +19284,11 @@ bool PineExecutionAdapter::slipped_long_unit_shortfall(double quote) const {
     const double held = detail::run_position(require_host()).signed_units;
     if (!pine || !finite_positive(quote) || !(held > 0.0)) return false;
     const double gain_loss = gain_loss_closed_equity();
-    const double deficit = source_money_round(held * quote)
+    const double deficit = source_money_round_unit_capped(held * quote)
         - ((std::isfinite(gain_loss) ? gain_loss : pine->closed_trade_equity())
            + held * (quote - pine->position_entry_price_));
     return deficit > 0.0 && deficit / quote < 1.0
-        && std::floor(source_money_round(deficit) / quote / *staged_.quantity_grid) == 0.0;
+        && std::floor(source_money_round_unit_capped(deficit) / quote / *staged_.quantity_grid) == 0.0;
 }
 
 // Margin rule 4: a call at an extreme of the bar whose script closes the
@@ -19550,7 +19548,7 @@ bool PineExecutionAdapter::submit_tv_money_long_margin_call(
             const double free_cash = (std::isfinite(gain_loss) ? gain_loss
                                                              : pine->closed_trade_equity())
                 - quantity * pine->position_entry_price_;
-            const double residual = source_money_round(quantity * price) - quantity * price;
+            const double residual = source_money_round_unit_capped(quantity * price) - quantity * price;
             if (!(free_cash < residual) || free_cash < 0.0) continue;
             const double units = std::min(1.0, quantity);
             const double rounded_units = std::round(units / *grid) * *grid;
@@ -19565,7 +19563,7 @@ bool PineExecutionAdapter::submit_tv_money_long_margin_call(
         if (!finite_positive(price)) continue;
         const double exact_value = quantity * price * point_value;
         const double equity = require_host().native_marked_equity(price);
-        const double rounded_value = source_money_round(exact_value);
+        const double rounded_value = source_money_round_unit_capped(exact_value);
         // This trigger is exclusively for an exact-funded book whose
         // 10-significant-digit account valuation is fractionally larger.
         // Preserve the base 1e-7 guard for ordinary historical arithmetic.
@@ -19686,7 +19684,7 @@ bool PineExecutionAdapter::submit_slipped_pooc_opening_money_call(
     const double exact_value = position.signed_units * bar.open
         * staged_.syminfo.pointvalue;
     const double equity = require_host().native_marked_equity(bar.open);
-    const double rounded_value = source_money_round(exact_value);
+    const double rounded_value = source_money_round_unit_capped(exact_value);
     if (!std::isfinite(exact_value) || !std::isfinite(equity)
         || equity < exact_value || !(equity < rounded_value)) {
         return false;
@@ -19782,7 +19780,7 @@ bool PineExecutionAdapter::schedule_tv_money_long_margin_before_trail(
         const double exact_value = position.signed_units * price
             * staged_.syminfo.pointvalue;
         const double equity = require_host().native_marked_equity(price);
-        const double rounded_value = source_money_round(exact_value);
+        const double rounded_value = source_money_round_unit_capped(exact_value);
         if (std::isfinite(exact_value) && std::isfinite(equity)
             && equity + kArithmeticGuard >= exact_value
             && equity + kArithmeticGuard < rounded_value) {
@@ -20080,7 +20078,7 @@ double PineExecutionAdapter::margin_follow_up_units(
     if (!(shortfall - exit_fees > 2.0 * step * called_units)) return 0.0;
     const double grid = *staged_.quantity_grid;
     const double minimum = std::floor(
-        source_money_round(shortfall) / money.unit_margin / grid) * grid;
+        source_money_round_unit_capped(shortfall) / money.unit_margin / grid) * grid;
     double units = std::floor(4.0 * minimum / grid + 1e-6) * grid;
     if (!(units > internal::kQtyEpsilon)) units = 1.0;
     units = std::min(units, money.held);
@@ -20209,7 +20207,7 @@ double PineExecutionAdapter::lagged_short_follow_up_units(
         if (!(remaining > internal::kQtyEpsilon)) break;
         const double exact = remaining * unit_margin;
         const double required = std::isfinite(lot_value) && lot_value < 1.0
-            ? source_money_round(exact) : exact;
+            ? source_money_round_unit_capped(exact) : exact;
         // The called units are out of the book: their open P&L at the fill,
         // (entry - fill) a unit for a short, leaves the equity unbooked.
         const double equity = equity_before - booked_fees + (fill - entry) * units * point;
@@ -20218,7 +20216,7 @@ double PineExecutionAdapter::lagged_short_follow_up_units(
         booked_fees += units * fill * point * fee;
     }
     if (!(last_short > 0.0) || !std::isfinite(last_short)) return 0.0;
-    const double minimum = std::floor(source_money_round(last_short) / unit_margin / grid) * grid;
+    const double minimum = std::floor(source_money_round_unit_capped(last_short) / unit_margin / grid) * grid;
     double units = std::floor(4.0 * minimum / grid + 1e-6) * grid;
     units = std::min(units, held_before - out);
     if (!(units > internal::kQtyEpsilon) || !std::isfinite(units)) return 0.0;
@@ -20305,13 +20303,13 @@ double PineExecutionAdapter::open_print_follow_up_units(
     const double exact = remaining * unit_margin;
     const double lot_value = grid * fill * point;
     const double required = std::isfinite(lot_value) && lot_value < 1.0
-        ? source_money_round(exact) : exact;
+        ? source_money_round_unit_capped(exact) : exact;
     // The called units' open P&L at the fill leaves the equity unbooked.
     const double side = short_book ? -1.0 : 1.0;
     const double equity = equity_before - side * (fill - entry) * called * point;
     const double deficit = required - equity;
     if (!(deficit > 0.0) || !std::isfinite(deficit)) return 0.0;
-    const double minimum = std::floor(source_money_round(deficit) / unit_margin / grid) * grid;
+    const double minimum = std::floor(source_money_round_unit_capped(deficit) / unit_margin / grid) * grid;
     double units = std::floor(4.0 * minimum / grid + 1e-6) * grid;
     if (!(units > internal::kQtyEpsilon) && exact - equity < unit_margin)
         units = std::min(1.0, remaining);
@@ -20362,7 +20360,7 @@ double PineExecutionAdapter::open_print_lot_follow_up_units(
         if (!(remaining > internal::kQtyEpsilon)) break;
         const double exact = remaining * unit_margin;
         const double required = std::isfinite(lot_value) && lot_value < 1.0
-            ? source_money_round(exact) : exact;
+            ? source_money_round_unit_capped(exact) : exact;
         const double equity = equity_before - booked_fees - side * (fill - entry) * units * point;
         const double deficit = required - equity;
         if (deficit > 0.0) {
@@ -20374,7 +20372,7 @@ double PineExecutionAdapter::open_print_lot_follow_up_units(
         booked_fees += units * fill * point * fee;
     }
     if (!(last_short > 0.0) || !std::isfinite(last_short)) return 0.0;
-    const double minimum = std::floor(source_money_round(last_short) / unit_margin / grid) * grid;
+    const double minimum = std::floor(source_money_round_unit_capped(last_short) / unit_margin / grid) * grid;
     double units = std::floor(4.0 * minimum / grid + 1e-6) * grid;
     if (!(units > internal::kQtyEpsilon) && last_exact - last_equity < unit_margin)
         units = std::min(1.0, last_remaining);
@@ -20596,7 +20594,7 @@ double PineExecutionAdapter::whole_share_lag_units(
         if (!(remaining > internal::kQtyEpsilon)) break;
         const double exact = remaining * unit_margin;
         const double required = std::isfinite(lot_value) && lot_value < 1.0
-            ? source_money_round(exact) : exact;
+            ? source_money_round_unit_capped(exact) : exact;
         const double equity = equity_before - booked_fees + (fill - entry) * units * point;
         const double deficit = required - equity;
         if (deficit > 0.0) {
@@ -20607,7 +20605,7 @@ double PineExecutionAdapter::whole_share_lag_units(
         booked_fees += units * fill * point * fee;
     }
     if (!(last_short > 0.0) || !std::isfinite(last_short)) return 0.0;
-    const double minimum = std::floor(source_money_round(last_short) / unit_margin);
+    const double minimum = std::floor(source_money_round_unit_capped(last_short) / unit_margin);
     double units = std::floor(4.0 * minimum + 1e-6);
     if (!(units > internal::kQtyEpsilon) && last_remaining * unit_margin - last_equity < unit_margin)
         units = 1.0;
@@ -21237,7 +21235,7 @@ double PineExecutionAdapter::source_margin_one_unit(const SourceMarginMoney& mon
     }
     const double raw = (money.required - money.equity) / money.unit_margin;
     if (!(raw > internal::kQtyEpsilon) || !(raw < 1.0)) return 0.0;
-    const double floor_basis = source_money_round(money.required - money.equity)
+    const double floor_basis = source_money_round_unit_capped(money.required - money.equity)
         / money.unit_margin;
     if (std::floor(floor_basis / *staged_.quantity_grid) * *staged_.quantity_grid > 0.0)
         return 0.0;
@@ -25252,7 +25250,7 @@ void PineExecutionAdapter::run_opening_checkpoint(
         && std::isfinite(opening_exact_required)
         && std::isfinite(opening_equity)
         && opening_equity >= opening_exact_required
-        && opening_equity < source_money_round(opening_exact_required);
+        && opening_equity < source_money_round_unit_capped(opening_exact_required);
     // pine_fills.cpp:1441-1450 at ab9714be leaves this exact-funded
     // terminal POOC residual intact until the next opening print.
     // Genuine opening deficits retain the immediate checkpoint.
