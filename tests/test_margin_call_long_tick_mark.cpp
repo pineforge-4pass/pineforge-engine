@@ -35,11 +35,12 @@ public:
     using source::PineStrategyHost::closed_trade_size;
 
     LongBook(double capital, double tick, double quantity, double fee = 0.0,
-             double share = 100.0, int pyramiding = 1, int slippage = 0)
-        : quantity_(quantity), tick_(tick) {
+             double share = 100.0, int pyramiding = 1, int slippage = 0,
+             double quantity_step = lot)
+        : quantity_(quantity), tick_(tick), quantity_step_(quantity_step) {
         attach_pine_execution_adapter();
         set_syminfo_mintick(tick);
-        set_syminfo_metadata("qty_step", lot);
+        set_syminfo_metadata("qty_step", quantity_step_);
         config_.initial_capital = capital;
         config_.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
         config_.default_qty_value = share;
@@ -70,7 +71,7 @@ public:
             source::StagedConfiguration staged;
             staged.syminfo.mintick = tick_;
             staged.syminfo.pointvalue = 1.0;
-            staged.quantity_grid = lot;
+            staged.quantity_grid = quantity_step_;
             reader.set_staged_configuration(staged);
             equity_at_fill = reader.source_margin_money(
                 position_avg_price(), 0).equity;
@@ -104,6 +105,7 @@ private:
     source::PineStrategyConfig config_;
     double quantity_;
     double tick_;
+    double quantity_step_;
 };
 
 void expect_calls(const LongBook& book, const std::vector<Call>& expected) {
@@ -161,6 +163,29 @@ void owed_sale(bool next_point_calls) {
     expect_calls(book, {{2, 2.0, 0.000004},
                        {2, next_point_calls ? 4.0 : 3.0,
                            next_point_calls ? 0.000012 : 0.000004}});
+}
+
+void owed_sale_sized_at_close() {
+    // T=99999.000048, F=.1, E=9999.9000055, tick=.1, lot=.000001.
+    // At the check P=2, required=199998.0001 and equity=199998.0000967,
+    // so the shortfall is .0000033. The first sale is
+    // floor(.0000033 / 2 / lot) * lot = .000001, hence 4 lots=.000004.
+    // The same-price re-check leaves the .0000033 shortfall owed. The bar
+    // close .11 rounds to C=.1. If the owed sale were sized at the check,
+    // it would again be .000004. The close-sized rule is
+    // floor(.0000033 / .1 / lot) * lot = .000033, hence 4 lots=.000132;
+    // the one-unit fallback is unused because the floor is 33 lots.
+    // The open 2.01 is nearer the high 3.01 than the low .91, so the next
+    // waypoint is P=3, where the reduced book is covered and the owed sale
+    // must execute before the script closes the position.
+    LongBook book(9999.9000055, 0.1, 99999.000048);
+    const std::vector<Bar> bars = {
+        bar(0, 0.11, 0.11, 0.11, 0.11),
+        bar(1, 0.11, 0.11, 0.11, 0.11),
+        bar(2, 2.01, 3.01, 0.91, 0.11),
+        bar(3, 0.11, 0.11, 0.11, 0.11)};
+    book.run(bars.data(), static_cast<int>(bars.size()));
+    expect_calls(book, {{2, 2.0, 0.000004}, {2, 3.0, 0.000132}});
 }
 
 void one_unit() {
@@ -461,13 +486,15 @@ void expect_export(double capital, std::int64_t first_day, std::vector<Bar> bars
     book.run(bars.data(), static_cast<int>(bars.size()));
     const double units = signal_units(capital, bars.front().close);
     // Less than half a lot, allowing binary representation at this scale.
-    assert(std::abs(book.entered - units) < lot / 2.0);
     expect_calls(book, calls);
     assert(book.trade_count() == static_cast<int>(calls.size()) + 1);
+    double closed_units = 0.0;
     for (int i = 0; i < book.trade_count(); ++i) {
         assert(book.closed_trade_entry_bar_index(i) == 1);
         assert(book.closed_trade_entry_price(i) == entry_price);
+        closed_units += book.closed_trade_size(i);
     }
+    assert(std::abs(closed_units - units) < lot / 2.0);
     const int last = book.trade_count() - 1;
     assert(book.closed_trade_exit_comment(last) != "Margin call");
     assert(book.closed_trade_exit_bar_index(last) == 4);
@@ -535,36 +562,60 @@ void export3_open_sale_then_close() {
         237.0, 233.0, 13255665.2009, 4);
 }
 
-double requirement_at(double units, double mark) {
-    LongBook book(units + 100.0, 1.0, units);
+double requirement_at(double units, double mark, double quantity_step,
+                      double tick, int pyramiding, bool expect_long_tick_book) {
+    LongBook book(units + 100.0, tick, units, 0.0, 100.0, pyramiding, 0,
+                  quantity_step);
     book.requirement_mark = mark;
     const std::vector<Bar> bars = {
         bar(0, 1.0, 1.0, 1.0, 1.0), bar(1, 1.0, 1.0, 1.0, 1.0)};
     book.run(bars.data(), static_cast<int>(bars.size()));
     assert(book.entered == units);
-    assert(book.requirement.valid && book.requirement.long_tick_book);
+    assert(book.requirement.valid);
+    if (expect_long_tick_book)
+        assert(book.requirement.long_tick_book);
     expect_calls(book, {});
     return book.requirement.required;
 }
 
 void requirement_below_ten_digits() {
-    // The lot count exceeds the exact-count limit, selecting binary rounding.
-    assert(requirement_at(9999999999.4, 1.0) == 9999999999.0);
+    // Exact product: 9999999999.5 * 1.0 = 9999999999.5, on the .5
+    // quantity grid and the 1.0 tick grid. Below 1e10, the ten-significant-
+    // digit result (unit step here) is 10000000000.0 and the capped result
+    // is also 10000000000.0. This is GREEN on both the pre-fix and fixed
+    // products.
+    assert(requirement_at(9999999999.5, 1.0, 0.5, 1.0, 2, false)
+        == 10000000000.0);
 }
 
 void requirement_above_ten_digits() {
-    assert(requirement_at(12345678904.99, 1.0) == 12345678905.0);
+    // Exact product: 10000000001.0 * 1.0 = 10000000001.0, on the .5
+    // quantity grid and the 1.0 tick grid. The pre-fix step-10 result is
+    // 10000000000.0; the one-unit cap result is 10000000001.0. RED on the
+    // pre-fix product (step 10), GREEN on the fixed product (cap).
+    assert(requirement_at(10000000001.0, 1.0, 0.5, 1.0, 2, false)
+        == 10000000001.0);
 }
 
 void requirement_unit_half() {
-    assert(requirement_at(10000000000.5, 1.0) == 10000000001.0);
+    // Exact product: 10000000000.5 * 1.0 = 10000000000.5, on the .5
+    // quantity grid and the 1.0 tick grid. The pre-fix step-10 result is
+    // 10000000000.0; half-away-from-zero unit capping gives 10000000001.0.
+    // RED on the pre-fix product, GREEN on the fixed product.
+    assert(requirement_at(10000000000.5, 1.0, 0.5, 1.0, 2, false)
+        == 10000000001.0);
 }
 
 void requirement_decimal_above_ten_digits() {
-    // Exact lot and tick counts give 12345678904.99 before unit rounding.
-    const double required = requirement_at(123456789.0499, 100.0);
-    assert(required == 12345678905.0);
-    assert(required == requirement_at(12345678904.99, 1.0));
+    // Exact product: 100000000094.0 * .1 = 10000000009.4. The .1
+    // quantity and .1 tick counts are 1000000000940 and 1, both below 2^53;
+    // the .1 quantity step times the bar high 1.0 is also below one, so
+    // this is the qualifying decimal long-tick path. Its pre-fix step-10
+    // result is 10000000010.0; decimal exact-grid rounding with the cap is
+    // 10000000009.0. RED on the pre-fix product, GREEN on the fixed product.
+    const double required = requirement_at(
+        100000000094.0, 0.1, 0.1, 0.1, 1, true);
+    assert(required == 10000000009.0);
 }
 
 void rule_derived_shared_requirement() {
@@ -667,6 +718,7 @@ int main(int argc, char* argv[]) {
         {"tick_mark_and_plain_equity", tick_mark_and_plain_equity},
         {"owed_sale_made", [] { owed_sale(false); }},
         {"owed_sale_dropped", [] { owed_sale(true); }},
+        {"owed_sale_sized_at_close", owed_sale_sized_at_close},
         {"one_unit", one_unit},
         {"owed_sale_across_close", owed_sale_across_close},
         {"commissioned_open_off_tick", [] { commissioned_open(false); }},
