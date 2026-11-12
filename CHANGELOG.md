@@ -15,6 +15,23 @@ version number follows semantic versioning over the surfaces the
   An invalid regular expression now stops the run with a typed error, as TradingView does; it used to return an empty string. The message is TradingView's text with the engine's bar prefix, `Error on bar N: `, or `Error before the first bar: ` when no bar is being executed.
   Patterns the engine's regular-expression library does not support also stop the run now, with the same error. On the Linux build these include lookbehind, named groups, inline flags such as `(?i)`, comment groups, atomic groups, conditionals, `\p{...}` classes and `{,n}` repeats; lookahead, lazy quantifiers, back-references, POSIX classes and `\b` are accepted.
 - A memory failure during a session-calendar lookup now fails the run with a typed error instead of reading the bar as out of session.
+- A failed `setenv` or a memory failure during a timezone switch now fails the run instead of continuing in the previous zone or in UTC.
+- A timezone name written in a script that the engine does not accept now raises `pine_timezone_error` with the function and zone instead of silently reading UTC. This addition to the public failure catalog requires a minor release. The message is TradingView's text with the engine's bar prefix, `Error on bar N: `, or `Error before the first bar: ` when no bar is being executed, and the arguments carry `bar_index`.
+- The void C setters for instrument and run settings now record exceptions on
+  the handle, including allocation failures and changes refused by the engine.
+  `strategy_last_run_status` reads 1; `strategy_get_last_error` and
+  `strategy_get_last_error_code` return the failure text and code.
+  The recorded text begins "Error before the first bar: " (or "Error on bar N: "
+  when a bar is being executed). A setup failure makes the next run start fail
+  once with that record; the following start clears it and starts normally.
+  The failed setter did not apply its value, so retrying the start without
+  reapplying the setter uses the previous value. The documented refusal of a
+  quote write after a selected run has sealed is still dropped silently and
+  read through `strategy_state_query_status_v1`.
+- Non-positive or NaN `mintick` or `pointvalue` values in `--syminfo`, and
+  `path_order` modes outside 0, 1 and 2, now produce typed refusals instead of
+  being ignored or reset to AUTO. Invalid point values use the existing symbol
+  metadata error.
 - A percent-of-equity default quantity above 100 percent is now capped at 100 percent of equity when `margin_long` and `margin_short` are both 0 (#805).
 - With `process_orders_on_close` and the default FIFO close rule, the named `strategy.exit` calls of a reversing `strategy.entry` with an explicit quantity, placed in the same execution after a `strategy.close` of the old position, are now sized from the new entry's own quantity: a percentage exit takes its share of the new entry and an absolute-quantity exit keeps its quantity, instead of being sized from a basis reduced by the old position (#803).
 - Without `process_orders_on_close`, the named `strategy.exit` calls placed with a reversing `strategy.entry` of explicit quantity now take their percentage from the new entry when its size differs from the position it replaces, and a take-profit given as an absolute quantity now fires; before, the percentage was taken from the position being replaced and an absolute-quantity take-profit never fired (#803).

@@ -62,6 +62,7 @@
 #include <pineforge/engine.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
+#include <pineforge/query_refusal.hpp>
 #include <pineforge/map_capacity.hpp>
 #include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/bar.hpp>
@@ -91,6 +92,7 @@ int native_set_execution_observer_v1(BacktestEngine*, const pf_execution_observe
 int native_execution_observation_v1(const BacktestEngine*, pf_execution_observation_v1*) noexcept;
 int native_set_selected_window_v1(BacktestEngine*, const pf_selected_window_config_v1*) noexcept;
 int native_selected_window_counts_v1(const BacktestEngine*, pf_selected_window_counts_v1*) noexcept;
+void native_latch_void_setter_refusal(BacktestEngine*, const std::exception*) noexcept;
 }
 }
 
@@ -104,16 +106,8 @@ void run_sigterm_handler(int) noexcept {
     run_sigterm_stop = 1;
 }
 
-template <typename Fn>
-void pf_cabi_void(Fn&& fn) noexcept {
-    try {
-        std::forward<Fn>(fn)();
-    } catch (...) {
-    }
-}
-
-/* A refusal that escaped an int entry point as an exception: its what() and
- * its run-failure code (run_failure.hpp) beside the handle, so a -1 reads
+/* A refusal that escaped a non-void C entry point as an exception: its what() and
+ * its run-failure code (run_failure.hpp) beside the handle, so a refusal reads
  * back the reason through strategy_get_last_error / _code. A NULL handle has
  * nowhere to keep it, and a handle whose run already failed keeps that run's
  * own text and code. Never throws: it runs on the C boundary. */
@@ -133,6 +127,22 @@ void note_cabi_refusal(pf_strategy_t s, const std::exception* error) noexcept {
                                         pineforge::RunFailureCode::engine_unclassified_error);
         }
     } catch (...) {
+    }
+}
+
+template <typename Fn>
+void pf_cabi_void(pf_strategy_t s, Fn&& fn) noexcept {
+    try {
+        std::forward<Fn>(fn)();
+    } catch (const pineforge::SelectedWindowQueryAfterSeal&) {
+        // A documented refusal, observed through strategy_state_query_status_v1.
+        // It leaves the run's error, status and first cause untouched.
+    } catch (const std::exception& error) {
+        if (s) pineforge::native_latch_void_setter_refusal(
+            static_cast<pineforge::BacktestEngine*>(s), &error);
+    } catch (...) {
+        if (s) pineforge::native_latch_void_setter_refusal(
+            static_cast<pineforge::BacktestEngine*>(s), nullptr);
     }
 }
 
@@ -572,17 +582,21 @@ PF_API int64_t strategy_script_bars_processed(pf_strategy_t s) {
  * a backtest whose per-bar values it wants to cross-reference against
  * TradingView. */
 PF_API void strategy_set_trace_enabled(pf_strategy_t s, int on) {
-    pf_cabi_void([&] {
+    pf_cabi_void(s, [&] {
         if (!s) return;
         static_cast<pineforge::BacktestEngine*>(s)->set_trace_enabled(on != 0);
     });
 }
 
-/* Returns the error message captured by the most recent run() on this
- * strategy, or an empty string if the run completed normally. The
- * pointer remains valid until the next run() (which clears the
- * captured error before it begins). Returns NULL only when ``s`` is
- * NULL. The runtime catches all std::exception derivatives inside
+/* Returns the most recent run or setter error text; empty when none was
+ * recorded. A void setter setup failure survives the next refused start;
+ * the following start clears it. The failed setter did not apply its value;
+ * retrying the start without reapplying it uses the previous value.
+ * The recorded text begins "Error before the first bar: " (or
+ * "Error on bar N: " when a bar is being executed).
+ * The pointer lasts until an operation
+ * replaces or clears the error. Returns NULL only when ``s`` is NULL.
+ * The runtime catches all std::exception derivatives inside
  * BacktestEngine::run() so the C ABI never unwinds an exception across
  * the extern "C" boundary; consumers must check this after every run
  * to surface engine-rejected configurations (e.g. script_tf finer than
@@ -610,7 +624,7 @@ PF_API const char* strategy_get_last_error_args(pf_strategy_t s) {
 }
 
 PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms) {
-    pf_cabi_void([&] {
+    pf_cabi_void(s, [&] {
         if (!s) return;
         static_cast<pineforge::BacktestEngine*>(s)->set_trade_start_time(timestamp_ms);
     });
@@ -626,9 +640,9 @@ PF_API void strategy_request_abort(pf_strategy_t s) {
     static_cast<pineforge::BacktestEngine*>(s)->request_abort();
 }
 
-/* 0 when the most recent run() completed, 1 when it was aborted
- * (NOT_COMPLETED), -1 when ``s`` is NULL. Errors are reported by
- * strategy_get_last_error. */
+/* 1 = NOT_COMPLETED (failed/aborted run or void setter failure); -1 = NULL handle.
+ * A zero status alone does not prove success: also read strategy_get_last_error
+ * and strategy_get_last_error_code, including after a refused start. */
 PF_API int strategy_last_run_status(pf_strategy_t s) {
     if (!s) return -1;
     return static_cast<const pineforge::BacktestEngine*>(s)->last_run_status();
@@ -641,7 +655,7 @@ PF_API int strategy_last_run_status(pf_strategy_t s) {
  * host's (a virtual seam on the kernel): on a host that models no forming
  * tail bar the call is accepted and inert, as it always was there. */
 PF_API void strategy_set_realtime_tail(pf_strategy_t s, int on, int horizon_bars) {
-    pf_cabi_void([&] {
+    pf_cabi_void(s, [&] {
         if (!s) return;
         static_cast<pineforge::BacktestEngine*>(s)->set_realtime_tail(on != 0, horizon_bars);
     });
@@ -663,7 +677,7 @@ PF_API void strategy_set_realtime_tail(pf_strategy_t s, int on, int horizon_bars
  * host's; on a host that models no forming tail bar the call is accepted
  * and inert, as it always was there. */
 PF_API void strategy_set_probe_suppress_tail_logic(pf_strategy_t s, int on) {
-    pf_cabi_void([&] {
+    pf_cabi_void(s, [&] {
         if (!s) return;
         static_cast<pineforge::BacktestEngine*>(s)->set_probe_suppress_tail_logic(on != 0);
     });
@@ -672,8 +686,8 @@ PF_API void strategy_set_probe_suppress_tail_logic(pf_strategy_t s, int on) {
 /* ABI v4 live-runtime surface (task 4): force the intrabar path order used
  * by every subsequent run() -- 0 AUTO (the unchanged TV-emulator rule), 1
  * HIGH_FIRST (O -> H -> L -> C), 2 LOW_FIRST (O -> L -> H -> C); any other
- * @p mode is clamped to AUTO. A live probe runs the SAME forming bar under
- * both forced orders and keeps only the fills that agree between the two.
+ * @p mode records a typed setting refusal. A live probe runs the SAME forming
+ * bar under both forced orders and keeps only the fills that agree between the two.
  * Persistent configuration, like strategy_set_realtime_tail. The mode is
  * carried by the RUN (NativeRunSpec::path_order, projected at begin), so it
  * takes effect at the next begin rather than mid-run and a stream is not
@@ -683,7 +697,7 @@ PF_API void strategy_set_probe_suppress_tail_logic(pf_strategy_t s, int on) {
  * legs to order. Default AUTO (mode=0): every historical run stays
  * byte-identical to before this flag existed. */
 PF_API void strategy_set_path_order(pf_strategy_t s, int mode) {
-    pf_cabi_void([&] {
+    pf_cabi_void(s, [&] {
         if (!s) return;
         static_cast<pineforge::BacktestEngine*>(s)->set_path_order(mode);
     });
@@ -709,7 +723,7 @@ PF_API int strategy_last_bar_dual_entry_path(pf_strategy_t s) {
  * NULL/0-length and every historical run is byte-identical to before this
  * flag existed. */
 PF_API void strategy_set_broker_state_hash_recording(pf_strategy_t s, int on) {
-    pf_cabi_void([&] {
+    pf_cabi_void(s, [&] {
         if (!s) return;
         static_cast<pineforge::BacktestEngine*>(s)->set_broker_state_hash_recording(on != 0);
     });
@@ -976,7 +990,7 @@ PF_API int strategy_stream_fill_report(pf_strategy_t s, pf_report_t* out) {
  * pineforge.h docstring; NULL or empty are normalised to the legacy UTC
  * fast path. */
 PF_API void strategy_set_chart_timezone(pf_strategy_t s, const char* tz) {
-    pf_cabi_void([&] {
+    pf_cabi_void(s, [&] {
         if (!s) return;
         static_cast<pineforge::BacktestEngine*>(s)->set_chart_timezone(
             tz ? std::string(tz) : std::string());
@@ -986,14 +1000,14 @@ PF_API void strategy_set_chart_timezone(pf_strategy_t s, const char* tz) {
 /* Plumb the symbol's exchange timezone / session string from the data feed
  * into syminfo_ (feeds session.ismarket / time(session)). NULL is ignored. */
 PF_API void strategy_set_syminfo_timezone(pf_strategy_t s, const char* tz) {
-    pf_cabi_void([&] {
+    pf_cabi_void(s, [&] {
         if (!s || !tz) return;
         static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_timezone(std::string(tz));
     });
 }
 
 PF_API void strategy_set_syminfo_session(pf_strategy_t s, const char* session) {
-    pf_cabi_void([&] {
+    pf_cabi_void(s, [&] {
         if (!s || !session) return;
         static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_session(std::string(session));
     });
@@ -1002,7 +1016,7 @@ PF_API void strategy_set_syminfo_session(pf_strategy_t s, const char* session) {
 /* Plumb the instrument class (syminfo.type: "forex" / "stock" / "crypto" /
  * "futures" / ...) into syminfo_. Defaults to "crypto"; NULL/empty ignored. */
 PF_API void strategy_set_syminfo_type(pf_strategy_t s, const char* type) {
-    pf_cabi_void([&] {
+    pf_cabi_void(s, [&] {
         if (!s || !type) return;
         static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_type(std::string(type));
     });
@@ -1023,9 +1037,9 @@ PF_API int strategy_set_syminfo_string(pf_strategy_t s, const char* key,
 /* Inject the instrument tick size (syminfo.mintick). Drives the directional
  * stop-entry snap (long ceil / short floor) and slippage = N*mintick economics.
  * Defaults to 0.01 (crypto/equity); set per-instrument (e.g. 0.25 for ES,
- * 0.00001 for FX). Non-positive values are ignored. */
+ * 0.00001 for FX). Non-positive and NaN values record a typed refusal. */
 PF_API void strategy_set_syminfo_mintick(pf_strategy_t s, double mintick) {
-    pf_cabi_void([&] {
+    pf_cabi_void(s, [&] {
         if (!s) return;
         static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_mintick(mintick);
     });
@@ -1033,9 +1047,10 @@ PF_API void strategy_set_syminfo_mintick(pf_strategy_t s, double mintick) {
 
 /* Inject the instrument point value (syminfo.pointvalue) — the $ per point per
  * contract multiplier applied to realized PnL and MFE/MAE. Defaults to 1.0
- * (crypto/equity); set per-instrument (e.g. 50 for ES). Non-positive ignored. */
+ * (crypto/equity); set per-instrument (e.g. 50 for ES). Non-positive and NaN
+ * values record a typed refusal. */
 PF_API void strategy_set_syminfo_pointvalue(pf_strategy_t s, double pointvalue) {
-    pf_cabi_void([&] {
+    pf_cabi_void(s, [&] {
         if (!s) return;
         static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_pointvalue(pointvalue);
     });
@@ -1048,10 +1063,11 @@ PF_API void strategy_set_syminfo_pointvalue(pf_strategy_t s, double pointvalue) 
  * report-only quote keys (report_terminal_quote_time_ms, report_terminal_quote_close)
  * by throwing SelectedWindowQueryAfterSeal before any store; this export keeps its
  * void signature, swallows that exception and records nothing, and the refusal is
- * observed through strategy_state_query_status_v1 (above). */
+ * observed through strategy_state_query_status_v1 (above). Other exceptions record
+ * a typed run failure beside the handle. */
 PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
                                           double value) {
-    pf_cabi_void([&] {
+    pf_cabi_void(s, [&] {
         if (!s || !key) return;
         static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_metadata(
             std::string(key), value);
@@ -1368,7 +1384,7 @@ PF_API int strategy_outputs_event_get(pf_strategy_t s, int index, void* out, siz
 }
 
 PF_API void strategy_outputs_events_clear(pf_strategy_t s) {
-    pf_cabi_void([&] {
+    pf_cabi_void(s, [&] {
         if (s) static_cast<pineforge::BacktestEngine*>(s)->output_events_clear();
     });
 }
