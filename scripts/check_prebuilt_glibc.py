@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refuse staged prebuilt libraries requiring glibc newer than 2.36.
+"""Refuse staged prebuilt libraries requiring glibc newer than 2.35.
 
 Internal Linux CI tool: pass exactly one explicit staging directory. Recursively
 inspect every .a, .so and .so.*; require a nonempty inventory. Policy is fixed.
@@ -27,7 +27,7 @@ archive bookkeeping is not an ELF payload member.
 
 Versions come from ELF symbol suffixes and GNU version sections, never arbitrary
 file strings. Numeric grammar is GLIBC_<digits>.<digits>[.<digits>...].
-Compare numeric components with zero padding: 2.9 < 2.36 == 2.36.0 < 2.36.1.
+Compare numeric components with zero padding: 2.9 < 2.35 == 2.35.0 < 2.35.1.
 GLIBC_PRIVATE and every other nonnumeric GLIBC_* tag fail explicitly; unrelated
 namespaces such as GLIBCXX_* are reported separately. Any __isoc23_* symbol,
 defined or undefined and with or without a version suffix, fails conservatively.
@@ -56,7 +56,7 @@ import subprocess
 import sys
 
 
-CEILING = (2, 36)
+CEILING = (2, 35)
 PROTECTED = {
     ".git", ".ssh", ".aws", ".codex", ".agents", ".config", ".gnupg",
     ".kube", ".azure", ".netrc", "config", "configs", "credentials",
@@ -317,7 +317,7 @@ def exceeds_baseline(candidate: tuple[int, ...] | None,
                      baseline: tuple[int, ...] | None) -> bool:
     """True when the staged tree's highest numeric tag is above the baseline's.
 
-    Components compare with zero padding, so 2.36 equals 2.36.0. No numeric tag
+    Components compare with zero padding, so 2.35 equals 2.35.0. No numeric tag
     at all ranks below every tag: a staged tag above a tagless baseline exceeds
     it, and a tagless staged tree never does.
     """
@@ -539,7 +539,7 @@ def policy_issues(path: Path, member: dict, issues: list[dict]) -> None:
             reason = "private glibc ABI refused" if name == "GLIBC_PRIVATE" else "unknown GLIBC version grammar"
             issue(issues, path, f"{reason}: {name}", **context)
         elif version_exceeds_ceiling(version):
-            issue(issues, path, f"{name} exceeds fixed GLIBC_2.36 ceiling", **context)
+            issue(issues, path, f"{name} exceeds fixed {glibc_label(CEILING)} ceiling", **context)
     for reference in member["isoc23_references"]:
         issue(issues, path, f"forbidden __isoc23_* symbol reference: {reference['symbol']}",
               **context, reference=reference)
@@ -672,7 +672,7 @@ def inspect_tree(root: Path, issues: list[dict], policy: bool) -> tuple[list[dic
     targets = []
     results = []
     root_fd = None
-    emit("root", path=str(root), **({"fixed_glibc_ceiling": "2.36"} if policy else {}))
+    emit("root", path=str(root), **({"fixed_glibc_ceiling": version_text(CEILING)} if policy else {}))
     try:
         if sys.platform != "linux":
             raise InspectionError("Linux descriptor-based ELF inspection is required")

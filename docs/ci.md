@@ -1711,7 +1711,7 @@ actual tarball and uploads a named workflow artifact. The later `upload` job nee
 both builds, has `contents: write` without OIDC, and re-hashes both downloads
 against those job outputs before any release upload. Missing or mismatched hashes
 refuse the job. Notify follows upload; dry runs retain the artifacts and publish
-nothing. Both builds retain the v1.10.0 archive comparison, fixed GLIBC 2.36 ceiling,
+nothing. Both builds retain the v1.10.0 archive comparison, fixed GLIBC 2.35 ceiling,
 `__isoc23_*` refusal, and every-library inventory; x86 also consumes its packed archive.
 
 The PR diagnostic checks out only the exact same-repository head without persisted
