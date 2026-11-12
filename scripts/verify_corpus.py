@@ -1124,6 +1124,23 @@ def align_by_time(tv: list[TradePair], eng: list[TradePair]) -> list[tuple[Trade
     return matched
 
 
+def _unmatched_by_membership(
+    tv_pool: list[TradePair],
+    eng_pool: list[TradePair],
+    pairs: list[tuple[TradePair, TradePair]],
+) -> tuple[int, int]:
+    """Count pool trades absent by object identity from their side of all pairs.
+
+    A pair crossing an interior bound still matches both of its trades.
+    """
+    matched_tv_ids = {id(t) for t, _ in pairs}
+    matched_eng_ids = {id(e) for _, e in pairs}
+    return (
+        sum(id(t) not in matched_tv_ids for t in tv_pool),
+        sum(id(e) not in matched_eng_ids for e in eng_pool),
+    )
+
+
 def trim_to_common_match_window(
     tv: list[TradePair],
     eng: list[TradePair],
@@ -1228,6 +1245,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         # divergence for the non-excellent zero-alignment branch.
         if label != "excellent":
             label = _apply_declared_tier_override(label, meta)
+        count_abs_delta = sum(_unmatched_by_membership(tv_cmp, eng_cmp, []))
         return VerificationResult(
             strategy_dir=strategy_dir,
             rel=rel,
@@ -1242,8 +1260,8 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
             tv_raw_count=len(tv),
             eng_raw_count=len(eng),
             count_delta=relative_max(len(tv_cmp), len(eng_cmp)),
-            count_abs_delta=abs(len(tv_cmp) - len(eng_cmp)),
-            count_ok=len(tv_cmp) == len(eng_cmp),
+            count_abs_delta=count_abs_delta,
+            count_ok=count_abs_delta == 0,
         )
 
     # Resolve parity profile (strict vs production) per probe.
@@ -1292,7 +1310,8 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     eng_gate_n = len(eng_gate) + n_gate_marks
     gating_matched_n = len(gating_matched) + n_gate_marks
 
-    count_abs_delta = abs(tv_gate_n - eng_gate_n)
+    unmatched_tv, unmatched_engine = _unmatched_by_membership(tv_gate, eng_gate, matched)
+    count_abs_delta = unmatched_tv + unmatched_engine
     count_delta = relative_max(tv_gate_n, eng_gate_n)
     # A mark pair's entry is a fill on both sides, so the identity gate
     # sees it with the others: the engine's range-end row must carry an
@@ -1412,7 +1431,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     entry_ok = entry_p90  < thresh["entry"]
     # Count mismatch is a primary reproduction signal. Percent thresholds can
     # hide dozens of missing/extra trades in large strategies, so excellent
-    # requires exact gated TV/engine count parity. Any non-zero absolute count
+    # requires zero unmatched trades in the canonical gate pools. A non-zero count
     # mismatch is an engine/codegen gap unless separately proven as a TV/export
     # anomaly.
     count_ok = count_abs_delta == 0
@@ -1499,7 +1518,15 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         if not notes:
             failures = []
             if not count_ok:
-                failures.append(f"count Δ {count_delta*100:.2f}%")
+                if unmatched_tv is not None and unmatched_engine is not None:
+                    failures.append(
+                        f"{unmatched_tv} TradingView "
+                        f"{'trade' if unmatched_tv == 1 else 'trades'} and "
+                        f"{unmatched_engine} engine "
+                        f"{'trade' if unmatched_engine == 1 else 'trades'} unmatched "
+                        f"({gating_matched_n} of {tv_gate_n} paired)")
+                else:
+                    failures.append(f"count Δ {count_delta*100:.2f}%")
             if not entry_ok:
                 failures.append(f"entry p90 {entry_p90*100:.4f}%")
             if not exit_ok:

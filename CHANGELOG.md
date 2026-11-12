@@ -7,6 +7,9 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- Corpus grading now counts unmatched trades on both sides by membership in
+  the analyzer's pairs, so a missing TradingView trade and an extra engine
+  trade cannot cancel each other and earn an excellent grade.
 - `str.match` no longer reports "no match" after a memory failure; the failure now reaches `out_of_memory`.
   A pattern over the limits of the engine's regular-expression library stops the run with `pine_string_error` and reason `regex_resource_limit`, which is not retryable.
   An invalid regular expression now stops the run with a typed error, as TradingView does; it used to return an empty string. The message is TradingView's text with the engine's bar prefix, `Error on bar N: `, or `Error before the first bar: ` when no bar is being executed.
