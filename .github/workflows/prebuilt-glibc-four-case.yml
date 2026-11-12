@@ -1,0 +1,44 @@
+name: Prebuilt glibc four-case diagnostic
+
+# Diagnostic only. This workflow lives on the branch diag/prebuilt-glibc-four-case
+# and is never merged. It takes the published v1.10.0 and v1.12.0 x86_64
+# archives and shows, case by case, whether a consumer program links and runs
+# against them on stock Ubuntu 22.04 and Debian 12 images. See
+# scripts/diag_prebuilt_four_case.sh for the cases and how each is judged.
+
+on:
+  push:
+    branches:
+      - diag/prebuilt-glibc-four-case
+
+permissions:
+  contents: read
+
+jobs:
+  four-case:
+    runs-on: ubuntu-24.04
+    # No timeout-minutes, as in the other workflows of this repository.
+    steps:
+      - name: Require an x86_64 runner
+        run: |
+          set -euo pipefail
+          arch=$(uname -m)
+          echo "uname -m: ${arch}"
+          test "${arch}" = x86_64
+
+      - name: Checkout with full history and tags
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run the four cases
+        run: bash scripts/diag_prebuilt_four_case.sh "$RUNNER_TEMP/four-case"
+
+      - name: Keep the evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: prebuilt-glibc-four-case-evidence
+          path: ${{ runner.temp }}/four-case/
+          if-no-files-found: warn
