@@ -398,7 +398,7 @@ struct FileSizeLimit {
             throw std::system_error(errno, std::generic_category(), "read file-size limit");
         struct sigaction ignored{};
         ignored.sa_handler = SIG_IGN;
-        if (::sigemptyset(&ignored.sa_mask) != 0
+        if (sigemptyset(&ignored.sa_mask) != 0
             || ::sigaction(SIGXFSZ, &ignored, &previous_signal) != 0)
             throw std::system_error(errno, std::generic_category(), "ignore SIGXFSZ");
         signal_changed = true;

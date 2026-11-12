@@ -344,7 +344,7 @@ public:
         assert(previous_.rlim_cur == RLIM_INFINITY || previous_.rlim_cur >= bytes);
         struct sigaction ignored{};
         ignored.sa_handler = SIG_IGN;
-        assert(::sigemptyset(&ignored.sa_mask) == 0);
+        assert(sigemptyset(&ignored.sa_mask) == 0);
         assert(::sigaction(SIGXFSZ, &ignored, &signal_) == 0);
         auto selected = previous_;
         selected.rlim_cur = static_cast<rlim_t>(bytes);

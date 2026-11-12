@@ -485,7 +485,7 @@ struct FileSizeLimit {
                 "read and lower RLIMIT_FSIZE");
         struct sigaction ignored{};
         ignored.sa_handler = SIG_IGN;
-        ::sigemptyset(&ignored.sa_mask);
+        sigemptyset(&ignored.sa_mask);
         require(::sigaction(SIGXFSZ, &ignored, &previous) == 0, "ignore SIGXFSZ for real EFBIG");
         auto limit = saved;
         limit.rlim_cur = bytes;
