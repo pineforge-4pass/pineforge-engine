@@ -427,6 +427,7 @@
       {"code": "pine_na_reference", "class": "strategy", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "direct", "route": "source invalid na reference"},
       {"code": "pine_runtime_limit", "class": "strategy_limit", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "direct", "route": "source runtime limit"},
       {"code": "pine_string_error", "class": "strategy", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "direct", "route": "source string operation"},
+      {"code": "pine_timezone_error", "class": "strategy", "retryable": false, "since": "1.12.0", "appendix": "catalog-extension", "reachability": "direct", "route": "source time, date or format function names a timezone that is neither UTC/GMT notation nor a name the host calendar accepts; added catalog row outside Appendix C's older enumeration"},
       {"code": "recalc_cap", "class": "strategy_limit", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "direct", "route": "source fill/recalculation cascade cap"},
       {"code": "recorded_request_missing", "class": "no_data", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "direct", "route": "source request with missing recorded data"},
       {"code": "recorded_request_refused", "class": "input", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "no", "route": "caller recorded-feed installation"},

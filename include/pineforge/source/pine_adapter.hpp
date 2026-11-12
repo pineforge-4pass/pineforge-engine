@@ -1865,7 +1865,7 @@ public:
     // by the risk and intraday-cap ledgers.  It carries no generic-kernel
     // policy and lets native-route tests avoid reaching into retired host
     // internals.
-    std::int64_t chart_day_key(std::int64_t timestamp_ms) const noexcept;
+    std::int64_t chart_day_key(std::int64_t timestamp_ms) const;
 
     int short_seed_collision_role_v1(native_order::RequestHandle) const noexcept;
     const PendingIntentView& pending_intent_view() const noexcept { return pending_view_; }

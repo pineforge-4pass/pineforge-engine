@@ -101,6 +101,23 @@ public:
         range_end_trades_.push_back(trade);
     }
 };
+
+void check_rejected_number(void (*setter)(pf_strategy_t, double), double value,
+                           double previous, const char* key, const char* args) {
+    ProbeEngine refused;
+    pf_strategy_t handle = static_cast<pf_strategy_t>(&refused);
+    setter(handle, previous);
+    setter(handle, value);
+    CHECK(strategy_last_run_status(handle) == 1);
+    CHECK(std::strcmp(strategy_get_last_error_code(handle), "symbol_metadata_rejected") == 0);
+    CHECK(std::strcmp(strategy_get_last_error_args(handle), args) == 0);
+    CHECK(std::strstr(strategy_get_last_error(handle), key) != nullptr);
+    CHECK(std::strstr(strategy_get_last_error(handle), std::to_string(value).c_str()) != nullptr);
+    if (setter == strategy_set_syminfo_mintick)
+        CHECK(refused.sym_mintick() == previous);
+    else
+        CHECK(refused.sym_pv() == previous);
+}
 }
 
 int main() {
@@ -209,21 +226,22 @@ int main() {
     strategy_set_syminfo_session(h, "0930-1600:23456");
     CHECK(eng.sym_session() == std::string("0930-1600:23456"));
 
-    // mintick: positive accepted; non-positive ignored (engine-side guard).
+    // Refused numbers keep the prior value and record their typed refusal.
+    // Each refusal has its own handle so an earlier first cause cannot mask it.
     CHECK(eng.sym_mintick() == 0.01);                 // constructor default
     strategy_set_syminfo_mintick(h, 0.25);
     CHECK(eng.sym_mintick() == 0.25);
-    strategy_set_syminfo_mintick(h, 0.0);             // non-positive → ignored
-    CHECK(eng.sym_mintick() == 0.25);
-    strategy_set_syminfo_mintick(h, -1.0);            // negative     → ignored
-    CHECK(eng.sym_mintick() == 0.25);
+    check_rejected_number(strategy_set_syminfo_mintick, 0.0, 0.25,
+                          "price tick", "{\"field\":\"price_tick\"}");
+    check_rejected_number(strategy_set_syminfo_mintick, -1.0, 0.25,
+                          "price tick", "{\"field\":\"price_tick\"}");
 
-    // pointvalue: positive accepted; non-positive ignored.
+    // pointvalue: positive accepted; zero records the symbol metadata refusal.
     CHECK(eng.sym_pv() == 1.0);                        // constructor default
     strategy_set_syminfo_pointvalue(h, 50.0);
     CHECK(eng.sym_pv() == 50.0);
-    strategy_set_syminfo_pointvalue(h, 0.0);          // ignored
-    CHECK(eng.sym_pv() == 50.0);
+    check_rejected_number(strategy_set_syminfo_pointvalue, 0.0, 50.0,
+                          "point value", "{\"field\":\"point_value\"}");
 
     // metadata: forwards (key, value) into the engine's metadata map,
     // surfaced via the public get_syminfo_metadata(). Absent → na (NaN).
