@@ -3883,7 +3883,7 @@ class MacosCompilePolicy(unittest.TestCase):
                     self.assert_refused(workflow.replace(before, after, 1))
         for line in ('          test -s build/lib/libpineforge.a\n',
                      '          test -x build/bin/test_ta\n',
-                     '          test -x build/bin/test_integration\n'):
+                     '          test -x build/bin/test_integration_l4d\n'):
             self.assertIn(line, workflow)
             self.assert_refused(workflow.replace(line, '', 1))
 
@@ -3989,7 +3989,7 @@ class MacosCompilePolicy(unittest.TestCase):
         root, env = self.shell_tree({
             'cmake': 'printf "%s\\n" "$*" > "$BUILD_LOG"\nexit "$BUILD_EXIT"\n',
             'sysctl': 'test "$*" = "-n hw.ncpu"\nprintf "%s\\n" "$CORES"\n'})
-        outputs = ('build/lib/libpineforge.a', 'build/bin/test_ta', 'build/bin/test_integration')
+        outputs = ('build/lib/libpineforge.a', 'build/bin/test_ta', 'build/bin/test_integration_l4d')
         cases = [('3', '0', None), ('7', '0', None), ('3', '41', None),
                  *(('3', '0', name) for name in outputs)]
         for index, (cores, build_exit, missing) in enumerate(cases):

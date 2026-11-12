@@ -4350,7 +4350,7 @@ MACOS_COMPILE_STEPS = r'''      - name: Require Darwin
           cmake --build build --parallel "$(sysctl -n hw.ncpu)"
           test -s build/lib/libpineforge.a
           test -x build/bin/test_ta
-          test -x build/bin/test_integration
+          test -x build/bin/test_integration_l4d
 
       - name: Save downloaded Homebrew dependencies on successful main push
         if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.brew-restore.outputs.cache-hit != 'true' }}
