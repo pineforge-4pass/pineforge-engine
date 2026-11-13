@@ -43,8 +43,8 @@ class NoSkipControls(unittest.TestCase):
 
     def run_row_driver(self, body):
         cmake = ROOT / "tests" / "CMakeLists.txt"
-        declared_inputs((cmake, ROOT / "scripts" / "check_cr150_cmake_d.py"))
-        import check_cr150_cmake_d as checker
+        declared_inputs((cmake, ROOT / "scripts" / "check_lanes_cmake_d.py"))
+        import check_lanes_cmake_d as checker
         statements = checker._statements(cmake, cmake.read_text(), mask_quotes=True)
         registrations = [checker._fence_words(statement) for statement in statements
                          if statement.name.lower() == "add_test"

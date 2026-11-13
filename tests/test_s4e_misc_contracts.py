@@ -10,7 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 INPUTS = (
     "tests/test_cr257_source_exit_scratch_io.cpp",
-    "tests/cr150.d/README.md",
+    "tests/lanes.d/README.md",
     "docs/pages/run-failure-codes.md",
     "docker/run_failure_codes.json",
     "docker/run_failure_codes_diff.json",
@@ -59,7 +59,7 @@ def test_engine_run_write_checks_are_active_bounds():
 
 
 def test_cr150_policy_names_terminal_validation_ownership_and_77():
-    text = " ".join(read_input("tests/cr150.d/README.md").split())
+    text = " ".join(read_input("tests/lanes.d/README.md").split())
     for pattern in (
         r"terminal PR-fast validation",
         r"PINEFORGE_PR_FAST_TESTS",

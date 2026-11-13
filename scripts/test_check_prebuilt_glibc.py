@@ -327,18 +327,26 @@ class RealArtifacts(unittest.TestCase):
                 self.assertGreater(index, inventory_index)
 
     def test_older_numeric_versions_are_accepted(self):
-        for version in ("2.2.5", "2.9", "2.34", "2.36", "2.36.0"):
+        # expectation corrected: 2.36 and 2.36.0 -> 2.35 and 2.35.0, because the
+        # fixed ceiling moved from GLIBC_2.36 to GLIBC_2.35.
+        for version in ("2.2.5", "2.9", "2.34", "2.35", "2.35.0"):
             with self.subTest(version=version):
                 path = self.shared(f"older/{version}/provider.so", ("GLIBC_" + version,))
                 records = self.assert_verdict(self.run_checker(), True)
                 self.assertEqual(self.targets(records)[str(path)]["max_glibc"], version)
+                # The accepted range ends at the ceiling the checker reports.
+                root = next(row for row in records if row["event"] == "root")
+                self.assertEqual(root["fixed_glibc_ceiling"], "2.35")
 
     def test_future_minor_patch_and_major_versions_are_rejected(self):
-        for version in ("2.37", "2.38", "2.39", "2.40", "2.100", "3.0", "10.0", "2.36.1"):
+        for version in ("2.35.1", "2.36", "2.37", "2.38", "2.39", "2.40", "2.100", "3.0",
+                        "10.0", "2.36.1"):
             with self.subTest(version=version):
                 path = self.shared(f"future/{version}/library.so.9", ("GLIBC_" + version,))
                 records = self.assert_verdict(self.run_checker(), False)
                 self.assert_issue(records, path, "GLIBC_" + version)
+                self.assert_issue(records, path,
+                                  f"GLIBC_{version} exceeds fixed GLIBC_2.35 ceiling")
                 self.assertEqual(self.targets(records)[str(path)]["max_glibc"], version)
 
     def test_maximum_is_numeric_and_reports_all_violations(self):
@@ -351,9 +359,14 @@ class RealArtifacts(unittest.TestCase):
             self.assert_issue(records, path, version)
 
     def test_version_definitions_are_inspected_as_well_as_requirements(self):
-        clean = self.shared("lib/clean definition.so", ("GLIBC_2.36",), definitions=True)
+        # expectation corrected: 2.36 -> 2.35, because the fixed ceiling moved from
+        # GLIBC_2.36 to GLIBC_2.35; a GLIBC_2.36 definition is now the first refusal.
+        clean = self.shared("lib/clean definition.so", ("GLIBC_2.35",), definitions=True)
         records = self.assert_verdict(self.run_checker(), True)
-        self.assertEqual(self.targets(records)[str(clean)]["max_glibc"], "2.36")
+        self.assertEqual(self.targets(records)[str(clean)]["max_glibc"], "2.35")
+        edge = self.shared("lib/edge definition.so", ("GLIBC_2.36",), definitions=True)
+        records = self.assert_verdict(self.run_checker(), False)
+        self.assert_issue(records, edge, "GLIBC_2.36 exceeds fixed GLIBC_2.35 ceiling")
         bad = self.shared("lib/high definition.so", ("GLIBC_3.0",), definitions=True)
         records = self.assert_verdict(self.run_checker(), False)
         self.assert_issue(records, bad, "GLIBC_3.0")

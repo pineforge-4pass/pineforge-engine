@@ -13,7 +13,7 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).absolute().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-import check_cr150_cmake_d as checker
+import check_lanes_cmake_d as checker
 from test_run_pytest_no_skips import declared_inputs
 
 ARTIFACTS = None
@@ -29,8 +29,8 @@ class NativeSkipAccountingControls(unittest.TestCase):
         self.work = Path(tempfile.mkdtemp(prefix="control-", dir=artifacts))
 
     def run_registered_driver(self, body):
-        cmake = ROOT / "tests/cr150.d/core-cr150-l22v.cmake"
-        declared_inputs((cmake, ROOT / "scripts/check_cr150_cmake_d.py"))
+        cmake = ROOT / "tests/lanes.d/run-json-sink-fd.cmake"
+        declared_inputs((cmake, ROOT / "scripts/check_lanes_cmake_d.py"))
         # Coupled to the registered L22V command and the checker's private CMake parsers.
         statements = checker._statements(cmake, cmake.read_text(), mask_quotes=True)
         registrations = [checker._fence_words(statement) for statement in statements
