@@ -180,8 +180,8 @@ void test_explicit_entry_path() {
 // The source quantity stays literal; only its executable units use the lot grid.
 class ExplicitOrderProbe final : public pineforge::source::PineStrategyHost {
 public:
-    ExplicitOrderProbe(double requested, double step, bool is_long)
-        : requested_(requested), is_long_(is_long) {
+    ExplicitOrderProbe(double requested, double step, bool is_long, int oca_type = 0)
+        : requested_(requested), is_long_(is_long), oca_type_(oca_type) {
         source::PineStrategyConfig config;
         config.initial_capital = 100.0;
         config.default_qty_type = static_cast<int>(QtyType::FIXED);
@@ -199,7 +199,8 @@ public:
 
     void on_source_bar(const Bar&) override {
         if (pine_bar_index() == 0) {
-            strategy_order("open", is_long_, requested_);
+            strategy_order("open", is_long_, requested_, kNaN, kNaN,
+                           oca_type_ == 1 ? "cancel" : "", oca_type_);
         } else if (pine_bar_index() == 1) {
             position_before_close = live_position_size();
             strategy_close_all();
@@ -211,6 +212,7 @@ public:
 private:
     double requested_;
     bool is_long_;
+    int oca_type_;
 };
 
 void test_explicit_order_decimal_boundary() {
@@ -256,6 +258,27 @@ void test_explicit_order_decimal_boundary() {
             CHECK(trade.entry_id == "open");
             CHECK(trade.entry_time == bars[0].timestamp);
             CHECK(trade.exit_time == bars[1].timestamp);
+            CHECK(!trade.open_at_end);
+        }
+    }
+    for (const auto& row : rows) {
+        for (bool is_long : {true, false}) {
+            std::printf("  strategy.order oca.cancel %s %s\n",
+                        is_long ? "long" : "short", row.name);
+            const double step = row.has_grid ? decimal_value(row.step) : 0.0;
+            const double expected = row.has_grid
+                ? decimal_floor(row.requested, row.step) : row.request;
+            ExplicitOrderProbe probe(row.request, step, is_long, 1);
+            probe.run(bars.data(), static_cast<int>(bars.size()));
+            CHECK(probe.last_error().empty());
+            CHECK(bits(probe.position_before_close) == bits(is_long ? expected : -expected));
+            CHECK(probe.trade_count() == 1);
+            CHECK(probe.live_position_size() == 0.0);
+            if (probe.trade_count() != 1) continue;
+            const auto trade = probe.get_trade(0);
+            CHECK(bits(trade.qty) == bits(expected));
+            CHECK(trade.is_long == is_long);
+            CHECK(trade.entry_id == "open");
             CHECK(!trade.open_at_end);
         }
     }
