@@ -83,7 +83,7 @@ OVERLAY_MARKER = REPO / CHECK_MODULE.OVERLAY_MARKER
 REMOVED_TU_ROW = 'test_trail_activation_tick_reach'
 TREES_DIR = 'tests/CMakeLists.txt'
 RUNNER = 'runner/CMakeLists.txt'
-LANE_FILE = 'tests/cr150.d/e2e-two-world-lane.cmake'
+LANE_FILE = 'tests/lanes.d/e2e-two-world-lane.cmake'
 SHARD_ROW = 'confirmed_capabilities_refusals_pooc_5'
 # A pinned private row that is no refusal shard: added to the list it is
 # pinned and sorted, so only the drift guard can reject it.
@@ -91,14 +91,14 @@ NOT_A_SHARD_ROW = 'test_pooc_close_fill_view_tapes'
 
 
 def lane_include_block(text: str) -> str:
-    """Extract the unique cr150.d glob through its loop's matching end."""
+    """Extract the unique lanes.d glob through its loop's matching end."""
     lines = text.splitlines(keepends=True)
     starts = [index for index, line in enumerate(lines)
               if re.match(r'\s*file\s*\(\s*GLOB\b', line, re.IGNORECASE)
-              and '/cr150.d/*.cmake' in line]
+              and '/lanes.d/*.cmake' in line]
     if len(starts) != 1:
         raise AssertionError(
-            f'{TREES_DIR}: expected one cr150.d file(GLOB) statement, '
+            f'{TREES_DIR}: expected one lanes.d file(GLOB) statement, '
             f'found {len(starts)}')
     start = starts[0]
     depth = 0
@@ -797,11 +797,11 @@ endif()
 
     def lane_tree(self, body: str) -> Path:
         """An isolated include probe over the copied tree and real pin set."""
-        lanes = self.root / 'tests' / 'cr150.d'
+        lanes = self.root / 'tests' / 'lanes.d'
         self.tree._refuse_repo(lanes.parent)
         self.assertTrue(lanes.is_symlink(), 'the copied lane directory changed shape')
         lanes.unlink()                       # the scratch-tree link, never its target
-        shutil.copytree(REPO / 'tests' / 'cr150.d', lanes)
+        shutil.copytree(REPO / 'tests' / 'lanes.d', lanes)
         self.tree.append(LANE_FILE, body)
         # Keep the real lane include block, with empty but fully modelled
         # records around it. Both probes use this same registration fixture.
@@ -833,15 +833,15 @@ endif()
 
     def test_lane_include_block_ignores_a_following_fenced_block(self):
         cmake = (REPO / TREES_DIR).read_text()
-        tail = (REPO / 'scripts' / 'fixtures' / 'cr150_cmake_d'
+        tail = (REPO / 'scripts' / 'fixtures' / 'lanes_cmake_d'
                 / 'tail-l6b2.cmake').read_text()
-        tail = tail.replace('core-cr150-l6b2', Path(LANE_FILE).stem)
+        tail = tail.replace('report-sink-equity', Path(LANE_FILE).stem)
         expected = (
-            'file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS '
-            '"${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")\n'
-            'list(SORT CR150_LANE_CMAKE)\n'
-            'foreach(cr150_lane_file IN LISTS CR150_LANE_CMAKE)\n'
-            '    include("${cr150_lane_file}")\n'
+            'file(GLOB LANE_CMAKE CONFIGURE_DEPENDS '
+            '"${CMAKE_CURRENT_SOURCE_DIR}/lanes.d/*.cmake")\n'
+            'list(SORT LANE_CMAKE)\n'
+            'foreach(lane_file IN LISTS LANE_CMAKE)\n'
+            '    include("${lane_file}")\n'
             'endforeach()\n')
         self.assertEqual(expected, lane_include_block(cmake + tail))
 

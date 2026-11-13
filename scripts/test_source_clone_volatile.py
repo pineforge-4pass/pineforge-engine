@@ -268,7 +268,7 @@ class SourceCloneVolatile(unittest.TestCase):
 
     def test_every_pytest_ctest_row_disables_the_cache_provider(self):
         paths = [ROOT / "tests" / "CMakeLists.txt"]
-        paths.extend(sorted((ROOT / "tests" / "cr150.d").glob("*.cmake")))
+        paths.extend(sorted((ROOT / "tests" / "lanes.d").glob("*.cmake")))
         pytest_rows = []
         for path in paths:
             for statement in add_test_statements(path.read_text()):

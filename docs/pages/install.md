@@ -52,8 +52,9 @@ ${prefix}/
 ## Prebuilt tarballs
 
 A release attaches the library prebuilt to its GitHub release. From 1.8.0,
-only Linux x86_64 and arm64 archives are published. Releases up to 1.7.0
-also carry a macOS archive. For
+only Linux x86_64 and arm64 archives are published.
+The prebuilt archives need glibc 2.35 or newer (for example Ubuntu 22.04 or Debian 12 and later).
+Releases up to 1.7.0 also carry a macOS archive. For
 [v1.3.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.3.0)
 they are `pineforge-v1.3.0-linux-x86_64.tar.gz`,
 `pineforge-v1.3.0-linux-aarch64.tar.gz` and
