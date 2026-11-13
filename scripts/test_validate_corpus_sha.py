@@ -977,6 +977,7 @@ output.write_text(os.environ["FAKE_HEADER"] + "\\n1,Long,Entry\\n", encoding="ut
     def build(self, probes=None, selected=None, shard=None, **fake):
         probes = {self.PROBE} if probes is None else set(probes)
         selected = [self.PROBE] if selected is None else selected
+        shard_options = {} if shard is None else {"shard": shard}
         output = io.StringIO()
         environment = {
             **self.environment,
@@ -987,7 +988,7 @@ output.write_text(os.environ["FAKE_HEADER"] + "\\n1,Long,Entry\\n", encoding="ut
             with redirect_stdout(output):
                 result = validator._build_and_run(
                     self.corpus, self.engine, self.work, probes, selected,
-                    jobs=1, shard=shard)
+                    jobs=1, **shard_options)
         return result, output.getvalue()
 
     def test_a_clean_run_has_no_findings_and_no_error(self):
@@ -1005,7 +1006,7 @@ output.write_text(os.environ["FAKE_HEADER"] + "\\n1,Long,Entry\\n", encoding="ut
 
     def test_shard_build_requests_only_its_hand_written_target_slice(self):
         (findings, error), _ = self.build(
-            probes={"validation/additional", self.PROBE},
+            probes={self.PROBE},
             selected=[self.PROBE],
             shard=(2, 2),
         )
@@ -1021,7 +1022,7 @@ output.write_text(os.environ["FAKE_HEADER"] + "\\n1,Long,Entry\\n", encoding="ut
 
     def test_shard_missing_library_is_a_finding(self):
         (findings, error), _ = self.build(
-            probes={"validation/additional", self.PROBE},
+            probes={self.PROBE},
             selected=[self.PROBE],
             shard=(2, 2),
             FAKE_CMAKE_LIBRARIES="none",
@@ -1038,7 +1039,7 @@ output.write_text(os.environ["FAKE_HEADER"] + "\\n1,Long,Entry\\n", encoding="ut
         (unknown / "engine_trades.csv").write_text(
             self.TAPE_HEADER + "\n1,Long,Entry\n")
         (findings, error), printed = self.build(
-            probes={self.PROBE, "validation/unknown"},
+            probes={"validation/unknown"},
             selected=["validation/unknown"],
             shard=(1, 1),
         )
