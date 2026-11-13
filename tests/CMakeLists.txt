@@ -3936,6 +3936,9 @@ list(APPEND TEST_SOURCES test_native_dormant_book_cost)
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     list(APPEND TEST_SOURCES test_standing_orders_wall test_projected_pending_scaling)
     list(APPEND TEST_SOURCES test_abi_layout_probe)
+    # #858: absent-parent strategy.exit calls preserve native issuance without
+    # retained-sequence index work; one focused adapter work target.
+    list(APPEND TEST_SOURCES test_issue858_absent_exit_work)
 endif()
 list(APPEND TEST_SOURCES test_native_dormant_book_resident)
 list(APPEND TEST_SOURCES test_native_dormant_book_transcript)
