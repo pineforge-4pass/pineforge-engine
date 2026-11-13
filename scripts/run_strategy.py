@@ -2330,6 +2330,36 @@ def _run_failure_text(lib, state) -> str | None:
     return text if (text or code) else RUN_STATUS_FAILED_TEXT
 
 
+def _engine_warnings(raw) -> list:
+    """Read warning objects, preserving future codes and their argument objects."""
+    try:
+        doc = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+        if not isinstance(doc, list):
+            return []
+        warnings = [
+            {"args": item["args"], "code": item["code"]}
+            for item in doc
+            if isinstance(item, dict) and isinstance(item.get("code"), str)
+            and isinstance(item.get("args"), dict)
+        ]
+        # Non-finite numbers or excessive nesting must not break report encoding.
+        json.dumps(warnings, allow_nan=False)
+    except (TypeError, ValueError, AttributeError, RecursionError):
+        return []
+    return warnings
+
+
+def _add_run_warnings(lib, state, diagnostics):
+    # Read after report assembly, while the strategy still owns the text.
+    # Warnings belong only to diagnostics, outside sink records and fingerprints.
+    getter = getattr(lib, "strategy_get_run_warnings", None)
+    if getter is None:
+        return
+    warnings = _engine_warnings(getter(state))
+    if warnings:
+        diagnostics["warnings"] = warnings
+
+
 class Strategy:
     """Thin ctypes wrapper around one strategy.so."""
 
@@ -2381,6 +2411,9 @@ class Strategy:
             if hasattr(L, name):
                 getattr(L, name).argtypes = [ctypes.c_void_p]
                 getattr(L, name).restype = ctypes.c_char_p
+        if hasattr(L, "strategy_get_run_warnings"):
+            L.strategy_get_run_warnings.argtypes = [ctypes.c_void_p]
+            L.strategy_get_run_warnings.restype = ctypes.c_char_p
         if hasattr(L, "strategy_last_run_status"):  # read by _run_failure_text
             L.strategy_last_run_status.argtypes = [ctypes.c_void_p]
             L.strategy_last_run_status.restype = ctypes.c_int
@@ -3183,6 +3216,10 @@ class Strategy:
                     "applied": _report_terminal_quote_applied(result, report_terminal_quote,
                                                                script_tf or input_tf or ""),
                 }
+            diagnostics = {}
+            _add_run_warnings(self.lib, state, diagnostics)
+            if diagnostics:
+                result["diagnostics"] = diagnostics
             result_ready = True
             return result
         finally:
@@ -4599,7 +4636,7 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
     finally:
         if tmp_ohlcv is not None:
             tmp_ohlcv.unlink(missing_ok=True)
-    return {
+    result = {
         "trades": _rel.report_trades_to_runstrategy_shape(raw),
         "net_profit": float(raw.get("summary", {}).get("net_pnl", 0.0)),
         "input_bars_processed": int(raw.get("diagnostics", {}).get("input_bars_processed", 0)),
@@ -4608,6 +4645,10 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
         "broker_state_hash": [],
         "equity_curve_time_ms": [],
     }
+    warnings = _engine_warnings(json.dumps(raw.get("diagnostics", {}).get("warnings")))
+    if warnings:
+        result["diagnostics"] = {"warnings": warnings}
+    return result
 
 
 # --- CLI ---------------------------------------------------------------
@@ -5014,6 +5055,7 @@ def _main_run(args, resources) -> int:
     # the range-end close rows among them.
     range_end_rows = sum(1 for t in trades_to_write if t.get("open_at_end"))
     write_engine_trades_csv(trades_to_write, out_path)
+    run_warnings = report.get("diagnostics", {}).get("warnings")
     if args.trace_json is not None:
         trace_to_write = _filter_trace_to_window(report["trace"], emit_window)
         args.trace_json.parent.mkdir(parents=True, exist_ok=True)
@@ -5026,6 +5068,8 @@ def _main_run(args, resources) -> int:
                 "trace_names": report["trace_names"],
                 "trace": trace_to_write,
             }
+            if run_warnings:
+                document["diagnostics"] = {"warnings": run_warnings}
             if isinstance(trace_to_write, _SinkRows):
                 from run_json import _JSONRecordArray
                 document["trace"] = _JSONRecordArray(lambda: iter(trace_to_write))
@@ -5187,6 +5231,8 @@ def _main_run(args, resources) -> int:
         f"bars={report['input_bars_processed']}, "
         f"{elapsed:.2f}s -> {out_path.name}"
     )
+    if run_warnings:
+        print("diagnostics.warnings: " + json.dumps(run_warnings, separators=(",", ":")))
     return 0
 
 

@@ -129,14 +129,13 @@ def ci_post_jobs():
 
 def linux_ci_post_jobs():
     # Keep these regression inputs Linux-only even against the previous gate.
-    # Derive all arm64 shards from amd64, without copying the required-name tuple.
+    # Derive the arm64 smoke legs from amd64, without copying the required-name tuple.
     amd64 = [job for job in ci_post_jobs()
              if job["name"].startswith("build (ubuntu-24.04, ")]
     return amd64 + [
-        {**job, "id": len(amd64) + 4 * index + shard,
-         "name": job["name"].replace("build (ubuntu-24.04,", "build-shard (ubuntu-24.04-arm,")[:-1]
-                 + f", {shard}/4)"}
-        for index, job in enumerate(amd64) for shard in range(1, 5)]
+        {**job, "id": len(amd64) + index + 1,
+         "name": job["name"].replace("build (ubuntu-24.04,", "build (ubuntu-24.04-arm,")}
+        for index, job in enumerate(amd64)]
 
 
 def jobs_page(rows, *, total=None):
@@ -2673,69 +2672,32 @@ class WorkflowPinTests(unittest.TestCase):
                             "required build jobs must run directly in the runner pod")
 
     def ci_post_build_names(self, jobs):
-        """Derive release checks from complete shard matrices and the arm matrix."""
+        """Derive release checks from ci-post's smoke jobs: one leg per platform and build type."""
         self.assertNotIn("build-macos", jobs, "post-merge verification must be Linux-only")
         expanded = []
-        for job_id, aggregate, build_type, count in (
-                ("build", "build-release-gate", "Release", 4),
-                ("build-debug", "build-debug-gate", "Debug", 2)):
-            self.assertIn(aggregate, jobs, "each amd64 leg must keep its old aggregate check")
-            self.assertIn(job_id, jobs, "each aggregate needs its own shard matrix")
+        for job_id, platform in (("smoke", "ubuntu-24.04"), ("smoke-arm", "ubuntu-24.04-arm")):
+            self.assertIn(job_id, jobs, "no required build leg may be dropped")
             body = _without_comments(jobs[job_id])
-            matrix = re.search(
-                r"(?ms)^      matrix:\n(.*?)(?=^ {0,6}\S|\Z)", body)
-            self.assertIsNotNone(matrix, "the shard matrix must be readable")
-            axes = re.findall(r"(?m)^        (\w+):", matrix[1])
-            self.assertCountEqual(axes, ["platform", "build_type", "shard"],
-                                  "new axes/include/exclude need a gate review")
+            matrix = re.search(r"(?ms)^      matrix:\n(.*?)(?=^ {0,6}\S|\Z)", body)
+            self.assertIsNotNone(matrix, "the smoke matrix must be readable")
+            self.assertEqual(re.findall(r"(?m)^        (\w+):", matrix[1]), ["build_type"],
+                             "new axes/include/exclude need a gate review")
             types = re.search(r"(?m)^        build_type: \[([^\n]+)\]$", matrix[1])
             self.assertIsNotNone(types, "the build types must be explicit")
-            self.assertEqual([value.strip() for value in types[1].split(",")], [build_type])
-            platforms = re.findall(r"(?m)^          - os: (\S+)$", matrix[1])
-            self.assertEqual(platforms, ["ubuntu-24.04"])
-            self.assert_gke_build(body, {"build": "ubuntu-24.04",
-                                         "build-debug": "ubuntu-24.04"}[job_id])
-            shards = re.findall(r"(?m)^        shard: \[([0-9, ]+)\]$", matrix[1])
-            self.assertEqual(len(shards), 1)
-            self.assertEqual([int(value.strip()) for value in shards[0].split(",")],
-                             list(range(1, count + 1)), "no required shard may be dropped")
-            denominators = re.findall(r"--ctest-shard \$\{\{ matrix.shard \}\}/(\d+)", body)
-            self.assertEqual(denominators, [str(count)])
-            gate = _without_comments(jobs[aggregate])
-            needs = re.search(r"(?m)^    needs: \[([^\n]+)\]$", gate)
-            self.assertIsNotNone(needs)
-            self.assertCountEqual([value.strip() for value in needs[1].split(",")],
-                                  ["authz", "changes", job_id])
-            self.assertIn("${{ needs." + job_id + ".result }}", gate)
-            name = re.search(r"(?m)^    name: (.+)$", gate)
-            self.assertIsNotNone(name, "the aggregate check name must be explicit")
-            self.assertEqual(name[1], f"build ({platforms[0]}, {build_type})")
-            expanded.append(name[1])
-        self.assertIn("build-arm", jobs, "arm64 must retain its build job")
-        body = _without_comments(jobs["build-arm"])
-        matrix = re.search(r"(?ms)^      matrix:\n(.*?)(?=^ {0,6}\S|\Z)", body)
-        self.assertIsNotNone(matrix)
-        self.assertEqual(re.findall(r"(?m)^        (\w+):", matrix[1]), ["build_type", "shard"],
-                         "new axes/include/exclude need a gate review")
-        types = re.search(r"(?m)^        build_type: \[([^\n]+)\]$", matrix[1])
-        self.assertIsNotNone(types)
-        build_types = [value.strip() for value in types[1].split(",")]
-        self.assertCountEqual(build_types, ["Release", "Debug"])
-        self.assert_gke_build(body, "ubuntu-24.04-arm")
-        shards = re.findall(r"(?m)^        shard: \[([0-9, ]+)\]$", matrix[1])
-        self.assertEqual(len(shards), 1)
-        indices = [int(value.strip()) for value in shards[0].split(",")]
-        self.assertEqual(indices, [1, 2, 3, 4], "no required shard may be dropped")
-        denominators = re.findall(r"--ctest-shard \$\{\{ matrix.shard \}\}/(\d+)", body)
-        self.assertEqual(denominators, ["4"])
-        name = re.search(r"(?m)^    name: (.+)$", body)
-        self.assertIsNotNone(name)
-        for build_type in build_types:
-            for shard in indices:
-                displayed = (name[1].replace("${{ matrix.build_type }}", build_type)
-                             .replace("${{ matrix.shard }}", str(shard)))
+            build_types = [value.strip() for value in types[1].split(",")]
+            self.assertCountEqual(build_types, ["Release", "Debug"],
+                                  "no required build leg may be dropped")
+            self.assert_gke_build(body, platform)
+            # A leg that builds or runs nothing would pass vacuously.
+            self.assertIn("--target pineforge_pr_smoke", body, "every leg must build the smoke target")
+            self.assertIn("-L '^fast$'", body, "every leg must run the fast label")
+            self.assertIn("--no-tests=error", body, "an empty fast selection must fail")
+            name = re.search(r"(?m)^    name: (.+)$", body)
+            self.assertIsNotNone(name, "the leg check name must be explicit")
+            for build_type in build_types:
+                displayed = name[1].replace("${{ matrix.build_type }}", build_type)
                 self.assertNotIn("${{", displayed, "every name axis must be expanded")
-                self.assertEqual(displayed, f"build-shard (ubuntu-24.04-arm, {build_type}, {shard}/4)")
+                self.assertEqual(displayed, f"build ({platform}, {build_type})")
                 expanded.append(displayed)
         return expanded
 
@@ -2745,33 +2707,41 @@ class WorkflowPinTests(unittest.TestCase):
         self.assertCountEqual(ci_release_gate.CI_POST_BUILD_JOBS, expanded)
         self.assertCountEqual([job["name"] for job in ci_post_jobs()], expanded)
 
-    def test_ci_post_required_build_jobs_reject_dropped_shard(self):
+    def test_ci_post_required_build_jobs_reject_dropped_leg(self):
         workflow = (ROOT / ".github/workflows/ci-post.yml").read_text()
         self.ci_post_build_names(_jobs(workflow))
-        for job_id, count in (("build", 4), ("build-debug", 2), ("build-arm", 4)):
-            with self.subTest(job=job_id):
+        for job_id in ("smoke", "smoke-arm"):
+            for after in ("        build_type: [Release]", "        build_type: [Debug]"):
+                with self.subTest(job=job_id, replacement=after):
+                    jobs = _jobs(workflow)
+                    before = "        build_type: [Release, Debug]"
+                    self.assertIn(before, jobs[job_id])
+                    jobs[job_id] = jobs[job_id].replace(before, after, 1)
+                    with self.assertRaisesRegex(AssertionError, "no required build leg may be dropped"):
+                        self.ci_post_build_names(jobs)
+            with self.subTest(job=job_id, replacement="job removed"):
                 jobs = _jobs(workflow)
-                before = "        shard: [" + ", ".join(str(i) for i in range(1, count + 1)) + "]"
-                self.assertIn(before, jobs[job_id])
-                jobs[job_id] = jobs[job_id].replace(before, before.rsplit(", ", 1)[0] + "]", 1)
-                with self.assertRaisesRegex(AssertionError, "no required shard may be dropped"):
+                del jobs[job_id]
+                with self.assertRaisesRegex(AssertionError, "no required build leg may be dropped"):
                     self.ci_post_build_names(jobs)
 
     def test_ci_post_required_build_jobs_reject_runner_or_container_drift(self):
         workflow = (ROOT / ".github/workflows/ci-post.yml").read_text()
         self.ci_post_build_names(_jobs(workflow))
-        for job, label in (("build", "ubuntu-24.04"),
-                           ("build-debug", "ubuntu-24.04"),
-                           ("build-arm", "ubuntu-24.04-arm")):
+        for job_id, label in (("smoke", "ubuntu-24.04"), ("smoke-arm", "ubuntu-24.04-arm")):
             for before, after, finding in (
                     ("    runs-on: " + label + "\n", "    runs-on: pf-linux-x64-16\n",
                      "required build jobs must keep hosted routing"),
                     ("    steps:\n", "    container:\n      image: ubuntu:24.04\n    steps:\n",
-                     "required build jobs must run directly in the runner pod")):
-                with self.subTest(job=job, replacement=after):
+                     "required build jobs must run directly in the runner pod"),
+                    ("--target pineforge_pr_smoke", "--target pineforge",
+                     "every leg must build the smoke target"),
+                    ("-L '^fast$'", "-L '^nothing$'", "every leg must run the fast label"),
+                    ("--no-tests=error", "--no-tests=ignore", "an empty fast selection must fail")):
+                with self.subTest(job=job_id, replacement=after):
                     jobs = _jobs(workflow)
-                    self.assertIn(before, jobs[job])
-                    jobs[job] = jobs[job].replace(before, after, 1)
+                    self.assertIn(before, jobs[job_id])
+                    jobs[job_id] = jobs[job_id].replace(before, after, 1)
                     with self.assertRaisesRegex(AssertionError, finding):
                         self.ci_post_build_names(jobs)
 
@@ -3423,19 +3393,19 @@ class CiPostGateTests(unittest.TestCase):
 
     def test_four_green_linux_legs_without_macos_prove_the_release(self):
         jobs = linux_ci_post_jobs()
-        self.assertEqual(len(jobs), 10)
+        self.assertEqual(len(jobs), 4)
         self.api.ci_post(self.post_run, jobs)
         self.assert_green(self.post_run)
         self.assertEqual(self.history.calls, [self.post_run["head_sha"]])
 
     def test_each_missing_linux_leg_is_the_only_missing_job_reported(self):
         complete = linux_ci_post_jobs()
-        self.assertEqual(len(complete), 10)
+        self.assertEqual(len(complete), 4)
         for original in complete:
             with self.subTest(job=original["name"]):
                 self.reset_ci_post()
                 jobs = [job for job in complete if job["name"] != original["name"]]
-                self.assertEqual(len(jobs), 9)
+                self.assertEqual(len(jobs), 3)
                 self.api.ci_post(self.post_run, jobs)
                 stderr = self.assert_no_full_run(
                     [self.post_run], f"missing job {original['name']}")

@@ -108,12 +108,25 @@ This query leaves ABI 5 and every existing C struct, including the 72-byte
 `run_json` skips it and otherwise emits the bypass reason/count only when
 the count is positive.
 
+`strategy_get_run_warnings(s)` is an additive, non-mutating runtime accessor,
+behind `PINEFORGE_HAS_RUN_WARNINGS_V1`; feature-probe the symbol in older modules.
+It returns the current run's canonical UTF-8 JSON warning array, ordered by
+site identity and code, without creating consumer state. Before a run or after
+a later attempt refused before admission it returns `[]`; a live stream keeps
+its warnings readable after a batch call refused over it. The borrowed string
+is valid until the next run, stream-begin or setter on the handle, or its
+destruction. NULL is returned only for a NULL handle. Collection failure reads
+`[{"args":{},"code":"run_warnings_unavailable"}]`, never an empty array.
+Warnings do not change values, trades, execution status, failure accessors or
+state hashes. The accessor adds no C struct and changes neither existing C
+layouts nor installed host class layouts; ABI 5 and stream layout 4 stay fixed.
+
 ## Symbol inventory
 
 The counts below describe the current API, including recorded outputs and the report sink; recorded outputs are not part of 1.4.0.
 
-The stable inventory contains 124 compiled-strategy `PF_API` declarations
-(104 implementations in `src/c_abi.cpp` plus twenty generated declarations)
+The stable inventory contains 125 compiled-strategy `PF_API` declarations
+(105 implementations in `src/c_abi.cpp` plus twenty generated declarations)
 and 43 native-host declarations. A module supplies the generated symbols it
 supports; a script that declares
 `use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, and a
@@ -154,6 +167,7 @@ not the complete inventory:
 | `strategy_get_last_error` | Diagnostics |
 | `strategy_get_last_error_code` | Diagnostics (@ref run_failure_codes) |
 | `strategy_get_last_error_args` | Diagnostics (@ref run_failure_codes) |
+| `strategy_get_run_warnings` | Observational warnings of the current run |
 | `pf_report_cache_stats` | Per-run command-cache and ledger resident bytes and allocation bypasses |
 | `pf_version_get` | @ref pf_version |
 | `pf_abi_version` | @ref pf_version |
@@ -195,7 +209,8 @@ A missing symbol, unknown declaration or throwing declaration reader keeps
 the actual curve. The probe takes no strategy handle or caller-supplied proof,
 allocates no handle, and does not change preferences or run state.
 `scripts/check_c_abi_runtime.py` pins the macro's nine definitions and its one
-optional declaration separately from the 94 `c_abi.cpp` implementations.
+optional declaration separately from the runtime implementations in the
+stable inventory above.
 
 Certification is an explicit specialization of
 `pineforge::native_module::MetricsPlainHostV1<Host>`. Its static
@@ -227,7 +242,7 @@ are unchanged. Uncertified hosts and Off requests do not call admission or
 preparation.
 
 Sixteen per-strategy exports include the five create/run/free lifecycle
-functions. The remaining 104 runtime implementations, including the
+functions. The remaining 105 runtime implementations, including the
 closed-trade incarnation accessor, are force-linked into each strategy library,
 so consumers resolve the same complete ABI from the strategy `.so`. All
 additions remain covered by the minor-version append-only guarantee.

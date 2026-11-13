@@ -118,6 +118,7 @@ bool PineExecutionAdapter::modeled_input() const {
 
 namespace {
 
+void throw_timeframe_refusal(const NativeRunSpec&, NativeRunSpecValidation);
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
 void check_slippage_fill_price(double value, bool has_basis) {
@@ -3268,6 +3269,7 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
         ? NativeExecutionConsumer::bound(*host_).normalize_projected_spec(spec)
         : native_bar_views_v1::normalize_native_run_spec(spec, {});
     if (!validation) {
+        throw_timeframe_refusal(spec, validation);
         throw coded<std::logic_error>(run_spec_field_failure(validation.field),
                                       "Pine adapter produced invalid native run spec field "
                                       + std::to_string(static_cast<unsigned>(validation.field)));
@@ -30920,5 +30922,63 @@ bool PlacementTable::compact_old() noexcept {
     }
     return true;
 }
+
+namespace {
+
+void throw_timeframe_refusal(const NativeRunSpec& spec,
+                             NativeRunSpecValidation validation) {
+    using E = NativeRunSpecError;
+    using F = NativeRunSpecField;
+    using P = native_calendar::TimeframePairing;
+    const bool intrabar_failure = validation.error == E::InvalidIntrabarPath
+        && validation.field == F::IntrabarTimeframe;
+    const bool pairing_failure = validation.error == E::IncompatibleTimeframes
+        && (validation.field == F::ScriptTimeframe
+            || validation.field == F::IntrabarTimeframe);
+    if (!intrabar_failure && !pairing_failure) return;
+
+    const auto* lower = spec.intrabar.lower();
+    if (intrabar_failure && lower == nullptr) return;
+    const auto script = native_calendar::parse_timeframe(spec.script_tf);
+    if (!script) return;
+    const std::string& source_tf = intrabar_failure ? lower->tf : spec.input_tf;
+    const auto source = native_calendar::parse_timeframe(source_tf);
+    if (!source) return;
+    const char* reason = nullptr;
+    std::string rule;
+    // Describe the validator's own calendar pairing, including calendar
+    // counts and second/minute pairs, without changing its admission.
+    switch (native_calendar::compatibility(*source, *script).pairing) {
+    case P::ScriptFiner:
+        reason = intrabar_failure ? "script_finer_than_intrabar" : "script_finer_than_input";
+        rule = "script timeframe '" + spec.script_tf + "' is finer than "
+            + (intrabar_failure ? "intrabar" : "input") + " timeframe '" + source_tf + "'";
+        break;
+    case P::IndivisibleFixed:
+        reason = intrabar_failure ? "intrabar_not_divisible" : "not_divisible";
+        rule = spec.script_tf + " is not a multiple of " + source_tf;
+        break;
+    default:
+        return;
+    }
+
+    RunFailureArgs args{
+        {"option", validation.field == F::IntrabarTimeframe
+            ? "intrabar_timeframe" : "script_timeframe"},
+        {"input_tf", spec.input_tf}, {"script_tf", spec.script_tf}, {"reason", reason}};
+    std::string text = "input timeframe '" + spec.input_tf
+        + "' cannot build script timeframe '" + spec.script_tf + "'";
+    if (lower != nullptr) {
+        args.emplace_back("intrabar_tf", lower->tf);
+        text += " using intrabar timeframe '" + lower->tf + "'";
+    }
+    text += " (" + rule + "); pass bars whose timeframe divides the script timeframe '"
+        + spec.script_tf + "'";
+    text += script->unit() == native_calendar::TimeframeUnit::Second
+        ? ", for example 1-second bars." : ", for example 1-minute bars.";
+    throw coded<std::logic_error>(RunFailureCode::run_options_rejected, args, text);
+}
+
+} // namespace
 
 } // namespace pineforge::source

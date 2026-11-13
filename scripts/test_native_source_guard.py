@@ -360,7 +360,12 @@ def _apple_condition(expression: str) -> set[bool]:
 
 
 def _apple_fdatasync(text: str) -> tuple[int, list[int]]:
-    """Count lexical calls and locate those not provably excluded on Apple."""
+    """Count direct lexical calls not provably excluded on Apple.
+
+    Check bare fdatasync(...) and ::fdatasync(...), excluding member calls.
+    Indirect calls through function pointers and token-pasted calls are
+    outside this lexical check.
+    """
     # Splice before masking, as C++ does, including continued // comments.
     # Keep enough offset information to report physical source line numbers.
     splices = [match.start() - 2 * index for index, match in
@@ -368,7 +373,9 @@ def _apple_fdatasync(text: str) -> tuple[int, list[int]]:
     masked = _mask_cpp(text.replace("\\\n", ""))
     calls: dict[int, list[int]] = {}
     count = 0
-    for match in re.finditer(r"::\s*fdatasync\s*\(", masked):
+    for match in re.finditer(r"(?:::\s*|(?<!\w))fdatasync\s*\(", masked):
+        if masked[:match.start()].rstrip().endswith((".", "->")):
+            continue
         logical_line = masked.count("\n", 0, match.start()) + 1
         physical_offset = match.start() + 2 * bisect_right(splices, match.start())
         calls.setdefault(logical_line, []).append(
@@ -382,7 +389,7 @@ def _apple_fdatasync(text: str) -> tuple[int, list[int]]:
     stack: list[tuple[bool, bool, bool]] = []
     reachable = True
     exposed: list[int] = []
-    for line_number, line in enumerate(masked.splitlines(), 1):
+    for line_number, line in enumerate(masked.split("\n"), 1):
         directive = re.match(r"^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)", line)
         if directive:
             kind, expression = directive.groups()
@@ -460,8 +467,21 @@ def run_portability_scan(root: Path) -> int:
 def portability_self_test() -> int:
     # Independent discriminators exercise the same scanner as the real tree;
     # no production path, call count or line number is an acceptance whitelist.
+    # Direct-call scope includes bare and globally qualified names, excluding
+    # members and __real_fdatasync.  Pointer and token-pasted calls stay outside
+    # this lexical check; the controls below pin that limit explicitly.
     cases = (
         ("unguarded", "::fdatasync(fd);\n", 1, [1]),
+        ("bare unguarded", "fdatasync(fd);\n", 1, [1]),
+        ("bare Apple exclusion", "#ifndef __APPLE__\nfdatasync(fd);\n#endif\n", 1, []),
+        ("bare comments", "// fdatasync(fd);\n/* fdatasync(fd); */\n", 0, []),
+        ("bare strings", 'const char* text = "fdatasync(fd);";\n'
+         'const char* raw = R"tag(fdatasync(fd);)tag";\n', 0, []),
+        ("member calls", "sink.fdatasync(fd);\npointer->fdatasync(fd);\n", 0, []),
+        ("real wrapper name", "__real_fdatasync(fd);\n", 0, []),
+        ("indirect call outside scope", "auto sync = &fdatasync;\n(*sync)(fd);\n", 0, []),
+        ("token-pasted call outside scope", "#define SYNC_NAME(a, b) a ## b\n"
+         "SYNC_NAME(fdata, sync)(fd);\n", 0, []),
         ("Apple else", "#if defined(__APPLE__)\n::fsync(fd);\n"
          "#else\n::fdatasync(fd);\n#endif\n", 1, []),
         ("Linux else", "#if defined(__linux__)\n::fdatasync(fd);\n"
@@ -496,19 +516,122 @@ def portability_self_test() -> int:
          "::fdatasync(fd);\n", 1, [3]),
         ("split call", "::\nfdatasync\n(fd);\n", 1, [1]),
         ("digit separator", "auto size = 1'024;\n::fdatasync(fd);\n", 1, [2]),
+        # Each literal fragment is one physical newline-terminated source line.
+        ("form-feed physical lines",
+         "\f\n"
+         "\f\n"
+         "#ifndef __APPLE__\n"
+         "::fsync(fd);\n"
+         "#endif\n"
+         "::fdatasync(fd);\n", 1, [6]),
+        ("ordinary physical lines",
+         "\n"
+         "\n"
+         "#ifndef __APPLE__\n"
+         "::fsync(fd);\n"
+         "#endif\n"
+         "::fdatasync(fd);\n", 1, [6]),
+        ("form-feed Apple exclusion",
+         "\f\n"
+         "\f\n"
+         "#ifndef __APPLE__\n"
+         "::fdatasync(fd);\n"
+         "#endif\n", 1, []),
     )
+    failed = 0
     for label, text, expected_count, expected in cases:
         count, exposed = _apple_fdatasync(text)
         if (count, exposed) != (expected_count, expected):
             print(f"native source guard: portability self-test failed: {label}: "
                   f"{(count, exposed)!r} != {(expected_count, expected)!r}", file=sys.stderr)
-            return 1
-    return 0
+            failed = 1
+
+    # Every malformed fixture contains a real call, so the zero-call early
+    # return cannot make a missing directive check look like a passing test.
+    error_cases = (
+        ("stray endif", "#endif\n::fdatasync(fd);\n", "line 1: unexpected #endif"),
+        ("stray else", "#else\n::fdatasync(fd);\n", "line 1: unexpected #else"),
+        ("repeated else", "#if defined(__linux__)\n::fdatasync(fd);\n"
+         "#else\n#else\n#endif\n", "line 4: unexpected #else"),
+        ("unterminated if", "#if defined(__linux__)\n::fdatasync(fd);\n",
+         "unterminated preprocessor conditional"),
+    )
+    for label, text, expected_error in error_cases:
+        try:
+            actual = _apple_fdatasync(text)
+        except ValueError as error:
+            if type(error) is ValueError and str(error) == expected_error:
+                continue
+            actual = f"{type(error).__name__}: {error}"
+        print(f"native source guard: portability self-test failed: {label}: "
+              f"{actual!r} != ValueError({expected_error!r})", file=sys.stderr)
+        failed = 1
+
+    failed |= _portability_scan_self_test()
+    return failed
+
+
+def _portability_scan_self_test() -> int:
+    failed = 0
+    portable = "#if defined(__linux__)\n::fdatasync(fd);\n#endif\n"
+
+    def tree(root: Path, *, missing: str = "", empty: str = "",
+             text: str = portable) -> Path:
+        for relative, filename in (("src", "sync.cpp"), ("include", "sync.hpp")):
+            if relative == missing:
+                continue
+            directory = root / relative
+            directory.mkdir(parents=True)
+            if relative != empty:
+                (directory / filename).write_text(text, encoding="utf-8")
+        return root
+
+    def check(label: str, root: Path, expected_result: int,
+              error_path: Path | None = None, error: str = "") -> None:
+        nonlocal failed
+        diagnostic = io.StringIO()
+        with redirect_stderr(diagnostic):
+            result = run_portability_scan(root)
+        output = diagnostic.getvalue()
+        expected_output = (
+            f"native source guard: portability scan failed: {error_path}: {error}\n"
+            if error_path is not None else "")
+        if (result, output) != (expected_result, expected_output):
+            print(f"native source guard: portability scan self-test failed: {label}: "
+                  f"{(result, output)!r} != {(expected_result, expected_output)!r}",
+                  file=sys.stderr)
+            failed = 1
+
+    with tempfile.TemporaryDirectory(prefix="pf-native-portability-") as temporary:
+        base = Path(temporary)
+        check("complete tree", tree(base / "complete"), 0)
+        for relative in ("src", "include"):
+            root = tree(base / f"missing-{relative}", missing=relative)
+            check(f"missing {relative}", root, 1, root / relative,
+                  "missing source directory")
+            root = tree(base / f"empty-{relative}", empty=relative)
+            check(f"no C/C++ files in {relative}", root, 1, root / relative,
+                  "no C/C++ source/header inputs")
+
+        root = tree(base / "symlink")
+        link = root / "src/sync-link.cpp"
+        link.symlink_to("sync.cpp")
+        check("symlink", root, 1, link, "refusing symbolic link in source tree")
+
+        root = tree(base / "invalid-utf8")
+        invalid = root / "src/invalid.cpp"
+        invalid.write_bytes(b"\xff")
+        check("invalid UTF-8", root, 1, invalid,
+              "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte")
+
+        root = tree(base / "zero-calls", text="::fsync(fd);\n")
+        check("zero calls", root, 1, root / "include/sync.hpp",
+              "no ::fdatasync calls scanned")
+    return failed
 
 
 def self_test() -> int:
-    if portability_self_test():
-        return 1
+    failed = portability_self_test()
     with tempfile.TemporaryDirectory(prefix="pf-native-source-guard-") as temporary:
         fixture = Path(temporary) / "include/pineforge/engine.hpp"
         fixture.parent.mkdir(parents=True)
@@ -567,7 +690,7 @@ def self_test() -> int:
             print("native source guard: forward-declaration self-test failed: "
                   + repr(missing), file=sys.stderr)
             return 1
-    return 0
+    return failed
 
 
 def main() -> int:

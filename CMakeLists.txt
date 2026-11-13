@@ -629,3 +629,16 @@ message(STATUS "")
 if(APPLE)
     target_link_options(pineforge_window_plan PRIVATE "-Wl,-U,_strategy_reads_trade_history")
 endif()
+
+# The pull-request parity subset as ONE target. scripts/check_corpus_parity.sh
+# --subset passes the subset's strategy targets here and builds this target.
+# Named one by one on a build command line, a Makefile generator builds targets
+# serially; as the dependencies of one target they build in parallel. A name
+# the corpus does not define stops the generation.
+set(PINEFORGE_CORPUS_PARITY_SUBSET_TARGETS "" CACHE STRING
+    "Strategy targets of the parity subset (set by scripts/check_corpus_parity.sh)")
+if(PINEFORGE_BUILD_CORPUS_STRATEGIES AND PINEFORGE_CORPUS_PARITY_SUBSET_TARGETS)
+    add_custom_target(pineforge_corpus_parity_subset)
+    add_dependencies(pineforge_corpus_parity_subset
+        ${PINEFORGE_CORPUS_PARITY_SUBSET_TARGETS})
+endif()
