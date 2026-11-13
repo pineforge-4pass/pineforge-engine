@@ -130,10 +130,11 @@ public:
     int hour() const { return pine_bar_index(); }
 };
 
-// MG10-a. The drawdown limit's sampling cadence. The adapter measures its
-// drawdown once per script bar, at the close mark; the kernel also measures
-// at the bar's open and after every applied drain. Bar 1 opens 6 points
-// under the entry (drawdown 600 against 500) and closes 1 under it.
+// MG10-a. TradingView tests drawdown only at fills that close units, so
+// neither the dip without a fill nor the same-side add halts this strategy.
+// Bar 1 opens 6 points under the entry (600 against 500) and closes 1 under it.
+// Tape d1 SHA-256: 5beeac719db4c7b6d84c31bf94f8bd9ac80cecaac8483e9900ec0b9532f36fd5
+// Tape d4b SHA-256: 0acb1158cea715b0e6cb5c6a838d997c6baf358c79df2433ad21a12fece399ac
 class DrawdownCadence final : public Probe {
 public:
     DrawdownCadence() { pyramiding_ = 2; }
@@ -145,9 +146,10 @@ public:
 };
 Tape drawdown_cadence_tape() { return Tape(4).at(1, 94.0, 100.0, 94.0, 99.0).at(2, 99.0).at(3, 99.0); }
 
-// MG10-b. The halt's scope. TradingView's latch gates a flat or same-side
-// entry at its fill and never the opposite entry, so a halted strategy still
-// reverses; the kernel's block refuses every request that would open.
+// MG10-b. TradingView tests the closing leg of a reversing entry. Its loss
+// breaches the limit, so the newly opened short closes at that same fill's
+// price with the drawdown exit text, and the later long entry is blocked.
+// Tape d4a SHA-256: 8a5bd165a195e74ecf72ce6336a369b7892828acef6ee5dccf662be38440dc4a
 class DrawdownReversal final : public Probe {
 public:
     void on_source_bar(const Bar&) override {
@@ -461,8 +463,8 @@ int main() {
         const auto adapter = run_adapter<DrawdownCadence>(drawdown_cadence_tape());
         verify(kDrawdownCadence, adapter, kernel);
         if (!dumping) {
-            // The adapter admits the bar-2 add (book 200); the kernel breached
-            // at bar 1's open mark and refuses it (book 100).
+            // TradingView admits the bar-2 add: it closes no units.
+            // The kernel breached at bar 1's open and refuses the add.
             CHECK(adapter.find("pos=200") != std::string::npos);
             CHECK(kernel.outcome.find("pos=100") != std::string::npos);
             CHECK(kernel.refused == std::vector<int>{2});
@@ -479,12 +481,15 @@ int main() {
         const auto adapter = run_adapter<DrawdownReversal>(drawdown_reversal_tape());
         verify(kDrawdownReversal, adapter, kernel);
         if (!dumping) {
-            // Halted at bar 1's close, the adapter still reverses twice (two
-            // script-closed rows plus the range-end row of the last long); the
-            // kernel refuses both reversals and holds.
-            CHECK(std::count(adapter.begin(), adapter.end(), '|') == 3);
+            // TradingView closes 100 * (94 - 100) = -600 on the reversal,
+            // then the short for 100 * (94 - 94) = 0 at the same fill.
+            // expectation corrected: 3 -> 2 rows, because the drawdown
+            // close flattens the reversal and blocks the later long.
+            // Tape d4a SHA-256: 8a5bd165a195e74ecf72ce6336a369b7892828acef6ee5dccf662be38440dc4a
+            CHECK(std::count(adapter.begin(), adapter.end(), '|') == 2);
             CHECK(adapter.find("L 100 @0:100->2:94 pnl=-600 id='S' c='' cause=1") != std::string::npos);
-            CHECK(adapter.find("S 100 @2:94->3:94 pnl=0 id='L' c='' cause=1") != std::string::npos);
+            CHECK(adapter.find("S 100 @2:94->2:94 pnl=0 id='' c='Close Position (Max Drawdown)' cause=4") != std::string::npos);
+            CHECK(adapter.find("pos=0") != std::string::npos);
             CHECK(std::count(kernel.outcome.begin(), kernel.outcome.end(), '|') == 0);
             CHECK(kernel.refused == (std::vector<int>{2, 3}));
             CHECK(kernel.outcome.find("pos=100") != std::string::npos);

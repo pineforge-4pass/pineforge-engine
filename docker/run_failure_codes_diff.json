@@ -1,14 +1,14 @@
 {
   "schema": "pineforge-run-failure-catalog-diff/v1",
   "from": {
-    "version": "1.11.0",
-    "tag": "v1.11.0",
-    "catalogSha256": "7e903f977be655901c877a3550008aeee19b7f69a9ecfad986ca6f0d9129c3be"
+    "version": "1.12.0",
+    "tag": "v1.12.0",
+    "catalogSha256": "c42c7305aee58908b46b98768480d23f8346e1d010cfc32b6f83d594950408b4"
   },
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "7e903f977be655901c877a3550008aeee19b7f69a9ecfad986ca6f0d9129c3be"
+    "catalogSha256": "75622a737a6ba8f114f6ad40ea5028ed15c8c15b42f2d95b9cd36f9a378e93c9"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -16,7 +16,79 @@
   },
   "metadataChanges": [],
   "added": [],
-  "changed": [],
+  "changed": [
+    {
+      "code": "run_options_rejected",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.intrabar_tf",
+          "beforePresent": false,
+          "afterPresent": true,
+          "before": null,
+          "after": {
+            "kind": "timeframe",
+            "optional": true
+          }
+        },
+        {
+          "path": "args.reason",
+          "beforePresent": false,
+          "afterPresent": true,
+          "before": null,
+          "after": {
+            "kind": "vocab",
+            "optional": true,
+            "values": [
+              "intrabar_not_divisible",
+              "not_divisible",
+              "script_finer_than_input",
+              "script_finer_than_intrabar"
+            ]
+          }
+        },
+        {
+          "path": "english",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "Pine adapter produced invalid native run spec field {field}",
+            "native calendar parse failed at configure",
+            "native intrabar path failed validation",
+            "native intrabar path timeframe or bar count is invalid",
+            "native intrabar timeframe parse failed at configure",
+            "native magnifier arguments require an intrabar path",
+            "native module refuses unsupported magnifier arguments",
+            "native stream requires a detected timeframe",
+            "native timeframe arguments must be empty or match the spec",
+            "native undetected timeframe requires empty timeframe arguments",
+            "native undetected timeframe requires fewer than two bars",
+            "request.security cannot infer input timeframe from available input bars; pass input_tf explicitly",
+            "script timeframe must be coarser than or equal to input timeframe: requested script_tf {script_tf} from input timeframe {input_tf}"
+          ],
+          "after": [
+            "Pine adapter produced invalid native run spec field {field}",
+            "input timeframe '{input_tf}' cannot build script timeframe '{script_tf}' ({script_tf} is not a multiple of {input_tf}); pass bars whose timeframe divides the script timeframe '{script_tf}', for example {example} bars.",
+            "input timeframe '{input_tf}' cannot build script timeframe '{script_tf}' (script timeframe '{script_tf}' is finer than input timeframe '{input_tf}'); pass bars whose timeframe divides the script timeframe '{script_tf}', for example {example} bars.",
+            "input timeframe '{input_tf}' cannot build script timeframe '{script_tf}' using intrabar timeframe '{intrabar_tf}' ({script_tf} is not a multiple of {intrabar_tf}); pass bars whose timeframe divides the script timeframe '{script_tf}', for example {example} bars.",
+            "input timeframe '{input_tf}' cannot build script timeframe '{script_tf}' using intrabar timeframe '{intrabar_tf}' (script timeframe '{script_tf}' is finer than intrabar timeframe '{intrabar_tf}'); pass bars whose timeframe divides the script timeframe '{script_tf}', for example {example} bars.",
+            "native calendar parse failed at configure",
+            "native intrabar path failed validation",
+            "native intrabar path timeframe or bar count is invalid",
+            "native intrabar timeframe parse failed at configure",
+            "native magnifier arguments require an intrabar path",
+            "native module refuses unsupported magnifier arguments",
+            "native stream requires a detected timeframe",
+            "native timeframe arguments must be empty or match the spec",
+            "native undetected timeframe requires empty timeframe arguments",
+            "native undetected timeframe requires fewer than two bars",
+            "request.security cannot infer input timeframe from available input bars; pass input_tf explicitly",
+            "script timeframe must be coarser than or equal to input timeframe: requested script_tf {script_tf} from input timeframe {input_tf}"
+          ]
+        }
+      ]
+    }
+  ],
   "removed": [],
   "deprecated": []
 }

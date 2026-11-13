@@ -63,6 +63,14 @@ startup from `--profile` or `PINEFORGE_RUN_JSON_PROFILE` (CLI wins; default
 the host used the jailed profile and native arena admission succeeded;
 unjailed runs report `false` even with an attached arena.
 
+`diagnostics.warnings` is present only when the library's optional
+`strategy_get_run_warnings` getter returns a nonempty list of objects with
+`code` (string) and `args` (object). It includes
+`request_timeframe_not_multiple` with `input_tf`, `requested_tf` and `sec_id`,
+and preserves unknown warning codes and their arguments. Older libraries and
+runs without warnings keep the earlier report shape and bytes. These warnings
+do not enter sink records or fingerprints.
+
 The marker records the checked host profile and successful native admission.
 It is not independent OS jail proof or a fresh backend query at report time;
 off Linux admission accepts any attached arena. Neither arena sizes nor

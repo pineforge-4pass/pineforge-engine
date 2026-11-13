@@ -256,6 +256,11 @@ if hasattr(lib, "strategy_get_last_error_code"):
         getattr(lib, name).argtypes = [ctypes.c_void_p]
         getattr(lib, name).restype = ctypes.c_char_p
 
+# Optional run diagnostics: older runtime libraries lack this symbol.
+if hasattr(lib, "strategy_get_run_warnings"):
+    lib.strategy_get_run_warnings.argtypes = [ctypes.c_void_p]
+    lib.strategy_get_run_warnings.restype = ctypes.c_char_p
+
 lib.report_free.argtypes      = [ctypes.POINTER(pf_report_t)]
 lib.report_free.restype       = None
 
@@ -267,6 +272,20 @@ lib.strategy_set_override.argtypes = [ctypes.c_void_p,
                                       ctypes.c_char_p, ctypes.c_char_p]
 lib.strategy_set_override.restype  = None
 ```
+
+Probe `strategy_get_run_warnings` with `hasattr` before binding or calling it.
+After report assembly, read it while the strategy handle is still live and
+before any later run, stream-begin, setter or `strategy_free`. The returned
+UTF-8 JSON array contains objects with a string `code` and an object `args`;
+`[]` means no warnings, and NULL is returned for a NULL handle.
+Both Python runners expose a nonempty parsed list as `diagnostics.warnings`;
+`scripts/run_strategy.py` also prints one warning summary line and includes the
+diagnostics in a requested trace JSON. An older library or an empty list adds
+nothing. Unknown codes and their argument objects are preserved, extra element
+keys are ignored, malformed elements are dropped and malformed strings are
+ignored. The fallback `[{"args":{},"code":"run_warnings_unavailable"}]` is a
+warning. See [report schema](report-schema.md) for the timeframe warning and
+its scope.
 
 ## Historical to realtime stream
 

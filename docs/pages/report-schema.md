@@ -421,14 +421,32 @@ The replay converter retains valid supplied fields and reads older reports
 without them, without inferring a profile or successful admission.
 These diagnostics leave sink wire and fingerprint versions unchanged.
 
-When the module exports `pf_report_cache_stats`, the host queries it after report
-assembly and before strategy release for ordinary and selected runs:
+The host queries optional per-run diagnostics after report assembly and before
+strategy release for ordinary and selected runs. Cache counters require
+`pf_report_cache_stats`; warnings require `strategy_get_run_warnings`:
 
 | JSON pointer | JSON type | Presence and meaning |
 | --- | --- | --- |
 | `/diagnostics/cache_resident_bytes` | integer | Present only with the getter and a positive allocation bypass count, together with the bypass fields: current live command-cache control/slabs plus the ledger's fixed workspace, allocated private directory and entry pages, each counted once. Separate from arena claims and backing-file bytes. |
 | `/diagnostics/cache_bypass_reason` | string | Present only with a positive bypass count; exactly `"alloc_failed"`. |
 | `/diagnostics/allocation_bypass_count` | integer | Present only when greater than zero: the admitted run's total optional command-slab and ledger-directory/page allocation bypasses, including released command owners. Repeated reads of a sticky bypass do not add events. |
+| `/diagnostics/warnings` | array of objects | Present only when the getter returns a nonempty valid warning list. Each element has `code` (string) and `args` (object), in engine order. The first code is `request_timeframe_not_multiple`, with `input_tf` (feed timeframe string), `requested_tf` (requested timeframe string) and `sec_id` (integer site identity) in `args`. |
+
+The timeframe warning covers same-symbol `request.security` sites only;
+other-symbol sites have their own exact-timeframe rules. A site whose requested
+timeframe is empty at setup is not warned. The bare `run(bars, n)` overload
+configures no security surface, so there is nothing to warn about. A native
+security feed attaches to buckets formed by the aggregator; an indivisible
+request forms none, so installing a native feed does not remove the warning.
+
+An absent getter or an empty list leaves the report byte-identical to the earlier
+shape, with no `warnings` key. Unknown codes and their argument objects are
+preserved; extra element keys are ignored and malformed elements are dropped.
+`run_warnings_unavailable` with empty `args` is retained as a warning.
+Metrics-only or sink-only shapes that bypass these two report assembly sites
+do not carry the key. Warnings are outside provenance, fingerprints, trade CSVs
+and sink records. This optional field is a minor report-schema addition;
+ABI 5, stream layout 4, sink wire and fingerprint versions are unchanged.
 
 All three cache fields are absent at zero; a cache disabled by policy adds no event.
 Older modules without the getter omit all three fields. Admission starts a new

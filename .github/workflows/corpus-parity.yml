@@ -13,33 +13,33 @@ name: Corpus parity
 # why the baseline rather than the corpus's own committed tapes is the byte
 # oracle.
 #
-# WHY THE WHOLE SWEEP IS NIGHTLY. Measured end to end on a 16-core laptop:
+# WHY THE WHOLE SWEEP IS NOT A CI CHECK. Measured end to end on a 16-core laptop:
 # the runtime and all 312 corpus strategies build in ~105 s at JOBS=8, and then
 # the run phase -- which run_corpus.sh executes serially, one ctypes process per
 # probe over a 221861-bar feed -- took 1792 s, with 94 s more to judge the
 # result. The dominant term is single-core serial work, which a runner's extra
 # cores do not shorten, so the whole population cannot be held to the ~25 min
-# a required pull-request check is budgeted for. Full parity therefore runs
-# nightly (01:30 UTC), on `workflow_dispatch`, and on the full-event pipeline.
-# The pull-request early signal is the inline corpus-parity-subset job in gke-pr.yml.
+# a required pull-request check is budgeted for. Full parity therefore runs as
+# the lab's parity step before every merge and on `workflow_dispatch`; every CI
+# round fits 15 minutes. The pull-request early signal is the inline
+# corpus-parity-subset job in gke-pr.yml, and ci-post.yml calls the subset.
 #
 # FULL-EVENT SUBSET. The `corpus-parity-subset` job below
 # re-runs the 54 probes scripts/corpus_parity_subset.txt names -- in parallel,
 # they write into disjoint directories -- and judges them against the same
-# pinned sha256 rows the nightly uses. Measured on the same laptop at JOBS=8,
+# pinned sha256 rows the full sweep uses. Measured on the same laptop at JOBS=8,
 # under sibling load, when the list held its first 30 probes: derive 2 s, build the runtime + the 30 strategy .so 68 s
 # from clean, run 45 s wall for 80 s of probe CPU, judge <1 s; 94 s end to end
 # over an up-to-date build directory, under 3 min cold.
 # .github/workflows/ci-post.yml calls it as a reusable workflow and includes it in
 # the advisory `build` aggregate. The maintainers' separate full parity
 # verdict posts the required pineforge/parity commit status on the PR head.
-# Nothing about the nightly job changes.
+# The full mode has no schedule: every CI round fits 15 minutes, and the full
+# parity runs as the lab's parity step on the exact head tree before every
+# merge (docs/ci.md, "Where the full suites run"). A manual dispatch can still
+# run it.
 
 on:
-  schedule:
-    # 01:30 UTC daily, after the nightly quiet period and off the hour so it
-    # does not queue behind the GitHub-wide cron spike.
-    - cron: '30 1 * * *'
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -54,7 +54,7 @@ permissions:
 # Keep a distinct prefix:
 # github.workflow in a reusable workflow names the CALLER, so an unprefixed
 # group would collide with CI's and could cancel it (native-live.yml has the
-# same note). Nightly and manual runs stay unique per run.
+# same note). Manual runs stay unique per run.
 concurrency:
   group: corpus-parity-${{ github.workflow }}-${{ github.run_id }}
   cancel-in-progress: false
@@ -64,7 +64,7 @@ env:
   CCACHE_COMPILERCHECK: content
   CCACHE_COMPRESS: "1"
   # 312 corpus translation units of generated C++ plus the runtime; they only
-  # change when the corpus gitlink moves, so a nightly re-run at an unchanged
+  # change when the corpus gitlink moves, so a re-run at an unchanged
   # pin is almost entirely cache hits.
   CCACHE_MAXSIZE: 2G
 
@@ -133,8 +133,8 @@ jobs:
           esac
           echo "authz: allowed ($EVENT${PR_AUTHOR:+ by $PR_AUTHOR})" >> "$GITHUB_STEP_SUMMARY"
 
-  # The whole population. Nightly (01:30 UTC), on `workflow_dispatch`, and on
-  # the full-event pipeline. Pull requests use the subset that `ci.yml` calls.
+  # The whole population, on `workflow_dispatch` only. Pull requests use the
+  # inline subset in gke-pr.yml; ci-post.yml calls the subset.
   # Never reached by `mode: subset` or a pull-request caller.
   corpus-parity:
     needs: [authz]
@@ -211,9 +211,9 @@ jobs:
     env:
       PF_CI_LABELS: '[]'
     steps:
-      # Credentials stay persisted, exactly as the nightly job above: the
+      # Credentials stay persisted, exactly as the full job above: the
       # submodule clone and `git lfs pull` below go out over https and the
-      # nightly is the configuration that is known to work for them.
+      # full job's is the configuration that is known to work for them.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 1
