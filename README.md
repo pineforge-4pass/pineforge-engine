@@ -291,6 +291,15 @@ Fixed in 1.1.0 (#325). See
 [Streaming known issues](docs/pages/streaming.md#streaming_known_issues) for the
 workaround for those versions.
 
+Known issue (v1.2.0 through v1.12.0): with `calc_on_order_fills = true`, a
+`strategy.exit` with a fixed `qty`, a `limit` and a `stop` that the script calls
+on every execution, together with a second `strategy.exit` of the same entry
+sized from the current position, can fill more than once for the same entry, so
+the list of trades and the per-trade statistics can differ from TradingView's.
+A fix is in progress. See
+[issue #854](https://github.com/pineforge-4pass/pineforge-engine/issues/854) for
+the affected scripts and how to recognise it.
+
 ## Validation scoreboard
 
 **Measured <!-- pf:scoreboard.date -->2026-11-01<!-- /pf -->** on main engine <!-- pf:scoreboard.engineCommit|short-code -->`a3e7822e`<!-- /pf --> with codegen-oss <!-- pf:scoreboard.codegenCommit|short-code -->`c1cc532b`<!-- /pf --> (baseline <!-- pf:scoreboard.id|code -->`pineforge-parity-baseline-20261101-engine-a3e7822e`<!-- /pf -->, snapshot <!-- pf:scoreboard.snapshotSha256|short-code -->`bdda9ac6`<!-- /pf -->): **<!-- pf:scoreboard.graded|int -->7,989<!-- /pf --> graded probes, <!-- pf:scoreboard.excellent|int -->7,983<!-- /pf --> excellent + <!-- pf:scoreboard.strong|int -->6<!-- /pf --> strong**, <!-- pf:scoreboard.belowStrong|int -->0<!-- /pf --> below strong and <!-- pf:scoreboard.engineErrors|int -->0<!-- /pf --> engine errors across <!-- pf:scoreboard.lanes|int -->18<!-- /pf --> market/timeframe lanes. The historical release 1.0.1 inventory holds <!-- pf:inventory.tvTrades|int -->4,776,328<!-- /pf --> trades.
