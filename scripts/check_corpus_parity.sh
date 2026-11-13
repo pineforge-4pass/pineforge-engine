@@ -171,20 +171,27 @@ else
     fi
 
     if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
-        log "configuring CMake (build_type=$BUILD_TYPE, dir=$BUILD_DIR)"
-        cmake -B "$BUILD_DIR" -S . \
-            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-            -DPINEFORGE_BUILD_TESTS=ON \
-            -DPINEFORGE_BUILD_CORPUS_STRATEGIES=ON \
-            -Wno-dev
         # corpus/CMakeLists.txt derives one target per probe directory:
         # validation/<probe> -> strategy_validation_<probe with - as _>.
         TARGETS=()
         for probe in "${PROBES[@]}"; do
             TARGETS+=("strategy_$(printf '%s' "$probe" | tr '/-' '__')")
         done
+        # The targets go to CMake as one list and are built as ONE aggregate
+        # target (pineforge_corpus_parity_subset in the top-level CMakeLists.txt).
+        # Named one by one on the build line, a Makefile generator builds them
+        # serially, whatever -j says: 54 libraries took 6 min 53 s of a 9 min 6 s
+        # build on a 4-core runner. As the dependencies of one target they build
+        # $JOBS at a time. A target the corpus does not define stops CMake here.
+        log "configuring CMake (build_type=$BUILD_TYPE, dir=$BUILD_DIR)"
+        cmake -B "$BUILD_DIR" -S . \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DPINEFORGE_BUILD_TESTS=ON \
+            -DPINEFORGE_BUILD_CORPUS_STRATEGIES=ON \
+            "-DPINEFORGE_CORPUS_PARITY_SUBSET_TARGETS=$(IFS=';'; printf '%s' "${TARGETS[*]}")" \
+            -Wno-dev
         log "building the runtime + ${#TARGETS[@]} strategy libraries ($JOBS jobs)"
-        cmake --build "$BUILD_DIR" -j "$JOBS" --target "${TARGETS[@]}"
+        cmake --build "$BUILD_DIR" -j "$JOBS" --target pineforge_corpus_parity_subset
     fi
 
     if [[ "${SKIP_RUN:-0}" != "1" ]]; then
