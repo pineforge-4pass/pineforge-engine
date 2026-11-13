@@ -148,6 +148,69 @@ class CorpusRecordsTests(unittest.TestCase):
             path, {"validation/sample"}), ["validation/sample"])
 
 
+class CorpusShardTests(unittest.TestCase):
+    def test_shard_slice_uses_sorted_one_based_round_robin_slices(self):
+        names = {
+            "validation/zulu",
+            "validation/alpha",
+            "validation/echo",
+            "validation/bravo",
+            "validation/delta",
+        }
+        self.assertEqual(
+            validator.shard_slice(names, 1, 3),
+            ["validation/alpha", "validation/echo"],
+        )
+        self.assertEqual(
+            validator.shard_slice(names, 2, 3),
+            ["validation/bravo", "validation/zulu"],
+        )
+        self.assertEqual(
+            validator.shard_slice(names, 3, 3),
+            ["validation/delta"],
+        )
+
+    def test_shard_slice_partitions_every_count_through_twelve(self):
+        names = {
+            "validation/lima",
+            "validation/alpha",
+            "validation/kilo",
+            "validation/bravo",
+            "validation/hotel",
+            "validation/echo",
+            "validation/juliet",
+            "validation/foxtrot",
+            "validation/india",
+            "validation/golf",
+            "validation/charlie",
+            "validation/delta",
+        }
+        for count in range(1, 13):
+            with self.subTest(count=count):
+                shards = [
+                    validator.shard_slice(names, index, count)
+                    for index in range(1, count + 1)
+                ]
+                flattened = [name for shard in shards for name in shard]
+                self.assertEqual(set(flattened), names)
+                self.assertEqual(len(flattened), len(names))
+                self.assertTrue(all(shards))
+                sizes = [len(shard) for shard in shards]
+                self.assertLessEqual(max(sizes) - min(sizes), 1)
+
+    def test_strategy_target_table_is_hand_written_and_collisions_refuse(self):
+        expected = {
+            "validation/a-b": "strategy_validation_a_b",
+            "validation/a_b": "strategy_validation_a_b",
+            "validation/period.name": "strategy_validation_period_name",
+        }
+        for name, target in expected.items():
+            with self.subTest(name=name):
+                self.assertEqual(validator.strategy_target(name), target)
+        with self.assertRaisesRegex(ValueError, "probe target collision"):
+            validator._strategy_targets({"validation/a-b", "validation/a_b"})
+
+
 def git(root, *arguments):
     return subprocess.run(
         ["git", "-C", str(root), "-c", "user.name=Corpus tests",
@@ -184,9 +247,14 @@ class CorpusValidatorMainTests(unittest.TestCase):
         self.owned_probe.mkdir(parents=True)
         for filename in validator.ARTIFACT_FILES.values():
             (self.owned_probe / filename).write_bytes(b"recorded bytes\n")
+        (self.owned_probe / "engine_trades.csv").write_text(
+            "Trade #,Type,Signal\n1,Long,Entry\n")
         self.unowned_probe = self.root / "validation" / "additional"
         self.unowned_probe.mkdir()
-        (self.unowned_probe / "engine_trades.csv").write_bytes(b"additional tape\n")
+        (self.unowned_probe / "generated.cpp").write_text("// additional strategy\n")
+        (self.unowned_probe / "strategy.pine").write_text("// additional source\n")
+        (self.unowned_probe / "engine_trades.csv").write_text(
+            "Trade #,Type,Signal\n1,Long,Entry\n")
         (self.unowned_probe / "tv_trades.csv").write_bytes(b"additional export\n")
         self.manifest = {
             "kind": "pineforge-corpus-run-manifest",
@@ -254,6 +322,138 @@ class CorpusValidatorMainTests(unittest.TestCase):
                                 for line in output.splitlines()), output)
         return output
 
+    def make_build_engine(self):
+        engine = self.directory / "build-engine"
+        (engine / "scripts").mkdir(parents=True)
+        (engine / "CMakeLists.txt").write_text("# fake engine\n")
+        (engine / "scripts" / "derive_corpus_feeds.py").write_text(
+            BuildAndProbePathTests.DERIVE)
+        (engine / "scripts" / "run_strategy.py").write_text(
+            BuildAndProbePathTests.RUN)
+        (engine / "scripts" / "corpus_parity_subset.txt").write_text(
+            "validation/additional\nvalidation/sample\n")
+        git(engine, "init", "-q")
+        git(engine, "add", "--all")
+        git(engine, "commit", "-q", "-m", "Record build engine fixture")
+        bin_directory = self.directory / "build-bin"
+        bin_directory.mkdir()
+        cmake = bin_directory / "cmake"
+        cmake.write_text(
+            BuildAndProbePathTests.FAKE_CMAKE.replace("{python}", sys.executable))
+        cmake.chmod(0o755)
+        target_log = self.directory / "cmake-targets"
+        environment = {
+            "PATH": f"{bin_directory}{os.pathsep}{os.environ['PATH']}",
+            "FAKE_HEADER": "Trade #,Type,Signal",
+            "FAKE_CMAKE_TARGET_LOG": str(target_log),
+            "FAKE_PROBE_LOG": str(self.directory / "probe-log"),
+        }
+        return engine, environment, target_log
+
+    def test_main_valid_shard_builds_only_its_hand_written_slice(self):
+        engine, environment, target_log = self.make_build_engine()
+        work = self.directory / "main-work"
+        output = io.StringIO()
+        with mock.patch.dict(os.environ, environment):
+            with redirect_stdout(output), redirect_stderr(output):
+                code = validator.main([
+                    "--corpus", str(self.root), "--engine", str(engine),
+                    "--work", str(work), "--jobs", "1", "--shard", "2/2",
+                ])
+        printed = self.assert_outcome((code, output.getvalue()), 0)
+        self.assertIn("CPUS 1", printed)
+        self.assertIn("SHARD 2/2 probes=1/2 selected=1/2", printed)
+        self.assertEqual(target_log.read_text().splitlines(),
+                         ["strategy_validation_sample"])
+        self.assertEqual(
+            (self.directory / "probe-log").read_text().splitlines(),
+            ["sample"],
+        )
+        stages = [line.split()[1] for line in printed.splitlines()
+                  if line.startswith("TIME ")]
+        self.assertEqual(
+            stages,
+            ["census", "copy", "configure", "build", "derive", "probes", "total"],
+        )
+        time_lines = [line for line in printed.splitlines()
+                      if line.startswith("TIME ")]
+        self.assertTrue(all(
+            len(fields := line.split()) == 3
+            and fields[0] == "TIME"
+            and fields[1]
+            and fields[2].endswith("s")
+            and float(fields[2][:-1]) >= 0
+            for line in time_lines
+        ))
+        times = [float(line.split()[2][:-1]) for line in time_lines]
+        self.assertEqual(times, sorted(times))
+
+    def test_main_valid_first_shard_builds_only_its_hand_written_slice(self):
+        engine, environment, target_log = self.make_build_engine()
+        work = self.directory / "first-shard-work"
+        output = io.StringIO()
+        with mock.patch.dict(os.environ, environment):
+            with redirect_stdout(output), redirect_stderr(output):
+                code = validator.main([
+                    "--corpus", str(self.root), "--engine", str(engine),
+                    "--work", str(work), "--jobs", "1", "--shard", "1/2",
+                ])
+        printed = self.assert_outcome((code, output.getvalue()), 0)
+        self.assertIn("CPUS 1", printed)
+        self.assertIn("SHARD 1/2 probes=1/2 selected=1/2", printed)
+        self.assertEqual(
+            target_log.read_text().splitlines(),
+            ["strategy_validation_additional"],
+        )
+        self.assertEqual(
+            (self.directory / "probe-log").read_text().splitlines(),
+            ["additional"],
+        )
+
+    def test_main_rejects_an_empty_shard(self):
+        engine, environment, target_log = self.make_build_engine()
+        work = self.directory / "empty-shard-work"
+        output = io.StringIO()
+        with mock.patch.dict(os.environ, environment):
+            with redirect_stdout(output), redirect_stderr(output):
+                code = validator.main([
+                    "--corpus", str(self.root), "--engine", str(engine),
+                    "--work", str(work), "--jobs", "1", "--shard", "3/3",
+                ])
+        printed = self.assert_outcome((code, output.getvalue()), 2)
+        self.assertIn("--shard 3/3 has no probes", printed)
+        self.assertFalse(target_log.exists())
+
+    def test_shard_options_are_strict_and_records_only_refuses_them(self):
+        malformed = {
+            "0/2": "--shard must be I/N with no leading zeros",
+            "01/2": "--shard must be I/N with no leading zeros",
+            "1/02": "--shard must be I/N with no leading zeros",
+            "2/1": "--shard index must be no greater than its count",
+            "1/0": "--shard must be I/N with no leading zeros",
+            "1/2/3": "--shard must be I/N with no leading zeros",
+            "1 /2": "--shard must be I/N with no leading zeros",
+        }
+        for value, reason in malformed.items():
+            with self.subTest(value=value):
+                output = self.assert_outcome(self.invoke("--shard", value), 2)
+                self.assertEqual(
+                    [line for line in output.splitlines()
+                     if line.startswith("FINDING ")],
+                    [f"FINDING setup arguments: ValueError: {reason}"],
+                )
+                self.assertNotIn("CPUS ", output)
+                self.assertNotIn("TIME ", output)
+        output = self.assert_outcome(
+            self.invoke("--records-only", "--shard", "1/2"), 2)
+        self.assertEqual(
+            [line for line in output.splitlines() if line.startswith("FINDING ")],
+            ["FINDING setup arguments: ValueError: "
+             "--records-only cannot be combined with --shard"],
+        )
+        self.assertNotIn("CPUS ", output)
+        self.assertNotIn("TIME ", output)
+
     def test_records_only_valid_checkout(self):
         output = self.assert_outcome(self.invoke("--records-only"), 0)
         tracked = set(git(self.root, "ls-files", "-z").rstrip("\0").split("\0"))
@@ -271,6 +471,8 @@ class CorpusValidatorMainTests(unittest.TestCase):
         self.assertEqual(self.count_fields(output), expected)
         self.assertIn("CLEAN corpus tree unchanged", output)
         self.assertNotIn("FINDING ", output)
+        self.assertNotIn("CPUS ", output)
+        self.assertNotIn("TIME ", output)
 
     def test_unowned_tape_flipped_byte_is_invalid(self):
         self.assertNotIn(self.unowned_probe.name,
@@ -649,9 +851,9 @@ class BuildAndProbePathTests(unittest.TestCase):
     """The build-and-probe stage, with a fake cmake and stub engine scripts.
 
     The engine is a real tiny Git repository whose tracked scripts are the stubs, and
-    the corpus is a plain directory. The fake tools only decide which step fails, so
-    these tests pin how each failure is reported and which failures are errors; they
-    do not claim anything about what a real compiler does.
+    the corpus is a plain directory. The fake tools expose the target names requested
+    by the validator and decide which step fails, so these tests pin the build graph
+    as well as each failure report; they do not claim anything about a real compiler.
     """
 
     PROBE = "validation/sample"
@@ -668,12 +870,42 @@ if "--build" in arguments:
     if os.environ.get("FAKE_CMAKE_BUILD") == "fail":
         print("fake build failure")
         sys.exit(7)
+    target_index = arguments.index("--target")
+    requested = []
+    for argument in arguments[target_index + 1:]:
+        if argument in ("--parallel", "-j"):
+            break
+        requested.append(argument)
+    raw_requested = list(requested)
+    targets = {
+        "strategy_validation_sample":
+            Path.cwd() / "corpus" / "validation" / "sample",
+        "strategy_validation_additional":
+            Path.cwd() / "corpus" / "validation" / "additional",
+    }
+    if requested == ["corpus_strategies"]:
+        requested = [target for target, directory in targets.items()
+                     if (directory / "generated.cpp").is_file()]
+    if not requested:
+        print("fake cmake received no targets")
+        sys.exit(12)
+    for target in requested:
+        if target not in targets:
+            print("fake unknown target: " + target)
+            sys.exit(8)
+        if not (targets[target] / "generated.cpp").is_file():
+            print("fake target has no generated.cpp: " + target)
+            sys.exit(10)
+    target_log = os.environ.get("FAKE_CMAKE_TARGET_LOG")
+    if target_log:
+        Path(target_log).write_text("\\n".join(raw_requested) + "\\n", encoding="utf-8")
     libraries = os.environ.get("FAKE_CMAKE_LIBRARIES", "one")
     if libraries != "none":
-        for generated in (Path.cwd() / "corpus").rglob("generated.cpp"):
-            (generated.parent / "strategy.so").write_bytes(b"")
+        for target in requested:
+            directory = targets[target]
+            (directory / "strategy.so").write_bytes(b"")
             if libraries == "two":
-                (generated.parent / "strategy.dylib").write_bytes(b"")
+                (directory / "strategy.dylib").write_bytes(b"")
     sys.exit(0)
 print("fake cmake configure")
 if os.environ.get("FAKE_CMAKE_CONFIGURE") == "fail":
@@ -700,6 +932,10 @@ if os.environ.get("FAKE_PROBE") == "fail":
     print("fake probe failure")
     sys.exit(9)
 arguments = sys.argv[1:]
+probe_log = os.environ.get("FAKE_PROBE_LOG")
+if probe_log:
+    with Path(probe_log).open("a", encoding="utf-8") as stream:
+        stream.write(Path(arguments[0]).name + "\\n")
 output = Path(arguments[arguments.index("--output") + 1])
 output.parent.mkdir(parents=True, exist_ok=True)
 output.write_text(os.environ["FAKE_HEADER"] + "\\n1,Long,Entry\\n", encoding="utf-8")
@@ -722,6 +958,11 @@ output.write_text(os.environ["FAKE_HEADER"] + "\\n1,Long,Entry\\n", encoding="ut
         probe.mkdir(parents=True)
         (probe / "generated.cpp").write_text("// fake strategy\n")
         (probe / "engine_trades.csv").write_text(self.TAPE_HEADER + "\n1,Long,Entry\n")
+        additional = self.corpus / "validation" / "additional"
+        additional.mkdir()
+        (additional / "generated.cpp").write_text("// additional strategy\n")
+        (additional / "engine_trades.csv").write_text(
+            self.TAPE_HEADER + "\n1,Long,Entry\n")
         self.work = self.directory / "work"
         self.work.mkdir()
         bin_directory = self.directory / "bin"
@@ -730,20 +971,82 @@ output.write_text(os.environ["FAKE_HEADER"] + "\\n1,Long,Entry\\n", encoding="ut
         cmake.write_text(self.FAKE_CMAKE.replace("{python}", sys.executable))
         cmake.chmod(0o755)
         self.environment = {"PATH": f"{bin_directory}{os.pathsep}{os.environ['PATH']}",
-                            "FAKE_HEADER": self.TAPE_HEADER}
+                            "FAKE_HEADER": self.TAPE_HEADER,
+                            "FAKE_PROBE_LOG": str(self.directory / "probes")}
 
-    def build(self, **fake):
+    def build(self, probes=None, selected=None, shard=None, **fake):
+        probes = {self.PROBE} if probes is None else set(probes)
+        selected = [self.PROBE] if selected is None else selected
+        shard_options = {} if shard is None else {"shard": shard}
         output = io.StringIO()
-        with mock.patch.dict(os.environ, {**self.environment, **fake}):
+        environment = {
+            **self.environment,
+            "FAKE_CMAKE_TARGET_LOG": str(self.directory / "cmake-targets"),
+            **fake,
+        }
+        with mock.patch.dict(os.environ, environment):
             with redirect_stdout(output):
                 result = validator._build_and_run(
-                    self.corpus, self.engine, self.work, {self.PROBE}, [self.PROBE], jobs=1)
+                    self.corpus, self.engine, self.work, probes, selected,
+                    jobs=1, **shard_options)
         return result, output.getvalue()
 
     def test_a_clean_run_has_no_findings_and_no_error(self):
         (findings, error), printed = self.build()
         self.assertEqual((findings, error), ([], False))
         self.assertIn("WORK ", printed)
+
+    def test_default_build_requests_only_the_corpus_aggregate(self):
+        (findings, error), _ = self.build()
+        self.assertEqual((findings, error), ([], False))
+        self.assertEqual(
+            (self.directory / "cmake-targets").read_text().splitlines(),
+            ["corpus_strategies"],
+        )
+
+    def test_shard_build_requests_only_its_hand_written_target_slice(self):
+        (findings, error), _ = self.build(
+            probes={self.PROBE},
+            selected=[self.PROBE],
+            shard=(2, 2),
+        )
+        self.assertEqual((findings, error), ([], False))
+        self.assertEqual(
+            (self.directory / "cmake-targets").read_text().splitlines(),
+            ["strategy_validation_sample"],
+        )
+        self.assertEqual(
+            (self.directory / "probes").read_text().splitlines(),
+            ["sample"],
+        )
+
+    def test_shard_missing_library_is_a_finding(self):
+        (findings, error), _ = self.build(
+            probes={self.PROBE},
+            selected=[self.PROBE],
+            shard=(2, 2),
+            FAKE_CMAKE_LIBRARIES="none",
+        )
+        self.assertFalse(error)
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("validation/sample/generated.cpp", findings[0])
+        self.assertIn("expected one freshly built strategy library", findings[0])
+
+    def test_unknown_shard_target_is_a_build_finding(self):
+        unknown = self.corpus / "validation" / "unknown"
+        unknown.mkdir()
+        (unknown / "generated.cpp").write_text("// unknown strategy\n")
+        (unknown / "engine_trades.csv").write_text(
+            self.TAPE_HEADER + "\n1,Long,Entry\n")
+        (findings, error), printed = self.build(
+            probes={"validation/unknown"},
+            selected=["validation/unknown"],
+            shard=(1, 1),
+        )
+        self.assertFalse(error)
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("strategy_validation_unknown failed", findings[0])
+        self.assertIn("fake unknown target", printed)
 
     def test_configure_failure_is_an_error_and_shows_its_log(self):
         (findings, error), printed = self.build(FAKE_CMAKE_CONFIGURE="fail")
@@ -817,6 +1120,301 @@ output.write_text(os.environ["FAKE_HEADER"] + "\\n1,Long,Entry\\n", encoding="ut
                 self.assertEqual(result, code)
                 self.assertEqual(log.read_text(), "line\n")
                 self.assertEqual(output.getvalue(), "line\n" if code else "")
+
+
+def shard_logs(corpus_commit, engine_commit):
+    prefix = f"CORPUS {corpus_commit}\nENGINE {engine_commit}\n"
+    return {
+        "one.log": prefix + "SHARD 1/4 probes=78/312 selected=14/54\nRESULT valid\n",
+        "two.log": prefix + "SHARD 2/4 probes=78/312 selected=14/54\nRESULT valid\n",
+        "three.log": prefix + "SHARD 3/4 probes=78/312 selected=13/54\nRESULT valid\n",
+        "four.log": prefix + "SHARD 4/4 probes=78/312 selected=13/54\nRESULT valid\n",
+    }
+
+
+class JoinShardsHelperTests(unittest.TestCase):
+    def test_four_logs_cover_312_probes_and_54_selected_without_files(self):
+        corpus_commit = "a" * 40
+        engine_commit = "b" * 40
+        self.assertEqual(
+            validator.join_shards(shard_logs(corpus_commit, engine_commit),
+                                  4, corpus_commit, engine_commit),
+            ([], {"probes": 312, "selected": 54}))
+
+
+class JoinShardsMainTests(unittest.TestCase):
+    def setUp(self):
+        resources = ExitStack()
+        self.addCleanup(resources.close)
+        self.directory = Path(resources.enter_context(
+            tempfile.TemporaryDirectory(prefix="corpus-join-"))).resolve()
+        self.root = self.directory / "corpus"
+        self.engine = self.directory / "engine"
+        for tree in (self.root, self.engine):
+            tree.mkdir()
+            git(tree, "init", "-q")
+            (tree / "version.txt").write_text(f"{tree.name} join fixture\n", encoding="utf-8")
+            git(tree, "add", "version.txt")
+            git(tree, "commit", "-q", "-m", "Record join fixture")
+        self.corpus_commit = git(self.root, "rev-parse", "HEAD")
+        self.engine_commit = git(self.engine, "rev-parse", "HEAD")
+        self.logs = shard_logs(self.corpus_commit, self.engine_commit)
+        self.run_number = 0
+
+    def write_logs(self, logs):
+        self.run_number += 1
+        directory = self.directory / f"logs-{self.run_number}"
+        directory.mkdir()
+        for name, text in logs.items():
+            (directory / name).write_text(text, encoding="utf-8")
+        return directory
+
+    def invoke(self, *arguments):
+        output = io.StringIO()
+        with redirect_stdout(output), redirect_stderr(output):
+            code = validator.main([
+                "--corpus", str(self.root), "--engine", str(self.engine), *arguments])
+        return code, output.getvalue()
+
+    def join(self, *arguments, logs=None):
+        directory = self.write_logs(self.logs if logs is None else logs)
+        return self.invoke("--join", str(directory), "--shards", "4", *arguments)
+
+    def assert_outcome(self, result, expected):
+        code, output = result
+        self.assertEqual(code, expected, output)
+        verdict = f"RESULT {('valid', 'invalid', 'error')[expected]}"
+        self.assertEqual(
+            [line for line in output.splitlines() if line.startswith("RESULT ")],
+            [verdict])
+        self.assertEqual(output.splitlines()[-1], verdict)
+        self.assertNotIn("Traceback", output)
+        self.assertNotIn("TIME ", output)
+        if code:
+            self.assertTrue(any(line.startswith("FINDING ")
+                                for line in output.splitlines()), output)
+        return output
+
+    def assert_invalid(self, logs, finding):
+        output = self.assert_outcome(self.join(logs=logs), 1)
+        self.assertIn(f"FINDING {finding}", output.splitlines())
+        return output
+
+    def test_four_logs_are_valid_without_records_a_subset_or_a_build(self):
+        output = self.assert_outcome(self.join(), 0)
+        self.assertEqual(output.splitlines(), [
+            f"CORPUS {self.corpus_commit}",
+            f"ENGINE {self.engine_commit}",
+            "JOIN shards=4/4 probes=312 selected=54",
+            "RESULT valid",
+        ])
+        self.assertEqual(sorted(path.name for path in self.directory.iterdir()),
+                         ["corpus", "engine", "logs-1"])
+
+    def test_failed_and_error_results_name_the_shard_that_did_not_end_valid(self):
+        for result in ("invalid", "error"):
+            with self.subTest(result=result):
+                logs = dict(self.logs)
+                logs["two.log"] = logs["two.log"].replace("RESULT valid", f"RESULT {result}")
+                self.assert_invalid(
+                    logs, f"join two.log: shard 2/4 RESULT is {result}, expected valid")
+
+    def test_three_logs_leave_the_fourth_shard_missing(self):
+        logs = {name: text for name, text in self.logs.items() if name != "four.log"}
+        output = self.assert_invalid(logs, "join: missing shard 4/4")
+        self.assertIn("JOIN shards=3/4 probes=312 selected=54", output.splitlines())
+
+    def test_no_logs_name_every_missing_index(self):
+        output = self.assert_outcome(self.join(logs={}), 1)
+        self.assertEqual(output.splitlines(), [
+            f"CORPUS {self.corpus_commit}",
+            f"ENGINE {self.engine_commit}",
+            "JOIN shards=0/4 probes=- selected=-",
+            "FINDING join: missing shard 1/4",
+            "FINDING join: missing shard 2/4",
+            "FINDING join: missing shard 3/4",
+            "FINDING join: missing shard 4/4",
+            "RESULT invalid",
+        ])
+
+    def test_a_job_cut_off_before_its_result_is_unreadable(self):
+        logs = dict(self.logs)
+        logs["two.log"] = logs["two.log"].removesuffix("RESULT valid\n")
+        self.assert_invalid(
+            logs, "join two.log: unreadable log: expected exactly one RESULT line, found 0")
+
+    def test_each_summary_line_must_occur_once_and_match_its_form(self):
+        for kind, line, malformed, counts in (
+                ("CORPUS", f"CORPUS {self.corpus_commit}\n", "CORPUS short\n", (0, 2)),
+                ("ENGINE", f"ENGINE {self.engine_commit}\n", "ENGINE short\n", (0, 2)),
+                ("SHARD", "SHARD 2/4 probes=78/312 selected=14/54\n", "SHARD 2/4\n", (0, 2)),
+                ("RESULT", "RESULT valid\n", "RESULT skipped\n", (2,))):
+            for count in counts:
+                with self.subTest(kind=kind, count=count):
+                    logs = dict(self.logs)
+                    logs["two.log"] = logs["two.log"].replace(line, line * count)
+                    self.assert_invalid(
+                        logs, f"join two.log: unreadable log: expected exactly one "
+                        f"{kind} line, found {count}")
+            with self.subTest(kind=kind, malformed=True):
+                logs = dict(self.logs)
+                logs["two.log"] = logs["two.log"].replace(line, malformed)
+                self.assert_invalid(logs, f"join two.log: unreadable log: malformed {kind} line")
+
+    def test_result_must_be_the_last_line_of_the_saved_run(self):
+        logs = dict(self.logs)
+        logs["two.log"] += "work continued\n"
+        self.assert_invalid(logs, "join two.log: unreadable log: RESULT must be the last line")
+
+    def test_a_doubled_index_names_both_logs_and_the_missing_index(self):
+        logs = dict(self.logs)
+        logs["four.log"] = logs["four.log"].replace("SHARD 4/4", "SHARD 2/4")
+        output = self.assert_invalid(
+            logs, "join: shard 2/4 appears in multiple logs: four.log, two.log")
+        self.assertIn("FINDING join: missing shard 4/4", output.splitlines())
+
+    def test_a_log_from_another_split_is_invalid(self):
+        logs = dict(self.logs)
+        logs["three.log"] = logs["three.log"].replace("SHARD 3/4", "SHARD 3/5")
+        self.assert_invalid(logs, "join three.log: shard count 5 differs from --shards 4")
+
+    def test_an_index_outside_the_split_is_invalid(self):
+        for index in (0, 5):
+            with self.subTest(index=index):
+                logs = dict(self.logs)
+                logs["two.log"] = logs["two.log"].replace("SHARD 2/4", f"SHARD {index}/4")
+                self.assert_invalid(logs, f"join two.log: shard index {index} is outside 1..4")
+
+    def test_a_log_from_another_corpus_commit_is_invalid(self):
+        logs = dict(self.logs)
+        other = "c" * 40
+        logs["two.log"] = logs["two.log"].replace(
+            f"CORPUS {self.corpus_commit}", f"CORPUS {other}")
+        self.assert_invalid(
+            logs, f"join two.log: CORPUS {other} differs from expected {self.corpus_commit}")
+
+    def test_a_log_from_another_engine_commit_is_invalid(self):
+        logs = dict(self.logs)
+        other = "d" * 40
+        logs["two.log"] = logs["two.log"].replace(
+            f"ENGINE {self.engine_commit}", f"ENGINE {other}")
+        self.assert_invalid(
+            logs, f"join two.log: ENGINE {other} differs from expected {self.engine_commit}")
+
+    def test_unknown_engine_in_a_log_is_invalid(self):
+        logs = dict(self.logs)
+        logs["two.log"] = logs["two.log"].replace(
+            f"ENGINE {self.engine_commit}", "ENGINE unknown")
+        self.assert_invalid(
+            logs, f"join two.log: ENGINE unknown differs from expected {self.engine_commit}")
+
+    def test_slice_sizes_must_cover_the_whole_probe_total(self):
+        logs = dict(self.logs)
+        logs["two.log"] = logs["two.log"].replace("probes=78/312", "probes=77/312")
+        self.assert_invalid(
+            logs, "join shards 1..4: slice probe counts add up to 311, expected 312")
+
+    def test_selected_slice_sizes_must_cover_the_whole_selected_total(self):
+        logs = dict(self.logs)
+        logs["two.log"] = logs["two.log"].replace("selected=14/54", "selected=13/54")
+        self.assert_invalid(
+            logs, "join shards 1..4: selected slice counts add up to 53, expected 54")
+
+    def test_logs_must_agree_on_the_probe_total(self):
+        logs = dict(self.logs)
+        logs["two.log"] = logs["two.log"].replace("probes=78/312", "probes=78/313")
+        output = self.assert_invalid(
+            logs, "join two.log: all probes 313 differs from 312 in four.log")
+        self.assertIn("JOIN shards=4/4 probes=- selected=54", output.splitlines())
+
+    def test_logs_must_agree_on_the_selected_total(self):
+        logs = dict(self.logs)
+        logs["two.log"] = logs["two.log"].replace("selected=14/54", "selected=14/55")
+        output = self.assert_invalid(
+            logs, "join two.log: all selected 55 differs from 54 in four.log")
+        self.assertIn("JOIN shards=4/4 probes=312 selected=-", output.splitlines())
+
+    def test_a_valid_result_cannot_hide_a_slice_with_no_probes(self):
+        logs = dict(self.logs)
+        logs["two.log"] = logs["two.log"].replace("probes=78/312", "probes=0/312")
+        self.assert_invalid(
+            logs, "join two.log: shard 2/4 slice size must be at least 1, found 0")
+
+    def test_file_names_do_not_determine_the_shard_indexes(self):
+        logs = {
+            "shard-4.log": self.logs["one.log"],
+            "shard-3.log": self.logs["two.log"],
+            "shard-2.log": self.logs["three.log"],
+            "shard-1.log": self.logs["four.log"],
+        }
+        self.assert_outcome(self.join(logs=logs), 0)
+
+    def test_non_log_files_and_non_regular_entries_are_ignored(self):
+        directory = self.write_logs({**self.logs, "notes.txt": "not a shard run\n"})
+        (directory / "nested.log").mkdir()
+        (directory / "nested.log" / "extra.log").write_text("not a shard run\n", encoding="utf-8")
+        (directory / "linked.log").symlink_to("one.log")
+        (directory / "dangling.log").symlink_to("absent.log")
+        output = self.assert_outcome(
+            self.invoke("--join", str(directory), "--shards", "4"), 0)
+        self.assertIn("JOIN shards=4/4 probes=312 selected=54", output.splitlines())
+
+    def test_a_missing_directory_is_an_error(self):
+        directory = self.directory / "missing"
+        output = self.assert_outcome(
+            self.invoke("--join", str(directory), "--shards", "4"), 2)
+        self.assertIn(f"--join cannot read {directory}", output)
+
+    def test_an_unreadable_directory_is_an_error(self):
+        directory = self.write_logs(self.logs)
+        with mock.patch.object(validator.os, "scandir",
+                               side_effect=PermissionError("saved logs are unreadable")):
+            output = self.assert_outcome(
+                self.invoke("--join", str(directory), "--shards", "4"), 2)
+        self.assertIn(f"--join cannot read {directory}: saved logs are unreadable", output)
+
+    def test_logs_must_be_utf8(self):
+        directory = self.write_logs(self.logs)
+        (directory / "broken.log").write_bytes(b"\xff")
+        output = self.assert_outcome(
+            self.invoke("--join", str(directory), "--shards", "4"), 2)
+        self.assertIn(f"--join cannot read {directory}", output)
+        self.assertIn("broken.log", output)
+        self.assertIn("UTF-8", output)
+
+    def test_join_and_shards_are_required_together(self):
+        directory = self.write_logs(self.logs)
+        for arguments in (("--join", str(directory)), ("--shards", "4")):
+            with self.subTest(arguments=arguments):
+                output = self.assert_outcome(self.invoke(*arguments), 2)
+                self.assertIn("--join and --shards are required together", output)
+
+    def test_shard_count_is_a_positive_integer_without_leading_zeros(self):
+        directory = self.write_logs(self.logs)
+        for value in ("0", "04", "x"):
+            with self.subTest(value=value):
+                output = self.assert_outcome(
+                    self.invoke("--join", str(directory), "--shards", value), 2)
+                self.assertIn(
+                    f"--shards must be a positive integer without leading zeros, not {value!r}",
+                    output)
+
+    def test_join_refuses_each_option_that_changes_a_shard_run(self):
+        for option, arguments in (
+                ("--shard", ("--shard", "1/4")),
+                ("--records-only", ("--records-only",)),
+                ("--work", ("--work", str(self.directory / "work"))),
+                ("--subset", ("--subset", str(self.directory / "subset.txt")))):
+            with self.subTest(option=option):
+                output = self.assert_outcome(self.join(*arguments), 2)
+                self.assertIn(f"--join cannot be used with {option}", output)
+
+    def test_join_requires_a_known_engine_checkout_commit(self):
+        plain = self.directory / "plain-engine"
+        plain.mkdir()
+        output = self.assert_outcome(self.join("--engine", str(plain)), 2)
+        self.assertIn("--join requires a known engine commit for --engine", output)
+        self.assertIn("ENGINE unknown", output.splitlines())
 
 
 if __name__ == "__main__":
