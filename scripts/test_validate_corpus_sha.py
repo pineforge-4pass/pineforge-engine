@@ -1122,5 +1122,300 @@ output.write_text(os.environ["FAKE_HEADER"] + "\\n1,Long,Entry\\n", encoding="ut
                 self.assertEqual(output.getvalue(), "line\n" if code else "")
 
 
+def shard_logs(corpus_commit, engine_commit):
+    prefix = f"CORPUS {corpus_commit}\nENGINE {engine_commit}\n"
+    return {
+        "one.log": prefix + "SHARD 1/4 probes=78/312 selected=14/54\nRESULT valid\n",
+        "two.log": prefix + "SHARD 2/4 probes=78/312 selected=14/54\nRESULT valid\n",
+        "three.log": prefix + "SHARD 3/4 probes=78/312 selected=13/54\nRESULT valid\n",
+        "four.log": prefix + "SHARD 4/4 probes=78/312 selected=13/54\nRESULT valid\n",
+    }
+
+
+class JoinShardsHelperTests(unittest.TestCase):
+    def test_four_logs_cover_312_probes_and_54_selected_without_files(self):
+        corpus_commit = "a" * 40
+        engine_commit = "b" * 40
+        self.assertEqual(
+            validator.join_shards(shard_logs(corpus_commit, engine_commit),
+                                  4, corpus_commit, engine_commit),
+            ([], {"probes": 312, "selected": 54}))
+
+
+class JoinShardsMainTests(unittest.TestCase):
+    def setUp(self):
+        resources = ExitStack()
+        self.addCleanup(resources.close)
+        self.directory = Path(resources.enter_context(
+            tempfile.TemporaryDirectory(prefix="corpus-join-"))).resolve()
+        self.root = self.directory / "corpus"
+        self.engine = self.directory / "engine"
+        for tree in (self.root, self.engine):
+            tree.mkdir()
+            git(tree, "init", "-q")
+            (tree / "version.txt").write_text(f"{tree.name} join fixture\n", encoding="utf-8")
+            git(tree, "add", "version.txt")
+            git(tree, "commit", "-q", "-m", "Record join fixture")
+        self.corpus_commit = git(self.root, "rev-parse", "HEAD")
+        self.engine_commit = git(self.engine, "rev-parse", "HEAD")
+        self.logs = shard_logs(self.corpus_commit, self.engine_commit)
+        self.run_number = 0
+
+    def write_logs(self, logs):
+        self.run_number += 1
+        directory = self.directory / f"logs-{self.run_number}"
+        directory.mkdir()
+        for name, text in logs.items():
+            (directory / name).write_text(text, encoding="utf-8")
+        return directory
+
+    def invoke(self, *arguments):
+        output = io.StringIO()
+        with redirect_stdout(output), redirect_stderr(output):
+            code = validator.main([
+                "--corpus", str(self.root), "--engine", str(self.engine), *arguments])
+        return code, output.getvalue()
+
+    def join(self, *arguments, logs=None):
+        directory = self.write_logs(self.logs if logs is None else logs)
+        return self.invoke("--join", str(directory), "--shards", "4", *arguments)
+
+    def assert_outcome(self, result, expected):
+        code, output = result
+        self.assertEqual(code, expected, output)
+        verdict = f"RESULT {('valid', 'invalid', 'error')[expected]}"
+        self.assertEqual(
+            [line for line in output.splitlines() if line.startswith("RESULT ")],
+            [verdict])
+        self.assertEqual(output.splitlines()[-1], verdict)
+        self.assertNotIn("Traceback", output)
+        self.assertNotIn("TIME ", output)
+        if code:
+            self.assertTrue(any(line.startswith("FINDING ")
+                                for line in output.splitlines()), output)
+        return output
+
+    def assert_invalid(self, logs, finding):
+        output = self.assert_outcome(self.join(logs=logs), 1)
+        self.assertIn(f"FINDING {finding}", output.splitlines())
+        return output
+
+    def test_four_logs_are_valid_without_records_a_subset_or_a_build(self):
+        output = self.assert_outcome(self.join(), 0)
+        self.assertEqual(output.splitlines(), [
+            f"CORPUS {self.corpus_commit}",
+            f"ENGINE {self.engine_commit}",
+            "JOIN shards=4/4 probes=312 selected=54",
+            "RESULT valid",
+        ])
+        self.assertEqual(sorted(path.name for path in self.directory.iterdir()),
+                         ["corpus", "engine", "logs-1"])
+
+    def test_failed_and_error_results_name_the_shard_that_did_not_end_valid(self):
+        for result in ("invalid", "error"):
+            with self.subTest(result=result):
+                logs = dict(self.logs)
+                logs["two.log"] = logs["two.log"].replace("RESULT valid", f"RESULT {result}")
+                self.assert_invalid(
+                    logs, f"join two.log: shard 2/4 RESULT is {result}, expected valid")
+
+    def test_three_logs_leave_the_fourth_shard_missing(self):
+        logs = {name: text for name, text in self.logs.items() if name != "four.log"}
+        output = self.assert_invalid(logs, "join: missing shard 4/4")
+        self.assertIn("JOIN shards=3/4 probes=312 selected=54", output.splitlines())
+
+    def test_no_logs_name_every_missing_index(self):
+        output = self.assert_outcome(self.join(logs={}), 1)
+        self.assertEqual(output.splitlines(), [
+            f"CORPUS {self.corpus_commit}",
+            f"ENGINE {self.engine_commit}",
+            "JOIN shards=0/4 probes=- selected=-",
+            "FINDING join: missing shard 1/4",
+            "FINDING join: missing shard 2/4",
+            "FINDING join: missing shard 3/4",
+            "FINDING join: missing shard 4/4",
+            "RESULT invalid",
+        ])
+
+    def test_a_job_cut_off_before_its_result_is_unreadable(self):
+        logs = dict(self.logs)
+        logs["two.log"] = logs["two.log"].removesuffix("RESULT valid\n")
+        self.assert_invalid(
+            logs, "join two.log: unreadable log: expected exactly one RESULT line, found 0")
+
+    def test_each_summary_line_must_occur_once_and_match_its_form(self):
+        for kind, line, malformed, counts in (
+                ("CORPUS", f"CORPUS {self.corpus_commit}\n", "CORPUS short\n", (0, 2)),
+                ("ENGINE", f"ENGINE {self.engine_commit}\n", "ENGINE short\n", (0, 2)),
+                ("SHARD", "SHARD 2/4 probes=78/312 selected=14/54\n", "SHARD 2/4\n", (0, 2)),
+                ("RESULT", "RESULT valid\n", "RESULT skipped\n", (2,))):
+            for count in counts:
+                with self.subTest(kind=kind, count=count):
+                    logs = dict(self.logs)
+                    logs["two.log"] = logs["two.log"].replace(line, line * count)
+                    self.assert_invalid(
+                        logs, f"join two.log: unreadable log: expected exactly one "
+                        f"{kind} line, found {count}")
+            with self.subTest(kind=kind, malformed=True):
+                logs = dict(self.logs)
+                logs["two.log"] = logs["two.log"].replace(line, malformed)
+                self.assert_invalid(logs, f"join two.log: unreadable log: malformed {kind} line")
+
+    def test_result_must_be_the_last_line_of_the_saved_run(self):
+        logs = dict(self.logs)
+        logs["two.log"] += "work continued\n"
+        self.assert_invalid(logs, "join two.log: unreadable log: RESULT must be the last line")
+
+    def test_a_doubled_index_names_both_logs_and_the_missing_index(self):
+        logs = dict(self.logs)
+        logs["four.log"] = logs["four.log"].replace("SHARD 4/4", "SHARD 2/4")
+        output = self.assert_invalid(
+            logs, "join: shard 2/4 appears in multiple logs: four.log, two.log")
+        self.assertIn("FINDING join: missing shard 4/4", output.splitlines())
+
+    def test_a_log_from_another_split_is_invalid(self):
+        logs = dict(self.logs)
+        logs["three.log"] = logs["three.log"].replace("SHARD 3/4", "SHARD 3/5")
+        self.assert_invalid(logs, "join three.log: shard count 5 differs from --shards 4")
+
+    def test_an_index_outside_the_split_is_invalid(self):
+        for index in (0, 5):
+            with self.subTest(index=index):
+                logs = dict(self.logs)
+                logs["two.log"] = logs["two.log"].replace("SHARD 2/4", f"SHARD {index}/4")
+                self.assert_invalid(logs, f"join two.log: shard index {index} is outside 1..4")
+
+    def test_a_log_from_another_corpus_commit_is_invalid(self):
+        logs = dict(self.logs)
+        other = "c" * 40
+        logs["two.log"] = logs["two.log"].replace(
+            f"CORPUS {self.corpus_commit}", f"CORPUS {other}")
+        self.assert_invalid(
+            logs, f"join two.log: CORPUS {other} differs from expected {self.corpus_commit}")
+
+    def test_a_log_from_another_engine_commit_is_invalid(self):
+        logs = dict(self.logs)
+        other = "d" * 40
+        logs["two.log"] = logs["two.log"].replace(
+            f"ENGINE {self.engine_commit}", f"ENGINE {other}")
+        self.assert_invalid(
+            logs, f"join two.log: ENGINE {other} differs from expected {self.engine_commit}")
+
+    def test_unknown_engine_in_a_log_is_invalid(self):
+        logs = dict(self.logs)
+        logs["two.log"] = logs["two.log"].replace(
+            f"ENGINE {self.engine_commit}", "ENGINE unknown")
+        self.assert_invalid(
+            logs, f"join two.log: ENGINE unknown differs from expected {self.engine_commit}")
+
+    def test_slice_sizes_must_cover_the_whole_probe_total(self):
+        logs = dict(self.logs)
+        logs["two.log"] = logs["two.log"].replace("probes=78/312", "probes=77/312")
+        self.assert_invalid(
+            logs, "join shards 1..4: slice probe counts add up to 311, expected 312")
+
+    def test_selected_slice_sizes_must_cover_the_whole_selected_total(self):
+        logs = dict(self.logs)
+        logs["two.log"] = logs["two.log"].replace("selected=14/54", "selected=13/54")
+        self.assert_invalid(
+            logs, "join shards 1..4: selected slice counts add up to 53, expected 54")
+
+    def test_logs_must_agree_on_the_probe_total(self):
+        logs = dict(self.logs)
+        logs["two.log"] = logs["two.log"].replace("probes=78/312", "probes=78/313")
+        output = self.assert_invalid(
+            logs, "join two.log: all probes 313 differs from 312 in four.log")
+        self.assertIn("JOIN shards=4/4 probes=- selected=54", output.splitlines())
+
+    def test_logs_must_agree_on_the_selected_total(self):
+        logs = dict(self.logs)
+        logs["two.log"] = logs["two.log"].replace("selected=14/54", "selected=14/55")
+        output = self.assert_invalid(
+            logs, "join two.log: all selected 55 differs from 54 in four.log")
+        self.assertIn("JOIN shards=4/4 probes=312 selected=-", output.splitlines())
+
+    def test_a_valid_result_cannot_hide_a_slice_with_no_probes(self):
+        logs = dict(self.logs)
+        logs["two.log"] = logs["two.log"].replace("probes=78/312", "probes=0/312")
+        self.assert_invalid(
+            logs, "join two.log: shard 2/4 slice size must be at least 1, found 0")
+
+    def test_file_names_do_not_determine_the_shard_indexes(self):
+        logs = {
+            "shard-4.log": self.logs["one.log"],
+            "shard-3.log": self.logs["two.log"],
+            "shard-2.log": self.logs["three.log"],
+            "shard-1.log": self.logs["four.log"],
+        }
+        self.assert_outcome(self.join(logs=logs), 0)
+
+    def test_non_log_files_and_non_regular_entries_are_ignored(self):
+        directory = self.write_logs({**self.logs, "notes.txt": "not a shard run\n"})
+        (directory / "nested.log").mkdir()
+        (directory / "nested.log" / "extra.log").write_text("not a shard run\n", encoding="utf-8")
+        (directory / "linked.log").symlink_to("one.log")
+        (directory / "dangling.log").symlink_to("absent.log")
+        output = self.assert_outcome(
+            self.invoke("--join", str(directory), "--shards", "4"), 0)
+        self.assertIn("JOIN shards=4/4 probes=312 selected=54", output.splitlines())
+
+    def test_a_missing_directory_is_an_error(self):
+        directory = self.directory / "missing"
+        output = self.assert_outcome(
+            self.invoke("--join", str(directory), "--shards", "4"), 2)
+        self.assertIn(f"--join cannot read {directory}", output)
+
+    def test_an_unreadable_directory_is_an_error(self):
+        directory = self.write_logs(self.logs)
+        with mock.patch.object(validator.os, "scandir",
+                               side_effect=PermissionError("saved logs are unreadable")):
+            output = self.assert_outcome(
+                self.invoke("--join", str(directory), "--shards", "4"), 2)
+        self.assertIn(f"--join cannot read {directory}: saved logs are unreadable", output)
+
+    def test_logs_must_be_utf8(self):
+        directory = self.write_logs(self.logs)
+        (directory / "broken.log").write_bytes(b"\xff")
+        output = self.assert_outcome(
+            self.invoke("--join", str(directory), "--shards", "4"), 2)
+        self.assertIn(f"--join cannot read {directory}", output)
+        self.assertIn("broken.log", output)
+        self.assertIn("UTF-8", output)
+
+    def test_join_and_shards_are_required_together(self):
+        directory = self.write_logs(self.logs)
+        for arguments in (("--join", str(directory)), ("--shards", "4")):
+            with self.subTest(arguments=arguments):
+                output = self.assert_outcome(self.invoke(*arguments), 2)
+                self.assertIn("--join and --shards are required together", output)
+
+    def test_shard_count_is_a_positive_integer_without_leading_zeros(self):
+        directory = self.write_logs(self.logs)
+        for value in ("0", "04", "x"):
+            with self.subTest(value=value):
+                output = self.assert_outcome(
+                    self.invoke("--join", str(directory), "--shards", value), 2)
+                self.assertIn(
+                    f"--shards must be a positive integer without leading zeros, not {value!r}",
+                    output)
+
+    def test_join_refuses_each_option_that_changes_a_shard_run(self):
+        for option, arguments in (
+                ("--shard", ("--shard", "1/4")),
+                ("--records-only", ("--records-only",)),
+                ("--work", ("--work", str(self.directory / "work"))),
+                ("--subset", ("--subset", str(self.directory / "subset.txt")))):
+            with self.subTest(option=option):
+                output = self.assert_outcome(self.join(*arguments), 2)
+                self.assertIn(f"--join cannot be used with {option}", output)
+
+    def test_join_requires_a_known_engine_checkout_commit(self):
+        plain = self.directory / "plain-engine"
+        plain.mkdir()
+        output = self.assert_outcome(self.join("--engine", str(plain)), 2)
+        self.assertIn("--join requires a known engine commit for --engine", output)
+        self.assertIn("ENGINE unknown", output.splitlines())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

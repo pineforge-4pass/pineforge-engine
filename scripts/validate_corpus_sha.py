@@ -19,7 +19,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Callable
+from typing import Callable, Mapping
 
 
 sys.dont_write_bytecode = True
@@ -403,6 +403,156 @@ def parse_shard(value: str) -> tuple[int, int]:
     return index, count
 
 
+def join_shards(logs: Mapping[str, str], shards: int, corpus_commit: str,
+                engine_commit: str) -> tuple[list[str], dict[str, int | None]]:
+    """Return findings and the probes/selected totals, None when absent or inconsistent."""
+    forms = {
+        "CORPUS": re.compile(r"CORPUS ([0-9a-f]{40})"),
+        "ENGINE": re.compile(r"ENGINE ([0-9a-f]{40}|unknown)"),
+        "SHARD": re.compile(r"SHARD ([0-9]+)/([0-9]+) probes=([0-9]+)/([0-9]+) "
+                            r"selected=([0-9]+)/([0-9]+)"),
+        "RESULT": re.compile(r"RESULT (valid|invalid|error)"),
+    }
+    findings: list[str] = []
+    totals: dict[str, int | None] = {"probes": None, "selected": None}
+    owners: dict[int, list[str]] = {}
+    counts: dict[str, list[tuple[str, int, int]]] = {"probes": [], "selected": []}
+    for name, text in sorted(logs.items()):
+        lines = text.splitlines()
+        fields = {}
+        for kind, form in forms.items():
+            candidates = [line for line in lines if line == kind or line.startswith(kind + " ")]
+            if len(candidates) != 1:
+                findings.append(f"join {name}: unreadable log: expected exactly one "
+                                f"{kind} line, found {len(candidates)}")
+                continue
+            match = form.fullmatch(candidates[0])
+            if match is None:
+                findings.append(f"join {name}: unreadable log: malformed {kind} line")
+            else:
+                fields[kind] = match
+        if len(fields) != len(forms):
+            continue
+        if lines[-1] != fields["RESULT"][0]:
+            findings.append(f"join {name}: unreadable log: RESULT must be the last line")
+        try:
+            index, count, size, all_probes, selected, all_selected = (
+                int(number) for number in fields["SHARD"].groups())
+        except ValueError:
+            findings.append(f"join {name}: unreadable log: malformed SHARD numbers")
+            continue
+        owners.setdefault(index, []).append(name)
+        if count != shards:
+            findings.append(f"join {name}: shard count {count} differs from --shards {shards}")
+        if not 1 <= index <= count:
+            findings.append(f"join {name}: shard index {index} is outside 1..{count}")
+        result = fields["RESULT"][1]
+        if result != "valid":
+            findings.append(f"join {name}: shard {index}/{count} RESULT is {result}, expected valid")
+        for kind, expected in (("CORPUS", corpus_commit), ("ENGINE", engine_commit)):
+            actual = fields[kind][1]
+            if actual != expected:
+                findings.append(f"join {name}: {kind} {actual} differs from expected {expected}")
+        if size < 1:
+            findings.append(f"join {name}: shard {index}/{count} slice size must be at least 1, "
+                            f"found {size}")
+        counts["probes"].append((name, size, all_probes))
+        counts["selected"].append((name, selected, all_selected))
+
+    for index in range(1, shards + 1):
+        if index not in owners:
+            findings.append(f"join: missing shard {index}/{shards}")
+    for index, names in sorted(owners.items()):
+        if len(names) > 1:
+            findings.append(f"join: shard {index}/{shards} appears in multiple logs: "
+                            + ", ".join(names))
+    for kind, description in (("probes", "slice probe counts"),
+                              ("selected", "selected slice counts")):
+        entries = counts[kind]
+        if not entries:
+            continue
+        first_name, _, expected = entries[0]
+        different = [(name, total) for name, _, total in entries if total != expected]
+        if different:
+            for name, total in different:
+                findings.append(f"join {name}: all {kind} {total} differs from "
+                                f"{expected} in {first_name}")
+        else:
+            totals[kind] = expected
+            actual = sum(size for _, size, _ in entries)
+            if actual != expected:
+                findings.append(f"join shards 1..{shards}: {description} add up to {actual}, "
+                                f"expected {expected}")
+    return findings, totals
+
+
+def _join_main(args: argparse.Namespace) -> int:
+    findings: list[str] = []
+    totals: dict[str, int | None] = {"probes": None, "selected": None}
+    logs: dict[str, str] = {}
+    corpus = None
+    corpus_commit = None
+    engine_commit = "unknown"
+    shards = None
+    error = False
+    try:
+        corpus, engine = args.corpus.resolve(), args.engine.resolve()
+        engine_commit = _engine_commit(engine)
+        if args.join is None or args.shards is None:
+            raise ValueError("--join and --shards are required together")
+        if not re.fullmatch(r"[1-9][0-9]*", args.shards):
+            raise ValueError("--shards must be a positive integer without leading zeros, "
+                             f"not {args.shards!r}")
+        try:
+            shards = int(args.shards)
+        except ValueError as problem:
+            raise ValueError("--shards must be a positive integer without leading zeros, "
+                             f"not {args.shards!r}") from problem
+        for option, present in (("--shard", args.shard is not None),
+                                ("--records-only", args.records_only),
+                                ("--work", args.work is not None),
+                                ("--subset", args.subset is not None)):
+            if present:
+                raise ValueError(f"--join cannot be used with {option}")
+        if not 1 <= args.jobs <= 8:
+            raise ValueError("--jobs must be between 1 and 8")
+        top = Path(os.fsdecode(_git(corpus, "rev-parse", "--show-toplevel")).strip()).resolve()
+        if top != corpus:
+            raise ValueError(f"{corpus}: --corpus must name the Git checkout root")
+        corpus_commit = os.fsdecode(_git(corpus, "rev-parse", "HEAD")).strip()
+        if engine_commit == "unknown":
+            raise ValueError("--join requires a known engine commit for --engine")
+        try:
+            with os.scandir(args.join) as entries:
+                paths = sorted(Path(entry.path) for entry in entries
+                               if entry.name.endswith(".log")
+                               and entry.is_file(follow_symlinks=False))
+            for path in paths:
+                try:
+                    logs[path.name] = path.read_text(encoding="utf-8")
+                except UnicodeError as problem:
+                    raise ValueError(f"{path.name}: log is not UTF-8: {problem}") from problem
+        except (OSError, ValueError) as problem:
+            raise ValueError(f"--join cannot read {args.join}: {problem}") from problem
+        findings, totals = join_shards(logs, shards, corpus_commit, engine_commit)
+    except Exception as problem:
+        error = True
+        message = " ".join(str(problem).splitlines())
+        findings.append(f"setup {corpus if corpus is not None else 'arguments'}: "
+                        f"{type(problem).__name__}: {message}")
+    if corpus_commit is not None:
+        print(f"CORPUS {corpus_commit}")
+    print(f"ENGINE {engine_commit}")
+    print(f"JOIN shards={len(logs)}/{shards if shards is not None else '-'} "
+          f"probes={totals['probes'] if totals['probes'] is not None else '-'} "
+          f"selected={totals['selected'] if totals['selected'] is not None else '-'}")
+    for finding in findings:
+        print(f"FINDING {finding}")
+    code = 2 if error else 1 if findings else 0
+    print(f"RESULT {('valid', 'invalid', 'error')[code]}")
+    return code
+
+
 def shard_slice(names: list[str] | set[str], index: int, count: int) -> list[str]:
     if count < 1 or not 1 <= index <= count:
         raise ValueError("shard index and count are out of range")
@@ -625,6 +775,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="Probe list (default: engine scripts/corpus_parity_subset.txt).")
     parser.add_argument("--shard", metavar="I/N",
                         help="Build and validate one 1-based slice of the corpus.")
+    parser.add_argument("--join", type=Path, metavar="DIR",
+                        help="Join saved shard .log files without building; requires --shards.")
+    parser.add_argument("--shards", metavar="N",
+                        help="Expected shard count for --join, a positive integer "
+                             "without leading zeros.")
+    joining = any(argument.split("=", 1)[0] in ("--join", "--shards")
+                  for argument in (sys.argv[1:] if argv is None else argv))
     counts = dict(tapes=0, owned_entries=0, owned_hashes=0, lfs_pointers=0,
                   feed=0, tracked=0, bound=0)
     findings: list[str] = []
@@ -636,6 +793,8 @@ def main(argv: list[str] | None = None) -> int:
     build_started = None
     try:
         args = parser.parse_args(argv)
+        if args.join is not None or args.shards is not None:
+            return _join_main(args)
         if args.shard is not None and args.records_only:
             raise ValueError("--records-only cannot be combined with --shard")
         shard = parse_shard(args.shard) if args.shard is not None else None
@@ -719,8 +878,11 @@ def main(argv: list[str] | None = None) -> int:
     if build_started is not None:
         _time_line("total", build_started)
     print(f"ENGINE {engine_commit}")
-    print("COUNT " + " ".join(f"{name}={counts[name]}" for name in (
-        "tapes", "owned_entries", "owned_hashes", "lfs_pointers", "feed", "tracked", "bound")))
+    if joining:
+        print("JOIN shards=0/- probes=- selected=-")
+    else:
+        print("COUNT " + " ".join(f"{name}={counts[name]}" for name in (
+            "tapes", "owned_entries", "owned_hashes", "lfs_pointers", "feed", "tracked", "bound")))
     for finding in findings:
         print(f"FINDING {finding}")
     if clean:
