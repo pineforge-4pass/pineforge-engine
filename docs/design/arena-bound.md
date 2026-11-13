@@ -155,12 +155,12 @@ overrides or imported libraries, its receipt must bind those inputs too.
 
 The carried declaration fields are visible in `PineStrategyConfig` at
 `include/pineforge/source/pine_adapter.hpp:79`. Their `project` projection starts at
-`src/source/pine_adapter.cpp:2917`. The relevant rules are:
+`src/source/pine_adapter.cpp:2918`. The relevant rules are:
 
 | Declaration / native fact | Sizing consequence and evidence |
 | --- | --- |
-| pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset (the `max_open_lots` setting spelling is at `src/source/pine_adapter.cpp:2836`). Do not assume this caps strategy.order or use it as an unconditional H. |
-| calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard `kCoofLoopGuard` through the native cadence at `src/source/pine_adapter.cpp:3017`; the `kCoofLoopGuard` literal is declared at `include/pineforge/source/pine_adapter.hpp:77`. The native point budget is a callback bound, not a total fill bound. |
+| pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset (the `max_open_lots` setting spelling is at `src/source/pine_adapter.cpp:2837`). Do not assume this caps strategy.order or use it as an unconditional H. |
+| calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard `kCoofLoopGuard` through the native cadence at `src/source/pine_adapter.cpp:3018`; the `kCoofLoopGuard` literal is declared at `include/pineforge/source/pine_adapter.hpp:77`. The native point budget is a callback bound, not a total fill bound. |
 | max_recalculations_per_point | Further executions still apply after callbacks stop; see the cadence comment and `max_recalculations_per_point` declaration at `include/pineforge/native_run_spec.hpp:686-695`. The actual counter check is `src/native_execution_consumer.cpp:8272`. |
 | first-open COOF chain | A second source-side guard exists at `src/source/pine_scheduler_native.cpp:945`. Count this source path; a native budget of 8 is not Pine's bound. |
 | process_orders_on_close | Adds a matching opportunity after calculation; projection at `src/source/pine_adapter.cpp:3006`. It does not impose an order/trade count. |
@@ -341,14 +341,14 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 | Equity writer / selected hold-back / SpillCurve | 24*E | `pf_equity_point_t` size assertion `include/pineforge/metrics_stream.hpp:16`; `src/report_scratch.cpp:238` |
 | Position tail | (30+L)*T | `src/source/pine_position_tail.hpp:20`; footer packing at `src/source/pine_position_tail.cpp:94` |
 | Cohort AVL and five-word summary | (96+L)*D + 1[D>0] | `Links` at `include/pineforge/detail/disk_id_table.hpp:165-182`, `end_` at `:349`; `CohortFacts::Record` at `include/pineforge/source/pine_adapter.hpp:2059-2062` |
-| Entry-rank AVL | (60+L)*J + 1[J>0] | `exit_rank_keys_` at `src/source/pine_adapter.cpp:6812-6813`; `Links` at `include/pineforge/detail/disk_id_table.hpp:165-182`, `end_` at `:349` |
+| Entry-rank AVL | (60+L)*J + 1[J>0] | `exit_rank_keys_` at `src/source/pine_adapter.cpp:6814-6815`; `Links` at `include/pineforge/detail/disk_id_table.hpp:165-182`, `end_` at `:349` |
 | Erased minima data | (40+L)*D + (40+2*L)*Q | `erased_minima_` at `include/pineforge/source/pine_adapter.hpp:961`; 40-byte header at `include/pineforge/detail/id_pair_store.hpp:69` |
 | Erased minima index | indexPeak(D+Q) | 16-byte slot at `include/pineforge/detail/id_pair_store.hpp:69`; replacement at `:642` |
 | Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2843`; joined key at `src/source/pine_adapter.cpp:25622` |
 | Consumed partial-cycle index | indexPeak(Q) | `include/pineforge/detail/id_pair_store.hpp:642` |
 | Ordered consumed-cycle fold | 136*leaves + 2088*branches + 2096*savedPath | `include/pineforge/detail/id_pair_ordered_fold.hpp:161`, `:165`, `:172`, size assertion for `Leaf`, `Branch` and `Snapshot` at `:183` |
 | Successor-root rows | 16*R | `src/native_order.cpp:8220`, row assertion for `Row` at `:8281`, 64-row tail bound `kTailRows` at `:8286` |
-| Frozen external openings | **0 in this certified profile** | Stock source builds owned `BindOpenings` vectors at `src/source/pine_adapter.cpp:7097`, `:7090`, `:9806-9822`; generic external owners are excluded below |
+| Frozen external openings | **0 in this certified profile** | Stock source builds owned `BindOpenings` vectors at `src/source/pine_adapter.cpp:7099`, `:7092`, `:9806-9822`; generic external owners are excluded below |
 
 The AVL node is seven uint64 words = 56 bytes, then its value and exact key
 bytes. CohortFacts::Record is handle, cycle, origin_count, origin_digest and
@@ -558,7 +558,7 @@ non-command certificates exactly.
 These formulas apply to the EngineRecorded streamed invocation. The
 selected recorder appends its anchor and selected observations in one
 writer (`equity_scratch` append at `src/engine_report.cpp:1563`), and capture transfers that writer as `metric_curve`
-instead of copying its prefix (`src/native_execution_consumer.cpp:13447`).
+instead of copying its prefix (`src/native_execution_consumer.cpp:13491`).
 HostRecorded array presentation and a second full curve are outside this
 profile. Adding another persistent scratch user requires another term and
 rounding region.

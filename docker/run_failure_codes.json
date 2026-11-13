@@ -1434,6 +1434,10 @@
      "kind": "timeframe",
      "optional": true
     },
+    "intrabar_tf": {
+     "kind": "timeframe",
+     "optional": true
+    },
     "option": {
      "kind": "vocab",
      "values": [
@@ -1450,6 +1454,16 @@
       "path_order"
      ]
     },
+    "reason": {
+     "kind": "vocab",
+     "optional": true,
+     "values": [
+      "intrabar_not_divisible",
+      "not_divisible",
+      "script_finer_than_input",
+      "script_finer_than_intrabar"
+     ]
+    },
     "script_tf": {
      "kind": "timeframe",
      "optional": true
@@ -1459,6 +1473,10 @@
    "description": "The run's own options (timeframes, intrabar path, magnifier, path order) were refused.",
    "english": [
     "Pine adapter produced invalid native run spec field {field}",
+    "input timeframe '{input_tf}' cannot build script timeframe '{script_tf}' ({script_tf} is not a multiple of {input_tf}); pass bars whose timeframe divides the script timeframe '{script_tf}', for example {example} bars.",
+    "input timeframe '{input_tf}' cannot build script timeframe '{script_tf}' (script timeframe '{script_tf}' is finer than input timeframe '{input_tf}'); pass bars whose timeframe divides the script timeframe '{script_tf}', for example {example} bars.",
+    "input timeframe '{input_tf}' cannot build script timeframe '{script_tf}' using intrabar timeframe '{intrabar_tf}' ({script_tf} is not a multiple of {intrabar_tf}); pass bars whose timeframe divides the script timeframe '{script_tf}', for example {example} bars.",
+    "input timeframe '{input_tf}' cannot build script timeframe '{script_tf}' using intrabar timeframe '{intrabar_tf}' (script timeframe '{script_tf}' is finer than intrabar timeframe '{intrabar_tf}'); pass bars whose timeframe divides the script timeframe '{script_tf}', for example {example} bars.",
     "native calendar parse failed at configure",
     "native intrabar path failed validation",
     "native intrabar path timeframe or bar count is invalid",

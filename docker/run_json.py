@@ -2394,6 +2394,25 @@ def _engine_args(raw) -> dict:
     return doc
 
 
+def _engine_warnings(raw) -> list:
+    """Read warning objects, preserving future codes and their argument objects."""
+    try:
+        doc = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+        if not isinstance(doc, list):
+            return []
+        warnings = [
+            {"args": item["args"], "code": item["code"]}
+            for item in doc
+            if isinstance(item, dict) and isinstance(item.get("code"), str)
+            and isinstance(item.get("args"), dict)
+        ]
+        # Non-finite numbers or excessive nesting must not break report encoding.
+        json.dumps(warnings, allow_nan=False)
+    except (TypeError, ValueError, AttributeError, RecursionError):
+        return []
+    return warnings
+
+
 def engine_failure_code(lib, strat):
     """The engine's (code, args) for the last failure on strat: None when the
     library has no strategy_get_last_error_code, ("", {}) when it recorded no
@@ -2988,6 +3007,9 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
         if hasattr(lib, _n):
             getattr(lib, _n).argtypes = [ctypes.c_void_p]
             getattr(lib, _n).restype = ctypes.c_char_p
+    if hasattr(lib, "strategy_get_run_warnings"):
+        lib.strategy_get_run_warnings.argtypes = [ctypes.c_void_p]
+        lib.strategy_get_run_warnings.restype = ctypes.c_char_p
     if hasattr(lib, "strategy_last_run_status"):
         lib.strategy_last_run_status.argtypes = [ctypes.c_void_p]
         lib.strategy_last_run_status.restype = ctypes.c_int
@@ -5226,6 +5248,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             _validate_report_result(out)
         _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
         _add_cache_diagnostics(lib, state, out["diagnostics"])
+        _add_run_warnings(lib, state, out["diagnostics"])
         out["report_window"] = window
         out["report_shape"] = swr.report_shape_full(
             equity_points, sink.counts["T"] if sink is not None else len(out["trades"]))
@@ -5864,6 +5887,7 @@ def _main(argv, binary_inputs) -> int:
             _validate_report_result(out)
         _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
         _add_cache_diagnostics(lib, state, out["diagnostics"])
+        _add_run_warnings(lib, state, out["diagnostics"])
         if timing is not None:
             out["diagnostics"]["timing"] = timing
             out["diagnostics"]["throughput"] = _throughput_block(
@@ -6042,6 +6066,17 @@ def _add_cache_diagnostics(lib, state, diagnostics):
         diagnostics["cache_resident_bytes"] = resident_bytes.value
         diagnostics["cache_bypass_reason"] = "alloc_failed"
         diagnostics["allocation_bypass_count"] = bypasses.value
+
+
+def _add_run_warnings(lib, state, diagnostics):
+    # Read after report assembly, while the strategy still owns the text.
+    # Warnings belong only to diagnostics, outside sink records and fingerprints.
+    getter = getattr(lib, "strategy_get_run_warnings", None)
+    if getter is None:
+        return
+    warnings = _engine_warnings(getter(state))
+    if warnings:
+        diagnostics["warnings"] = warnings
 
 
 def _refuse_jailed_path_sink(args):
