@@ -15442,6 +15442,12 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
         ? native_order::OrderIntent{native_order::HostSized{native_order::HostSizedKind::Open,
             is_long ? native_order::Side::Long : native_order::Side::Short}}
         : native_order::OrderIntent{native_order::Transact{is_long ? normalized_qty : -normalized_qty}};
+    // The epsilon floor can return an off-grid literal just below a lot boundary.
+    // Apply the entry floor to executable RAW units; retain qty in the source snapshot.
+    if (auto* transact = std::get_if<native_order::Transact>(&request.intent)) {
+        const double units = explicit_entry_quantity_floor(std::abs(qty), staged_.quantity_grid);
+        *transact = native_order::Transact{is_long ? units : -units};
+    }
     request.label = id;
     double native_limit = limit_price;
     double native_stop = stop_price;

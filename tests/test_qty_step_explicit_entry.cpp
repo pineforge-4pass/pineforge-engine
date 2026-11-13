@@ -176,10 +176,96 @@ void test_explicit_entry_path() {
                          step, false);
 }
 
+// Exercise RAW order admission independently of strategy.entry and its sizing.
+// The source quantity stays literal; only its executable units use the lot grid.
+class ExplicitOrderProbe final : public pineforge::source::PineStrategyHost {
+public:
+    ExplicitOrderProbe(double requested, double step, bool is_long)
+        : requested_(requested), is_long_(is_long) {
+        source::PineStrategyConfig config;
+        config.initial_capital = 100.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        config.commission_value = 0.0;
+        config.margin_long = 100.0;
+        config.margin_short = 100.0;
+        config.slippage = 0;
+        config.process_orders_on_close = true;
+        config.calc_on_order_fills = false;
+        configure_pine_strategy(config);
+        if (step > 0.0) set_syminfo_metadata("qty_step", step);
+        set_margin_call_enabled(false);
+    }
+
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() == 0) {
+            strategy_order("open", is_long_, requested_);
+        } else if (pine_bar_index() == 1) {
+            position_before_close = live_position_size();
+            strategy_close_all();
+        }
+    }
+
+    double position_before_close = kNaN;
+
+private:
+    double requested_;
+    bool is_long_;
+};
+
+void test_explicit_order_decimal_boundary() {
+    struct Row {
+        const char* name;
+        double request;
+        Decimal requested;
+        Decimal step;
+        bool has_grid;
+    };
+    const Row rows[] = {
+        {"below 3.39, step 0.0001", 3.3899999999998727,
+         {33899999999998727LL, 16}, {1, 4}, true},
+        {"below 3.14, step 0.0001", 3.1399999999998727,
+         {31399999999998727LL, 16}, {1, 4}, true},
+        {"below 0.03683, step 0.00001", 0.036829999999999,
+         {36829999999999LL, 15}, {1, 5}, true},
+        {"on-grid control", 3.39, {339, 2}, {1, 4}, true},
+        {"above-grid control", 3.3900000000000006,
+         {33900000000000006LL, 16}, {1, 4}, true},
+        {"non-decimal grid control", 1.125, {1125, 3}, {25, 2}, true},
+        {"gridless control", 3.3899999999998727,
+         {33899999999998727LL, 16}, {1, 4}, false},
+    };
+    const auto bars = opening_bars();
+    for (const auto& row : rows) {
+        for (bool is_long : {true, false}) {
+            std::printf("  strategy.order %s %s\n", is_long ? "long" : "short", row.name);
+            const double step = row.has_grid ? decimal_value(row.step) : 0.0;
+            // Integer decimal division is independent of both engine floors.
+            const double expected = row.has_grid
+                ? decimal_floor(row.requested, row.step) : row.request;
+            ExplicitOrderProbe probe(row.request, step, is_long);
+            probe.run(bars.data(), static_cast<int>(bars.size()));
+            CHECK(probe.last_error().empty());
+            CHECK(bits(probe.position_before_close) == bits(is_long ? expected : -expected));
+            CHECK(probe.trade_count() == 1);
+            CHECK(probe.live_position_size() == 0.0);
+            if (probe.trade_count() != 1) continue;
+            const auto trade = probe.get_trade(0);
+            CHECK(bits(trade.qty) == bits(expected));
+            CHECK(trade.is_long == is_long);
+            CHECK(trade.entry_id == "open");
+            CHECK(trade.entry_time == bars[0].timestamp);
+            CHECK(trade.exit_time == bars[1].timestamp);
+            CHECK(!trade.open_at_end);
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
     test_explicit_entry_path();
+    test_explicit_order_decimal_boundary();
     std::printf("\n=== Results: %d checks, %d failures ===\n",
                 checks, failures);
     return failures == 0 ? 0 : 1;
