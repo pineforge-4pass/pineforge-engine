@@ -657,11 +657,29 @@ class FenceControls(CMakeControls):
 
     def test_real_cmake_has_no_retired_fence_markers(self) -> None:
         real_cmake = ROOT / 'tests' / 'CMakeLists.txt'
-        declared_inputs([real_cmake])
-        self.assertNotRegex(
-            real_cmake.read_text(encoding='utf-8'),
-            r'(?m)^[ \t]*# --- CR-150\b',
-            f'{real_cmake}: retired CR-150 fence marker')
+        lane_files = sorted(
+            path for path in check_lanes_cmake_d.LANE_DIR.glob('*.cmake')
+            if path.is_file())
+        declared_inputs([real_cmake, *lane_files])
+        lane_names = {path.stem for path in lane_files}
+        marker_count = 0
+        for line_number, line in enumerate(
+                real_cmake.read_text(encoding='utf-8').splitlines(), 1):
+            marker = line.strip()
+            if not (marker.startswith('# --- ') and marker.endswith(' ---')):
+                continue
+            marker_count += 1
+            with self.subTest(line=line_number):
+                words = marker[len('# --- '):-len(' ---')].split()
+                self.assertEqual(3, len(words),
+                                 'fence marker must contain three words')
+                self.assertEqual('lane', words[0],
+                                 'fence marker must start with lane')
+                self.assertIn(words[1], lane_names,
+                              'fence marker must name a current lane')
+                self.assertIn(words[2], ('begin', 'end'),
+                              'fence marker must end with begin or end')
+        self.assertGreater(marker_count, 0, 'no lane fence markers found')
 
     def test_fence_before_include_loop_is_refused(self) -> None:
         self.assert_tail_refused(
