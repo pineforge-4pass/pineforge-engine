@@ -558,7 +558,7 @@
     "predicate": "Modeled opening point and !intrabar_path_enabled, not stream mode",
     "old": "    if (!stream_mode_ && !context.driver_statistics.intrabar_path_enabled",
     "new": "    if (modeled_input() && !context.driver_statistics.intrabar_path_enabled",
-    "window": "    coof_script_bar_valid_ = true;\n    policy_script_bar_ = bar;\n    policy_script_bar_valid_ = true;\n    if (modeled_input() && !context.driver_statistics.intrabar_path_enabled\n        && !trail_state_at_open_.empty()) {\n        const double open_tick = source_bar_fill_tick(bar.open, staged_.syminfo.mintick);\n        native_order::ReplaceOptions keep;"
+    "window": "    coof_script_bar_valid_ = true;\n    policy_script_bar_ = bar;\n    policy_script_bar_valid_ = true;\n    observe_long_tick_margin_bar(bar);\n    if (modeled_input() && !context.driver_statistics.intrabar_path_enabled\n        && !trail_state_at_open_.empty()) {\n        const double open_tick = source_bar_fill_tick(bar.open, staged_.syminfo.mintick);\n        native_order::ReplaceOptions keep;"
   },
   {
     "file": "src/source/pine_adapter.cpp",
