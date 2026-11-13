@@ -674,7 +674,7 @@ endif()
 # The complete canon step, including its env, comments and shell, byte for byte.
 # PR-only ALLOWED_BOTS is dependabot[bot] and pineforge-app[bot]. No local canon
 # file is needed on CI runners. Changing the script requires a new canon pin.
-AUTHZ_STEP_SHA256 = '94bf3afefe4588bc33dad5fd4d8fa3d2a104cc45743ad59286c756fa3a17baa6'
+AUTHZ_STEP_SHA256 = 'faa0ceb33aae85dfda0377b24a0cba6d783e60d6be7ff17dd15a941936d7b7de'
 # Scoped CI workflows bind this canon header byte for byte, including the
 # hosted runner line and comma spacing. The release probe pins executable lines.
 AUTHZ_JOB_HEADER = '''    name: authz
@@ -4904,7 +4904,7 @@ jobs:
               # events; none of them runs pull-request code.
               ;;
             workflow_run)
-              # LB-437: bind identity to the triggering run and its re-runner.
+              # bind identity to the triggering run and its re-runner.
               # These two App bots are fixed canon policy; ALLOWED_BOTS is PR-only.
               [ -n "${WR_HEAD_REPO:-}" ] || fail "workflow_run head repository is missing"
               [ -n "${WR_ACTOR:-}" ] || fail "workflow_run triggering actor is missing"
