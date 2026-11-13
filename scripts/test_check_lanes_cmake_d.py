@@ -655,6 +655,14 @@ class FenceControls(CMakeControls):
         self.assertIn(str(self.cmake), output)
         self.assertIn(reason, output)
 
+    def test_real_cmake_has_no_retired_fence_markers(self) -> None:
+        real_cmake = ROOT / 'tests' / 'CMakeLists.txt'
+        declared_inputs([real_cmake])
+        self.assertNotRegex(
+            real_cmake.read_text(encoding='utf-8'),
+            r'(?m)^[ \t]*# --- CR-150\b',
+            f'{real_cmake}: retired CR-150 fence marker')
+
     def test_fence_before_include_loop_is_refused(self) -> None:
         self.assert_tail_refused(
             '', 'fence must follow the lane include block',
