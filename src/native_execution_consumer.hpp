@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <exception>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -97,6 +98,10 @@ class NativeExecutionConsumer final : public IExecutionConsumer {
     // Declared first so embedded cache registrations detach before this sink
     // dies. Its destructor also detaches the engine's longer-lived ledger.
     detail::RunCacheDiagnostics run_cache_diagnostics_;
+    // Observational run notices only: never execution inputs or hash state.
+    std::map<std::pair<int, std::string>, std::string> run_warning_records_;
+    std::string run_warnings_json_ = "[]";
+    bool run_warnings_unavailable_ = false;
     // Creation-time run policy, captured before the derived host constructs
     // script state. A run reset never adopts another host's thread default.
     std::uint64_t map_pair_limit_ = detail::map_pair_limit();
@@ -150,6 +155,15 @@ public:
     bool stage_account_currency_fx_series(const std::vector<std::int64_t>& timestamps,
                                           const std::vector<double>& rates) override;
     uint64_t continuation_hash() const noexcept override;
+
+    // Installed at run begin by an adapter that owns a chart partition.
+    // Empty leaves all nominal calendar and completion paths unchanged.
+    void set_script_period_source(std::shared_ptr<TimeframeAggregator::PeriodSource>,
+                                  const Bar* bars, std::size_t n);
+    std::optional<native_calendar::NativeInterval> script_period_interval(
+            std::int64_t stamp) const {
+        return script_period_.source ? script_interval_at(stamp) : std::nullopt;
+    }
 
     void run_simple(BacktestEngine& engine, const Bar* bars, int n) override;
     void run_tf(BacktestEngine& engine,
@@ -360,10 +374,22 @@ public:
     // engine_unclassified_error; no failure reads "". Error paths only.
     static void note_failure_record(BacktestEngine& engine, std::string text,
                                     RunFailureValue value);
+    // Record and latch an idle void-setter refusal; preserve durable/in-flight
+    // and unconsumed first causes. The next begin consumes the latch and keeps
+    // the record; a later admitted begin clears it. The failed value was not
+    // applied: retrying the start without reapplying it uses the previous value.
+    // The recorded text begins "Error before the first bar: " (or
+    // "Error on bar N: " when a bar is being executed).
+    static void latch_void_setter_refusal(BacktestEngine& engine,
+                                         const std::exception* error) noexcept;
     static void clear_failure_record(BacktestEngine& engine) noexcept;
     static const char* failure_code_of(const BacktestEngine& engine) noexcept;
     static const char* failure_args_of(const BacktestEngine& engine) noexcept;
     static RunFailureValue failure_value_of(const BacktestEngine& engine) noexcept;
+    static const char* run_warnings_of(const BacktestEngine& engine) noexcept;
+    static void mark_run_warnings_unavailable(BacktestEngine& engine) noexcept;
+    void record_run_warning(int sec_id, std::string code, std::string args_json);
+    void finish_run_warnings();
     // Whether retained rows answer the latest run/stream_begin call (ledger below):
     // false after a call that never reached begin_ready's reset_run_state() or was
     // refused over a live attempt; true after begin or with no consumer bound.
@@ -1150,6 +1176,10 @@ private:
         std::string text;
     };
     mutable RunFailureRecord run_failure_;
+    // Presentation/setup transport only, never broker or continuation state.
+    // Cleared when prepare_public_begin refuses the next attempt, leaving its
+    // status, code and text available until the following run's normal reset.
+    bool setup_failure_pending_ = false;
     void store_rendered(BacktestEngine& engine, const char* text, RunFailureValue value) const;
     // The running spec while the run runs (cache_running_policy), else the
     // lifecycle probe: inline, so the per-point reads of the spec below cost
@@ -1206,6 +1236,12 @@ private:
     // bars with a daily feed installed. Derived from the installed feed at
     // begin, never folded, as the feed store's own period stamps are not.
     std::vector<std::pair<std::int64_t, std::int64_t>> day_labels_;
+    struct ScriptPeriod {
+        std::shared_ptr<TimeframeAggregator::PeriodSource> source;
+        std::int64_t first_ms = 0;
+        std::int64_t last_ms = 0;
+        std::uint64_t digest = 0;
+    } script_period_;
     void prepare_day_labels(const BacktestEngine& engine, const Bar* input_bars, int n_input);
     // The instant a lookup by `timestamp` reads the calendar at: a label a
     // stamp moved before its bar's calendar open names that bar, so it reads
@@ -2987,7 +3023,9 @@ public:
         unsigned char boundary = 0U;
     };
 
-    explicit ScriptBucketCursor(const NativeRunSpec&);
+    explicit ScriptBucketCursor(const NativeRunSpec&,
+        std::shared_ptr<TimeframeAggregator::PeriodSource> source = {},
+        std::int64_t first_ms = 0, std::int64_t last_ms = 0);
     Flags next(const Bar&);
     void reset();
     std::size_t position() const noexcept { return position_; }
@@ -2999,6 +3037,9 @@ private:
     std::string timezone_;
     std::string session_;
     TimeframeAggregator aggregator_;
+    std::shared_ptr<TimeframeAggregator::PeriodSource> source_;
+    std::int64_t first_ms_ = 0;
+    std::int64_t last_ms_ = 0;
     std::size_t position_ = 0;
     Flags last_{};
 };

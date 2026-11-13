@@ -27,6 +27,10 @@
 //    pine_map_capacity_exceeded likewise carries engine-owned map counts and
 //    current bar context, plus the fixed TV identifier RE10070; its maxSize and
 //    currSize argument names retain the provider's spelling;
+//    pine_timezone_error carries the refused timezone argument in zone, which
+//    may be script-computed; its function is a closed built-in vocabulary and
+//    its code is fixed by pine_timezone_stop (TradingView RE10133); bar_index
+//    comes from the engine's bar context and is -1 when no bar is installed;
 //  * a vocabulary argument outside its closed list, an undeclared argument, a
 //    wrong kind or a missing required argument turns the failure into
 //    engine_invariant (the English is kept): a wrong call cannot mint a code
@@ -45,9 +49,17 @@
 // (and keep `pine_runtime_error(std::string(english))` in the `#else` arm).
 // Every helper is [[noreturn]], throws coded<std::runtime_error>, hardwires its
 // code and never takes one; `english` is the text the stop has today, and is
-// what strategy_get_last_error() reads, byte for byte. Pointer arguments are
+// what strategy_get_last_error() reads, byte for byte, except that the timezone
+// stop adds the shared bar prefix described below. Pointer arguments are
 // codegen literals (`const char*`, never NULL except where marked); `line` is
 // the call's line in the source the transpiler read.
+// pine_timezone_stop is guarded separately by PINEFORGE_HAS_TIMEZONE_STOP_V1,
+// with pine_runtime_error(std::string(english)) in its #else arm. Its zone
+// pointer may name the script's runtime timezone argument, rather than a
+// literal. Callers must pass english WITHOUT a prefix: the stop adds
+// run_error_bar_prefix() once ("Error on bar N: ", or
+// "Error before the first bar: " without a bar context) and carries the
+// integer run_error_bar_index() as bar_index.
 //
 //   pine_runtime_error(const std::string& message)              (log.hpp)
 //       -> strategy_runtime_error {}
@@ -92,7 +104,15 @@
 //          (line -1: none)
 //   pine_string_stop(const char* reason, const char* english)
 //       -> pine_string_error {reason}
-//          reason: substring_out_of_range | format_index_overflow
+//          reason: substring_out_of_range | format_index_overflow |
+//                  invalid_regex_pattern | regex_resource_limit
+//   pine_timezone_stop(const char* function, const char* zone, const char* english)
+//       -> pine_timezone_error {bar_index, function, zone} (TradingView RE10133)
+//          function: time | time_close | timestamp | hour | minute | second |
+//                    dayofmonth | dayofweek | month | year | weekofyear |
+//                    format_time (str.format_time)
+//          zone: the refused timezone argument, which may be script-computed
+//          bar_index: the current engine bar, or -1 before the first bar
 //   pine_engine_invariant(const char* english)
 //       -> engine_invariant {}
 //
@@ -135,6 +155,7 @@
 #include <vector>
 
 #define PINEFORGE_HAS_RUN_FAILURE_CODES_V1 1
+#define PINEFORGE_HAS_TIMEZONE_STOP_V1 1
 
 namespace pineforge {
 
@@ -245,6 +266,13 @@ const char* run_failure_code_name(RunFailureCode code) noexcept;
 /// The code's catalog class and retryable flag.
 RunFailureClass run_failure_code_class(RunFailureCode code) noexcept;
 bool run_failure_code_retryable(RunFailureCode code) noexcept;
+
+/// Stops using TradingView's text prepend "Error on bar N: " when a bar
+/// context is installed, otherwise "Error before the first bar: ".
+std::string run_error_bar_prefix();
+
+/// The same context's current bar index, or -1 when no context is installed.
+std::int64_t run_error_bar_index() noexcept;
 
 /// The code an exception carries: a coded exception's own; else the safety
 /// net by type (std::bad_alloc -> out_of_memory, std::logic_error ->
@@ -381,6 +409,14 @@ RunFailureValue run_failure_value_of(const BacktestEngine& engine) noexcept;
 [[noreturn]] inline void pine_string_stop(const char* reason, const char* english) {
     throw coded<std::runtime_error>(RunFailureCode::pine_string_error, {{"reason", reason}},
                                     english ? english : "");
+}
+
+[[noreturn]] inline void pine_timezone_stop(const char* function, const char* zone,
+                                           const char* english) {
+    throw coded<std::runtime_error>(
+        RunFailureCode::pine_timezone_error,
+        {{"bar_index", run_error_bar_index()}, {"function", function}, {"zone", zone}},
+        run_error_bar_prefix() + (english ? english : ""));
 }
 
 [[noreturn]] inline void pine_engine_invariant(const char* english) {

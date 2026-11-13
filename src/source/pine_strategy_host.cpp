@@ -10,6 +10,7 @@
 #include "../report_replay.hpp"
 #include "../timezone.hpp"
 #include "../native_execution_consumer.hpp"
+#include "../canonical_json.hpp"
 #include "../scratch_table_binders.hpp"
 #include "pine_host_reads.hpp"
 #include "pine_intent_state.hpp"
@@ -30,6 +31,7 @@
 #include <ctime>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -758,9 +760,12 @@ void source::PineStrategyHost::on_native_run_begin() {
     } catch (const checked_settings::LatchedSettingsFailure& error) {
         rethrow_latched_setting(error);
     } catch (const std::exception& error) {
-        if (adapter_.stream_mode_) throw;
+        const auto failure = classify_run_failure(error);
+        // An unsupported selected chart must fail the admitted generation at
+        // begin, before the native driver can consume input or capture results.
+        if (adapter_.stream_mode_ || failure.code == RunFailureCode::window_mode_unsupported) throw;
         source_prepare_failed_ = true;
-        note_run_failure(*this, std::string(error.what()), classify_run_failure(error));
+        note_run_failure(*this, std::string(error.what()), failure);
     } catch (...) {
         if (adapter_.stream_mode_)
             throw coded<std::runtime_error>(RunFailureCode::engine_unclassified_error, {},
@@ -1132,6 +1137,8 @@ void source::PineStrategyHost::on_native_applied(
                 row.close_cause = execution::CloseCause::FillCap;
             else if (row.exit_comment.rfind(source::kIntradayLossComment, 0) == 0)
                 row.close_cause = execution::CloseCause::RiskLimit;
+            else if (row.exit_comment.rfind(source::kMaxDrawdownComment, 0) == 0)
+                row.close_cause = execution::CloseCause::RiskLimit;
         }
         adapter_.invalidate_exit_group(index); if (row.close_cause != previous_cause || index < trades_.base()) trades_.replace(index, row);
     }
@@ -1331,12 +1338,15 @@ source::PineStrategyHost::BarTime source::PineStrategyHost::fixture_chart_time(
         || chart_timezone_ == "Etc/UTC") {
         (void)utc();
     } else {
+        bool local = false;
         try {
             tz_util::ScopedTimezone guard(chart_timezone_);
-            if (::localtime_r(&seconds, &tm) == nullptr) (void)utc();
-        } catch (...) {
-            (void)utc();
+            local = ::localtime_r(&seconds, &tm) != nullptr;
+        } catch (const std::exception& error) {
+            if (tz_util::timezone_failure_is_resource(error)) throw;
+        } catch (...) {  // Non-standard errors retain the UTC fallback.
         }
+        if (!local) (void)utc();
     }
     BarTime result;
     result.year = tm.tm_year + 1900;
@@ -2044,6 +2054,45 @@ int multi_day_count(const std::string& tf) {
     return parsed->count() >= 2 ? parsed->count() : 0;
 }
 
+template <typename SecurityStates>
+void capture_security_timeframe_warnings(
+        BacktestEngine& host, const std::string& input_tf,
+        const SecurityStates& states,
+        const std::map<int, source::PineSecurityEvalState>& pine_states) noexcept {
+    try {
+        const auto input = native_calendar::parse_timeframe(input_tf);
+        if (!input) return;
+        auto& consumer = NativeExecutionConsumer::bound(host);
+        for (const auto& state : states) {
+            if (state.tf.empty()) continue;
+            const auto pine = pine_states.find(state.sec_id);
+            if (pine != pine_states.end()
+                && (pine->second.lower_tf_array_requested || pine->second.lower_tf_requested
+                    || pine->second.no_loaded_bars)) {
+                continue;
+            }
+            const auto requested = native_calendar::parse_timeframe(state.tf);
+            if (!requested
+                || native_calendar::compatibility(*input, *requested).pairing
+                    != native_calendar::TimeframePairing::IndivisibleFixed) {
+                continue;
+            }
+            std::string args = "{\"input_tf\":";
+            internal::canonical_json::append_json_string(args, input_tf);
+            args += ",\"requested_tf\":";
+            internal::canonical_json::append_json_string(args, state.tf);
+            args += ",\"sec_id\":";
+            args += std::to_string(state.sec_id);
+            args.push_back('}');
+            consumer.record_run_warning(
+                state.sec_id, "request_timeframe_not_multiple", std::move(args));
+        }
+        consumer.finish_run_warnings();
+    } catch (...) {
+        NativeExecutionConsumer::mark_run_warnings_unavailable(host);
+    }
+}
+
 }  // namespace
 
 void source::PineStrategyHost::scheduler_prepare_security_sequence(
@@ -2053,6 +2102,8 @@ void source::PineStrategyHost::scheduler_prepare_security_sequence(
     if (aux_security_feed_enabled()) security_input_tf_ = aux_security_input_tf_;
 #endif
     validate_security_timeframes(security_input_tf_);
+    capture_security_timeframe_warnings(
+        *this, security_input_tf_, security_eval_states_, pine_security_states_);
     security_first_chart_bar_ms_ = bars.empty() ? 0 : bars.front().timestamp;
     if (declare_security_sites_to_kernel()) {
         // The kernel registers the declared sites after this callback returns
@@ -3475,6 +3526,8 @@ int64_t source::PineStrategyHost::chart_time_close() const {
 }
 
 int64_t source::PineStrategyHost::chart_bar_close_ms(int64_t stamp) const {
+    if (const auto interval = detail::run_consumer(*this).script_period_interval(stamp))
+        return interval->last_traded_close_ms;
     if (calendar_period_for(script_tf_) != CalendarPeriod::NONE) {
         return pine_time_close(stamp, script_tf_, "", "", script_tf_,
                                syminfo_.timezone, syminfo_.session);
@@ -3526,6 +3579,8 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
     // A chart bar's own open (the input's stamp) and close, as the chart's
     // time and time_close read them (chart_time_close).
     const auto chart_open_of = [&](std::int64_t input_ms) -> std::int64_t {
+        if (const auto interval = detail::run_consumer(*this).script_period_interval(input_ms))
+            return interval->open_ms;
         return input_is_chart ? input_ms
                               : pine_time(input_ms, script_tf_, "", "", script_tf_, sym_tz,
                                           sym_session);
@@ -3543,6 +3598,8 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
         && (!daily_chart || (calendar_period_for(script_tf_) == CalendarPeriod::DAY
                              && script_tf_seconds_ == 86400));
     const auto chart_close_of = [&](std::int64_t open_ms) -> std::int64_t {
+        if (const auto interval = detail::run_consumer(*this).script_period_interval(open_ms))
+            return interval->last_traded_close_ms;
         if (const auto* day = calendar_chart ? symbol_calendar_day(open_ms) : nullptr) {
             return daily_chart || chart_step_ms <= 0 ? day->second
                                                      : std::min(open_ms + chart_step_ms, day->second);
@@ -3553,6 +3610,8 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
                                  open_ms, script_tf_, sym_session, sym_tz, script_tf_);
     };
     const auto chart_slot_of = [&](std::int64_t ms) -> std::int64_t {
+        if (const auto interval = detail::run_consumer(*this).script_period_interval(ms))
+            return interval->open_ms;
         return pine_time(ms, script_tf_, "", "", script_tf_, sym_tz, sym_session);
     };
     // The first chart bar opening at or after `at`: the retained input's, else
@@ -3663,12 +3722,22 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
     const bool calendar_days = session.empty() && tf_period == CalendarPeriod::DAY
         && tf_to_seconds(tf.empty() ? script_tf_ : tf) == 86400;
     const auto calendar_open_of = [&](std::int64_t ms) -> std::int64_t {
+        if (session.empty() && (tz.empty() || tz == sym_tz)
+            && (tf.empty() || tf == script_tf_)) {
+            if (const auto interval = detail::run_consumer(*this).script_period_interval(ms))
+                return interval->open_ms;
+        }
         if (calendar_days) {
             if (const auto* day = symbol_calendar_day(ms)) return day->first;
         }
         return pine_time(ms, tf, session, tz, script_tf_, sym_tz, sym_session);
     };
     const auto tf_close_of = [&](std::int64_t open_ms) -> std::int64_t {
+        if (session.empty() && (tz.empty() || tz == sym_tz)
+            && (tf.empty() || tf == script_tf_)) {
+            if (const auto interval = detail::run_consumer(*this).script_period_interval(open_ms))
+                return interval->last_traded_close_ms;
+        }
         if (calendar_days) {
             if (const auto* day = symbol_calendar_day(open_ms)) return day->second;
         }

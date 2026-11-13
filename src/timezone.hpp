@@ -1,13 +1,29 @@
 #pragma once
 
+#include <exception>
 #include <mutex>
 #include <string>
+#include <string_view>
 
 namespace pineforge {
+
+namespace native_calendar {
+inline namespace native_calendar_v2 {
+// Internal throwing form, deliberately absent from the installed headers.
+bool timezone_lookup_accepted(std::string_view timezone);
+}
+}
 
 namespace tz_util {
 
 std::string normalize_timezone_for_posix(const std::string& tz);
+
+// Resource failures cannot be treated as a request to use a fallback clock.
+bool timezone_failure_is_resource(const std::exception& error) noexcept;
+
+// Return the calendar-accepted spelling or raise pine_timezone_error through
+// pine_timezone_stop with the function's timezone diagnostic.
+const std::string& resolve_script_timezone(const std::string& timezone, const char* function);
 
 // RAII guard: swaps the process ``TZ`` environment to the normalized ``tz``
 // unless getenv("TZ") already matches, and holds this engine image's mutex

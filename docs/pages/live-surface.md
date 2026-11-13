@@ -211,8 +211,9 @@ reports on a closed row), until a caller sets a different mode:
 - `2` **LOW_FIRST** — force `O → L → H → C` regardless of the bar's own
   shape.
 
-Any other `mode` is clamped to AUTO. A live probe runs the **same** forming
-bar under both forced orders and emits only the fills that agree between
+Any other `mode` records a typed `setting_rejected` error through
+`strategy_get_last_error` and `strategy_get_last_error_code`. A live probe runs
+the **same** forming bar under both forced orders and emits only the fills that agree between
 the two — a fill that depends on which leg TradingView's own (unobservable,
 still-forming) bar will resolve to is path-dependent and must be suppressed
 rather than guessed. Persistent configuration, like

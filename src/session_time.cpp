@@ -324,14 +324,46 @@ void decompose_ms_local(int64_t bar_ms, const std::string& tz, struct tm& out) {
 // Pine time/date extraction — value-identical to the codegen's former inline
 // setenv+tzset lambda (pineforge-codegen tables.py TIME_FIELD_EXPRS) but
 // churn-free. hour()/minute()/... route through these instead of open-coding it.
-int local_hour(int64_t bar_ms, const std::string& tz)       { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_hour; }
-int local_minute(int64_t bar_ms, const std::string& tz)     { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_min; }
-int local_second(int64_t bar_ms, const std::string& tz)     { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_sec; }
-int local_dayofmonth(int64_t bar_ms, const std::string& tz) { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_mday; }
-int local_dayofweek(int64_t bar_ms, const std::string& tz)  { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_wday + 1; }
-int local_month(int64_t bar_ms, const std::string& tz)      { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_mon + 1; }
-int local_year(int64_t bar_ms, const std::string& tz)       { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_year + 1900; }
-int local_weekofyear(int64_t bar_ms, const std::string& tz) { struct tm t; decompose_ms_local(bar_ms, tz, t); return (t.tm_yday + 7 - ((t.tm_wday + 6) % 7)) / 7; }
+int local_hour(int64_t bar_ms, const std::string& tz) {
+    struct tm t;
+    decompose_ms_local(bar_ms, tz_util::resolve_script_timezone(tz, "hour"), t);
+    return t.tm_hour;
+}
+int local_minute(int64_t bar_ms, const std::string& tz) {
+    struct tm t;
+    decompose_ms_local(bar_ms, tz_util::resolve_script_timezone(tz, "minute"), t);
+    return t.tm_min;
+}
+int local_second(int64_t bar_ms, const std::string& tz) {
+    struct tm t;
+    decompose_ms_local(bar_ms, tz_util::resolve_script_timezone(tz, "second"), t);
+    return t.tm_sec;
+}
+int local_dayofmonth(int64_t bar_ms, const std::string& tz) {
+    struct tm t;
+    decompose_ms_local(bar_ms, tz_util::resolve_script_timezone(tz, "dayofmonth"), t);
+    return t.tm_mday;
+}
+int local_dayofweek(int64_t bar_ms, const std::string& tz) {
+    struct tm t;
+    decompose_ms_local(bar_ms, tz_util::resolve_script_timezone(tz, "dayofweek"), t);
+    return t.tm_wday + 1;
+}
+int local_month(int64_t bar_ms, const std::string& tz) {
+    struct tm t;
+    decompose_ms_local(bar_ms, tz_util::resolve_script_timezone(tz, "month"), t);
+    return t.tm_mon + 1;
+}
+int local_year(int64_t bar_ms, const std::string& tz) {
+    struct tm t;
+    decompose_ms_local(bar_ms, tz_util::resolve_script_timezone(tz, "year"), t);
+    return t.tm_year + 1900;
+}
+int local_weekofyear(int64_t bar_ms, const std::string& tz) {
+    struct tm t;
+    decompose_ms_local(bar_ms, tz_util::resolve_script_timezone(tz, "weekofyear"), t);
+    return (t.tm_yday + 7 - ((t.tm_wday + 6) % 7)) / 7;
+}
 
 static int64_t calendar_day_open_local_ms_tz(int64_t bar_ms, const std::string& tz);
 
@@ -1557,8 +1589,9 @@ bool local_time_in_session_windows(const std::string& windows_body,
 }
 
 bool passes_session_filter(const std::string& session,
-                           const std::string& tz,
+                           const std::string& tz_in,
                            int64_t bar_ms) {
+    const std::string& tz = tz_util::resolve_script_timezone(tz_in, "time");
     if (session.empty() || session == "24x7")
         return true;
 
@@ -1599,16 +1632,19 @@ bool session_trades_at(const std::string& session, const std::string& tz, int64_
 // ---------------------------------------------------------------------------
 // Session predicate public free functions
 // ---------------------------------------------------------------------------
-
+// These predicates share time()'s session calendar; session.is* variables have
+// no timezone-taking Pine function of their own.
 bool session_in_market(const std::string& session,
                            const std::string& tz,
                            int64_t bar_ms) {
-    return passes_session_filter(session, tz, bar_ms);
+    return passes_session_filter(
+        session, tz_util::resolve_script_timezone(tz, "time"), bar_ms);
 }
 
 bool session_in_premarket(const std::string& session,
-                              const std::string& tz,
+                              const std::string& tz_in,
                               int64_t bar_ms) {
+    const std::string& tz = tz_util::resolve_script_timezone(tz_in, "time");
     if (session.empty() || session == "24x7")
         return false;
 
@@ -1641,8 +1677,9 @@ bool session_in_premarket(const std::string& session,
 }
 
 bool session_in_postmarket(const std::string& session,
-                               const std::string& tz,
+                               const std::string& tz_in,
                                int64_t bar_ms) {
+    const std::string& tz = tz_util::resolve_script_timezone(tz_in, "time");
     if (session.empty() || session == "24x7")
         return false;
 
@@ -1675,27 +1712,30 @@ bool session_in_postmarket(const std::string& session,
 // Chart-timeframe forms (see session_time.hpp): a D/W/M chart bar is the
 // symbol's regular-session bar whatever time of day its stamp reads.
 bool session_in_market(const std::string& session,
-                           const std::string& tz,
+                           const std::string& tz_in,
                            int64_t bar_ms,
                            const std::string& chart_tf) {
+    const std::string& tz = tz_util::resolve_script_timezone(tz_in, "time");
     if (tf_is_daily_or_higher(chart_tf))
         return true;
     return session_in_market(session, tz, bar_ms);
 }
 
 bool session_in_premarket(const std::string& session,
-                              const std::string& tz,
+                              const std::string& tz_in,
                               int64_t bar_ms,
                               const std::string& chart_tf) {
+    const std::string& tz = tz_util::resolve_script_timezone(tz_in, "time");
     if (tf_is_daily_or_higher(chart_tf))
         return false;
     return session_in_premarket(session, tz, bar_ms);
 }
 
 bool session_in_postmarket(const std::string& session,
-                               const std::string& tz,
+                               const std::string& tz_in,
                                int64_t bar_ms,
                                const std::string& chart_tf) {
+    const std::string& tz = tz_util::resolve_script_timezone(tz_in, "time");
     if (tf_is_daily_or_higher(chart_tf))
         return false;
     return session_in_postmarket(session, tz, bar_ms);
@@ -1813,7 +1853,8 @@ int64_t timeframe_time(int64_t bar_ms,
                   const std::string& syminfo_tz) {
     const std::string& tf = call_timeframe(tf_in, chart_tf);
 
-    const SessionTzTriple resolved = resolve_session_tz(session, tz_in, syminfo_tz);
+    const SessionTzTriple resolved = resolve_session_tz(
+        session, tz_util::resolve_script_timezone(tz_in, "time"), syminfo_tz);
     const std::string& sess = resolved.session;
     const std::string& session_tz = resolved.session_tz;
     const std::string& tf_tz = resolved.tf_tz;
@@ -1836,7 +1877,8 @@ static int64_t session_time_close_reading(int64_t bar_ms,
                                          bool transition_clock) {
     const std::string& tf = call_timeframe(tf_in, chart_tf);
 
-    const SessionTzTriple resolved = resolve_session_tz(session, tz_in, syminfo_tz);
+    const SessionTzTriple resolved = resolve_session_tz(
+        session, tz_util::resolve_script_timezone(tz_in, "time_close"), syminfo_tz);
     const std::string& sess = resolved.session;
     const std::string& session_tz = resolved.session_tz;
     const std::string& tf_tz = resolved.tf_tz;
@@ -2059,7 +2101,8 @@ int64_t timeframe_time(int64_t bar_ms,
     // is read in the explicit tz, else syminfo.timezone (sym_tz), else UTC;
     // a VALID session under a D/W/M tf is the session's own bar in that
     // zone, while no valid session takes the symbol's own D/W/M bar.
-    const SessionTzTriple resolved = resolve_session_tz(session, tz_in, sym_tz);
+    const SessionTzTriple resolved = resolve_session_tz(
+        session, tz_util::resolve_script_timezone(tz_in, "time"), sym_tz);
     const std::string& sess = resolved.session;
     const std::string& session_tz = resolved.session_tz;
     const std::string& tf_tz = resolved.tf_tz;
@@ -2098,7 +2141,8 @@ int64_t timeframe_time_close(int64_t bar_ms,
                         const std::string& sym_session) {
     const std::string& tf = call_timeframe(tf_in, chart_tf);
 
-    const SessionTzTriple resolved = resolve_session_tz(session, tz_in, sym_tz);
+    const SessionTzTriple resolved = resolve_session_tz(
+        session, tz_util::resolve_script_timezone(tz_in, "time_close"), sym_tz);
     const std::string& sess = resolved.session;
     const std::string& session_tz = resolved.session_tz;
     const std::string& tf_tz = resolved.tf_tz;

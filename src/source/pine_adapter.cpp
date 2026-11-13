@@ -118,6 +118,7 @@ bool PineExecutionAdapter::modeled_input() const {
 
 namespace {
 
+void throw_timeframe_refusal(const NativeRunSpec&, NativeRunSpecValidation);
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
 void check_slippage_fill_price(double value, bool has_basis) {
@@ -727,9 +728,9 @@ std::optional<double> decimal_floor_lot(double units, double grid) noexcept {
 // trades 3124, 1562 + 1562 after a 50% leg; literal 3124.9999995 trades 3124,
 // 3125.0000000000005 trades 3125; tests/fixtures/explicit_qty_floor). Only that
 // snap changes: an on-grid request, a floor below the request and a non-decimal
-// grid keep the grid floor's result. No tape covers strategy.order's explicit
-// quantity (order()) or a lot that is not a power of ten (0.5, 0.25): both keep
-// the grid floor, snapped request included, as before.
+// grid keep the grid floor's result. close() and exit() floor their explicit
+// quantities with it too; a tape covers the snap for close, not for exit. None
+// covers order() or a lot that is not a power of ten (0.5, 0.25): grid floor.
 double explicit_entry_quantity_floor(double units, const std::optional<double>& grid) noexcept {
     const double floored = floor_quantity_grid(units, grid);
     if (!detail::script_rule_switches().explicit_qty_decimal_floor || floored != units
@@ -2718,6 +2719,7 @@ void PineExecutionAdapter::reset_for_run() {
     day_ledger_ = {};
     risk_.observed_peak_equity = kNaN;
     risk_.observed_max_drawdown = 0.0;
+    risk_.fill_peak_equity = kNaN;
     risk_.intraday_block_day = std::numeric_limits<std::int64_t>::min();
     risk_.intraday_cancel_pending = false;
     policy_script_bar_ = {};
@@ -3194,6 +3196,7 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
         ? NativeExecutionConsumer::bound(*host_).normalize_projected_spec(spec)
         : native_bar_views_v1::normalize_native_run_spec(spec, {});
     if (!validation) {
+        throw_timeframe_refusal(spec, validation);
         throw coded<std::logic_error>(run_spec_field_failure(validation.field),
                                       "Pine adapter produced invalid native run spec field "
                                       + std::to_string(static_cast<unsigned>(validation.field)));
@@ -3244,6 +3247,17 @@ PineSizingSnapshot PineExecutionAdapter::sizing_snapshot() const {
     return snapshot;
 }
 
+// TradingView sizes an order from flat at no more than 100 percent of equity
+// when both margins are off (measured without commission). Apply the cap to
+// the money, before taking any commission out of it.
+double PineExecutionAdapter::default_percent_of_equity() const noexcept {
+    if (config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+        && margins_disabled()) {
+        return std::min(config_.default_qty_value, 100.0);
+    }
+    return config_.default_qty_value;
+}
+
 // The money a default-quantity declaration converts.  CASH is the declared
 // value itself; a percentage is taken of the equity the snapshot marked, and
 // that money -- not the equity it is a percentage of -- goes on the
@@ -3290,7 +3304,7 @@ double PineExecutionAdapter::default_sizing_cash(
         }
         const double equity = staged_.quantity_grid ? source_money_round(sizing.strategy_equity)
                                                     : sizing.strategy_equity;
-        const double money = config_.default_qty_value / 100.0 * equity;
+        const double money = default_percent_of_equity() / 100.0 * equity;
         if (!std::isfinite(money)) {
             engine_command_value_invalid_or_count("sizing.quantity", EngineValueStage::sizing,
                                                  EngineValueReason::nonfinite);
@@ -3332,7 +3346,7 @@ double PineExecutionAdapter::default_sizing_cash(
         }
         return kNaN;
     }
-    const double money = config_.default_qty_value / 100.0 * sizing.equity;
+    const double money = default_percent_of_equity() / 100.0 * sizing.equity;
     const double cash = staged_.quantity_grid ? source_money_round(money) : money;
     if (!std::isfinite(money) || !std::isfinite(cash)) {
         engine_command_value_invalid_or_count("sizing.quantity", EngineValueStage::sizing,
@@ -3507,7 +3521,7 @@ std::optional<double> PineExecutionAdapter::pooc_fee_units(
         || !std::isfinite(sizing.equity)) {
         return std::nullopt;
     }
-    const double money = config_.default_qty_value / 100.0 * sizing.equity;
+    const double money = default_percent_of_equity() / 100.0 * sizing.equity;
     const double cash = source_money_round(money);
     const double unit = tv_pooc_fee_grossed_unit(sizing.price);
     if (!finite_positive(cash) || !finite_positive(unit)) return std::nullopt;
@@ -10483,6 +10497,16 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                 });
         if (!has_opposite && !close_first_percent_add) flush_pending_entries();
     }
+    // Explicit closes use the entry quantity floor before an ANY close is
+    // converted to a percentage or a FIFO close becomes a native request.
+    // With live exposure, a request below one step closes it all; a pending
+    // entry keeps the original quantity. Larger reductions are already
+    // bounded by the native close scope.
+    if (finite_positive(qty) && staged_.quantity_grid) {
+        const double floored = explicit_entry_quantity_floor(qty, staged_.quantity_grid);
+        if (floored > 0.0) qty = floored;
+        else if (closable > 0.0) qty = closable;
+    }
     double requested_percent = std::isnan(qty_percent) ? 100.0 : qty_percent;
     double effective_qty = qty;
     const double current = detail::run_position(require_host()).signed_units;
@@ -11591,6 +11615,12 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             || !std::isnan(trail_points) || !std::isnan(trail_price));
     require_cohort_ticket(cohort_candidate ? &from_entry : nullptr);
     reroute_fixed_entries_before_request();
+    // Reserve explicit exit units on the entry grid. Below one step, only the
+    // measured qty_percent 100 (or none) falls back to percentage sizing.
+    if (finite_positive(qty) && staged_.quantity_grid) {
+        const double floored = explicit_entry_quantity_floor(qty, staged_.quantity_grid);
+        if (floored > 0.0 || !(qty_percent < 100.0)) qty = floored > 0.0 ? floored : kNaN;
+    }
     if (!from_entry.empty()) {
         const auto token = named_entry_cancel_tokens_.find(from_entry);
         if (token != named_entry_cancel_tokens_.end()) {
@@ -12129,6 +12159,12 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         if (parent != placement_.end()) observe_pending_parent(parent->second);
     }
     for (const auto& parent : pending_entries_) observe_pending_parent(parent.snapshot);
+    // A parked reversing entry is absent from the live and pending entry lists.
+    // Without it, the exit percentage falls back to the open position.
+    for (const auto& pending : pending_same_bar_commands_)
+        if (physical.signed_units != 0.0
+            && pending.snapshot.is_long != (physical.signed_units > 0.0))
+            observe_pending_parent(pending.snapshot);
     // TradingView's default strategy.exit(from_entry) under FIFO closes the
     // entry's own quantity -- the oldest lots first -- not the whole book
     // (tests/test_pyramiding_count_differential.cpp, P10 on its lab tv tape).
@@ -12203,8 +12239,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         ? std::min(std::abs(physical.signed_units), cohort_exposure_for(from_entry))
         : std::abs(physical.signed_units)) + (ancestry_sized_target ? 0.0 : completed_entry_units);
     const double live_reservation_basis = binds_pending_reversal_entry ? 0.0
-        : std::max(0.0, book_basis
-                         - pending_same_bar_close_qty_ + pending_parent_units);
+        : std::max(0.0, book_basis - pending_same_bar_close_qty_) + pending_parent_units;
     const double percentage_basis = ancestry_sized_target
         ? book_basis + completed_entry_units + pending_parent_units
         : live_reservation_basis;
@@ -18048,7 +18083,7 @@ constexpr std::int64_t kChartDayCivilSpan = std::int64_t{1} << 40;
 // localtime_r under a chart timezone, gmtime_r on a UTC chart, each falling
 // back to gmtime_r as it always did.
 [[gnu::noinline]] std::int64_t libc_chart_day_key(const std::string& timezone, bool utc_chart,
-                                                  std::time_t seconds) noexcept {
+                                                  std::time_t seconds) {
     std::tm fields{};
     const auto utc = [&]() {
         return ::gmtime_r(&seconds, &fields) != nullptr;
@@ -18056,17 +18091,17 @@ constexpr std::int64_t kChartDayCivilSpan = std::int64_t{1} << 40;
     if (utc_chart) {
         if (!utc()) return std::numeric_limits<std::int64_t>::min();
     } else {
+        bool local = false;
         try {
             tz_util::ScopedTimezone guard(timezone);
-            if (::localtime_r(&seconds, &fields) == nullptr) {
-                if (!utc()) return std::numeric_limits<std::int64_t>::min();
-            }
-        } catch (...) {
-            // A malformed staged timezone must not turn a source-policy
-            // read into an unhashable partial state.  The run-spec validator
-            // owns rejection; preserve the legacy UTC fallback meanwhile.
-            if (!utc()) return std::numeric_limits<std::int64_t>::min();
+            local = ::localtime_r(&seconds, &fields) != nullptr;
+        } catch (const std::exception& error) {
+            if (tz_util::timezone_failure_is_resource(error)) throw;
+        } catch (...) {  // Non-standard errors retain the UTC fallback.
         }
+        // The run-spec validator owns name rejection. Preserve the legacy
+        // UTC fallback for other failures, while resource failures end the run.
+        if (!local && !utc()) return std::numeric_limits<std::int64_t>::min();
     }
     return static_cast<std::int64_t>(fields.tm_mday) * 100
         + static_cast<std::int64_t>(fields.tm_mon + 1);
@@ -18074,7 +18109,7 @@ constexpr std::int64_t kChartDayCivilSpan = std::int64_t{1} << 40;
 
 }  // namespace
 
-std::int64_t PineExecutionAdapter::chart_day_key(std::int64_t timestamp_ms) const noexcept {
+std::int64_t PineExecutionAdapter::chart_day_key(std::int64_t timestamp_ms) const {
     const std::time_t seconds = static_cast<std::time_t>(timestamp_ms / 1000);
     const std::string& timezone = staged_.chart_timezone;
     const bool utc_chart = timezone.empty() || timezone == "UTC" || timezone == "Etc/UTC";
@@ -18198,10 +18233,6 @@ void PineExecutionAdapter::update_risk_state(double mark_price) {
         if (std::isfinite(risk_.max_drawdown) && !std::isfinite(threshold)) {
             engine_command_value_invalid_or_count("risk.threshold",
                 EngineValueStage::risk, EngineValueReason::numeric_overflow);
-        }
-        if (risk_.observed_max_drawdown >= threshold) {
-            risk_.halted = true;
-            return;
         }
     }
     if (risk_.max_cons_loss_days > 0
@@ -25197,6 +25228,36 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             pine_host->adapter_label_bracket_trades(event, from_bracket);
         }
     }
+    bool max_drawdown_breached = false;
+    if (risk_.max_drawdown > 0.0 && !risk_.halted) {
+        // A reversal has already closed the old position and opened the
+        // new one. Capture its equity before any further fills.
+        const double equity = require_host().native_marked_equity(event.resolved_price);
+        if (std::isfinite(equity)) {
+            // The peak is seeded at the first applied fill and afterwards
+            // follows the equity at fills that close units only: the equity
+            // at an opening fill never raises it.
+            if (!std::isfinite(risk_.fill_peak_equity)) {
+                risk_.fill_peak_equity = equity;
+            }
+            if (event.closed_units > 0.0) {
+                if (equity > risk_.fill_peak_equity) {
+                    risk_.fill_peak_equity = equity;
+                }
+                const double threshold = risk_.max_drawdown_percent
+                    ? risk_.fill_peak_equity * risk_.max_drawdown / 100.0
+                    : risk_.max_drawdown;
+                if (std::isfinite(risk_.max_drawdown) && !std::isfinite(threshold)) {
+                    engine_command_value_invalid_or_count("risk.threshold",
+                        EngineValueStage::risk, EngineValueReason::numeric_overflow);
+                }
+                max_drawdown_breached = risk_.fill_peak_equity - equity >= threshold;
+                // Latch before the forced close so its fill cannot trigger
+                // another drawdown test or a second close.
+                if (max_drawdown_breached) risk_.halted = true;
+            }
+        }
+    }
     if (placement_snapshot && placement_snapshot->opening) {
         detail::ExitScratchRows<native_order::RequestHandle> paired_closes(*this);
         for (const auto& handle : live_handles_) {
@@ -26588,6 +26649,29 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             risk_.intraday_block_day = chart_day_key(context.sub_bar_open_ms);
             risk_.intraday_cancel_pending = true;
         }
+    }
+    if (max_drawdown_breached) {
+        // Close every remaining position, including a reversal's new side.
+        if (detail::run_position(require_host()).signed_units != 0.0) {
+            native_order::Request request;
+            request.intent = native_order::Flatten{};
+            request.comment = kMaxDrawdownComment;
+            PlacementSnapshot snapshot;
+            // This close does not start a separate intraday-loss block.
+            snapshot.family = PineOrderFamily::CloseAll;
+            snapshot.source_id = "__max_drawdown__";
+            snapshot.comment = request.comment;
+            snapshot.sizing = sizing_snapshot();
+            snapshot.forced_execution_price = event.resolved_price;
+            const auto accepted = submit_or_replace(
+                std::move(request), std::move(snapshot), false,
+                "__max_drawdown_close__");
+            if (accepted) {
+                (void)require_host().execute_current(
+                    {*accepted, NativeCurrentPriceRule::NearestTick});
+            }
+        }
+        cancel_all();
     }
     if (preclose_intraday_loss) {
         risk_.intraday_block_day = chart_day_key(context.sub_bar_open_ms);
@@ -30645,5 +30729,63 @@ bool PlacementTable::compact_old() noexcept {
     }
     return true;
 }
+
+namespace {
+
+void throw_timeframe_refusal(const NativeRunSpec& spec,
+                             NativeRunSpecValidation validation) {
+    using E = NativeRunSpecError;
+    using F = NativeRunSpecField;
+    using P = native_calendar::TimeframePairing;
+    const bool intrabar_failure = validation.error == E::InvalidIntrabarPath
+        && validation.field == F::IntrabarTimeframe;
+    const bool pairing_failure = validation.error == E::IncompatibleTimeframes
+        && (validation.field == F::ScriptTimeframe
+            || validation.field == F::IntrabarTimeframe);
+    if (!intrabar_failure && !pairing_failure) return;
+
+    const auto* lower = spec.intrabar.lower();
+    if (intrabar_failure && lower == nullptr) return;
+    const auto script = native_calendar::parse_timeframe(spec.script_tf);
+    if (!script) return;
+    const std::string& source_tf = intrabar_failure ? lower->tf : spec.input_tf;
+    const auto source = native_calendar::parse_timeframe(source_tf);
+    if (!source) return;
+    const char* reason = nullptr;
+    std::string rule;
+    // Describe the validator's own calendar pairing, including calendar
+    // counts and second/minute pairs, without changing its admission.
+    switch (native_calendar::compatibility(*source, *script).pairing) {
+    case P::ScriptFiner:
+        reason = intrabar_failure ? "script_finer_than_intrabar" : "script_finer_than_input";
+        rule = "script timeframe '" + spec.script_tf + "' is finer than "
+            + (intrabar_failure ? "intrabar" : "input") + " timeframe '" + source_tf + "'";
+        break;
+    case P::IndivisibleFixed:
+        reason = intrabar_failure ? "intrabar_not_divisible" : "not_divisible";
+        rule = spec.script_tf + " is not a multiple of " + source_tf;
+        break;
+    default:
+        return;
+    }
+
+    RunFailureArgs args{
+        {"option", validation.field == F::IntrabarTimeframe
+            ? "intrabar_timeframe" : "script_timeframe"},
+        {"input_tf", spec.input_tf}, {"script_tf", spec.script_tf}, {"reason", reason}};
+    std::string text = "input timeframe '" + spec.input_tf
+        + "' cannot build script timeframe '" + spec.script_tf + "'";
+    if (lower != nullptr) {
+        args.emplace_back("intrabar_tf", lower->tf);
+        text += " using intrabar timeframe '" + lower->tf + "'";
+    }
+    text += " (" + rule + "); pass bars whose timeframe divides the script timeframe '"
+        + spec.script_tf + "'";
+    text += script->unit() == native_calendar::TimeframeUnit::Second
+        ? ", for example 1-second bars." : ", for example 1-minute bars.";
+    throw coded<std::logic_error>(RunFailureCode::run_options_rejected, args, text);
+}
+
+} // namespace
 
 } // namespace pineforge::source

@@ -131,11 +131,10 @@ GKE_JOB_LABELS = {
                    NATIVE_X86_JOB: HOSTED_X86_RUNNER,
                    'build-debug': HOSTED_X86_RUNNER,
                    'corpus-parity-subset': HOSTED_X86_RUNNER},
-    'ci-post.yml': {'preflight': HOSTED_X86_RUNNER, 'preflight-slow': HOSTED_X86_RUNNER,
+    'ci-post.yml': {'preflight': HOSTED_X86_RUNNER,
                     NATIVE_X86_JOB: HOSTED_X86_RUNNER,
-                    'build': HOSTED_X86_RUNNER, 'build-debug': HOSTED_X86_RUNNER,
-                    'sanitizers': HOSTED_X86_RUNNER, 'kernel-only': HOSTED_X86_RUNNER,
-                    'build-arm': HOSTED_ARM_RUNNER},
+                    'smoke': HOSTED_X86_RUNNER, 'smoke-arm': HOSTED_ARM_RUNNER,
+                    'sanitizers': HOSTED_X86_RUNNER},
     'corpus-parity.yml': {'corpus-parity': HOSTED_X86_RUNNER,
                           'corpus-parity-subset': HOSTED_X86_RUNNER},
     'native-live.yml': {'native-live': GKE_MATRIX_RUNNER,
@@ -146,9 +145,7 @@ GKE_PR_ARM_JOB_LABELS = {**GKE_JOB_LABELS['gke-pr.yml'], 'build-arm': HOSTED_ARM
 # Add these rows only when the corpus admission variant is selected.
 GKE_PR_CORPUS_JOB_LABELS = {'corpus-gitlink-result': HOSTED_X86_RUNNER}
 GKE_LIGHT_JOB_RUNNERS = {
-    'ci-post.yml': dict.fromkeys(
-        ('authz', 'changes', 'build-release-gate', 'build-debug-gate',
-         'sanitizers-gate', 'kernel-only-gate', 'build-gate'), HOSTED_X86_RUNNER),
+    'ci-post.yml': dict.fromkeys(('authz', 'changes', 'build-gate'), HOSTED_X86_RUNNER),
     'native-live.yml': dict.fromkeys(
         ('authz', 'native-live-native', 'native-live-gate'), HOSTED_X86_RUNNER),
     'corpus-parity.yml': {'authz': HOSTED_X86_RUNNER},
@@ -178,11 +175,6 @@ POST_CI_EVENTS = '''on:
   schedule:
     - cron: '30 1 * * *'
   workflow_dispatch:
-    inputs:
-      cold_native_cache:
-        description: Run full native profiles without compiler or libcurl caches
-        type: boolean
-        default: false
 '''
 MATRIX_RUNNER = '${{ fromJSON(matrix.platform.runner) }}'
 MATRIX_LINUX_RUNNER = f"'{PR_RUNNER}'"
@@ -194,40 +186,7 @@ BUILD_STRATEGY = ('    strategy:\n'
                   '        platform:\n'
                   '          - os: ubuntu-24.04\n'
                   '        build_type: [Release]\n')
-POST_BUILD_STRATEGY = ('    strategy:\n'
-                       '      fail-fast: false\n'
-                       '      matrix:\n'
-                       '        platform:\n'
-                       '          - os: ubuntu-24.04\n'
-                       '        build_type: [Release]\n'
-                       '        shard: [1, 2, 3, 4]\n')
-POST_DEBUG_BUILD_STRATEGY = POST_BUILD_STRATEGY.replace(
-    'build_type: [Release]', 'build_type: [Debug]'
-).replace('shard: [1, 2, 3, 4]', 'shard: [1, 2]')
-POST_ARM_BUILD_STRATEGY = ('    strategy:\n'
-                          '      fail-fast: false\n'
-                          '      matrix:\n'
-                          '        build_type: [Release, Debug]\n'
-                          '        shard: [1, 2, 3, 4]\n')
 BUILD_NAME = 'build (${{ matrix.platform.os }}, ${{ matrix.build_type }})'
-POST_ARM_BUILD_NAME = ('build-shard (ubuntu-24.04-arm, ${{ matrix.build_type }}, '
-                       '${{ matrix.shard }}/4)')
-POST_ARM_CTEST_EXCLUSION = (
-    " ${{ matrix.build_type == 'Release' && '--exclude-label ci-script' || '' }}")
-POST_SHARDS = {'build': 4, 'build-debug': 2, 'build-arm': 4, 'sanitizers': 8, 'kernel-only': 2}
-POST_LEG_GATES = {
-    'build-release-gate': ('build', 'build (ubuntu-24.04, Release)'),
-    'build-debug-gate': ('build-debug', 'build (ubuntu-24.04, Debug)'),
-    'sanitizers-gate': ('sanitizers', 'sanitizers'),
-    'kernel-only-gate': ('kernel-only', 'kernel-only'),
-}
-
-
-def post_build_name(count: int) -> str:
-    return ('build-shard (${{ matrix.platform.os }}, ${{ matrix.build_type }}, '
-            '${{ matrix.shard }}/' + str(count) + ')')
-
-
 RELEASE_STRATEGY = ('    strategy:\n'
                     '      fail-fast: false\n'
                     '      matrix:\n'
@@ -338,17 +297,16 @@ JOB_COMMANDS = {
                    'build-debug': None, 'corpus-parity-subset': PARITY,
                    'legs': None, 'result': None},
     'ci-post.yml': {'authz': None, 'changes': None, 'preflight': None,
-                    'preflight-slow': None, 'build': VERIFY, 'build-arm': VERIFY,
-                    'build-debug': VERIFY, NATIVE_X86_JOB: NATIVE_X86_COMMAND,
-                    'sanitizers': VERIFY, 'kernel-only': VERIFY,
-                    **dict.fromkeys(POST_LEG_GATES), 'build-gate': None},
+                    NATIVE_X86_JOB: NATIVE_X86_COMMAND,
+                    'smoke': None, 'smoke-arm': None, 'sanitizers': None,
+                    'build-gate': None},
     'native-live.yml': {'authz': None, 'native-live': VERIFY, 'native-live-shards': VERIFY,
                         'native-live-native': None, 'native-live-gate': None},
     'corpus-parity.yml': {'authz': None, 'corpus-parity': PARITY, 'corpus-parity-subset': PARITY},
     'docs.yml': {'authz': None, 'build': None},
     'docs-post.yml': {'authz': None, 'build': None},
 }
-GKE_PR_ARM_JOB_COMMANDS = {**JOB_COMMANDS['gke-pr.yml'], 'build-arm': VERIFY}
+GKE_PR_ARM_JOB_COMMANDS = {**JOB_COMMANDS['gke-pr.yml'], 'build-arm': None}
 GKE_PR_CORPUS_JOB_COMMANDS = {'corpus-gitlink-result': None}
 # Exact hosted pins (x86 ubuntu-24.04, arm64 ubuntu-24.04-arm) and the native
 # matrix pin, checked per job.
@@ -408,13 +366,16 @@ _RETIRED_VM_LABEL = re.compile(r'(?<![\w.-])pf-gcp-(?:main|post)(?![\w.-])')
 # for authz and changes and skips only when changes succeeded and answered
 # docs-only -- exactly the skip the build aggregate accepts -- so a failed or
 # unanswered classification runs it.
-PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-arm': 'ARM_BUILD_RESULT',
-              'build-debug': 'DEBUG_BUILD_RESULT',
-              'build-release-gate': 'RELEASE_GATE_RESULT', 'build-debug-gate': 'DEBUG_GATE_RESULT',
-              'sanitizers': 'SANITIZER_RESULT',
-              'sanitizers-gate': 'SANITIZER_GATE_RESULT', 'kernel-only-gate': 'KERNEL_GATE_RESULT',
-              'kernel-only': 'KERNEL_RESULT', 'native-live': 'NATIVE_RESULT',
-              'corpus-parity-subset': 'PARITY_RESULT', 'corpus-parity': 'FULL_PARITY_RESULT'}
+# Every CI round fits 15 minutes (owner rule; 2026-11-13): ci-post keeps the smoke
+# legs and the subset parity; the full profiles run in the lab's verify.
+PROOF_JOBS = {'smoke': 'SMOKE_RESULT', 'smoke-arm': 'ARM_SMOKE_RESULT',
+              'sanitizers': 'SANITIZER_RESULT', 'corpus-parity-subset': 'PARITY_RESULT'}
+# ci-post's smoke jobs: the hosted platform each one names and the machine it requires.
+SMOKE_JOBS = {'smoke': ('ubuntu-24.04', 'x86_64'), 'smoke-arm': ('ubuntu-24.04-arm', 'aarch64')}
+SMOKE_STRATEGY = ('    strategy:\n'
+                  '      fail-fast: false\n'
+                  '      matrix:\n'
+                  '        build_type: [Release, Debug]\n')
 POST_ALWAYS_JOBS = {NATIVE_X86_JOB: 'X86_GCC133_RESULT'}
 POST_PROOF_JOBS = {**PROOF_JOBS, **POST_ALWAYS_JOBS}
 PR_PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-debug': 'DEBUG_RESULT',
@@ -448,6 +409,29 @@ cmake --build build --target pineforge_pr_smoke --parallel "$(getconf _NPROCESSO
 ctest --test-dir build -L '^fast$' --output-on-failure --no-tests=error \
 --parallel "$(getconf _NPROCESSORS_ONLN)" --timeout 0 --output-junit build/ctest-junit.xml
 '''.splitlines())
+# ci-post's smoke legs run the gke-pr smoke command for their matrix build type.
+SMOKE_VERIFY_RUN = BUILD_VERIFY_RUN.replace(' --timeout 0', '').replace(
+    '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_BUILD_TYPE="$BUILD_TYPE"')
+# The same smoke under ASan and UBSan, with ci_verify.py's sanitizers build flags
+# (PINEFORGE_ENABLE_SANITIZERS, -g1) and run options (SANITIZER_RUN_ENV).
+SANITIZER_SMOKE_RUN = ' '.join(r'''|
+cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug \
+-DPINEFORGE_ENABLE_SANITIZERS=ON -DCMAKE_C_FLAGS_DEBUG=-g1 -DCMAKE_CXX_FLAGS_DEBUG=-g1 \
+-DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DPINEFORGE_VERSION_SOURCE=FILE \
+-DPython3_EXECUTABLE="$(command -v python3)" -DPINEFORGE_BUILD_TESTS=ON \
+-DPINEFORGE_BUILD_SOURCE_LAYER=ON -DPINEFORGE_BUILD_TUTORIAL=OFF \
+-DPINEFORGE_BUILD_LIVE_RUNNER=OFF -DPINEFORGE_BUILD_CORPUS_STRATEGIES=OFF \
+-DPINEFORGE_BUILD_EXAMPLES=OFF -DPINEFORGE_REQUIRE_ABI_RECEIPTS=OFF \
+-DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache
+cmake --build build-asan --target pineforge_pr_smoke --parallel "$(getconf _NPROCESSORS_ONLN)"
+ctest --test-dir build-asan -L '^fast$' --output-on-failure --no-tests=error \
+--parallel "$(getconf _NPROCESSORS_ONLN)" --output-junit build-asan/ctest-junit.xml
+'''.splitlines())
+SANITIZER_SMOKE_ENV = ['          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1',
+                       '          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1']
+# What every ci-post smoke job installs: the gke-pr smoke's packages, nothing more.
+SMOKE_INSTALL_RUN = ('| sudo apt-get update sudo DEBIAN_FRONTEND=noninteractive apt-get install -y '
+                     'libeigen3-dev tzdata-legacy ccache')
 GKE_PROOF_IF = ("${{ needs.admit.outputs.allowed == 'true' && "
                 "needs.admit.outputs.docs_only != 'true' && "
                 "needs.admit.outputs.github_only != 'true' }}")
@@ -615,37 +599,7 @@ GKE_ARM_CORPUS_RESULT_STEP = GKE_ARM_RESULT_STEP
 for _anchor, _addition in _GKE_CORPUS_RESULT_INSERTIONS:
     GKE_CORPUS_RESULT_STEP = GKE_CORPUS_RESULT_STEP.replace(_anchor, _anchor + _addition, 1)
     GKE_ARM_CORPUS_RESULT_STEP = GKE_ARM_CORPUS_RESULT_STEP.replace(_anchor, _anchor + _addition, 1)
-POST_BUILD_VERIFY_RUN = ('| python3 scripts/ci_verify.py '
-                         "${{ matrix.build_type == 'Release' && 'release' || 'debug' }} "
-                         f'--build-dir build --jobs {CORES} --ccache')
-POST_PLATFORM_STEP = '''      - name: Require the requested platform
-        if: ${{ needs.authz.result == 'success' }}
-        env:
-          REQUESTED_PLATFORM: ${{ matrix.platform.os }}
-          ACTUAL_OS: ${{ runner.os }}
-        run: |
-          case "$REQUESTED_PLATFORM:$ACTUAL_OS" in
-            ubuntu-24.04:Linux) ;;
-            *) echo "::error::runner OS $ACTUAL_OS cannot verify $REQUESTED_PLATFORM"; exit 1 ;;
-          esac
-'''
-POST_ARM_PLATFORM_STEP = POST_PLATFORM_STEP.replace(
-    'REQUESTED_PLATFORM: ${{ matrix.platform.os }}', 'REQUESTED_PLATFORM: ubuntu-24.04-arm'
-).replace('ubuntu-24.04:Linux', 'ubuntu-24.04-arm:Linux')
 BUILD_CACHE_KEY = 'ccache-main-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-'
-BUILD_CACHE_SAVE = ("${{ success() && github.ref == 'refs/heads/main' "
-                    "&& steps.ccache-restore.outputs.cache-hit != 'true' }}")
-SHARD_CACHE_SAVE = BUILD_CACHE_SAVE.replace(
-    "&& steps.ccache-restore", "&& matrix.shard == 1 && steps.ccache-restore")
-POST_SHARD_GATE_STEP = r'''      - name: Require every shard to have passed
-        shell: bash
-        env:
-          SHARD_RESULT: ${{ needs.SHARD_JOB.result }}
-        run: |
-          set -euo pipefail
-          printf '%s\n' "shards: $SHARD_RESULT"
-          [[ "$SHARD_RESULT" == "success" ]]
-'''
 PREFLIGHT_LINTER_RUN = ' '.join(r'''|
 set -euo pipefail
 sudo apt-get update
@@ -1052,8 +1006,8 @@ PROMOTE_GUARD = r'''  promote-guard:
 PROMOTE_IF = ("${{ needs.promote-guard.result == 'success' && "
               "needs.promote-guard.outputs.ok == 'true' }}")
 GATE_NEEDS = 'needs: [authz, changes, preflight, build, corpus-parity-subset]'
-POST_GATE_NEEDS = ('needs: [authz, changes, preflight, build, build-arm, sanitizers, native-live, kernel-only, '
-                   'build-x86-gcc133, corpus-parity-subset, preflight-slow, corpus-parity]')
+POST_GATE_NEEDS = ('needs: [authz, changes, preflight, build-x86-gcc133, smoke, smoke-arm, sanitizers, '
+                   'corpus-parity-subset]')
 # The matrix dependency already aggregates the selected cells. Its result must
 # never be excused for the PR-only exclusion: no job was created for that cell.
 # Pin the whole step so a widened passed(), a later override or a missing-result
@@ -1092,44 +1046,25 @@ POST_GATE_STEP = r'''      - name: Require every verification lane to have passe
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
           X86_GCC133_RESULT: ${{ needs.build-x86-gcc133.result }}
-          BUILD_RESULT: ${{ needs.build.result }}
-          DEBUG_BUILD_RESULT: ${{ needs.build-debug.result }}
-          RELEASE_GATE_RESULT: ${{ needs.build-release-gate.result }}
-          DEBUG_GATE_RESULT: ${{ needs.build-debug-gate.result }}
-          ARM_BUILD_RESULT: ${{ needs.build-arm.result }}
+          SMOKE_RESULT: ${{ needs.smoke.result }}
+          ARM_SMOKE_RESULT: ${{ needs.smoke-arm.result }}
           SANITIZER_RESULT: ${{ needs.sanitizers.result }}
-          SANITIZER_GATE_RESULT: ${{ needs.sanitizers-gate.result }}
-          NATIVE_RESULT: ${{ needs.native-live.result }}
-          KERNEL_RESULT: ${{ needs.kernel-only.result }}
-          KERNEL_GATE_RESULT: ${{ needs.kernel-only-gate.result }}
           PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
-          SLOW_PREFLIGHT_RESULT: ${{ needs.preflight-slow.result }}
-          FULL_PARITY_RESULT: ${{ needs.corpus-parity.result }}
         run: |
           printf '%s\n' "authz: $AUTHZ_RESULT" "changes: $CHANGES_RESULT, docs only: ${DOCS_ONLY:-unanswered}" \
-            "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
-            "native x86 GNU 13.3.0: $X86_GCC133_RESULT" \
-            "debug shards: $DEBUG_BUILD_RESULT" "release aggregate: $RELEASE_GATE_RESULT" "debug aggregate: $DEBUG_GATE_RESULT" \
-            "arm64 matrix: $ARM_BUILD_RESULT" \
-            "sanitizers: $SANITIZER_RESULT" "native: $NATIVE_RESULT" \
-            "sanitizers aggregate: $SANITIZER_GATE_RESULT" "kernel aggregate: $KERNEL_GATE_RESULT" \
-            "kernel: $KERNEL_RESULT" "corpus parity (subset): $PARITY_RESULT" \
-            "preflight (slow): $SLOW_PREFLIGHT_RESULT" "corpus parity (full): $FULL_PARITY_RESULT"
-          # Every shard matrix, leg aggregate and full-event proof must pass.
-          # Only a classified docs-only push may skip proof jobs.
-          # Both preflight tiers must pass even for a docs-only push.
+            "preflight: $PREFLIGHT_RESULT" "native x86 GNU 13.3.0: $X86_GCC133_RESULT" \
+            "amd64 smoke: $SMOKE_RESULT" "arm64 smoke: $ARM_SMOKE_RESULT" \
+            "sanitizers: $SANITIZER_RESULT" "corpus parity (subset): $PARITY_RESULT"
+          # Every smoke leg and the subset parity must pass. Only a classified
+          # docs-only push may skip them; preflight passes even for a docs-only push.
           docs_only=false
           if [[ "$CHANGES_RESULT" == "success" && "$DOCS_ONLY" == "true" ]]; then docs_only=true; fi
           passed() { [[ "$1" == "success" || ( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }
           [[ "$AUTHZ_RESULT" == "success" && "$CHANGES_RESULT" == "success" ]] \
             && [[ "$PREFLIGHT_RESULT" == "success" ]] \
-            && [[ "$X86_GCC133_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
-            && passed "$DEBUG_BUILD_RESULT" && passed "$RELEASE_GATE_RESULT" && passed "$DEBUG_GATE_RESULT" \
-            && passed "$ARM_BUILD_RESULT" \
-            && passed "$SANITIZER_RESULT" && passed "$NATIVE_RESULT" \
-            && passed "$SANITIZER_GATE_RESULT" && passed "$KERNEL_GATE_RESULT" \
-            && passed "$KERNEL_RESULT" && passed "$PARITY_RESULT" \
-            && [[ "$SLOW_PREFLIGHT_RESULT" == "success" ]] && passed "$FULL_PARITY_RESULT"
+            && [[ "$X86_GCC133_RESULT" == "success" ]] \
+            && passed "$SMOKE_RESULT" && passed "$ARM_SMOKE_RESULT" \
+            && passed "$SANITIZER_RESULT" && passed "$PARITY_RESULT"
 '''
 # No stage of this preflight carries a timeout: the verifier self-tests
 # (test_ci_verify.py) drive the real literal-aware parity, receipt and
@@ -2061,10 +1996,12 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
         if any(_step_values(step, key) for step in arm_steps
                for key in ('env', 'shell', 'working-directory')):
             findings.append(f'{name} build-arm steps must not set env, shell or working-directory')
+        # Every CI round fits 15 minutes: arm64 runs the same fast Debug smoke as
+        # build-debug; the full Debug profile on arm64 runs outside GitHub CI.
         arm_names = ('Require the arm64 machine', 'Checkout the admitted head', 'Set up Python',
-                     'Install the CTest pytest runner', 'Install dependencies (Linux)', 'Verify Debug')
+                     'Install dependencies', 'Verify Debug')
         if [_step_values(step, 'name') for step in arm_steps] != [[name] for name in arm_names]:
-            findings.append(f'{name} build-arm must keep its full Debug setup')
+            findings.append(f'{name} build-arm must keep its arm64 smoke setup')
         arm_machine = _step_named(arm_steps, '      - name: Require the arm64 machine')
         if (_step_values(arm_machine, 'run') != ['| test "$(uname -m)" = aarch64']
                 or _step_values(arm_machine, 'if')):
@@ -2073,23 +2010,17 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
         debug_python = _step_named(steps.get('build-debug', []), '      - name: Set up Python')
         if not arm_python or _code(arm_python) != _code(debug_python):
             findings.append(f'{name} build-arm must use the same pinned Python setup as build-debug')
-        arm_pytest = _step_named(arm_steps, '      - name: Install the CTest pytest runner')
-        if (_step_values(arm_pytest, 'run') != [
-                '| python3 -m pip install --disable-pip-version-check --no-input \\ '
-                "--require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt"]
-                or _step_values(arm_pytest, 'if')):
-            findings.append(f'{name} build-arm must install the hash-pinned CTest pytest runner')
-        arm_install = _step_named(arm_steps, '      - name: Install dependencies (Linux)')
+        arm_install = _step_named(arm_steps, '      - name: Install dependencies')
         if (_step_values(arm_install, 'run') != [
                 '| sudo apt-get update sudo DEBIAN_FRONTEND=noninteractive apt-get install -y '
-                'libeigen3-dev tzdata-legacy ccache strace']
+                'libeigen3-dev tzdata-legacy ccache']
                 or _step_values(arm_install, 'if')):
-            findings.append(f'{name} build-arm must install its full Debug dependencies')
+            findings.append(f'{name} build-arm must install only its smoke dependencies')
         arm_verify = _step_named(arm_steps, '      - name: Verify Debug')
-        if (_step_values(arm_verify, 'run') != [
-                f'| python3 scripts/ci_verify.py debug --build-dir build --jobs {CORES} --ccache']
-                or _step_values(arm_verify, 'if')):
-            findings.append(f'{name} build-arm must run the complete Debug profile')
+        expected_arm = BUILD_VERIFY_RUN.replace(' --timeout 0', '').replace(
+            '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_BUILD_TYPE=Debug')
+        if _step_values(arm_verify, 'run') != [expected_arm] or _step_values(arm_verify, 'if'):
+            findings.append(f'{name} build-arm must run the complete fast Debug smoke')
     subset = _step_named(steps.get('corpus-parity-subset', []),
                          '      - name: Check TradingView parity over the pull-request subset')
     if (_step_values(subset, 'run') != [f'{PARITY_COMMAND} --subset']
@@ -3243,7 +3174,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 if (name == 'native-live.yml'
                         or name == 'promote-baseline.yml'
                         or name == 'ci-post.yml' and job not in (
-                            'preflight', 'preflight-slow', 'changes', 'build-gate')):
+                            'preflight', 'changes', 'build-gate')):
                     environments = _job_values(workflow, 'env') + _job_values(body, 'env')
                     if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
                         findings.append(f'{name} job {job} must not set PF_CI_LABELS '
@@ -3307,42 +3238,17 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             # Keep parallelism tied to the runner's available cores.
             if not _sized(_counted_text(body), command):
                 findings.append(f'{name} job {job} must size its parallelism to the runner')
-    for name, job, strategy, build_name, population in (
-            ('ci-post.yml', 'build', POST_BUILD_STRATEGY, post_build_name(4),
-             'only Ubuntu Release shards on full events'),
-            ('ci-post.yml', 'build-debug', POST_DEBUG_BUILD_STRATEGY, post_build_name(2),
-             'only Ubuntu Debug shards on full events'),
-            ('ci-post.yml', 'build-arm', POST_ARM_BUILD_STRATEGY, POST_ARM_BUILD_NAME,
-             'only Linux arm64 Release/Debug shards on full events')):
-        if name not in workflows:
-            continue
-        build = _jobs(workflows[name]).get(job, '')
-        if _job_block(build, 'strategy') != _code(strategy):
-            findings.append(f'{name} {job} must select {population}')
-        if _job_values(build, 'name') != [build_name]:
-            findings.append(f'{name} {job} legs must keep their names: {build_name}')
+    # ci-post's smoke jobs (every CI round fits 15 minutes): Release and Debug
+    # on each hosted platform, one fixed-label job per platform.
     if 'ci-post.yml' in workflows:
         jobs = _jobs(workflows['ci-post.yml'])
-        for job, count in POST_SHARDS.items():
+        for job, (platform, _machine) in SMOKE_JOBS.items():
             body = jobs.get(job, '')
-            strategy = (POST_BUILD_STRATEGY if job == 'build' else
-                        POST_DEBUG_BUILD_STRATEGY if job == 'build-debug' else
-                        POST_ARM_BUILD_STRATEGY if job == 'build-arm' else
-                        '    strategy:\n      fail-fast: false\n      matrix:\n'
-                        '        shard: [' + ', '.join(str(i) for i in range(1, count + 1)) + ']\n')
-            if _job_block(body, 'strategy') != _code(strategy):
-                findings.append(f'ci-post.yml {job} must select shards 1..{count} '
-                                f'for --ctest-shard denominator {count}')
-            flag = '--ctest-shard ${{ matrix.shard }}/' + str(count)
-            commands = [value for step in _steps(body) for value in _verify_step_commands(step)
-                        if _VERIFY_CALL.search(value)]
-            if (len(commands) != 1 or _counted_text(body).count('--ctest-shard') != 1
-                    or not re.search(re.escape(flag) + r'(?=\s|$)', commands[0])):
-                findings.append(f'ci-post.yml {job} must pass {flag} exactly once to ci_verify')
-            if job in ('sanitizers', 'kernel-only'):
-                display = job + '-shard (${{ matrix.shard }}/' + str(count) + ')'
-                if _job_values(body, 'name') != [display]:
-                    findings.append(f'ci-post.yml {job} legs must keep their names: {display}')
+            if _job_block(body, 'strategy') != _code(SMOKE_STRATEGY):
+                findings.append(f'ci-post.yml {job} must select exactly Release and Debug on {platform}')
+            display = 'build (' + platform + ', ${{ matrix.build_type }})'
+            if _job_values(body, 'name') != [display]:
+                findings.append(f'ci-post.yml {job} legs must keep their names: {display}')
     if 'prebuilt-hosted-diagnostic.yml' in workflows:
         findings += prebuilt_hosted_diagnostic_findings(workflows['prebuilt-hosted-diagnostic.yml'])
     if 'release.yml' in workflows:
@@ -5261,9 +5167,11 @@ def corpus_parity_trigger_findings(parity: str) -> list[str]:
     after = re.search(r'^[^\s#]', events, re.MULTILINE)
     events = events[:after.start()] if after else events
     # _events ignores comments; refuse commented-out trigger keys as well.
-    if (_events(parity) != {'schedule', 'workflow_dispatch', 'workflow_call'}
+    # No schedule: every CI round fits 15 minutes, and the full parity runs as
+    # the lab's parity step before every merge; a manual dispatch can still run it.
+    if (_events(parity) != {'workflow_dispatch', 'workflow_call'}
             or re.search(r'(?m)^[ \t]*#[ \t]*[\'"]?[a-z_]+[\'"]?[ \t]*:', events)):
-        findings.append('corpus-parity.yml must retain exactly schedule, workflow_dispatch '
+        findings.append('corpus-parity.yml must retain exactly workflow_dispatch '
                         'and workflow_call without commented-out triggers')
     # Compare canonically: a substring test would accept `... || true`.
     conditions = _job_values(_jobs(parity).get('corpus-parity', ''), 'if')
@@ -5351,35 +5259,64 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
     return findings
 
 
-def post_shard_workflow_findings(jobs: dict[str, str]) -> list[str]:
-    """Keep each leg independent, its cache single-writer and diagnostics distinct."""
+def post_smoke_workflow_findings(jobs: dict[str, str]) -> list[str]:
+    """ci-post's smoke legs: the PR smoke target and the whole fast label, cold, on the named machine."""
     findings = []
-    for aggregate, (job, display) in POST_LEG_GATES.items():
-        body = jobs.get(aggregate, '')
-        expected_steps = [_code(AUTHZ_REFUSE_STEP),
-                          _code(POST_SHARD_GATE_STEP.replace('SHARD_JOB', job))]
-        if (sorted(_needs(body)) != sorted(['authz', 'changes', job])
-                or _job_values(body, 'name') != [display]
-                or _job_values(body, 'if') != [DOCS_ONLY_SKIP]
-                or _job_block(body, 'strategy') or _job_values(body, 'uses')
-                or [_code(step) for step in _steps(body)] != expected_steps):
-            findings.append(f'{aggregate} must require only its own complete shard matrix '
-                            'and keep its docs-only scheduling policy')
-    for job, count in POST_SHARDS.items():
+    for job, (platform, machine) in SMOKE_JOBS.items():
         body = jobs.get(job, '')
         steps = _steps(body)
         if ('actions/cache' in body
                 or re.search(r'(?m)^\s*cache\s*:', body)):
             findings.append(f'{job} must build cold without an Actions cache')
-        upload = _step_named(steps, '      - name: Retain CI diagnostics')
-        diagnostic = ('${{ matrix.platform.os }}-${{ matrix.build_type }}'
-                      if job in ('build', 'build-debug') else
-                      'ubuntu-24.04-arm-${{ matrix.build_type }}' if job == 'build-arm' else
-                      'kernel' if job == 'kernel-only' else 'sanitizers')
-        if ('          name: ci-diagnostics-' + diagnostic
-                + '-shard-${{ matrix.shard }}-of-' + str(count) not in _code(upload)
-                or _step_values(upload, 'if') != ['always()']):
-            findings.append(f'{job} must retain separate diagnostics for every shard')
+        arch = 'arm64' if machine == 'aarch64' else 'amd64'
+        # Exactly these steps, in this order: an added step is added wall time, and
+        # the machine guard must run before the checkout.
+        names = ('Refuse an unauthorised run before anything else',
+                 f'Require the {arch} machine', 'Checkout the exact workflow head',
+                 'Set up Python', 'Install dependencies', 'Verify ${{ matrix.build_type }} smoke')
+        if [_step_values(step, 'name') for step in steps] != [[name] for name in names]:
+            findings.append(f'{job} must keep exactly its six smoke steps, in order')
+        install = _step_named(steps, '      - name: Install dependencies')
+        if (_step_values(install, 'run') != [SMOKE_INSTALL_RUN]
+                or _step_values(install, 'if') != [AUTHZ_SUCCESS]):
+            findings.append(f'{job} must install only its smoke dependencies')
+        guard = _step_named(steps, f'      - name: Require the {arch} machine')
+        if (_step_values(guard, 'run') != [f'| test "$(uname -m)" = {machine}']
+                or _step_values(guard, 'if') != [AUTHZ_SUCCESS]):
+            findings.append(f'{job} must fail unless the machine is {machine} ({platform})')
+        verify = _step_named(steps, '      - name: Verify ${{ matrix.build_type }} smoke')
+        if (_step_values(verify, 'run') != [SMOKE_VERIFY_RUN]
+                or _step_block(verify, 'env') != ['        env:',
+                                                  '          BUILD_TYPE: ${{ matrix.build_type }}']
+                or _step_values(verify, 'if') != [AUTHZ_SUCCESS]
+                or _counted_text(body).count('scripts/ci_verify.py') != 0
+                or _counted_text(body).count('ctest --test-dir') != 1):
+            findings.append(f'{job} must build pineforge_pr_smoke and run the whole fast label '
+                            'for its matrix build type')
+        if any(_CONTINUE_ON_ERROR.match(line) for line in _code(body)):
+            findings.append(f'{job} must not continue on error')
+    body = jobs.get('sanitizers', '')
+    if ('actions/cache' in body
+            or re.search(r'(?m)^\s*cache\s*:', body)):
+        findings.append('sanitizers must build cold without an Actions cache')
+    names = ('Refuse an unauthorised run before anything else', 'Checkout the exact workflow head',
+             'Set up Python', 'Install dependencies', 'Verify the sanitizer smoke')
+    if [_step_values(step, 'name') for step in _steps(body)] != [[name] for name in names]:
+        findings.append('sanitizers must keep exactly its five smoke steps, in order')
+    install = _step_named(_steps(body), '      - name: Install dependencies')
+    if (_step_values(install, 'run') != [SMOKE_INSTALL_RUN]
+            or _step_values(install, 'if') != [AUTHZ_SUCCESS]):
+        findings.append('sanitizers must install only its smoke dependencies')
+    verify = _step_named(_steps(body), '      - name: Verify the sanitizer smoke')
+    if (_step_values(verify, 'run') != [SANITIZER_SMOKE_RUN]
+            or _step_block(verify, 'env') != ['        env:', *SANITIZER_SMOKE_ENV]
+            or _step_values(verify, 'if') != [AUTHZ_SUCCESS]
+            or _counted_text(body).count('scripts/ci_verify.py') != 0
+            or _counted_text(body).count('ctest --test-dir') != 1):
+        findings.append('sanitizers must run the ASan and UBSan smoke with the full profile\'s '
+                        'flags and run options')
+    if any(_CONTINUE_ON_ERROR.match(line) for line in _code(body)):
+        findings.append('sanitizers must not continue on error')
     return findings
 
 
@@ -5509,15 +5446,12 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
     jobs = _jobs(workflow)
     proofs = PR_PROOF_JOBS if pr else POST_PROOF_JOBS
     expected_jobs = {'authz', 'changes', 'preflight', *proofs, 'build-gate'}
-    if not pr:
-        expected_jobs.add('preflight-slow')
     findings += [f'{name} is missing job {job}' for job in sorted(expected_jobs - jobs.keys())]
     if set(jobs) - expected_jobs:
         findings.append(f'{name} must keep only its pinned {"PR" if pr else "full-event"} jobs')
     named_jobs = {'authz', 'build', 'build-arm', 'build-gate'}
     if not pr:
-        named_jobs.update(POST_SHARDS)
-        named_jobs.update(POST_LEG_GATES)
+        named_jobs.update(SMOKE_JOBS)
     for job in expected_jobs - named_jobs:
         if _job_values(jobs.get(job, ''), 'name'):
             findings.append(f'{job} must keep its default check name')
@@ -5553,16 +5487,7 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
             or _step_values(linters, 'run') != [PREFLIGHT_LINTER_RUN]
             or any(_step_values(step, 'run') for step in steps if _step_values(step, 'uses'))):
         findings.append('preflight must keep only checkout, linters, fast checks and diagnostics')
-    if not pr:
-        slow = jobs.get('preflight-slow', '')
-        verify_slow = _step_named(_steps(slow), '      - name: Verify deferred preflight stages')
-        if (sorted(_needs(slow)) != ['authz', 'changes']
-                or _job_values(slow, 'if') != [AUTHZ_ALWAYS]
-                or _step_values(verify_slow, 'if') != [AUTHZ_SUCCESS]
-                or _step_values(verify_slow, 'run') != [
-                    'python3 scripts/ci_preflight.py --output-dir build-ci-preflight-slow --tier slow']):
-            findings.append('preflight-slow must run all deferred stages on full events only')
-    for job in proofs.keys() - (set() if pr else POST_LEG_GATES.keys()):
+    for job in proofs.keys():
         body = jobs.get(job, '')
         always_job = not pr and job in POST_ALWAYS_JOBS
         expected_needs = ['authz'] if always_job else ['authz', 'changes']
@@ -5580,7 +5505,7 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
     for job in dependencies:
         variable = (proofs[job] if job in proofs else
                     {'authz': 'AUTHZ_RESULT', 'changes': 'CHANGES_RESULT',
-                     'preflight': 'PREFLIGHT_RESULT', 'preflight-slow': 'SLOW_PREFLIGHT_RESULT'}[job])
+                     'preflight': 'PREFLIGHT_RESULT'}[job])
         if f'{variable}: ${{{{ needs.{job}.result }}}}' not in gate:
             findings.append(f'build-gate must read the result of {job}')
     if 'DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}' not in gate:
@@ -5603,79 +5528,29 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
         findings.append('build-gate must keep the exact result policy: success or a classified docs-only skip')
     if not pr:
         findings += native_x86_job_findings(jobs.get(NATIVE_X86_JOB, ''), name, pr=False)
-        findings += post_shard_workflow_findings(jobs)
-    for job in (('build',) if pr else ('build', 'build-debug', 'build-arm')):
+        findings += post_smoke_workflow_findings(jobs)
+    for job in (('build',) if pr else ()):
         build = jobs.get(job, '')
         build_step = _step_named(_steps(build), '      - name: Verify (${{ matrix.build_type }})')
-        shard_flag = (' --ctest-shard ${{ matrix.shard }}/' + str(POST_SHARDS[job])
-                      if not pr and job in POST_SHARDS else '')
-        exclusion = POST_ARM_CTEST_EXCLUSION if not pr and job == 'build-arm' else ''
-        if (_step_values(build_step, 'run') != [
-                BUILD_VERIFY_RUN if pr else POST_BUILD_VERIFY_RUN + shard_flag + exclusion]
+        if (_step_values(build_step, 'run') != [BUILD_VERIFY_RUN]
                 or _step_values(build_step, 'if') != [AUTHZ_SUCCESS]
-                or _counted_text(build).count('scripts/ci_verify.py') != (0 if pr else 1)
-                or _counted_text(build).count('ctest --test-dir') != (1 if pr else 0)):
+                or _counted_text(build).count('scripts/ci_verify.py') != 0
+                or _counted_text(build).count('ctest --test-dir') != 1):
             findings.append(f'{job} must run the fast Release smoke only on PRs and full profiles otherwise')
         if ('actions/cache' in build
                 or re.search(r'(?m)^\s*cache\s*:', build)):
             findings.append(f'{job} must build cold without an Actions cache')
         pytest_step = _step_named(_steps(build), '      - name: Install the CTest pytest runner')
-        if (pr and pytest_step) or (not pr and _step_values(pytest_step, 'if') != [AUTHZ_SUCCESS]):
+        if pytest_step:
             findings.append(f'{job} must install pytest only for the full profiles')
-        if not pr:
-            platform = _step_named(_steps(build), '      - name: Require the requested platform')
-            expected_platform = POST_ARM_PLATFORM_STEP if job == 'build-arm' else POST_PLATFORM_STEP
-            if _code(platform) != _code(expected_platform):
-                findings.append(f'full {job} must refuse a runner whose OS differs from its named platform')
-    if not pr:
-        for job in ('build', 'build-debug'):
-            count = POST_SHARDS[job]
-            expected_steps = [
-                _code(POST_ARM_PLATFORM_STEP)
-                if _step_values(step, 'name') == ['Require the requested platform']
-                else _code(step.replace('ci-diagnostics-${{ matrix.platform.os }}-',
-                                        'ci-diagnostics-ubuntu-24.04-arm-')
-                               .replace(' --ctest-shard ${{ matrix.shard }}/' + str(count),
-                                        ' --ctest-shard ${{ matrix.shard }}/4'
-                                        + POST_ARM_CTEST_EXCLUSION)
-                               .replace('-shard-${{ matrix.shard }}-of-' + str(count),
-                                        '-shard-${{ matrix.shard }}-of-4')
-                               .replace(SHARD_CACHE_SAVE, BUILD_CACHE_SAVE))
-                for step in _steps(jobs.get(job, ''))]
-            if [_code(step) for step in _steps(jobs.get('build-arm', ''))] != expected_steps:
-                findings.append(f'build-arm must keep the same verification steps as {job}')
-        for job, profile, build_dir, extra in (
-                ('sanitizers', 'sanitizers', 'build-asan', ''),
-                ('kernel-only', 'kernel', 'build-kernel',
-                 ' --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}"')):
-            verify_steps = [
-                step for step in _steps(jobs.get(job, ''))
-                if any(_VERIFY_CALL.search(value) for value in _verify_step_commands(step))]
-            step = verify_steps[0] if len(verify_steps) == 1 else ''
-            command = (f'python3 scripts/ci_verify.py {profile} --build-dir {build_dir} '
-                       f'--jobs {CORES} --ccache' + extra
-                       + ' --ctest-shard ${{ matrix.shard }}/' + str(POST_SHARDS[job]))
-            if (_verify_step_commands(step) != [command]
-                    or _step_values(step, 'if') != [AUTHZ_SUCCESS]):
-                findings.append(f'{job} must run its full profile on every shard')
     for job, body in jobs.items():
-        # The exact arm Verify command and mirrored steps bind this Release-only
-        # exception. Remove it once; every other population filter still fails.
-        population = (body.replace(POST_ARM_CTEST_EXCLUSION, '', 1)
-                      if not pr and job == 'build-arm' else body)
-        if any(flag in population for flag in ('--exclude-label', '--include-label', '--class-tier')):
+        if any(flag in body for flag in ('--exclude-label', '--include-label', '--class-tier')):
             findings.append(f'{job} must keep its full population')
     if not pr:
-        if ('      exclude_slow: false' not in _code(jobs.get('native-live', ''))
-                or _job_values(jobs.get('native-live', ''), 'uses') != ['./.github/workflows/native-live.yml']):
-            findings.append('native-live must receive the full population input')
-        if 'cold_cache: ${{ inputs.cold_native_cache || false }}' not in jobs.get('native-live', ''):
-            findings.append('CI manual native cold-cache proof must be explicit and default off')
-        for job, mode in (('corpus-parity-subset', 'subset'), ('corpus-parity', 'full')):
-            body = jobs.get(job, '')
-            if (_job_values(body, 'uses') != ['./.github/workflows/corpus-parity.yml']
-                    or _job_block(body, 'with') != ['    with:', f'      mode: {mode}']):
-                findings.append(f'{job} must call corpus-parity.yml with mode {mode}')
+        body = jobs.get('corpus-parity-subset', '')
+        if (_job_values(body, 'uses') != ['./.github/workflows/corpus-parity.yml']
+                or _job_block(body, 'with') != ['    with:', '      mode: subset']):
+            findings.append('corpus-parity-subset must call corpus-parity.yml with mode subset')
     return findings
 
 
