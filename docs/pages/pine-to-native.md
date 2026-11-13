@@ -192,7 +192,7 @@ source-only features state why a native counterpart does not exist.
 | SZ9 | Mapped by the migration table above. |
 | SZ10 | No separate native counterpart: Pine money rounding is an adapter policy over the native sizing basis. |
 | SZ10a | No separate native counterpart: the money band's affordable price is TradingView's ten-significant-digit whole-drop price, adapter policy measured on the famr / famr3 tapes; every money-to-units conversion the adapter makes is the kernel's `native_sized_units`. |
-| SZ11 | No separate native counterpart: Pine quantity floors are adapter policy; native `quantity_grid` is the generic knob. |
+| SZ11 | No separate native counterpart: Pine quantity floors are adapter policy; native `quantity_grid` is the generic knob. With a declared quantity step, a positive finite `strategy.close(qty = ...)` quantity is floored to that step; a quantity that floors to zero or exceeds the entry id's position closes that whole position. Positive explicit `strategy.exit(qty = ...)` quantities also floor to that step; a quantity below one step is ignored unless `qty_percent` is below 100, so with the default `qty_percent = 100` the exit covers the whole position, as TradingView does; with `qty_percent` below 100 such a quantity is kept as given. Measured on a 0.00001 step with pyramiding 1, the default close rule and one entry id; `close_entries_rule = "ANY"`, pyramided entry ids, whole-unit steps, lots that are not a power of ten and a sub-step exit quantity with `qty_percent` below 100 are not measured. |
 | SZ12 | No separate native counterpart: Pine reservation ledger details stay in the adapter over native scope claims. |
 | MG1 | Mapped by the migration table above. |
 | MG2 | Mapped by the migration table above. |

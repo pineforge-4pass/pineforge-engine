@@ -727,9 +727,9 @@ std::optional<double> decimal_floor_lot(double units, double grid) noexcept {
 // trades 3124, 1562 + 1562 after a 50% leg; literal 3124.9999995 trades 3124,
 // 3125.0000000000005 trades 3125; tests/fixtures/explicit_qty_floor). Only that
 // snap changes: an on-grid request, a floor below the request and a non-decimal
-// grid keep the grid floor's result. No tape covers strategy.order's explicit
-// quantity (order()) or a lot that is not a power of ten (0.5, 0.25): both keep
-// the grid floor, snapped request included, as before.
+// grid keep the grid floor's result. close() and exit() floor their explicit
+// quantities with it too; a tape covers the snap for close, not for exit. None
+// covers order() or a lot that is not a power of ten (0.5, 0.25): grid floor.
 double explicit_entry_quantity_floor(double units, const std::optional<double>& grid) noexcept {
     const double floored = floor_quantity_grid(units, grid);
     if (!detail::script_rule_switches().explicit_qty_decimal_floor || floored != units
@@ -10495,6 +10495,16 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                 });
         if (!has_opposite && !close_first_percent_add) flush_pending_entries();
     }
+    // Explicit closes use the entry quantity floor before an ANY close is
+    // converted to a percentage or a FIFO close becomes a native request.
+    // With live exposure, a request below one step closes it all; a pending
+    // entry keeps the original quantity. Larger reductions are already
+    // bounded by the native close scope.
+    if (finite_positive(qty) && staged_.quantity_grid) {
+        const double floored = explicit_entry_quantity_floor(qty, staged_.quantity_grid);
+        if (floored > 0.0) qty = floored;
+        else if (closable > 0.0) qty = closable;
+    }
     double requested_percent = std::isnan(qty_percent) ? 100.0 : qty_percent;
     double effective_qty = qty;
     const double current = detail::run_position(require_host()).signed_units;
@@ -11603,6 +11613,12 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             || !std::isnan(trail_points) || !std::isnan(trail_price));
     require_cohort_ticket(cohort_candidate ? &from_entry : nullptr);
     reroute_fixed_entries_before_request();
+    // Reserve explicit exit units on the entry grid. Below one step, only the
+    // measured qty_percent 100 (or none) falls back to percentage sizing.
+    if (finite_positive(qty) && staged_.quantity_grid) {
+        const double floored = explicit_entry_quantity_floor(qty, staged_.quantity_grid);
+        if (floored > 0.0 || !(qty_percent < 100.0)) qty = floored > 0.0 ? floored : kNaN;
+    }
     if (!from_entry.empty()) {
         const auto token = named_entry_cancel_tokens_.find(from_entry);
         if (token != named_entry_cancel_tokens_.end()) {
