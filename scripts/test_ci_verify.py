@@ -6027,8 +6027,8 @@ class FloorDocsPointAtTheTable(unittest.TestCase):
         'raise the floor',
     )
     DOC_PLACES = ('CONTRIBUTING.md', 'docs/pages/contributing-llm.md',
-                  'docs/pages/native-engine.md', 'docs/ci.md',
-                  '.github/workflows/ci-post.yml')
+                  'docs/pages/native-engine.md', 'docs/ci.md')
+    # ci-post.yml runs smoke legs only since 2026-11-13: it names no profile floor.
 
     def test_ci_documentation_pins_the_combined_profile_floors(self):
         text = (ROOT / 'docs/ci.md').read_text()
