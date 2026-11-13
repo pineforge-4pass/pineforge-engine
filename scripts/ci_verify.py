@@ -898,7 +898,7 @@ def private_fixture_rows(source: Path, *, expand_equivalence: bool = True) -> 'f
 
 
 # tests/test_scratch_arena_jailed_seals.cpp returns 77 in its non-Linux
-# branch; tests/lanes.d/core-cr150-cr267.cmake registers it on every host.
+# branch; tests/lanes.d/scratch-arena-jailed-seals.cmake registers it on every host.
 # No other unpinned platform skip is authorized by this table.
 PLATFORM_CONDITIONAL_SKIP_ROWS: dict[str, tuple[Callable[[str], bool], str]] = {
     'test_scratch_arena_jailed_seals': (
@@ -983,12 +983,12 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_run_json_selected_sink_memory_l9s',
     # tests/CMakeLists.txt:7354 (report-memory bound row).
     'test_report_sink_scratch_curve_resident',
-    # tests/lanes.d/core-cr150-cr257.cmake:10.
+    # tests/lanes.d/source-exit-scratch-io.cmake:10.
     'test_cr257_source_exit_scratch_io_100k',
-    # tests/lanes.d/core-cr150-l18.cmake:6,9.
+    # tests/lanes.d/position-tail-spill-and-scale-out.cmake:6,9.
     'test_position_tail_scale_out',
     'test_position_tail_scale_out_100k',
-    # tests/lanes.d/core-cr150-l22u.cmake:5,8.
+    # tests/lanes.d/arena-bound-formulas-and-runtime.cmake:5,8.
     'test_arena_bound_runtime',
     'test_arena_bound_corpus',
     # Public report population slices and the related report rows.
@@ -998,10 +998,10 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_open_report_rows_flat_slice_4',
     'test_open_report_rows_retention_flat',
     'test_report_trades_summary_flat',
-    # tests/lanes.d/o1w-ledger.cmake:4,7.
+    # tests/lanes.d/ledger-history-scale.cmake:4,7.
     'test_ledger_history_scale',
     'test_ledger_history_scale_400k',
-    # tests/lanes.d/o1w-tail.cmake:6.
+    # tests/lanes.d/position-tail-summary.cmake:6.
     'test_position_tail_summary_scale',
     # Complete native-tail and retained-identity cache sweeps.
     'test_native_tail_window_sizes',
@@ -1012,19 +1012,19 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     # tests/lanes.d/cache-sweep-ledger-rows.cmake:4, trade-ledger-cache.cmake:9, ledger-cache-bound.cmake:4, ledger-cache-policy-wrapper.cmake:8.
     'test_cache_sweep_ledger_rows', 'test_trade_ledger_cache_sweep', 'test_run_json_ledger_cache_policy',
     'test_ledger_cache_bound',
-    # tests/lanes.d/p2cx-a5s.cmake:3.
+    # tests/lanes.d/scratch-store-object-layer.cmake:3.
     'test_o1_store',
     # tests/lanes.d/udt-object-graphs.cmake:6.
     'test_a5u_growth_1m',
-    # tests/lanes.d/core-cr150-cohort.cmake:5,11 (Release-only timing ratio).
+    # tests/lanes.d/adapter-spaced-ids-scaling.cmake:5,11 (Release-only timing ratio).
     'test_adapter_spaced_ids_scaling',
     # tests/lanes.d/strings-maps.cmake:6,11,28.
     'test_p2_a5_string_1m',
     'test_p2_a5_map_1m',
     'test_p2_a5_map_prepared_1m',
-    # tests/lanes.d/cr559-map-capacity.cmake:30.
+    # tests/lanes.d/map-capacity.cmake:30.
     'test_cr559_map_capacity_resident',
-    # tests/lanes.d/o1-live-limit-policy.cmake and the matching
+    # tests/lanes.d/live-object-limit-policy.cmake and the matching
     # o1-live-limit-policy fence in tests/CMakeLists.txt.
     'test_o1_live_limit_raised',
     'test_o1_live_limit_default_unset',
@@ -1032,10 +1032,10 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     # expectation corrected: 92 -> 93 pins, because the finite raised-boundary
     # row joins the existing slow property group (43 loop + 50 direct names).
     'test_o1_live_limit_raised_boundary',
-    # tests/lanes.d/cr559-map-capacity.cmake:25 (its library target is in the
+    # tests/lanes.d/map-capacity.cmake:25 (its library target is in the
     # tests/CMakeLists.txt fence); measured 5615.44 s in the ended pair proof.
     'test_cr559_map_capacity_cli',
-    # tests/lanes.d/p2cx-a5arr.cmake:5.
+    # tests/lanes.d/array-growth-and-semantics.cmake:5.
     'test_array_growth_1m',
     # tests/lanes.d/report-trade-retirement.cmake and report-trade-reference.cmake:
     # the closed-trade retirement witnesses, the identity row against the frozen

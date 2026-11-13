@@ -43,7 +43,7 @@ endif()
 '''
 ALLOWED_TEST_PROPERTIES = frozenset({
     # TIMEOUT is parsed here for ownership diagnostics, then rejected by the
-    # cross-file owner-#827 rule after all lane syntax has been checked.
+    # cross-file no-time-limit rule after all lane syntax has been checked.
     "LABELS", "SKIP_RETURN_CODE", "TIMEOUT", "RUN_SERIAL", "DEPENDS",
 })
 REFUSED_TEST_PROPERTIES = frozenset({
@@ -982,7 +982,7 @@ def _check_registration_timeouts() -> None:
                 continue
             if any(key.upper() == "TIMEOUT" for key in keys):
                 raise CheckFailure(
-                    f"{path}:{statement.line}: TIMEOUT is forbidden (owner #827)")
+                    f"{path}:{statement.line}: TIMEOUT is forbidden (this repository declares no time limits)")
 
 
 def _check_cmake_tail() -> dict[str, dict[str, set[str]]]:

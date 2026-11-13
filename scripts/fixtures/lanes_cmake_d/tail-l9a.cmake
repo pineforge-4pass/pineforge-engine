@@ -1,5 +1,5 @@
 
-# --- lane core-cr150-l9a begin ---
+# --- lane run-json-sink-full-output begin ---
 # L9A: full JSON through the temporary sink; after every line pin.
 # Preflight also discovers this file through docker/run_json_*_test.py.
 add_test(NAME test_run_json_sink_l9a
@@ -14,4 +14,4 @@ if(TARGET outputs_fixture_strategy)
     set_property(TEST test_run_json_sink_l9a APPEND PROPERTY ENVIRONMENT
         "PINEFORGE_L9A_OUTPUTS_SO=$<TARGET_FILE:outputs_fixture_strategy>")
 endif()
-# --- lane core-cr150-l9a end ---
+# --- lane run-json-sink-full-output end ---

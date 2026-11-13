@@ -200,7 +200,7 @@ class LanePropertyControls(CMakeControls):
             with self.subTest(keys=keys):
                 result = self.run_check(
                     'set_tests_properties(test_lane_property PROPERTIES '
-                    f'{keys[0]} "ENVIRONMENT WORKING_DIRECTORY; cr150" '
+                    f'{keys[0]} "ENVIRONMENT WORKING_DIRECTORY; example" '
                     f'{keys[1]} 77 {keys[2]} TRUE '
                     f'{keys[3]} [=[setup; teardown]=])')
                 self.assertEqual(0, result.returncode, result.stdout + result.stderr)
@@ -554,7 +554,7 @@ class TimeoutControls(CMakeControls):
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         result = self.check_inputs(statement, location)
         self.assertEqual(1, result.returncode, result.stdout + result.stderr)
-        self.assertIn('TIMEOUT is forbidden (owner #827)', result.stderr)
+        self.assertIn('TIMEOUT is forbidden (this repository declares no time limits)', result.stderr)
 
     def test_lane_timeout_is_refused(self) -> None:
         for key in ('TIMEOUT', 'timeout', '"TIMEOUT"', '[=[TIMEOUT]=]'):
@@ -597,7 +597,7 @@ class TimeoutControls(CMakeControls):
                 self.cmake.write_text(statement + INCLUDE_LOOP)
                 result = self.run_checker()
                 self.assertEqual(1, result.returncode, result.stdout + result.stderr)
-                self.assertIn('TIMEOUT is forbidden (owner #827)', result.stderr)
+                self.assertIn('TIMEOUT is forbidden (this repository declares no time limits)', result.stderr)
 
 
 class FenceControls(CMakeControls):
@@ -629,7 +629,7 @@ class FenceControls(CMakeControls):
                 f'# --- lane {lane} end ---\n')
 
     def real_lane(self, name: str) -> None:
-        self.write_lane(f'core-cr150-{name}', (FIXTURES / f'lane-{name}.cmake').read_text())
+        self.write_lane({'l6b1': 'report-sink-format', 'l6b2': 'report-sink-equity', 'l6b3': 'report-sink-record-kinds', 'l9a': 'run-json-sink-full-output', 'l19b': 'group-receipt-retirement'}[name], (FIXTURES / f'lane-{name}.cmake').read_text())
         self.sources('test_report_sink_format', 'test_report_sink_l6b1',
                      'test_report_sink_equity', 'test_report_sink_l6b3',
                      'test_group_receipt_retirement', 'test_report_sink_selected_l17a')
@@ -682,7 +682,7 @@ class FenceControls(CMakeControls):
         # file. Do not install the empty lane-l17a input as an ownership grant.
         self.real_lane('l6b1')
         self.assert_tail_refused(self.real_tail('l17a'),
-                                 'fence has no lane file tests/lanes.d/core-cr150-l17a.cmake')
+                                 'fence has no lane file tests/lanes.d/selected-capture-window-values.cmake')
 
     def test_foreign_target_writes_are_refused(self) -> None:
         statements = (

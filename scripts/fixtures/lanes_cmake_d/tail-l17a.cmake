@@ -1,5 +1,5 @@
 
-# --- lane core-cr150-l6b1 begin ---
+# --- lane report-sink-format begin ---
 # L6B1: appended after every pre-existing line pin. A real source
 # strategy module, with the same whole-archive link as release modules.
 if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
@@ -25,13 +25,13 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
         PINEFORGE_L6B1_DOCKER="${PROJECT_SOURCE_DIR}/docker")
     add_dependencies(test_report_sink_l6b1 report_sink_l6b1_strategy)
 endif()
-# --- lane core-cr150-l6b1 end ---
+# --- lane report-sink-format end ---
 
-# --- lane core-cr150-l17a begin ---
+# --- lane selected-capture-window-values begin ---
 # L17A: a kernel-only native host and a real version-1 path sink.
 # Append after the line-pinned private-fixture registrations.
 if(UNIX)
     list(APPEND TEST_SOURCES test_report_sink_selected_l17a)
     pineforge_add_unit_test(test_report_sink_selected_l17a)
 endif()
-# --- lane core-cr150-l17a end ---
+# --- lane selected-capture-window-values end ---

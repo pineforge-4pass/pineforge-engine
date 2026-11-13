@@ -835,7 +835,7 @@ endif()
         cmake = (REPO / TREES_DIR).read_text()
         tail = (REPO / 'scripts' / 'fixtures' / 'lanes_cmake_d'
                 / 'tail-l6b2.cmake').read_text()
-        tail = tail.replace('core-cr150-l6b2', Path(LANE_FILE).stem)
+        tail = tail.replace('report-sink-equity', Path(LANE_FILE).stem)
         expected = (
             'file(GLOB LANE_CMAKE CONFIGURE_DEPENDS '
             '"${CMAKE_CURRENT_SOURCE_DIR}/lanes.d/*.cmake")\n'

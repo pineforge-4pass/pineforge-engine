@@ -4,9 +4,9 @@ The `lane-*.cmake` and `tail-*.cmake` files copy the real lane inputs supplied
 with the core-cr150-cmkd2 brief, based on
 `5be8c54e7519a7906f3be7e7a0512e98bdc1cda7`.
 Only fence names were normalized: `l6b2`, `l6b3`, `l9a`, and `l17a` become
-`core-cr150-l6b2`, `core-cr150-l6b3`, `core-cr150-l9a`, and `core-cr150-l17a`.
+`report-sink-equity`, `report-sink-record-kinds`, `run-json-sink-full-output`, and `selected-capture-window-values`.
 L6b1 already uses its full file stem; L19b's unchanged line and comments are
-wrapped in `core-cr150-l19b` begin/end markers.
+wrapped in `group-receipt-retirement` begin/end markers.
 Lane files are copied unchanged.
 
 The supplied `lane-l17a.cmake` is empty and is deliberately not installed:
@@ -39,7 +39,7 @@ cases directly require their own fenced input to succeed.
 | `test_unfenced_statement_after_loop_is_refused` | Reject a target write outside a fence after the loop. |
 | `test_begin_without_end_is_refused` | Diagnose the missing end marker. |
 | `test_mismatched_fence_names_are_refused` | Require the closing lane name to match the opener. |
-| `test_fence_without_lane_file_is_refused` | Reject the real L17a tail for missing `core-cr150-l17a.cmake`, with L6b1's lane file present. |
+| `test_fence_without_lane_file_is_refused` | Reject the real L17a tail for missing `selected-capture-window-values.cmake`, with L6b1's lane file present. |
 | `test_foreign_target_writes_are_refused` | Reject every listed target command, multi-target properties, or dependency destination writing `test_other`; quoted/bracketed names keep their ownership and inline bracket comments cannot join destination names. |
 | `test_add_compile_options_is_refused` | Reject directory compile options. |
 | `test_include_directories_is_refused` | Reject directory include paths. |
@@ -54,7 +54,7 @@ cases directly require their own fenced input to succeed.
 | `test_add_library_cannot_claim_another_lanes_target` | Reject declaring another lane's existing target as a module. |
 | `test_foreign_test_properties_are_refused` | Check every test in property commands, including unquoted semicolon lists. |
 | `test_fence_cannot_claim_a_target_from_the_main_file` | Reject re-declaration of an existing literal main-file target. |
-| `test_short_fence_name_is_not_a_lane_file_stem` | Reject `l6b2` when only `core-cr150-l6b2.cmake` exists. |
+| `test_short_fence_name_is_not_a_lane_file_stem` | Reject `l6b2` when only `report-sink-equity.cmake` exists. |
 | `test_unfenced_statement_between_or_after_fences_is_refused` | Reject writes in gaps and after the final closing marker. |
 | `test_variable_and_generator_expression_write_names_are_refused` | Require a literal write destination and a parsed scope; neither expansions nor a hidden list can supply it. |
 | `test_adjacent_quoted_write_names_are_refused` | Do not concatenate adjacent quoted destination arguments to conceal a foreign target. |
@@ -77,14 +77,14 @@ cases directly require their own fenced input to succeed.
 | `test_fence_markers_in_literal_arguments_are_not_boundaries` | Treat marker and command text inside bracketed or quoted property values as data. |
 | `test_fence_markers_in_bracket_comments_are_not_boundaries` | Ignore marker and command text in bracket comments while accepting the real fenced write. |
 
-For lab comparison, save the base checker outside the tree under test and
+To compare with an earlier checker, save it outside the tree under test and
 set `PF_LANES_CMAKE_D_CHECKER` to its absolute path when running
 `python3 -B scripts/test_check_lanes_cmake_d.py FenceControls`: all 41 new
 methods must fail on that base checker (subtests can report multiple failures).
 Unset the override and run the full controls and checker; both must pass,
-followed by the brief's preflight, release, debug, and docs verification.
+followed by the preflight, release, debug, and docs verification.
 
-Supervisor commit split: first `scripts/test_check_lanes_cmake_d.py` plus this
+Suggested commit order: first `scripts/test_check_lanes_cmake_d.py` plus this
 fixture directory, then `scripts/check_lanes_cmake_d.py`, then
 `tests/lanes.d/README.md`. No new Python script or registration wiring is
 needed; `test_lanes_cmake_d_controls` already invokes the extended controls.
