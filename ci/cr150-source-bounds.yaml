@@ -97,7 +97,34 @@ ceilings:
   # accessor and the writer's transfer buffer, transfer bytes, carried bytes and
   # integer text temporaries. None is bounded.
   # expectation corrected: unreviewed 1409 -> 1410, because the merged main's five groups retain the live-object scalar key; OPEN.
-  unreviewed: 1410
+  # Three more unreviewed groups: the selected-capacity Source stage's chunk
+  # buffer, its record window and its stored message. None is bounded in the
+  # gate's sense: no fixed input is declared for them.
+  # Two more unreviewed groups: the declarations of the run-error bar prefix
+  # function, in the installed header and in its source. Each call returns one
+  # short string and nothing retains it: 1413 -> 1415.
+  # Three more unreviewed groups on failure paths: the number-to-text
+  # temporaries of the three setter refusal messages in the engine header, and
+  # the message string and its temporary in the timezone refusal. Each builds
+  # one short message, once, when a value is refused: 1415 -> 1418.
+  # One more unreviewed group on a failure path: the message string of the
+  # timezone database lookup refusal in the native calendar (its declaration,
+  # assignment and appends). It builds one short message, once, when a lookup
+  # fails: 1418 -> 1419.
+  # Three more unreviewed groups: the failure arguments, the rule text and the
+  # message text that the refusal of a script timeframe the input timeframe
+  # cannot build assembles in src/source/pine_adapter.cpp (each is built once,
+  # on the refusal path). None is bounded in the gate's sense: no fixed input
+  # is declared for them: 1419 -> 1422.
+  # Ten more unreviewed groups for the per-site run warning of a requested
+  # timeframe that is not a multiple of the chart timeframe: the native
+  # execution consumer's warning records, the strings that render a warning and
+  # the stored run-warnings text, and the host's argument text. None is bounded
+  # in the gate's sense: no fixed input is declared for them. The failure-
+  # argument JSON appenders moved from src/run_failure.cpp to
+  # src/canonical_json.hpp, so their entry (U0746) now names the new file; the
+  # count does not change: 1422 -> 1432.
+  unreviewed: 1432
   pending-flat-memory: 184
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -222,6 +249,7 @@ entries:
   - {id: "U0082", file: "include/pineforge/engine.hpp", symbol: "security_eval_states_", ops: ["decl"], container: "std::vector<SecurityEvalState>", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 1484}
   - {id: "U0083", file: "include/pineforge/engine.hpp", symbol: "security_input_tf_", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 1487}
   - {id: "U0084", file: "include/pineforge/engine.hpp", symbol: "session", ops: ["assign", "decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 483}
+  - {id: "U1850", file: "include/pineforge/engine.hpp", symbol: "std::to_string", ops: ["temp"], container: "unresolved by the index: std::to_string(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 2396}
   - {id: "U0085", file: "include/pineforge/engine.hpp", symbol: "stream_order_actions_", ops: ["decl"], container: "std::vector<StreamOrderAction>", owner: "engine-core", phase: "bar", state: "pending-flat-memory", inventory: "E17", grows_with: ["unproved-bound"], line: 1452}
   - {id: "U0086", file: "include/pineforge/engine.hpp", symbol: "syminfo_metadata_", ops: ["decl"], container: "std::unordered_map<std::string, double>", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 676}
   - {id: "U0087", file: "include/pineforge/engine.hpp", symbol: "tf", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 1457}
@@ -359,6 +387,7 @@ entries:
   - {id: "U0230", file: "include/pineforge/order_cancellation.hpp", symbol: "state_", ops: ["assign"], container: "unresolved by the index: state_ = ...", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 92}
   - {id: "U0231", file: "include/pineforge/position_close_obligation.hpp", symbol: "comment", ops: ["decl"], container: "std::string", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 15}
   - {id: "U0232", file: "include/pineforge/run_failure.hpp", symbol: "args", ops: ["assign", "decl", "grow"], container: "std::shared_ptr<const std::string>", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 216}
+  - {id: "U1800", file: "include/pineforge/run_failure.hpp", symbol: "run_error_bar_prefix", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 252}
   - {id: "U0233", file: "include/pineforge/run_failure.hpp", symbol: "text", ops: ["assign", "decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 180}
   - {id: "U0234", file: "include/pineforge/run_failure.hpp", symbol: "value", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 187}
   - {id: "U0235", file: "include/pineforge/selected_window_plan.hpp", symbol: "input_tf", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 88}
@@ -609,6 +638,7 @@ entries:
   - {id: "U0490", file: "src/c_abi.cpp", symbol: "account_per_quote", ops: ["grow"], container: "unresolved by the index: account_per_quote.assign(...)", owner: "c-abi", phase: "unclassified", state: "unreviewed", line: 193}
   - {id: "U0492", file: "src/c_abi.cpp", symbol: "effective_from_ms", ops: ["grow"], container: "unresolved by the index: effective_from_ms.assign(...)", owner: "c-abi", phase: "unclassified", state: "unreviewed", line: 191}
   - {id: "U0493", file: "src/c_abi.cpp", symbol: "native", ops: ["assign", "decl", "grow"], container: "std::vector<pineforge::TradeTick>", owner: "c-abi", phase: "bar", state: "pending-flat-memory", inventory: "E17", grows_with: ["unproved-bound"], line: 919}
+  - {id: "U0746", file: "src/canonical_json.hpp", symbol: "out", ops: ["grow"], container: "unresolved by the index: out.push_back(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 39}
   - {id: "U0494", file: "src/compat/pine/exit_lifecycle.cpp", symbol: "retire", ops: ["decl", "grow"], container: "std::vector<exit_legs::Leg>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 19}
   - {id: "U0495", file: "src/compat/pine/reservation_expansion.cpp", symbol: "select_reservation_growth_sources", ops: ["decl"], container: "std::vector<std::uint64_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 9}
   - {id: "U0496", file: "src/compat/pine/reservation_expansion.cpp", symbol: "selected", ops: ["decl", "grow"], container: "std::vector<std::uint64_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 17}
@@ -717,6 +747,7 @@ entries:
   - {id: "U0599", file: "src/native_calendar.cpp", symbol: "input", ops: ["grow"], container: "unresolved by the index: input.assign(...)", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1167}
   - {id: "U0600", file: "src/native_calendar.cpp", symbol: "literal", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1414}
   - {id: "U0601", file: "src/native_calendar.cpp", symbol: "merge_spans", ops: ["decl"], container: "std::vector<EpochSpan>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 346}
+  - {id: "U1853", file: "src/native_calendar.cpp", symbol: "message", ops: ["append", "assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 819}
   - {id: "U0602", file: "src/native_calendar.cpp", symbol: "n", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 141}
   - {id: "U0603", file: "src/native_calendar.cpp", symbol: "norm", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1169}
   - {id: "U0604", file: "src/native_calendar.cpp", symbol: "out", ops: ["assign", "decl", "grow"], container: "std::vector<EpochSpan>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 72}
@@ -741,6 +772,7 @@ entries:
   - {id: "U0623", file: "src/native_execution_consumer.cpp", symbol: "account_log_", ops: ["grow"], container: "unresolved by the index: account_log_.push_back(...)", owner: "native-kernel", phase: "bar", state: "pending-flat-memory", inventory: "E08", grows_with: ["events"], line: 6657}
   - {id: "U0624", file: "src/native_execution_consumer.cpp", symbol: "activation_births_", ops: ["grow"], container: "unresolved by the index: activation_births_.push_back(...)", owner: "native-kernel", phase: "bar", state: "pending-flat-memory", inventory: "E11", grows_with: ["live-orders"], line: 5463}
   - {id: "U0625", file: "src/native_execution_consumer.cpp", symbol: "applied_notifications_", ops: ["grow"], container: "unresolved by the index: applied_notifications_.push_back(...)", owner: "native-kernel", phase: "bar", state: "pending-flat-memory", inventory: "E11", grows_with: ["live-orders"], line: 8295}
+  - {id: "U1751", file: "src/native_execution_consumer.cpp", symbol: "args_json", ops: ["decl"], container: "std::string", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 1472}
   - {id: "U0626", file: "src/native_execution_consumer.cpp", symbol: "auxiliary_appended_", ops: ["grow"], container: "unresolved by the index: auxiliary_appended_.insert(...)", owner: "native-kernel", phase: "bar", state: "pending-flat-memory", inventory: "F08", grows_with: ["feed-rows"], line: 10135}
   - {id: "U0627", file: "src/native_execution_consumer.cpp", symbol: "bound_session_key_", ops: ["assign"], container: "unresolved by the index: bound_session_key_ = ...", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 3003}
   - {id: "U0628", file: "src/native_execution_consumer.cpp", symbol: "boundary_completes", ops: ["grow"], container: "unresolved by the index: boundary_completes.assign(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 9487}
@@ -748,6 +780,7 @@ entries:
   - {id: "U0630", file: "src/native_execution_consumer.cpp", symbol: "candidate_provenance", ops: ["grow"], container: "unresolved by the index: candidate_provenance.push_back(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 7358}
   - {id: "U0631", file: "src/native_execution_consumer.cpp", symbol: "chart_timezone_", ops: ["assign"], container: "unresolved by the index: chart_timezone_ = ...", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 2708}
   - {id: "U0632", file: "src/native_execution_consumer.cpp", symbol: "closed_row_prefix_", ops: ["grow"], container: "unresolved by the index: closed_row_prefix_.push_back(...)", owner: "native-kernel", phase: "bar", state: "pending-flat-memory", inventory: "R08", grows_with: ["trades"], line: 12388}
+  - {id: "U1752", file: "src/native_execution_consumer.cpp", symbol: "code", ops: ["assign", "decl"], container: "std::string", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 1386}
   - {id: "U0633", file: "src/native_execution_consumer.cpp", symbol: "completes", ops: ["grow"], container: "unresolved by the index: completes.assign(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 9486}
   - {id: "U0634", file: "src/native_execution_consumer.cpp", symbol: "copied", ops: ["grow"], container: "unresolved by the index: copied.emplace(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 2876}
   - {id: "U0635", file: "src/native_execution_consumer.cpp", symbol: "current_frame_", ops: ["grow"], container: "unresolved by the index: current_frame_.emplace(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 8326}
@@ -759,6 +792,7 @@ entries:
   - {id: "U0641", file: "src/native_execution_consumer.cpp", symbol: "held", ops: ["assign", "decl"], container: "std::vector<NativeInstrumentFeed>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 3427}
   - {id: "U0642", file: "src/native_execution_consumer.cpp", symbol: "incarnations", ops: ["decl", "grow"], container: "std::vector<std::uint64_t>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 5621}
   - {id: "U0644", file: "src/native_execution_consumer.cpp", symbol: "input_tf_", ops: ["assign"], container: "unresolved by the index: input_tf_ = ...", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 2717}
+  - {id: "U1753", file: "src/native_execution_consumer.cpp", symbol: "json", ops: ["append", "decl", "grow"], container: "std::string", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 1478}
   - {id: "U0645", file: "src/native_execution_consumer.cpp", symbol: "last_error_", ops: ["assign"], container: "unresolved by the index: last_error_ = ...", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 1372}
   - {id: "U0646", file: "src/native_execution_consumer.cpp", symbol: "make_unique", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "native-kernel", phase: "unclassified", state: "unreviewed", note: "The dormant-book backing factory now accepts CacheCapacity. Its make_unique still allocates one DormantBookScratchBacking control at setup; production backing/cache preparation is lazy, with the configured byte allowance passed through. Other allocation identities in this group are retained. No population bound is claimed.", line: 1340}
   - {id: "U0647", file: "src/native_execution_consumer.cpp", symbol: "message", ops: ["append", "decl"], container: "std::string", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 3314}
@@ -773,6 +807,8 @@ entries:
   - {id: "U0659", file: "src/native_execution_consumer.cpp", symbol: "replacement", ops: ["grow"], container: "unresolved by the index: replacement.emplace(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 2088}
   - {id: "U0660", file: "src/native_execution_consumer.cpp", symbol: "requests_", ops: ["grow"], container: "unresolved by the index: requests_.reserve(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 10859}
   - {id: "U0661", file: "src/native_execution_consumer.cpp", symbol: "rows_", ops: ["grow"], container: "unresolved by the index: rows_.push_back(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 6706}
+  - {id: "U1754", file: "src/native_execution_consumer.cpp", symbol: "run_warning_records_", ops: ["grow"], container: "unresolved by the index: run_warning_records_.try_emplace(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 1473}
+  - {id: "U1755", file: "src/native_execution_consumer.cpp", symbol: "run_warnings_json_", ops: ["assign"], container: "unresolved by the index: run_warnings_json_ = ...", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 3133}
   - {id: "U0662", file: "src/native_execution_consumer.cpp", symbol: "samples", ops: ["grow"], container: "unresolved by the index: samples.assign(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 9208}
   - {id: "U0663", file: "src/native_execution_consumer.cpp", symbol: "script_tf_", ops: ["assign"], container: "unresolved by the index: script_tf_ = ...", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 2718}
   - {id: "U0664", file: "src/native_execution_consumer.cpp", symbol: "security_input_tf_", ops: ["assign"], container: "unresolved by the index: security_input_tf_ = ...", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 9878}
@@ -792,9 +828,11 @@ entries:
   - {id: "U0678", file: "src/native_execution_consumer.hpp", symbol: "activation_births_", ops: ["decl"], container: "std::vector<native_order::RequestHandle>", owner: "native-kernel", phase: "bar", state: "pending-flat-memory", inventory: "E11", grows_with: ["live-orders"], line: 1715}
   - {id: "U0679", file: "src/native_execution_consumer.hpp", symbol: "applied_notifications_", ops: ["decl"], container: "std::vector<AppliedNotification>", owner: "native-kernel", phase: "bar", state: "pending-flat-memory", inventory: "E11", grows_with: ["live-orders"], line: 1716}
   - {id: "U0680", file: "src/native_execution_consumer.hpp", symbol: "args", ops: ["assign", "decl"], container: "std::shared_ptr<const std::string>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 997}
+  - {id: "U1756", file: "src/native_execution_consumer.hpp", symbol: "args_json", ops: ["decl"], container: "std::string", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 374}
   - {id: "U0681", file: "src/native_execution_consumer.hpp", symbol: "auxiliary_appended_", ops: ["decl"], container: "std::vector<Bar>", owner: "native-kernel", phase: "bar", state: "pending-flat-memory", inventory: "F08", grows_with: ["feed-rows"], line: 1757}
   - {id: "U0682", file: "src/native_execution_consumer.hpp", symbol: "bound_session_key_", ops: ["decl"], container: "std::string", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 1687}
   - {id: "U0683", file: "src/native_execution_consumer.hpp", symbol: "closed_row_prefix_", ops: ["decl"], container: "std::vector<std::uint64_t>", owner: "native-kernel", phase: "bar", state: "pending-flat-memory", inventory: "R08", grows_with: ["trades"], line: 1914}
+  - {id: "U1757", file: "src/native_execution_consumer.hpp", symbol: "code", ops: ["assign", "decl"], container: "std::string", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 374}
   - {id: "U0684", file: "src/native_execution_consumer.hpp", symbol: "day_labels_", ops: ["decl"], container: "std::vector<std::pair<std::int64_t, std::int64_t>>", owner: "native-kernel", phase: "bar", state: "pending-flat-memory", inventory: "F15", grows_with: ["days"], line: 1064}
   - {id: "U0685", file: "src/native_execution_consumer.hpp", symbol: "declared", ops: ["decl"], container: "std::vector<NativeTimeframeSubscription>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 389}
   - {id: "U0686", file: "src/native_execution_consumer.hpp", symbol: "drain_handles_", ops: ["decl"], container: "std::vector<native_order::RequestHandle>", owner: "native-kernel", phase: "bar", state: "pending-flat-memory", inventory: "E13", grows_with: ["live-orders", "open-lots"], line: 2011}
@@ -815,6 +853,8 @@ entries:
   - {id: "U0703", file: "src/native_execution_consumer.hpp", symbol: "projected_first_ms", ops: ["decl"], container: "std::vector<std::int64_t>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 813}
   - {id: "U0704", file: "src/native_execution_consumer.hpp", symbol: "read_openings", ops: ["decl"], container: "std::vector<native_order::OpeningObservation>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 750}
   - {id: "U0705", file: "src/native_execution_consumer.hpp", symbol: "rows_", ops: ["decl"], container: "std::vector<MatchCandidate>", owner: "native-kernel", phase: "bar", state: "pending-flat-memory", inventory: "E12", grows_with: ["live-orders"], line: 936}
+  - {id: "U1758", file: "src/native_execution_consumer.hpp", symbol: "run_warning_records_", ops: ["decl"], container: "std::map<std::pair<int, std::string>, std::string>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 102}
+  - {id: "U1759", file: "src/native_execution_consumer.hpp", symbol: "run_warnings_json_", ops: ["decl"], container: "std::string", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 103}
   - {id: "U0706", file: "src/native_execution_consumer.hpp", symbol: "spans", ops: ["decl"], container: "std::vector<std::pair<int64_t, int64_t>>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 1205}
   - {id: "U0707", file: "src/native_execution_consumer.hpp", symbol: "subscription_feed_tfs_", ops: ["decl"], container: "std::vector<std::string>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 1752}
   - {id: "U0708", file: "src/native_execution_consumer.hpp", symbol: "subscriptions_", ops: ["decl"], container: "std::vector<TimeframeSubscription>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 1733}
@@ -848,7 +888,7 @@ entries:
   - {id: "U0743", file: "src/run_failure.cpp", symbol: "<temp:string>", ops: ["temp"], container: "unresolved by the index: std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 182}
   - {id: "U0744", file: "src/run_failure.cpp", symbol: "json", ops: ["alloc", "append", "decl", "grow"], container: "unresolved by the index: make_shared", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 249}
   - {id: "U0745", file: "src/run_failure.cpp", symbol: "matched", ops: ["decl", "grow"], container: "std::vector<std::pair<const RegistryArg*, const RunFailureArg*>>", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 176}
-  - {id: "U0746", file: "src/run_failure.cpp", symbol: "out", ops: ["grow"], container: "unresolved by the index: out.push_back(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 120}
+  - {id: "U1801", file: "src/run_failure.cpp", symbol: "run_error_bar_prefix", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 408}
   - {id: "U0747", file: "src/run_failure.cpp", symbol: "std::to_string", ops: ["temp"], container: "unresolved by the index: std::to_string(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 259}
   - {id: "U0748", file: "src/run_failure.cpp", symbol: "text", ops: ["append", "decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 318}
   - {id: "U0749", file: "src/selected_report_view.cpp", symbol: "points", ops: ["alloc"], container: "unresolved by the index: new pf_equity_point_t", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 54}
@@ -907,6 +947,7 @@ entries:
   - {id: "U0802", file: "src/source/pine_adapter.cpp", symbol: "after_close", ops: ["decl", "grow"], container: "std::vector<PendingEntry>", owner: "source-layer", phase: "bar", state: "pending-flat-memory", inventory: "P08", grows_with: ["live-orders"], line: 24540}
   - {id: "U0803", file: "src/source/pine_adapter.cpp", symbol: "ages", ops: ["decl", "grow"], container: "std::vector<std::size_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 6387}
   - {id: "U0804", file: "src/source/pine_adapter.cpp", symbol: "anchored_relative_legs_", ops: ["grow"], container: "unresolved by the index: anchored_relative_legs_.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 14280}
+  - {id: "U1738", file: "src/source/pine_adapter.cpp", symbol: "args", ops: ["decl", "grow"], container: "RunFailureArgs", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 30756}
   - {id: "U0805", file: "src/source/pine_adapter.cpp", symbol: "armed", ops: ["assign", "decl", "grow"], container: "std::vector<GlobalExit>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 4896}
   - {id: "U0806", file: "src/source/pine_adapter.cpp", symbol: "askable_origins", ops: ["grow"], container: "unresolved by the index: askable_origins.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 3661}
   - {id: "U0807", file: "src/source/pine_adapter.cpp", symbol: "behind", ops: ["decl", "grow"], container: "std::vector<native_order::RequestHandle>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 25504}
@@ -1040,6 +1081,7 @@ entries:
   - {id: "U0945", file: "src/source/pine_adapter.cpp", symbol: "roster", ops: ["grow"], container: "unresolved by the index: roster.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 23435}
   - {id: "U1626", file: "src/source/pine_adapter.cpp", symbol: "roster_roots", ops: ["assign", "decl", "grow"], container: "std::vector<std::uint64_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1116}
   - {id: "U0946", file: "src/source/pine_adapter.cpp", symbol: "rows", ops: ["assign", "decl", "grow"], container: "std::vector<Ranked>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 940}
+  - {id: "U1739", file: "src/source/pine_adapter.cpp", symbol: "rule", ops: ["assign", "decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 30739}
   - {id: "U0947", file: "src/source/pine_adapter.cpp", symbol: "same_bar_defaults", ops: ["decl", "grow"], container: "std::vector<std::pair<std::uint64_t, native_order::RequestHandle>>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 14751}
   - {id: "U0948", file: "src/source/pine_adapter.cpp", symbol: "seen", ops: ["decl", "grow"], container: "std::unordered_set<std::uint64_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 22115}
   - {id: "U0949", file: "src/source/pine_adapter.cpp", symbol: "selected", ops: ["assign", "decl", "grow"], container: "std::vector<std::uint64_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1321}
@@ -1062,6 +1104,7 @@ entries:
   - {id: "U0967", file: "src/source/pine_adapter.cpp", symbol: "superseded_siblings", ops: ["decl", "grow"], container: "std::vector<native_order::RequestHandle>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 8309}
   - {id: "U0968", file: "src/source/pine_adapter.cpp", symbol: "taken", ops: ["assign", "decl", "grow"], container: "std::vector<std::pair<double, double>>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 17744}
   - {id: "U0969", file: "src/source/pine_adapter.cpp", symbol: "terminal_review_handles", ops: ["decl", "grow"], container: "std::vector<native_order::RequestHandle>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 22144}
+  - {id: "U1740", file: "src/source/pine_adapter.cpp", symbol: "text", ops: ["append", "assign", "decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 6540}
   - {id: "U0970", file: "src/source/pine_adapter.cpp", symbol: "throttled_reopen_rearm_", ops: ["grow"], container: "unresolved by the index: throttled_reopen_rearm_.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 16456}
   - {id: "U0971", file: "src/source/pine_adapter.cpp", symbol: "timezone", ops: ["assign", "decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 2737}
   - {id: "U0972", file: "src/source/pine_adapter.cpp", symbol: "tombstones", ops: ["decl", "subscript"], container: "std::map<const PlacementTable*,              std::map<std::uint64_t, std::unique", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 933}
@@ -1154,6 +1197,7 @@ entries:
   - {id: "U1063", file: "src/source/pine_state_hash.cpp", symbol: "trail_open_keys", ops: ["decl", "grow"], container: "std::vector<std::uint64_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 697}
   - {id: "U1064", file: "src/source/pine_strategy_host.cpp", symbol: "<temp:pair>", ops: ["temp"], container: "unresolved by the index: std::pair<const char*, std::map<long long, double>*>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1536}
   - {id: "U1065", file: "src/source/pine_strategy_host.cpp", symbol: "<temp:string>", ops: ["temp"], container: "unresolved by the index: std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 759}
+  - {id: "U1760", file: "src/source/pine_strategy_host.cpp", symbol: "args", ops: ["append", "decl", "grow"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 2074}
   - {id: "U1066", file: "src/source/pine_strategy_host.cpp", symbol: "broker_state_hashes_", ops: ["grow"], container: "unresolved by the index: broker_state_hashes_.push_back(...)", owner: "source-layer", phase: "bar", state: "pending-flat-memory", inventory: "R14", grows_with: ["bars"], line: 3309}
   - {id: "U1068", file: "src/source/pine_strategy_host.cpp", symbol: "closes", ops: ["decl"], container: "std::map<long long, double>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 798}
   - {id: "U1069", file: "src/source/pine_strategy_host.cpp", symbol: "columns", ops: ["grow"], container: "unresolved by the index: columns.resize(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 389}
@@ -1271,7 +1315,9 @@ entries:
   - {id: "U1507", file: "src/timeframe.cpp", symbol: "starts", ops: ["decl"], container: "std::vector<int>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", note: "CR150-CX 10-26 (c171d), class: scratch of one call. Local in SessionDaySchedule::parse_many (more than 8 windows only): sized by the number of windows in ONE session string, an input value; freed on return; nothing is retained across bars. Bound not argued, so OPEN.", line: 1930}
   - {id: "U1183", file: "src/timeframe.cpp", symbol: "trade_instants", ops: ["decl"], container: "std::vector<int64_t>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1770}
   - {id: "U1184", file: "src/timeframe.cpp", symbol: "tz", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", note: "Partition setup copies the caller timezone into one p.tz string in the explicit-cache overload. Payload length follows the input string, with no proved byte cap; other timezone declarations stay inventoried.", line: 200}
+  - {id: "U1851", file: "src/timezone.cpp", symbol: "<temp:string>", ops: ["temp"], container: "unresolved by the index: std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 83}
   - {id: "U1186", file: "src/timezone.cpp", symbol: "body", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 71}
+  - {id: "U1852", file: "src/timezone.cpp", symbol: "english", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 83}
   - {id: "U1188", file: "src/timezone.cpp", symbol: "hour_s", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 72}
   - {id: "U1189", file: "src/timezone.cpp", symbol: "minute_s", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 73}
   - {id: "U1190", file: "src/timezone.cpp", symbol: "normalize_timezone_for_posix", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 50}
@@ -1748,3 +1794,6 @@ entries:
   - {id: "U1733", file: "src/trade_text_writer.hpp", symbol: "std::to_string", ops: ["temp"], container: "unresolved by the index: std::to_string(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "Decimal text of an unsigned 64-bit integer, at most 20 characters: the row index and the entry incarnation of each row, and the row count of the trailer. OPEN.", line: 83}
   # The live-object scalar was U1729 before main added its trade-text key; retain both under distinct ids.
   - {id: "U1734", file: "include/pineforge/detail/o1_store.hpp", symbol: "value_", ops: ["assign"], container: "unresolved by the index: value_ = ...", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 114}
+  - {id: "U1735", file: "src/selected_capacity_source_stage.cpp", symbol: "chunk_", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "selected-capacity", phase: "unclassified", state: "unreviewed", line: 38}
+  - {id: "U1736", file: "src/selected_capacity_source_stage.cpp", symbol: "window_", ops: ["decl", "grow"], container: "std::string", owner: "selected-capacity", phase: "unclassified", state: "unreviewed", line: 26}
+  - {id: "U1737", file: "src/selected_capacity_source_stage.hpp", symbol: "message", ops: ["decl"], container: "std::string", owner: "selected-capacity", phase: "unclassified", state: "unreviewed", line: 44}

@@ -106,9 +106,11 @@ set(TEST_SOURCES
     test_report_terminal_quote
     test_adapter_margin_relower
     test_adapter_risk_relower
+    test_adapter_drawdown_fill_halt
     test_adapter_range_end_relower
     test_native_margin_kernel_r5
     test_adapter_brackets_relower
+    test_adapter_named_exit_after_reversing_close
     test_exit_without_from_entry_same_execution
     test_adapter_grid_relower
     test_adapter_htf_relower
@@ -336,6 +338,8 @@ set(TEST_SOURCES
     test_exit_path_segment_tiebreak
     test_accounting_reconciliation
     test_ta_volume_state_oracle
+    test_ta_pvt_first_bar
+    test_ta_obv_first_bar
     test_market_structure_fills
     test_handle_reuse_reset
     test_calendar_aggregation_wm
@@ -377,6 +381,7 @@ set(TEST_SOURCES
     test_market_admission_commission
     test_explicit_qty_fill_admission
     test_market_entry_affordability
+    test_percent_equity_cap_margins_off
     test_percent_equity_affordability
     test_stop_tick_rounding
     test_coof_chart_tick_touch
@@ -8489,6 +8494,57 @@ if(PINEFORGE_ENABLE_COVERAGE)
 endif()
 add_test(NAME test_o1_live_limit_backing COMMAND test_o1_live_limit_backing)
 # --- CR-150 o1-live-limit-policy end ---
+# --- CR-150 selected-admit-helper begin ---
+if(TARGET pineforge_selected_admit_test_identity)
+    add_test(NAME test_selected_admit_stages
+        COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/test_selected_admit_stages.py
+            --work-dir ${CMAKE_CURRENT_BINARY_DIR})
+    set_property(TEST test_selected_admit_stages APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_SELECTED_ADMIT_HELPER=$<TARGET_FILE:pineforge_selected_admit_test_identity>"
+        "PINEFORGE_SELECTED_ADMIT_EXPECT_GIT_SHA=${PINEFORGE_SELECTED_ADMIT_TEST_GIT_SHA}")
+    add_test(NAME test_selected_admit_manifest
+        COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/test_selected_admit_manifest.py
+            --parent-build ${CMAKE_BINARY_DIR} --work-dir ${CMAKE_CURRENT_BINARY_DIR}
+            --expected-stages "[\"source\",\"selected\"]")
+    add_test(NAME test_selected_admit_imports
+        COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/test_selected_admit_imports.py)
+    set_property(TEST test_selected_admit_imports APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_SELECTED_ADMIT_HELPER=$<TARGET_FILE:pineforge_selected_admit_test_identity>")
+    add_test(NAME test_selected_admit_calendar
+        COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/test_selected_admit_calendar.py
+            --work-dir ${CMAKE_CURRENT_BINARY_DIR})
+    set_property(TEST test_selected_admit_calendar APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_SELECTED_ADMIT_HELPER=$<TARGET_FILE:pineforge_selected_admit_test_identity>"
+        "PINEFORGE_SELECTED_ADMIT_EXPECT_GIT_SHA=${PINEFORGE_SELECTED_ADMIT_TEST_GIT_SHA}")
+    set_tests_properties(test_selected_admit_stages test_selected_admit_manifest
+        test_selected_admit_imports test_selected_admit_calendar PROPERTIES LABELS "selected_admit_helper")
+    set_tests_properties(test_selected_admit_manifest PROPERTIES RUN_SERIAL TRUE)
+endif()
+# --- CR-150 selected-admit-helper end ---
+
+# --- CR-150 run-json-run-warnings begin ---
+# Test-only stub strategy libraries for the run-warnings rows: one exports the
+# optional warnings getter, the other is built without it (an older module).
+# The rows reach their paths through $<TARGET_FILE:...> in the lane file.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    add_library(run_json_run_warnings_strategy MODULE
+        test_run_json_run_warnings_strategy.cpp ${PROJECT_SOURCE_DIR}/src/sha256.cpp)
+    target_include_directories(run_json_run_warnings_strategy PRIVATE
+        ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(run_json_run_warnings_strategy PRIVATE -ffp-contract=off)
+    set_target_properties(run_json_run_warnings_strategy PROPERTIES
+        PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/run_json_run_warnings")
+    add_library(run_json_no_run_warnings_strategy MODULE
+        test_run_json_run_warnings_strategy.cpp ${PROJECT_SOURCE_DIR}/src/sha256.cpp)
+    target_include_directories(run_json_no_run_warnings_strategy PRIVATE
+        ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(run_json_no_run_warnings_strategy PRIVATE -ffp-contract=off)
+    target_compile_definitions(run_json_no_run_warnings_strategy PRIVATE
+        PINEFORGE_TEST_OMIT_RUN_WARNINGS)
+    set_target_properties(run_json_no_run_warnings_strategy PROPERTIES
+        PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/run_json_run_warnings")
+endif()
+# --- CR-150 run-json-run-warnings end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))

@@ -6,9 +6,10 @@
 // declared read-cache cap (the provisional byte default's geometry, rows of
 // kLedgerEntryBytes each plus the page pointers, derived independently of the
 // product in ledger_default_cache_rows.hpp) above its zero-trade control, plus
-// the fixed slack below. That excess must not move with the trade count: the
-// populations below pass the cap, their excess over the control agrees within
-// the slack. A retiring run sizes it by retained rows.
+// the fixed slack below. Within the cap's rows the cache holds exactly the pages
+// the trades reach; past them that excess must not move with the trade count:
+// the populations below that pass the cap have an excess over the control that
+// agrees within the slack. A retiring run sizes it by retained rows.
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"
 #include "ledger_default_cache_rows.hpp"
@@ -545,6 +546,21 @@ Excess run_population(const Directory& directory, int population) {
     require(fd_trades.live <= fd_control.live + bound,
             "fd sink retained heap exceeded the control plus the declared cache cap");
 
+    // The cache pages a run holds are exactly the pages its trades reach. Within
+    // the default cache's rows each trade owns the slot of its ordinal (391
+    // pages at 100,000 trades); past them every four-way set, hence every page,
+    // is touched and the declared cap is reached (ledger_default_cache_rows.hpp).
+    const auto rows = ledger_oracle::default_cache_rows();
+    const std::size_t page_table =
+        ((rows + TradeLedger::kCachePageSlots - 1) / TradeLedger::kCachePageSlots) * sizeof(void*);
+    const std::size_t pages_reached = TradeLedger::kLedgerEntryBytes
+        * ledger_oracle::touched_slots(rows, static_cast<std::size_t>(population), 0,
+                                       static_cast<std::size_t>(population));
+    require(path_trades.cache_bytes == path_control.cache_bytes + page_table + pages_reached,
+            "path sink cache pages differ from the pages its trades reach");
+    require(fd_trades.cache_bytes == fd_control.cache_bytes + page_table + pages_reached,
+            "fd sink cache pages differ from the pages its trades reach");
+
     const auto path_wire = check_wire_shape(path_trades.output_path, population, tape.bars.size());
     const auto fd_wire = check_wire_shape(fd_trades.output_path, population, tape.bars.size());
     require(std::memcmp(&path_wire.summary, &path_trades.summary,
@@ -573,13 +589,20 @@ Excess run_population(const Directory& directory, int population) {
 int main() {
     try {
         Directory directory;
-        // 100,000 trades already touch every one of the default cache's 53,768
-        // four-way sets, hence every page (215,070 rows); 200,000 and 1,000,000
-        // go 2x and 10x past that. Zero growth past the cap means the excess
-        // over each population's own control agrees across them.
+        // 100,000 trades are fewer than the default cache's 215,070 rows: each
+        // owns the slot of its ordinal, so the run holds exactly the 391 pages
+        // those ordinals reach (run_population checks it for every population).
+        // 250,000 and 1,000,000 trades go 1.2x and 4.7x past the rows; they touch
+        // every one of the 53,768 four-way sets, hence every page. Zero growth
+        // past the cap means the excess over each population's own control
+        // agrees across the two.
         std::vector<Excess> excess;
-        for (const int population : {100000, 200000, 1000000})
-            excess.push_back(run_population(directory, population));
+        for (const int population : {100000, 250000, 1000000}) {
+            const auto item = run_population(directory, population);
+            if (static_cast<std::size_t>(population) > ledger_oracle::default_cache_rows())
+                excess.push_back(item);
+        }
+        require(excess.size() == 2, "two populations must pass the cache's rows");
         const auto spread = [&](std::size_t Excess::*member) {
             std::size_t low = excess.front().*member, high = low;
             for (const auto& item : excess) {

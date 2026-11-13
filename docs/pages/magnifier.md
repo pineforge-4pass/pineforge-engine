@@ -69,6 +69,8 @@ per chart timeframe, each row covering the charts from it up to the next row
 | 3 days | 4 hours | yes |
 | 1 week and up | 1 day | yes |
 
+Passing the intrabar timeframe itself as input is refused when it does not divide the chart timeframe (2 minutes for a 15-minute chart), so pass 1-minute input to build those intrabars.
+
 Each intrabar is the symbol's regular bar of that timeframe — anchored at the
 session day's open (00:00 UTC on a 24x7 symbol, 09:15 on NSE, 09:30 on NYSE)
 and cut at the session's close — and belongs to the chart bar that holds its

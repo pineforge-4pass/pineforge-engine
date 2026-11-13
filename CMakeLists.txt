@@ -168,9 +168,13 @@ set(PINEFORGE_KERNEL_SOURCES src/array.cpp
     src/selected_capacity_core.cpp
     src/selected_capacity_csv_reader.cpp
     src/selected_capacity_driver.cpp
+    src/selected_capacity_source_rows.cpp
     src/selected_capacity_primary_rows.cpp
     src/selected_capacity_auxiliary_rows.cpp
     src/selected_capacity_script_bars.cpp
+    src/selected_capacity_bytes.cpp
+    src/selected_capacity_product.cpp
+    src/selected_capacity_source_stage.cpp
     src/metrics_spill_curve.cpp
     src/report_scratch.cpp
     src/detail/o1_store.cpp
@@ -331,6 +335,57 @@ target_include_directories(pineforge_window_plan
 )
 target_link_libraries(pineforge_window_plan PRIVATE pineforge_kernel)
 
+# The helper and its manifest install to these literal locations in every CMake configuration, whatever the install directory variables are set to; consumers look only here.
+set(_pf_sa_helper_path "bin/pineforge-selected-admit")
+set(_pf_sa_manifest_path "share/pineforge/pineforge-selected-admit.manifest.json")
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/docker/run_failure_codes.json" _pf_sa_catalog_sha)
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/tools/selected_admit/DESCRIPTOR-V1.md" _pf_sa_spec_sha)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/docker/run_failure_codes.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/selected_admit/DESCRIPTOR-V1.md")
+set(_pf_sa_have_source 0)
+set(_pf_sa_stage_sources "")
+set(_pf_sa_stages_json "[\"selected\"]")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/selected_admit/stage_source.cpp")
+    set(_pf_sa_have_source 1)
+    set(_pf_sa_stage_sources tools/selected_admit/stage_source.cpp)
+    set(_pf_sa_stages_json "[\"source\",\"selected\"]")
+endif()
+if(PINEFORGE_VERSION_DIRTY)
+    set(_pf_sa_dirty 1)
+else()
+    set(_pf_sa_dirty 0)
+endif()
+function(pineforge_add_selected_admit target identity_unit identity_definition)
+    add_executable(${target} tools/selected_admit/main.cpp
+        tools/selected_admit/stage_selected.cpp ${_pf_sa_stage_sources} ${identity_unit})
+    string(REPLACE "_" "-" _pf_sa_output "${target}")
+    set_target_properties(${target} PROPERTIES OUTPUT_NAME "${_pf_sa_output}")
+    target_link_libraries(${target} PRIVATE pineforge_kernel)
+    target_compile_options(${target} PRIVATE -ffp-contract=off -Wall -Wextra -Wpedantic)
+    target_compile_definitions(${target} PRIVATE
+        "PF_SELECTED_ADMIT_DIRTY=${_pf_sa_dirty}"
+        "PF_SELECTED_ADMIT_HAVE_STAGE_SOURCE=${_pf_sa_have_source}"
+        "PF_SELECTED_ADMIT_HELPER_PATH=\"${_pf_sa_helper_path}\""
+        "PF_SELECTED_ADMIT_SPEC_SHA256=\"${_pf_sa_spec_sha}\""
+        "PF_SELECTED_ADMIT_CATALOG_SHA256=\"${_pf_sa_catalog_sha}\""
+        ${identity_definition})
+    if(PINEFORGE_ENABLE_COVERAGE)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            target_compile_options(${target} PRIVATE -fprofile-instr-generate -fcoverage-mapping)
+        elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+            target_compile_options(${target} PRIVATE --coverage -fprofile-arcs -ftest-coverage)
+        endif()
+    endif()
+endfunction()
+pineforge_add_selected_admit(pineforge_selected_admit tools/selected_admit/identity_shipped.cpp "")
+if(PINEFORGE_BUILD_TESTS)
+    set(PINEFORGE_SELECTED_ADMIT_TEST_GIT_SHA "0123456789abcdef0123456789abcdef01234567")
+    pineforge_add_selected_admit(pineforge_selected_admit_test_identity
+        tools/selected_admit/identity_test.cpp
+        "PF_SELECTED_ADMIT_TEST_GIT_SHA=\"${PINEFORGE_SELECTED_ADMIT_TEST_GIT_SHA}\"")
+endif()
+
 # === Coverage instrumentation (opt-in) =================================
 # Build with:
 #   cmake -B build -DCMAKE_BUILD_TYPE=Debug -DPINEFORGE_ENABLE_COVERAGE=ON
@@ -486,6 +541,20 @@ install(TARGETS pineforge pineforge_kernel pineforge_window_plan
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
+get_filename_component(_pf_sa_helper_install_dir "${_pf_sa_helper_path}" DIRECTORY)
+install(TARGETS pineforge_selected_admit RUNTIME DESTINATION "${_pf_sa_helper_install_dir}")
+install(CODE "
+set(PF_SA_HELPER_PATH [==[${_pf_sa_helper_path}]==])
+set(PF_SA_MANIFEST_PATH [==[${_pf_sa_manifest_path}]==])
+set(PF_SA_VERSION_FULL [==[${PINEFORGE_VERSION_FULL}]==])
+set(PF_SA_VERSION [==[${PINEFORGE_VERSION_MMP}]==])
+set(PF_SA_GIT_SHA [==[${PINEFORGE_VERSION_GIT_SHA}]==])
+set(PF_SA_DIRTY [==[${PINEFORGE_VERSION_DIRTY}]==])
+set(PF_SA_SPEC_SHA256 [==[${_pf_sa_spec_sha}]==])
+set(PF_SA_CATALOG_SHA256 [==[${_pf_sa_catalog_sha}]==])
+set(PF_SA_STAGES_JSON [==[${_pf_sa_stages_json}]==])
+")
+install(SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/cmake/PineForgeSelectedAdmitManifest.cmake")
 
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     install(DIRECTORY include/pineforge
@@ -559,4 +628,17 @@ message(STATUS "")
 # symbol may stay undefined; every other missing symbol is still a link error.
 if(APPLE)
     target_link_options(pineforge_window_plan PRIVATE "-Wl,-U,_strategy_reads_trade_history")
+endif()
+
+# The pull-request parity subset as ONE target. scripts/check_corpus_parity.sh
+# --subset passes the subset's strategy targets here and builds this target.
+# Named one by one on a build command line, a Makefile generator builds targets
+# serially; as the dependencies of one target they build in parallel. A name
+# the corpus does not define stops the generation.
+set(PINEFORGE_CORPUS_PARITY_SUBSET_TARGETS "" CACHE STRING
+    "Strategy targets of the parity subset (set by scripts/check_corpus_parity.sh)")
+if(PINEFORGE_BUILD_CORPUS_STRATEGIES AND PINEFORGE_CORPUS_PARITY_SUBSET_TARGETS)
+    add_custom_target(pineforge_corpus_parity_subset)
+    add_dependencies(pineforge_corpus_parity_subset
+        ${PINEFORGE_CORPUS_PARITY_SUBSET_TARGETS})
 endif()

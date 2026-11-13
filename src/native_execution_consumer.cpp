@@ -1,4 +1,5 @@
 #include "native_execution_consumer.hpp"
+#include "canonical_json.hpp"
 #include "native_issued_range_state.hpp"
 #include "engine_internal.hpp"
 #include "engine_value_invalid.hpp"
@@ -27,6 +28,7 @@
 #include <limits>
 #include <new>
 #include <stdexcept>
+#include <system_error>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -1381,6 +1383,7 @@ void NativeExecutionConsumer::fail(BacktestEngine& engine, NativeFailure failure
 
 void NativeExecutionConsumer::store_rendered(BacktestEngine& engine, const char* text,
                                              RunFailureValue value) const {
+    if (setup_failure_pending_) return;
     engine.last_error_ = text ? text : "";
     run_failure_.code = value.code;
     run_failure_.args = std::move(value.args);
@@ -1404,6 +1407,7 @@ void NativeExecutionConsumer::render_unclassified(BacktestEngine& engine,
 }
 
 void NativeExecutionConsumer::clear_rendered(BacktestEngine& engine) const noexcept {
+    if (setup_failure_pending_) return;
     engine.last_error_.clear();
     run_failure_.code = RunFailureCode::none;
     run_failure_.args.reset();
@@ -1413,16 +1417,56 @@ void NativeExecutionConsumer::clear_rendered(BacktestEngine& engine) const noexc
 void NativeExecutionConsumer::note_failure_record(BacktestEngine& engine, std::string text,
                                                   RunFailureValue value) {
     NativeExecutionConsumer& consumer = bound(engine);
+    if (consumer.setup_failure_pending_) return;
     engine.last_error_ = std::move(text);
     consumer.run_failure_.code = value.code;
     consumer.run_failure_.args = std::move(value.args);
     consumer.run_failure_.text = engine.last_error_;
 }
 
+void NativeExecutionConsumer::latch_void_setter_refusal(
+        BacktestEngine& engine, const std::exception* error) noexcept {
+    try {
+        NativeExecutionConsumer& consumer = bound(engine);
+        // Preserve a durable/in-flight run's cause or an unconsumed setup cause.
+        // A prior admission refusal or consumed setup record is replaceable.
+        if (consumer.failed() || consumer.in_attempt_call_
+            || std::holds_alternative<NativeRunning>(consumer.state_)
+            || consumer.setup_failure_pending_) return;
+        const auto value = error ? classify_run_failure(*error)
+            : RunFailureValue{RunFailureCode::engine_unclassified_error, nullptr};
+        engine.last_run_status_ = 1;
+        consumer.setup_failure_pending_ = true;
+        auto& record = consumer.run_failure_;
+        record.code = value.code;
+        record.args = value.args;
+        try {
+            engine.last_error_ = run_error_bar_prefix()
+                + (error ? error->what() : "unknown C++ exception");
+            record.text = engine.last_error_;
+        } catch (...) {
+            // Prefix rendering can be the allocation that failed. Keep this
+            // fallback unprefixed so its short text fits the small-string buffer.
+            engine.last_error_.clear();
+            record.text.clear();
+            engine.last_error_ = "setter failed";
+            record.text = engine.last_error_;
+        }
+    } catch (...) {
+        engine.last_run_status_ = 1;
+    }
+}
+
+void native_latch_void_setter_refusal(
+        BacktestEngine* engine, const std::exception* error) noexcept {
+    NativeExecutionConsumer::latch_void_setter_refusal(*engine, error);
+}
+
 void NativeExecutionConsumer::clear_failure_record(BacktestEngine& engine) noexcept {
-    engine.last_error_.clear();
     if (auto* consumer = engine.execution_consumer_slot_.ptr.get()) {
         static_cast<NativeExecutionConsumer*>(consumer)->clear_rendered(engine);
+    } else {
+        engine.last_error_.clear();
     }
 }
 
@@ -1447,6 +1491,46 @@ const char* NativeExecutionConsumer::failure_args_of(const BacktestEngine& engin
         }
     }
     return engine.last_error_.empty() ? "" : "{}";
+}
+
+const char* NativeExecutionConsumer::run_warnings_of(const BacktestEngine& engine) noexcept {
+    const auto* consumer = static_cast<const NativeExecutionConsumer*>(
+        engine.execution_consumer_slot_.ptr.get());
+    if (consumer == nullptr || !consumer->rows_current_) return "[]";
+    if (consumer->run_warnings_unavailable_)
+        return "[{\"args\":{},\"code\":\"run_warnings_unavailable\"}]";
+    return consumer->run_warnings_json_.c_str();
+}
+
+const char* native_run_warnings(const BacktestEngine* engine) noexcept {
+    return engine ? NativeExecutionConsumer::run_warnings_of(*engine) : nullptr;
+}
+
+void NativeExecutionConsumer::mark_run_warnings_unavailable(BacktestEngine& engine) noexcept {
+    if (auto* consumer = engine.execution_consumer_slot_.ptr.get())
+        static_cast<NativeExecutionConsumer*>(consumer)->run_warnings_unavailable_ = true;
+}
+
+void NativeExecutionConsumer::record_run_warning(
+        int sec_id, std::string code, std::string args_json) {
+    run_warning_records_.try_emplace(
+        std::make_pair(sec_id, std::move(code)), std::move(args_json));
+}
+
+void NativeExecutionConsumer::finish_run_warnings() {
+    std::string json = "[";
+    bool first = true;
+    for (const auto& record : run_warning_records_) {
+        if (!first) json.push_back(',');
+        first = false;
+        json += "{\"args\":";
+        json += record.second;
+        json += ",\"code\":";
+        internal::canonical_json::append_json_string(json, record.first.second);
+        json.push_back('}');
+    }
+    json.push_back(']');
+    run_warnings_json_.swap(json);
 }
 
 RunFailureValue NativeExecutionConsumer::failure_value_of(const BacktestEngine& engine) noexcept {
@@ -1847,6 +1931,11 @@ bool NativeExecutionConsumer::prepare_public_begin(
         render(engine, text);
         return false;
     }
+    if (setup_failure_pending_) {
+        setup_failure_pending_ = false;
+        engine.last_run_status_ = 1;
+        return false;
+    }
     cache_policy_attempt_ = cache_policy_config_;
     scratch_io_policy_attempt_ = scratch_io_policy_config_;
     struct RestorePolicyPreparation {
@@ -1877,6 +1966,7 @@ bool NativeExecutionConsumer::prepare_public_begin(
     }
     interval_cache_.clear();
     day_labels_.clear();
+    script_period_ = {};
     begin_bars_ = args.bars;
     begin_n_ = args.n;
     begin_is_stream_ = run_is_stream_ = args.is_stream;
@@ -2165,6 +2255,12 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.s(kNativeConsumerSemanticVersion);
     f.s(kNativeDriverSemanticVersion);
     f.s(kNativeCalendarSemanticVersion);
+    if (script_period_.source) {
+        f.s("script-period-partition/v1");
+        f.i(script_period_.first_ms);
+        f.i(script_period_.last_ms);
+        f.u(script_period_.digest);
+    }
     // An explicit creation policy changes future callbacks. The unlimited
     // default adds no bytes to the historical continuation fold.
     if (map_pair_limit_ != 0) {
@@ -2579,9 +2675,18 @@ NativeExecutionConsumer::script_interval_resolved(std::int64_t timestamp) const 
     if (cache.script_prior.held && cache.script_prior.ts == timestamp) {
         interval = cache.script_prior.interval;
     } else {
-        interval = native_calendar::interval_containing(
-            calendar_, script_tf_, day_label_origin(timestamp), calendar_memo_);
-        if (!interval && legacy_tolerant_slot_labels()) interval = timestamp_partition(timestamp);
+        if (script_period_.source) {
+            native_calendar::PeriodBounds bounds;
+            if (script_period_.source->period_bounds(
+                    timestamp, bounds.open_ms, bounds.next_open_ms))
+                interval = native_calendar::interval_containing(
+                    calendar_, script_tf_, input_tf_, timestamp, bounds);
+        } else {
+            interval = native_calendar::interval_containing(
+                calendar_, script_tf_, day_label_origin(timestamp), calendar_memo_);
+        }
+        if (!interval && !script_period_.source && legacy_tolerant_slot_labels())
+            interval = timestamp_partition(timestamp);
         // A D bar the installed daily feed dates is labelled by its stamp
         // (prepare_day_labels), and a lookup by that label is the bar's own
         // (day_label_origin); its span, closes and successors stay the
@@ -3088,6 +3193,9 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     for (auto& run : run_command_scratch_) run.reset();
     dependency_scratch_stats_ = {};
     run_cache_diagnostics_.begin_run();
+    run_warning_records_.clear();
+    run_warnings_json_ = "[]";
+    run_warnings_unavailable_ = false;
     engine.reset_run_state();
     engine.runtime_contexts().reset();
     engine.reset_trade_percent_prefix();
@@ -4669,6 +4777,18 @@ std::optional<std::int64_t> NativeExecutionConsumer::risk_day(
             return native_calendar::session_day_ordinal(*risk_day_calendar_, timestamp_ms);
         }
         return native_calendar::session_day_ordinal(calendar_, timestamp_ms);
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::length_error& error) {
+        // Calendar strings and spans exhausting their capacity are resource
+        // failures, not an instant the calendar cannot key.
+        throw coded<std::length_error>(RunFailureCode::out_of_memory, {}, error);
+    } catch (const std::system_error& error) {
+        if (error.code() == std::errc::not_enough_memory
+            || error.code() == std::errc::resource_unavailable_try_again) {
+            throw coded<std::system_error>(RunFailureCode::out_of_memory, {}, error);
+        }
+        return std::nullopt;
     } catch (...) {
         // A day the calendar cannot key is not a new day: the ledger keeps
         // the one it is on rather than inventing an ordinal.
@@ -9074,6 +9194,16 @@ NativeExecutionConsumer::SessionPoint NativeExecutionConsumer::session_point_res
         } else {
             point = {session_day_memo_->in_session_at(ms), session_day_memo_->ordinal};
         }
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::length_error& error) {
+        throw coded<std::length_error>(RunFailureCode::out_of_memory, {}, error);
+    } catch (const std::system_error& error) {
+        if (error.code() == std::errc::not_enough_memory
+            || error.code() == std::errc::resource_unavailable_try_again) {
+            throw coded<std::system_error>(RunFailureCode::out_of_memory, {}, error);
+        }
+        return {};
     } catch (...) {
         // Not held: the next ask resolves it again, as every ask used to.
         return {};
@@ -9636,7 +9766,8 @@ bool NativeExecutionConsumer::script_bucket_completions(
     if (!spec) return false;
     completes.assign(n, 0U);
     boundary_completes.assign(n, 0U);
-    ScriptBucketCursor cursor(*spec);
+    ScriptBucketCursor cursor(*spec, script_period_.source,
+                              script_period_.first_ms, script_period_.last_ms);
     for (std::size_t i = 0; i < n; ++i) {
         const auto flags = cursor.next(bars[i]);
         completes[i] = flags.complete;
@@ -9729,6 +9860,14 @@ bool NativeExecutionConsumer::seal_stale_script(BacktestEngine& engine,
 
 void NativeExecutionConsumer::seal_script(BacktestEngine& engine, NativeCompletionKind kind) {
     if (!script_.has_data || script_.sealed) return;
+    // An installed chart partition returns bars beginning inside its input
+    // range. A leading bucket whose open precedes that range is not a chart
+    // bar and consumes no script index.
+    if (script_period_.source && script_.interval.open_ms < script_period_.first_ms) {
+        script_.sealed = true;
+        script_.has_data = false;
+        return;
+    }
     NativeCoordinate base;
     base.interval_index = script_.script_index;
     base.input_interval_index = script_.first_index;
@@ -9757,9 +9896,11 @@ bool NativeExecutionConsumer::final_script_session_closed() const noexcept {
     // traded input. Its last contributor reaches the script interval's
     // last-traded close; a feed that merely stops mid-interval does not.
     return script_.has_data && !script_.sealed && last_accepted_input_
-        && script_.interval.last_traded_close_ms > script_.interval.eligible_open_ms
-        && last_accepted_input_->last_traded_close_ms
-            >= script_.interval.last_traded_close_ms;
+        && ((!run_is_stream_ && script_period_.source
+             && script_.interval.open_ms >= script_period_.first_ms)
+            || (script_.interval.last_traded_close_ms > script_.interval.eligible_open_ms
+                && last_accepted_input_->last_traded_close_ms
+                    >= script_.interval.last_traded_close_ms));
 }
 
 // The selected window's consumption counts (declared with the seal helpers).
@@ -14435,22 +14576,65 @@ void NativeExecutionConsumer::fill_streamed_report(
     *out = local;
 }
 
-ScriptBucketCursor::ScriptBucketCursor(const NativeRunSpec& spec)
+void NativeExecutionConsumer::set_script_period_source(
+        std::shared_ptr<TimeframeAggregator::PeriodSource> source,
+        const Bar* bars, std::size_t n) {
+    script_period_ = {};
+    interval_cache_.clear();
+    if (!source || !bars || n == 0) return;
+    // Hash the partition's decisions once, without storing them or folding
+    // mutable generator/cache positions. Its borrowed OHLCV stays with the
+    // run. No bytes are added to the continuation of an ordinary calendar.
+    StateFold fold;
+    for (std::size_t i = 0; i < n; ++i) {
+        std::int64_t open = 0;
+        std::int64_t next = 0;
+        if (!source->period_bounds(bars[i].timestamp, open, next))
+            throw std::logic_error("chart period partition does not cover its input");
+        fold.i(open);
+        fold.i(next);
+    }
+    script_period_.source = std::move(source);
+    script_period_.first_ms = bars[0].timestamp;
+    script_period_.last_ms = run_is_stream_ ? 0 : bars[n - 1].timestamp;
+    script_period_.digest = fold.h;
+}
+
+ScriptBucketCursor::ScriptBucketCursor(const NativeRunSpec& spec,
+        std::shared_ptr<TimeframeAggregator::PeriodSource> source,
+        std::int64_t first_ms, std::int64_t last_ms)
     : script_tf_(spec.script_tf), input_tf_(spec.input_tf), timezone_(spec.timezone),
-      session_(spec.session), aggregator_(script_tf_, input_tf_, timezone_, session_) {}
+      session_(spec.session), aggregator_(script_tf_, input_tf_, timezone_, session_),
+      source_(std::move(source)), first_ms_(first_ms), last_ms_(last_ms) {
+    if (source_) aggregator_.set_native_period_source(source_);
+}
 
 ScriptBucketCursor::Flags ScriptBucketCursor::next(const Bar& bar) {
-    const AggregatedBar aggregate = aggregator_.feed(bar);
+    // With a generated partition, use its next-period comparison rather
+    // than the nominal one-day close projection of a DAY aggregator.
+    const auto next_ms = source_
+        ? bar.timestamp + static_cast<std::int64_t>(tf_to_seconds(input_tf_)) * 1000
+        : 0;
+    const AggregatedBar aggregate = aggregator_.feed(bar, next_ms);
     last_.complete = aggregate.is_complete ? 1U : 0U;
     last_.boundary = aggregate.is_complete
-        && tf_change(aggregate.bar.timestamp, bar.timestamp, script_tf_, timezone_, session_)
+        && (source_ ? aggregator_.period_changes(aggregate.bar.timestamp, bar.timestamp)
+                    : tf_change(aggregate.bar.timestamp, bar.timestamp,
+                                script_tf_, timezone_, session_))
             ? 1U : 0U;
+    if (source_) {
+        if (aggregate.bar.timestamp < first_ms_) last_ = {0U, 0U};
+        if (bar.timestamp == last_ms_
+            && aggregator_.bucket_open_ms(bar.timestamp) >= first_ms_)
+            last_.complete = 1U;
+    }
     ++position_;
     return last_;
 }
 
 void ScriptBucketCursor::reset() {
     aggregator_ = TimeframeAggregator(script_tf_, input_tf_, timezone_, session_);
+    if (source_) aggregator_.set_native_period_source(source_);
     position_ = 0;
     last_ = Flags{};
 }

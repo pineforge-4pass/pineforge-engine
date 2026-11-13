@@ -4,6 +4,7 @@
 #include <pineforge/timeframe.hpp>
 
 #include "pine_host_reads.hpp"
+#include "multi_day_periods.hpp"
 #include <pineforge/run_failure.hpp>
 #include <pineforge/selected_window.h>
 #include <pineforge/selected_window_plan.hpp>
@@ -197,6 +198,47 @@ void PineScheduler::run_begin(PineStrategyHost& host) {
     const int ratio = undetected || !state.spec ? 1
         : tf_ratio(state.spec->input_tf, state.spec->script_tf);
     const bool needs_aggregation = ratio > 1 || ratio == -1;
+    std::shared_ptr<TimeframeAggregator::PeriodSource> chart_periods;
+    const auto chart_tf = state.spec
+        ? native_calendar::parse_timeframe(state.spec->script_tf) : std::nullopt;
+    if (needs_aggregation && chart_tf
+        && chart_tf->unit() == native_calendar::TimeframeUnit::Day
+        && chart_tf->count() >= 2 && !retained_.is_stream && !retained_.bars.empty()
+        && state.spec->input_tf != state.spec->script_tf) {
+        MultiDayFeeds feeds;
+        feeds.days = chart_tf->count();
+        feeds.chart = retained_.bars.data();
+        feeds.n_chart = static_cast<int>(retained_.bars.size());
+        feeds.daily_chart = tf_to_seconds(state.spec->input_tf) == 86400;
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+        if (host.aux_security_feed_enabled()) {
+            feeds.aux = host.aux_security_bars_.data();
+            feeds.n_aux = host.aux_security_bars_.size();
+        }
+#endif
+        feeds.tz = host.syminfo_.timezone;
+        feeds.session = host.syminfo_.session;
+        feeds.exchange_calendar = host.session_template_knows_early_close();
+        chart_periods = make_multi_day_period_source(feeds);
+        if (!chart_periods)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                           "N-day chart partition could not be prepared");
+        // The selected consumer's nominal bucket walk cannot count or seal
+        // this generated grid. Refuse the admitted combination before any
+        // input is consumed, rather than publishing a full-range tail index.
+        pf_selected_window_config_v1 window{};
+        if (NativeExecutionConsumer::selected_window_admitted(host, &window))
+            throw coded<std::invalid_argument>(
+                RunFailureCode::window_mode_unsupported,
+                {{"capability", "selected_window_chart_timeframe"},
+                 {"timeframe", state.spec->script_tf}},
+                "selected windows do not support a generated N-day chart partition");
+        detail::run_consumer(host).set_script_period_source(
+            chart_periods, retained_.bars.data(), retained_.bars.size());
+    }
+    const std::int64_t first_ms = retained_.bars.empty() ? 0 : retained_.bars.front().timestamp;
+    const std::int64_t last_ms = retained_.bars.empty() || retained_.is_stream
+        ? 0 : retained_.bars.back().timestamp;
     host.diag_script_tf_ratio_ = ratio;
     host.diag_needs_aggregation_ = needs_aggregation;
     input_script_size_ = retained_.bars.size();
@@ -205,12 +247,26 @@ void PineScheduler::run_begin(PineStrategyHost& host) {
     // hashing each get their own walk of the very same kernel producer.
     // Ratio 1 uses complete=1/boundary=0 without constructing any cursor.
     if (needs_aggregation && state.spec) {
-        ScriptBucketCursor counting(*state.spec);
+        ScriptBucketCursor counting(*state.spec, chart_periods, first_ms, last_ms);
         expected_source_bars_ = 0;
-        for (std::size_t i = 0; i < input_script_size_; ++i)
-            expected_source_bars_ += counting.next(retained_.bars[i]).complete != 0U ? 1 : 0;
-        input_script_cursor = std::make_unique<ScriptBucketCursor>(*state.spec);
-        consumed_script_cursor_ = std::make_unique<ScriptBucketCursor>(*state.spec);
+        std::int64_t previous_open = std::numeric_limits<std::int64_t>::min();
+        for (std::size_t i = 0; i < input_script_size_; ++i) {
+            if (chart_periods) {
+                std::int64_t open = 0;
+                std::int64_t next = 0;
+                if (!chart_periods->period_bounds(retained_.bars[i].timestamp, open, next))
+                    throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                                  "N-day chart input has no period");
+                if (open >= first_ms && open != previous_open) ++expected_source_bars_;
+                previous_open = open;
+            } else {
+                expected_source_bars_ += counting.next(retained_.bars[i]).complete != 0U ? 1 : 0;
+            }
+        }
+        input_script_cursor = std::make_unique<ScriptBucketCursor>(
+            *state.spec, chart_periods, first_ms, last_ms);
+        consumed_script_cursor_ = std::make_unique<ScriptBucketCursor>(
+            *state.spec, chart_periods, first_ms, last_ms);
     }
     // A selected admitted batch run executes the script bars of the consumer's
     // own bucket walk, which the aggregator's per-input hint above does not
@@ -219,7 +275,8 @@ void PineScheduler::run_begin(PineStrategyHost& host) {
     // (terminal_source_bar, the probe tail) read the executed count. An OFF run
     // and a stream never reach this and keep the hint; completion cursors are
     // unchanged either way.
-    if (!retained_.is_stream && state.phase == NativeRunPhase::Batch) {
+    // A selected run with a generated chart partition was refused above.
+    if (!chart_periods && !retained_.is_stream && state.phase == NativeRunPhase::Batch) {
         pf_selected_window_config_v1 window{};
         if (NativeExecutionConsumer::selected_window_admitted(host, &window)) {
             expected_source_bars_ =

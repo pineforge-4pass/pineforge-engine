@@ -1,8 +1,10 @@
 #include <cstdio>
 #include <cmath>
 #include <cstring>
+#include <exception>
 #include <string>
 #include <vector>
+#include <pineforge/run_failure.hpp>
 #include <pineforge/str_utils.hpp>
 
 using namespace pineforge;
@@ -82,9 +84,21 @@ void test_match() {
     CHECK_EQ(pine_str_match("price: 42.5", "price: ([0-9.]+)"),
              "42.5", "capture group returned");
 
-    // Invalid regex returns empty
-    CHECK_EQ(pine_str_match("test", "[invalid"),
-             "", "invalid regex returns empty");
+    // Invalid regex stops with a typed string error
+    bool typed_stop = false;
+    try {
+        (void)pine_str_match("test", "[invalid");
+    } catch (const std::exception& error) {
+        const auto* typed = dynamic_cast<const RunFailureInfo*>(&error);
+        typed_stop = typed != nullptr
+            && typed->run_failure_code() == RunFailureCode::pine_string_error
+            && typed->run_failure().args
+            && *typed->run_failure().args == "{\"reason\":\"invalid_regex_pattern\"}"
+            && std::strcmp(error.what(),
+                           "Error before the first bar: "
+                           "Invalid regex pattern in the 'str.match' function.") == 0;
+    }
+    CHECK(typed_stop, "invalid regex throws the typed string error");
 }
 
 void test_split() {

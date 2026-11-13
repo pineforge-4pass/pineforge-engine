@@ -107,7 +107,9 @@ bool same_bits(double a, double b) { return std::memcmp(&a, &b, sizeof(double)) 
 
 void row1_cash_arithmetic_overflow() {
     row = "row1_percent_cash_overflow";
-    Probe percent(QtyType::PERCENT_OF_EQUITY, largest);
+    // Margin 100: with both margins at 0 a declared percentage is capped at 100,
+    // which would keep this product finite.
+    Probe percent(QtyType::PERCENT_OF_EQUITY, largest, CommissionType::PERCENT, 0.0, 100.0);
     percent.script = [](Probe& p, int index) {
         if (index) return;
         auto sizing = snapshot();

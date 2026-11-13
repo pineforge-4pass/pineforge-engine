@@ -103,11 +103,11 @@ codes it tested the text alone, so a script stopped by an empty
 
 The tables below list the catalog at this tree.
 
-The catalog contains 87 named failure codes: 38 first released in 1.4.0,
+The catalog contains 88 named failure codes: 38 first released in 1.4.0,
 26 first released in 1.5.0, 5 added in 1.7.0, 10 added in 1.9.0
-(3 run-quota codes and 7 report-channel codes), and 8 added in 1.11.0.
-One unnamed `none` sentinel gives 88 registry entries; existing numbers stay
-fixed.
+(3 run-quota codes and 7 report-channel codes), 8 added in 1.11.0, and 1
+added in 1.12.0. One unnamed `none` sentinel gives 89 registry entries;
+existing numbers stay fixed.
 
 The 1.11.0 additions are `runtime_history_budget_exhausted` (class
 `resource`), the refusal of a dynamic runtime context that exceeds its
@@ -123,6 +123,13 @@ reservation beyond a selected capacity bound:
 `selected_source_rows_limit_exceeded`,
 `selected_script_bars_limit_exceeded`, and `selected_bytes_limit_exceeded`.
 Their retryability and typed arguments are listed below.
+
+The 1.12.0 addition is `pine_timezone_error` (class `strategy`), the refusal
+of a timezone argument that the calendar does not accept. Its retryability and
+typed arguments are listed below.
+A timezone database lookup that cannot be carried out raises `out_of_memory`
+for a memory failure or `engine_unclassified_error` for another host failure,
+including a missing database directory.
 
 The run-quota additions are `run_descriptor_limit_exceeded` (74),
 `run_quota_configuration_invalid` (78), and `run_resource_quota_exceeded`
@@ -216,7 +223,8 @@ other `strategy_create_failed` lines omit it.
 | `pine_matrix_error` | `strategy` | no | `function` (vocab, 15 values), `reason` (vocab, 10 values) | A matrix built-in refused its arguments (an index, a dimension, a size or an empty matrix). |
 | `pine_na_reference` | `strategy` | no | `object` (vocab, 10 values) | The script called a method on an na reference (an array, matrix, map, drawing or object id). |
 | `pine_runtime_limit` | `strategy_limit` | no | `limit` (vocab, 6 values), `max` (integer, optional) | The script reached a TradingView or PineForge resource limit. |
-| `pine_string_error` | `strategy` | no | `reason` (vocab, 2 values) | A string built-in refused its arguments. |
+| `pine_string_error` | `strategy` | no | `reason` (vocab, 4 values) | A string built-in refused its arguments. |
+| `pine_timezone_error` | `strategy` | no | `bar_index` (integer), `function` (vocab, 12 values), `zone` (string) | A timezone argument is not accepted by the calendar. TradingView runtime error RE10133. bar_index is the bar being executed, and -1 when the stop is raised before the first bar (the message then begins "Error before the first bar: " instead of "Error on bar N: "). |
 | `recalc_cap` | `strategy_limit` | no | none | The script's calc_on_order_fills recalculation loop reached its cap. |
 | `recorded_request_missing` | `no_data` | no | none | No recorded series is installed for a request the script reads. |
 | `recorded_request_refused` | `input` | no | `reason` (vocab, 5 values) | A recorded request series was refused. |
@@ -239,7 +247,7 @@ other `strategy_create_failed` lines omit it.
 | `run_descriptor_limit_exceeded` | `resource` | no | `limit` (integer), `peak` (integer), `process_role` (vocab, 6 values), `requested` (integer), `soft_nofile` (integer), `stage` (vocab, 8 values), `used` (integer) | Descriptor admission exceeded the finite run allowance or the process soft NOFILE limit. used includes committed and pending descriptors before the denied additional requested count; peak is the preceding high water. Counters are host-owned nonnegative integers at most 2^53-1. |
 | `run_isolation_unavailable` | `unsupported` | no | `reason` (vocab, 3 values) | The requested report isolation is unavailable. |
 | `run_mode_unsupported` | `unsupported` | no | `feature` (vocab, 11 values) | A feature the requested run mode does not support. |
-| `run_options_rejected` | `input` | no | `input_tf` (timeframe, optional), `option` (vocab, 11 values), `script_tf` (timeframe, optional) | The run's own options (timeframes, intrabar path, magnifier, path order) were refused. |
+| `run_options_rejected` | `input` | no | `input_tf` (timeframe, optional), `intrabar_tf` (timeframe, optional), `option` (vocab, 11 values), `reason` (vocab, 4 values, optional), `script_tf` (timeframe, optional) | The run's own options (timeframes, intrabar path, magnifier, path order) were refused. |
 | `run_process_refused` | `resource` | no | `operation` (vocab, 4 values) | The native process attempted forbidden process creation. |
 | `run_producer_failed` | `resource` | no | `exit_status` (integer, optional), `reason` (vocab, 3 values), `signal` (integer, optional) | The native report producer did not complete successfully. |
 | `run_quota_configuration_invalid` | `input` | no | `reason` (vocab, 8 values), `setting` (vocab, 10 values), `stage` (vocab, 8 values) | The finite host run contract is missing, malformed, overflowing, unauthenticated or unsupported. An unset limit refuses with missing_limit; explicit decimal zero is literal zero capacity. There is no implicit unlimited mode. Limits, extents, deltas and reportable counters must fit 2^53-1. |
@@ -635,9 +643,10 @@ unless it is a minor or major release over the release its diff starts at
 A strategy the transpiler generates names its stops' codes through
 `<pineforge/run_failure.hpp>`, under `#ifdef
 PINEFORGE_HAS_RUN_FAILURE_CODES_V1`. Each helper is `[[noreturn]]`, throws
-`coded<std::runtime_error>`, hardwires its code and takes only literals the
-transpiler emits; the English it is given is what #strategy_get_last_error
-reads.
+`coded<std::runtime_error>`, hardwires its code and, but for
+`pine_timezone_stop`, takes only literals the transpiler emits; the English it
+is given is what #strategy_get_last_error reads (`pine_timezone_stop` puts the
+engine's bar prefix before it).
 
 | Helper | Code |
 | --- | --- |
@@ -650,7 +659,16 @@ reads.
 | `pine_limit_stop(limit, max, english)` | `pine_runtime_limit` |
 | `pine_unsupported_stop(reason, line, english)` | `request_unsupported` |
 | `pine_string_stop(reason, english)` | `pine_string_error` |
+| `pine_timezone_stop(function, zone, english)` | `pine_timezone_error` |
 | `pine_engine_invariant(english)` | `engine_invariant` |
+
+`pine_timezone_stop` is offered under its own macro,
+`PINEFORGE_HAS_TIMEZONE_STOP_V1` (defined by `<pineforge/run_failure.hpp>`),
+and `zone` is the timezone string the script computed at run time, not a
+literal. It raises `pine_timezone_error` with the arguments `bar_index`,
+`function` and `zone`, and puts the engine's bar prefix (`Error on bar N: `,
+or `Error before the first bar: ` when no bar is being executed) before the
+English it is given, so pass the English without a prefix.
 
 `pine_limit_stop` accepts six closed `limit` values: `map_pairs`,
 `max_bars_back`, `matrix_elements`, `udt_objects`, `drawing_ids` and

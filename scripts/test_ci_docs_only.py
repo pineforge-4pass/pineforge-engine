@@ -114,7 +114,7 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(sorted(PROOF_READS), [
             'docs/adr/0001-kernel-adapter-boundary.md', 'docs/build.sh',
             'docs/pages/native-engine.md', 'docs/pages/pine-to-native.md',
-            'docs/seo_postprocess.py'])
+            'docs/seo_postprocess.py', 'tools/selected_admit/DESCRIPTOR-V1.md'])
         for path in PROOF_READS:
             with self.subTest(path=path):
                 self.assertFalse(is_documentation(path))
@@ -137,7 +137,8 @@ class RuleTests(unittest.TestCase):
         documentation = {path for path in read if path.startswith('docs/') or path.endswith('.md')}
         # The scan sees the rows it exists for, so a quiet parse cannot pass it.
         self.assertLessEqual({'docs/pages/pine-to-native.md', 'docs/pages/native-engine.md',
-                              'docs/build.sh'}, documentation)
+                              'docs/build.sh', 'tools/selected_admit/DESCRIPTOR-V1.md'},
+                             documentation)
         self.assertEqual(sorted(path for path in documentation if is_documentation(path)), [])
 
 
@@ -204,6 +205,28 @@ class EventTests(unittest.TestCase):
             with self.subTest(move=move):
                 self.fresh()
                 docs_only, lines = self.pull_request(move=move)
+                self.assertEqual(docs_only, docs_only_expected, lines)
+                if not_documentation:
+                    self.assertEqual(lines[2:], not_documentation)
+
+    def test_the_selected_admit_spec_page_is_a_page_a_proof_job_reads(self) -> None:
+        """CMakeLists.txt takes this page's sha256 into the helper's manifest, so every way of changing it
+        (an edit, a rename away, a rename onto its path, a deletion) runs the proof legs; another Markdown
+        page of the same directory stays documentation."""
+        spec = 'tools/selected_admit/DESCRIPTOR-V1.md'
+        other = 'tools/selected_admit/NOTES.md'
+        listed = [f'  {spec} ({PROOF_READS[spec]})']
+        for with_spec, change, docs_only_expected, not_documentation in (
+                (True, {'write': {spec: 'new\n'}}, False, listed),
+                (True, {'move': {spec: 'docs/pages/spec.md'}}, False, listed),
+                (True, {'remove': (spec,)}, False, listed),
+                (False, {'move': {'docs/ci.md': spec}}, False, listed),
+                (True, {'write': {other: 'new\n'}}, True, [])):
+            with self.subTest(change=change):
+                self.fresh()
+                if with_spec:
+                    self.base = self.repo.commit('add the spec page', {spec: 'spec\n', other: 'notes\n'})
+                docs_only, lines = self.pull_request(**change)
                 self.assertEqual(docs_only, docs_only_expected, lines)
                 if not_documentation:
                     self.assertEqual(lines[2:], not_documentation)

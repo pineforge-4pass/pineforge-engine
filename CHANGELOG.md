@@ -7,6 +7,38 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- Multi-day charts restart their trading-date grid each year; measured on 24x7 daily input for chart bars, last_bar_index, barstate.islast and the open-trade report row. Streams keep the previous chart path; selected windows on generated N-day chart partitions are refused. Time offsets, exchange calendars and intraday input are not measured against TradingView.
+- `str.match` no longer reports "no match" after a memory failure; the failure now reaches `out_of_memory`.
+  A pattern over the limits of the engine's regular-expression library stops the run with `pine_string_error` and reason `regex_resource_limit`, which is not retryable.
+  An invalid regular expression now stops the run with a typed error, as TradingView does; it used to return an empty string. The message is TradingView's text with the engine's bar prefix, `Error on bar N: `, or `Error before the first bar: ` when no bar is being executed.
+  Patterns the engine's regular-expression library does not support also stop the run now, with the same error. On the Linux build these include lookbehind, named groups, inline flags such as `(?i)`, comment groups, atomic groups, conditionals, `\p{...}` classes and `{,n}` repeats; lookahead, lazy quantifiers, back-references, POSIX classes and `\b` are accepted.
+- A memory failure during a session-calendar lookup now fails the run with a typed error instead of reading the bar as out of session.
+- A failed `setenv` or a memory failure during a timezone switch now fails the run instead of continuing in the previous zone or in UTC.
+- A timezone database lookup that fails because no file descriptors or memory are available, an input/output error occurs, or the database is missing now fails the run with an engine error instead of reporting an incorrect timezone name.
+- A timezone name written in a script that the engine's own calendar functions do not accept now raises `pine_timezone_error` with the function and zone instead of silently reading UTC. Code that the transpiler generates for `timestamp()` still reads a zone that the host cannot load as UTC, without an error (with a zone argument, and without one on a symbol whose zone is not UTC); that is fixed in a later release. This addition to the public failure catalog requires a minor release. The message is TradingView's text with the engine's bar prefix, `Error on bar N: `, or `Error before the first bar: ` when no bar is being executed, and the arguments carry `bar_index`.
+- The void C setters for instrument and run settings now record exceptions on
+  the handle, including allocation failures and changes refused by the engine.
+  `strategy_last_run_status` reads 1; `strategy_get_last_error` and
+  `strategy_get_last_error_code` return the failure text and code.
+  The recorded text begins "Error before the first bar: " (or "Error on bar N: "
+  when a bar is being executed). A setup failure makes the next run start fail
+  once with that record; the following start clears it and starts normally.
+  The failed setter did not apply its value, so retrying the start without
+  reapplying the setter uses the previous value. The documented refusal of a
+  quote write after a selected run has sealed is still dropped silently and
+  read through `strategy_state_query_status_v1`.
+- Non-positive or NaN `mintick` or `pointvalue` values in `--syminfo`, and
+  `path_order` modes outside 0, 1 and 2, now produce typed refusals instead of
+  being ignored or reset to AUTO. An invalid `mintick` is refused as `symbol_feeds_refused` with reason
+  `syminfo_mintick_invalid`; an invalid point value uses the existing symbol metadata error, `symbol_metadata_rejected` with field `point_value`.
+- `strategy_get_run_warnings` exposes one named warning per `request.security` call site whose requested timeframe is not a multiple of its evaluator's feed timeframe; values, trades and run acceptance are unchanged (#718).
+- The Docker report and `scripts/run_strategy.py` now show the engine's run warnings as `diagnostics.warnings` when a run has any, and are unchanged otherwise (#718).
+- A percent-of-equity default quantity above 100 percent is now capped at 100 percent of equity when `margin_long` and `margin_short` are both 0 (#805).
+- `strategy.close(qty = ...)` now floors the quantity to the declared quantity step and closes that much, as TradingView does; a quantity that floors to zero or exceeds the entry id's position closes that whole position. Positive explicit `strategy.exit(qty = ...)` quantities now floor to the declared step; a quantity below one step is ignored unless `qty_percent` is below 100, so with the default `qty_percent = 100` the exit covers the whole position, as TradingView does; with `qty_percent` below 100 such a quantity is kept as given, as before. Measured against TradingView on one instrument and lot (a 0.00001 step, pyramiding 1, the default close rule, one entry id); not measured: `close_entries_rule = "ANY"`, pyramided entry ids, whole-unit steps, lots that are not a power of ten, and a sub-step `strategy.exit` quantity with `qty_percent` below 100 (#716).
+- With `process_orders_on_close` and the default FIFO close rule, the named `strategy.exit` calls of a reversing `strategy.entry` with an explicit quantity, placed in the same execution after a `strategy.close` of the old position, are now sized from the new entry's own quantity: a percentage exit takes its share of the new entry and an absolute-quantity exit keeps its quantity, instead of being sized from a basis reduced by the old position (#803).
+- Without `process_orders_on_close`, the named `strategy.exit` calls placed with a reversing `strategy.entry` of explicit quantity now take their percentage from the new entry when its size differs from the position it replaces, and a take-profit given as an absolute quantity now fires; before, the percentage was taken from the position being replaced and an absolute-quantity take-profit never fired (#803).
+- `strategy.risk.max_drawdown` is now tested at the order fills that close units, on the equity at that fill with open positions included, against the highest equity at such fills (the equity at an opening fill or at a bar close does not raise it), and a breach closes every open position at that fill's price (exit text "Close Position (Max Drawdown)"), cancels the pending orders and blocks later entries; before, it was measured once per bar close and only refused new entries (#804).
+- A run refused because its input, script or intrabar timeframes do not fit now names the timeframes and the rule instead of an internal field number, and its structured error args carry the timeframes and reason (#813).
 - The internal native Store live-object policy defaults to 0 (unbounded).
   The former capped default of 1,048,576 is now 0. Native limits are kept
   exactly: every positive uint64, including UINT64_MAX, is finite;
@@ -23,6 +55,9 @@ version number follows semantic versioning over the surfaces the
   call site retains its own appended source history and computes the
   nearest-rank percentile over the requested recent values, within the
   documented historical limit.
+- `ta.pvt` and `ta.obv` now have no value (`na`) on the first bar of their
+  series, as on TradingView, where each term needs the previous bar's close;
+  they returned 0 on that bar before; every later value is unchanged.
 - An exit given in ticks and without `from_entry` that follows a market entry in
   the same execution now takes effect when that entry fills, as a named exit does.
 - **Strategy modules built against 1.10.x must be rebuilt.** The C++ script
@@ -203,6 +238,16 @@ version number follows semantic versioning over the surfaces the
   occupant, and deleting the oldest drawing moves the directory's entries).
   The bound, the typed overflow outcome, the slot reuse order, the
   stale-handle behaviour and every value a script reads are unchanged.
+- The closed-trade read cache of the trade ledger places rows by count. While a
+  run holds no more closed trades than the cache has entries (215,070 by
+  default) each trade owns the slot of its ordinal: a read makes one probe, and
+  the cache commits only the pages the trades reach (25,000 closed trades hold
+  98 pages, 7.8 MB, where four-way sets hold 391, 31.2 MB). With more closed
+  trades the four-way sets apply, and the cached rows are dropped when a run
+  crosses the capacity in either direction. In a four-way set a hit on the most
+  recent entry changes nothing and a hit on another entry ages only the entries
+  more recent than it, so a full set replaces the entry touched longest ago. A
+  miss is probed once. Every value a script reads is unchanged.
 
 ## 1.9.1 — 2026-10-31
 

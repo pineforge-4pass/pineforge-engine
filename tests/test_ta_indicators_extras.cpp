@@ -471,7 +471,8 @@ static void test_rci() {
 static void test_obv() {
     std::printf("test_obv\n");
     ta::OBV obv;
-    CHECK(near(obv.compute(100, 50), 0.0));   // first bar always 0
+    // expectation corrected: 0.0 -> na, because the first bar has no previous close.
+    CHECK(is_na(obv.compute(100, 50)));
     CHECK(near(obv.compute(102, 30), 30.0));  // close up: +volume
     CHECK(near(obv.compute(101, 20), 10.0));  // close down: -volume
     CHECK(near(obv.compute(101, 40), 10.0));  // close flat: unchanged
@@ -535,7 +536,8 @@ static void test_nvi_pvi() {
 static void test_pvt_wad() {
     std::printf("test_pvt_wad\n");
     ta::PVT pvt;
-    CHECK(near(pvt.compute(100, 50), 0.0));  // first bar (prev_close NA)
+    // expectation corrected: 0.0 -> na, because PVT's term needs a previous close.
+    CHECK(is_na(pvt.compute(100, 50)));  // first bar (prev_close NA)
     // (110-100)/100 * 200 = 20
     CHECK(near(pvt.compute(110, 200), 20.0));
     // recompute returns identical
