@@ -1894,6 +1894,25 @@ PF_API const char* strategy_get_last_error_code(pf_strategy_t s);
  *  #strategy_get_last_error_code. */
 PF_API const char* strategy_get_last_error_args(pf_strategy_t s);
 
+/** Compile-time probe for #strategy_get_run_warnings. A runtime library
+ *  without it lacks the symbol: look it up with `dlsym`. */
+#define PINEFORGE_HAS_RUN_WARNINGS_V1 1
+
+/** The warnings of the run whose result @p s currently holds, as ONE canonical
+ *  JSON array: UTF-8, keys sorted, no whitespace; each element is an object
+ *  with exactly the keys "args" (an object) and "code" (a string matching
+ *  `^[a-z][a-z0-9_]{2,47}$`), in the order of the site identity, then the code.
+ *  `"[]"` when that run recorded no warning, before any run, and after a later
+ *  attempt that was refused before it began; a live stream's warnings stay
+ *  readable while the stream is live. NULL only when @p s is NULL. A warning
+ *  never changes the run's status, trades, values or failure accessors. If
+ *  collecting the warnings failed, the static string
+ *  `[{"args":{},"code":"run_warnings_unavailable"}]`: a failure is never an
+ *  empty list. The string is the handle's own, valid until the next run,
+ *  stream-begin or setter on @p s or the handle's destruction, and read-only
+ *  for the caller. */
+PF_API const char* strategy_get_run_warnings(pf_strategy_t s);
+
 /** @} */ /* end of pf_config */
 
 /** @defgroup pf_version Version query

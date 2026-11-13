@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <exception>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -97,6 +98,10 @@ class NativeExecutionConsumer final : public IExecutionConsumer {
     // Declared first so embedded cache registrations detach before this sink
     // dies. Its destructor also detaches the engine's longer-lived ledger.
     detail::RunCacheDiagnostics run_cache_diagnostics_;
+    // Observational run notices only: never execution inputs or hash state.
+    std::map<std::pair<int, std::string>, std::string> run_warning_records_;
+    std::string run_warnings_json_ = "[]";
+    bool run_warnings_unavailable_ = false;
     // Creation-time run policy, captured before the derived host constructs
     // script state. A run reset never adopts another host's thread default.
     std::uint64_t map_pair_limit_ = detail::map_pair_limit();
@@ -381,6 +386,10 @@ public:
     static const char* failure_code_of(const BacktestEngine& engine) noexcept;
     static const char* failure_args_of(const BacktestEngine& engine) noexcept;
     static RunFailureValue failure_value_of(const BacktestEngine& engine) noexcept;
+    static const char* run_warnings_of(const BacktestEngine& engine) noexcept;
+    static void mark_run_warnings_unavailable(BacktestEngine& engine) noexcept;
+    void record_run_warning(int sec_id, std::string code, std::string args_json);
+    void finish_run_warnings();
     // Whether retained rows answer the latest run/stream_begin call (ledger below):
     // false after a call that never reached begin_ready's reset_run_state() or was
     // refused over a live attempt; true after begin or with no consumer bound.
