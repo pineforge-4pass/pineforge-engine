@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Callable
 
 
@@ -41,6 +42,7 @@ DIGEST = re.compile(r"[0-9a-f]{64}")
 PROBE = re.compile(r"validation/[A-Za-z0-9][A-Za-z0-9._-]*")
 LFS_VERSION = b"version https://git-lfs.github.com/spec/v1"
 FILE_PATH = re.compile(r"[A-Za-z0-9._/-]+")
+SHARD = re.compile(r"([1-9][0-9]*)/([1-9][0-9]*)")
 
 
 def _sha256(path: Path) -> str:
@@ -391,6 +393,41 @@ def read_subset(path: Path, probes: set[str]) -> list[str]:
     return selected
 
 
+def parse_shard(value: str) -> tuple[int, int]:
+    match = SHARD.fullmatch(value)
+    if match is None:
+        raise ValueError("--shard must be I/N with no leading zeros")
+    index, count = (int(part) for part in match.groups())
+    if index > count:
+        raise ValueError("--shard index must be no greater than its count")
+    return index, count
+
+
+def shard_slice(names: list[str] | set[str], index: int, count: int) -> list[str]:
+    if count < 1 or not 1 <= index <= count:
+        raise ValueError("shard index and count are out of range")
+    return sorted(names)[index - 1::count]
+
+
+def strategy_target(name: str) -> str:
+    """Mirror corpus/CMakeLists.txt's target name for one probe directory."""
+    return "strategy_" + re.sub(r"[^A-Za-z0-9_]", "_", name)
+
+
+def _strategy_targets(names: list[str] | set[str]) -> dict[str, str]:
+    targets = {}
+    owners = {}
+    for name in sorted(names):
+        target = strategy_target(name)
+        previous = owners.get(target)
+        if previous is not None and previous != name:
+            raise ValueError(
+                f"probe target collision: {previous!r} and {name!r} both map to {target!r}")
+        owners[target] = name
+        targets[name] = target
+    return targets
+
+
 def _copy_engine(engine: Path, destination: Path) -> None:
     """Copy tracked worktree bytes, excluding submodules and build products."""
     destination.mkdir()
@@ -426,6 +463,10 @@ def _command(arguments: list[str], cwd: Path, log: Path, environment: dict) -> i
     if result.returncode:
         print(log.read_text(encoding="utf-8", errors="replace"), end="")
     return result.returncode
+
+
+def _time_line(stage: str, started: float) -> None:
+    print(f"TIME {stage} {time.monotonic() - started:.6f}s", flush=True)
 
 
 def _header_problem(tape: Path, produced: Path) -> str | None:
@@ -467,13 +508,22 @@ def collect_probe_results(work: Callable[[str], str | None], items: list[str],
 
 
 def _build_and_run(corpus: Path, engine: Path, work: Path, probes: set[str],
-                   selected: list[str], jobs: int = 8) -> tuple[list[str], bool]:
+                   selected: list[str], jobs: int = 8,
+                   shard: tuple[int, int] | None = None,
+                   started: float | None = None) -> tuple[list[str], bool]:
+    if shard is not None and not probes:
+        raise ValueError("sharded build has no probes")
+    started = time.monotonic() if started is None else started
+    targets = _strategy_targets(probes)
     run = Path(tempfile.mkdtemp(prefix="corpus-validation-", dir=work))
     source, build = run / "engine", run / "build"
     print(f"WORK {run}")
-    _copy_engine(engine, source)
-    staged = source / "corpus"
-    shutil.copytree(corpus, staged, ignore=_copy_ignore, symlinks=True)
+    try:
+        _copy_engine(engine, source)
+        staged = source / "corpus"
+        shutil.copytree(corpus, staged, ignore=_copy_ignore, symlinks=True)
+    finally:
+        _time_line("copy", started)
     environment = os.environ.copy()
     temporary = run / "tmp"
     temporary.mkdir()
@@ -485,11 +535,29 @@ def _build_and_run(corpus: Path, engine: Path, work: Path, probes: set[str],
         "-DCMAKE_BUILD_TYPE=Release", "-DPINEFORGE_BUILD_TESTS=OFF",
         "-DPINEFORGE_BUILD_TUTORIAL=OFF", "-DPINEFORGE_BUILD_CORPUS_STRATEGIES=ON",
     ]
-    if _command(configure, source, run / "configure.log", environment):
-        return [f"build {engine / 'CMakeLists.txt'}: configure failed; see {run / 'configure.log'}"], True
-    if _command(["cmake", "--build", str(build), "--target", "corpus_strategies",
-                 "--parallel", str(jobs)], source, run / "build.log", environment):
-        return [f"build {corpus / 'validation'}: corpus_strategies failed; see {run / 'build.log'}"], False
+    try:
+        configure_result = _command(
+            configure, source, run / "configure.log", environment)
+    finally:
+        _time_line("configure", started)
+    if configure_result:
+        return [f"build {engine / 'CMakeLists.txt'}: configure failed; see "
+                f"{run / 'configure.log'}"], True
+    build_targets = ["corpus_strategies"] if shard is None else [
+        targets[name] for name in sorted(probes)]
+    build_arguments = [
+        "cmake", "--build", str(build), "--target", *build_targets,
+        "--parallel", str(jobs),
+    ]
+    try:
+        build_result = _command(
+            build_arguments, source, run / "build.log", environment)
+    finally:
+        _time_line("build", started)
+    if build_result:
+        target_label = " ".join(build_targets)
+        return [f"build {corpus / 'validation'}: {target_label} failed; "
+                f"see {run / 'build.log'}"], False
     libraries = {}
     findings = []
     for name in sorted(probes):
@@ -500,12 +568,19 @@ def _build_and_run(corpus: Path, engine: Path, work: Path, probes: set[str],
         else:
             libraries[name] = found[0]
     if findings:
+        _time_line("probes", started)
         return findings, False
     derived = staged / "data" / "derived"
-    if _command([sys.executable, "-B", str(source / "scripts/derive_corpus_feeds.py"),
-                 "--corpus-root", str(staged), "--derived-workspace", str(derived)],
-                source, run / "derive.log", environment):
-        return [f"feed {corpus / FEED}: derivation failed; see {run / 'derive.log'}"], True
+    try:
+        derive_result = _command(
+            [sys.executable, "-B", str(source / "scripts/derive_corpus_feeds.py"),
+             "--corpus-root", str(staged), "--derived-workspace", str(derived)],
+            source, run / "derive.log", environment)
+    finally:
+        _time_line("derive", started)
+    if derive_result:
+        return [f"feed {corpus / FEED}: derivation failed; see "
+                f"{run / 'derive.log'}"], True
 
     def run_probe(name: str) -> str | None:
         output = run / "outputs" / name / "engine_trades.csv"
@@ -523,7 +598,10 @@ def _build_and_run(corpus: Path, engine: Path, work: Path, probes: set[str],
             return f"header {output}: {problem}"
         return None
 
-    return collect_probe_results(run_probe, selected, jobs)
+    try:
+        return collect_probe_results(run_probe, selected, jobs)
+    finally:
+        _time_line("probes", started)
 
 
 class _Parser(argparse.ArgumentParser):
@@ -545,6 +623,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Parallel build and probe workers, from 1 to 8 (default: 8).")
     parser.add_argument("--subset", type=Path, metavar="FILE",
                         help="Probe list (default: engine scripts/corpus_parity_subset.txt).")
+    parser.add_argument("--shard", metavar="I/N",
+                        help="Build and validate one 1-based slice of the corpus.")
     counts = dict(tapes=0, owned_entries=0, owned_hashes=0, lfs_pointers=0,
                   feed=0, tracked=0, bound=0)
     findings: list[str] = []
@@ -553,8 +633,12 @@ def main(argv: list[str] | None = None) -> int:
     clean = False
     error = False
     engine_commit = "unknown"
+    build_started = None
     try:
         args = parser.parse_args(argv)
+        if args.shard is not None and args.records_only:
+            raise ValueError("--records-only cannot be combined with --shard")
+        shard = parse_shard(args.shard) if args.shard is not None else None
         corpus, engine = args.corpus.resolve(), args.engine.resolve()
         engine_commit = _engine_commit(engine)
         if not 1 <= args.jobs <= 8:
@@ -574,14 +658,30 @@ def main(argv: list[str] | None = None) -> int:
             for line in os.fsdecode(before).splitlines():
                 findings.append(f"clean {corpus}: checkout is dirty before validation: {line}")
         print(f"CORPUS {os.fsdecode(_git(corpus, 'rev-parse', 'HEAD')).strip()}")
-        records, measured, probes = _records(corpus)
-        findings.extend(records)
-        counts.update(measured)
-        pointers, counts["lfs_pointers"] = _lfs(corpus)
-        findings.extend(pointers)
+        if not args.records_only:
+            build_started = time.monotonic()
+            print(f"CPUS {args.jobs}", flush=True)
+        try:
+            records, measured, probes = _records(corpus)
+            findings.extend(records)
+            counts.update(measured)
+            pointers, counts["lfs_pointers"] = _lfs(corpus)
+            findings.extend(pointers)
+        finally:
+            if build_started is not None:
+                _time_line("census", build_started)
         if not args.records_only and not findings:
             subset = args.subset or engine / "scripts/corpus_parity_subset.txt"
-            selected = read_subset(subset, probes)
+            _strategy_targets(probes)
+            build_probes = probes
+            if shard is not None:
+                build_probes = set(shard_slice(probes, *shard))
+                if not build_probes:
+                    raise ValueError(f"--shard {args.shard} has no probes")
+            selected_all = read_subset(subset, probes)
+            selected = selected_all
+            if shard is not None:
+                selected = [name for name in selected_all if name in build_probes]
             for name in sorted(probes):
                 for filename in ("generated.cpp", "strategy.pine"):
                     try:
@@ -589,8 +689,14 @@ def main(argv: list[str] | None = None) -> int:
                     except ValueError as problem:
                         findings.append(f"build {corpus / name / filename}: {problem}")
             if not findings:
+                if shard is not None:
+                    print(
+                        f"SHARD {args.shard} probes={len(build_probes)}/{len(probes)} "
+                        f"selected={len(selected)}/{len(selected_all)}", flush=True)
                 work.mkdir(parents=True, exist_ok=True)
-                result, error = _build_and_run(corpus, engine, work, probes, selected, args.jobs)
+                result, error = _build_and_run(
+                    corpus, engine, work, build_probes, selected, args.jobs,
+                    shard=shard, started=build_started)
                 findings.extend(result)
     except Exception as problem:
         error = True
@@ -610,6 +716,8 @@ def main(argv: list[str] | None = None) -> int:
             message = " ".join(str(problem).splitlines())
             findings.append(f"clean {corpus}: could not read final status: "
                             f"{type(problem).__name__}: {message}")
+    if build_started is not None:
+        _time_line("total", build_started)
     print(f"ENGINE {engine_commit}")
     print("COUNT " + " ".join(f"{name}={counts[name]}" for name in (
         "tapes", "owned_entries", "owned_hashes", "lfs_pointers", "feed", "tracked", "bound")))

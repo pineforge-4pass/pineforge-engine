@@ -2155,6 +2155,9 @@ The corpus workflow, added by the corpus pull request, is to run the engine's
 engine commit it ran. The validator checks recorded bytes and checkout
 cleanliness, builds the selected probes and compares each produced trade file's
 header with the recorded tape header; it never compares trades.
+Large corpus runs may pass `--shard I/N` to build and validate one-based,
+round-robin slices of the probe population. The `corpus-validate` check
+requires every shard to succeed.
 The manifest `file_digests.json`, written by
 `scripts/write_corpus_file_digests.py`, binds every tracked corpus file except
 itself. The checked commit binds the manifest's own bytes.
