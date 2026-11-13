@@ -425,13 +425,32 @@ class CorpusValidatorMainTests(unittest.TestCase):
         self.assertFalse(target_log.exists())
 
     def test_shard_options_are_strict_and_records_only_refuses_them(self):
-        for value in ("0/2", "01/2", "1/02", "2/1", "1/0", "1/2/3", "1 /2"):
+        malformed = {
+            "0/2": "--shard must be I/N with no leading zeros",
+            "01/2": "--shard must be I/N with no leading zeros",
+            "1/02": "--shard must be I/N with no leading zeros",
+            "2/1": "--shard index must be no greater than its count",
+            "1/0": "--shard must be I/N with no leading zeros",
+            "1/2/3": "--shard must be I/N with no leading zeros",
+            "1 /2": "--shard must be I/N with no leading zeros",
+        }
+        for value, reason in malformed.items():
             with self.subTest(value=value):
                 output = self.assert_outcome(self.invoke("--shard", value), 2)
+                self.assertEqual(
+                    [line for line in output.splitlines()
+                     if line.startswith("FINDING ")],
+                    [f"FINDING setup arguments: ValueError: {reason}"],
+                )
                 self.assertNotIn("CPUS ", output)
                 self.assertNotIn("TIME ", output)
         output = self.assert_outcome(
             self.invoke("--records-only", "--shard", "1/2"), 2)
+        self.assertEqual(
+            [line for line in output.splitlines() if line.startswith("FINDING ")],
+            ["FINDING setup arguments: ValueError: "
+             "--records-only cannot be combined with --shard"],
+        )
         self.assertNotIn("CPUS ", output)
         self.assertNotIn("TIME ", output)
 
@@ -879,7 +898,7 @@ if "--build" in arguments:
             sys.exit(10)
     target_log = os.environ.get("FAKE_CMAKE_TARGET_LOG")
     if target_log:
-        Path(target_log).write_text("\n".join(raw_requested) + "\n", encoding="utf-8")
+        Path(target_log).write_text("\\n".join(raw_requested) + "\\n", encoding="utf-8")
     libraries = os.environ.get("FAKE_CMAKE_LIBRARIES", "one")
     if libraries != "none":
         for target in requested:
