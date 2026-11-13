@@ -29,7 +29,7 @@ the overlay. The marker a driver tests must resolve to a REMOVED path: present
 exactly when the private fixtures are overlaid.
 
 Every registration is walked, not pattern-matched per form: the two CMakeLists
-and the tests/cr150.d/*.cmake files are read command by command so that a row
+and the tests/lanes.d/*.cmake files are read command by command so that a row
 registered through add_test (also
 multi-line, also inside foreach loops the file expands), pineforge_add_unit_
 test, pineforge_add_twin_test or add_executable is swept, and the count of
@@ -330,8 +330,8 @@ class Rows:
         self.unresolved_list_inputs: list[tuple[int, str, str, str]] = []
         self.sort_sites: set[int] = set()
         self.applied_sort_sites: set[int] = set()
-        self.cr150_lane_files: list[Path] | None = (including.cr150_lane_files
-                                                   if including is not None else None)
+        self.lane_files: list[Path] | None = (including.lane_files
+                                             if including is not None else None)
         self._check_sites_readable()
         self._scan_list_subcommands()
         self._walk(0, len(self.lines), self.vars, conditions)
@@ -342,9 +342,9 @@ class Rows:
                 f'{self.path}:{lineno}: list(SORT) is not a '
                 f'subcommand this sweep models: its effect on the tracked '
                 f'lists would be skipped, and skipped is not clean')
-        if including is None and self.cr150_lane_files is not None:
+        if including is None and self.lane_files is not None:
             read_paths = {table.path for table in self.tables}
-            for lane in self.cr150_lane_files:
+            for lane in self.lane_files:
                 if lane not in read_paths:
                     raise Unparseable(f'{lane}:1: globbed lane file was not included by the walk')
 
@@ -581,15 +581,15 @@ class Rows:
         if not head:
             raise Unparseable(f'{self.path}:{first + 1}: a foreach header this sweep cannot read')
         var, rest = head.group(1), head.group(2).strip()
-        if var == 'cr150_lane_file' and rest == 'IN LISTS CR150_LANE_CMAKE':
-            if self.cr150_lane_files is None or 'CR150_LANE_CMAKE' not in env:
+        if var == 'lane_file' and rest == 'IN LISTS LANE_CMAKE':
+            if self.lane_files is None or 'LANE_CMAKE' not in env:
                 raise Unparseable(
-                    f'{self.path}:{first}: CR150_LANE_CMAKE was not bound by the lane glob')
+                    f'{self.path}:{first}: LANE_CMAKE was not bound by the lane glob')
             # Lane includes run in the including scope; later files and the
             # statements after the loop must observe their list mutations.
             previous = env.get(var)
             try:
-                for item in list(env['CR150_LANE_CMAKE']):
+                for item in list(env['LANE_CMAKE']):
                     env[var] = [item]
                     self._walk(first, last, env, conditions)
             finally:
@@ -637,10 +637,10 @@ class Rows:
         if self.path != self.root / 'tests' / 'CMakeLists.txt':
             return
         if not re.fullmatch(
-                r'\s*GLOB\s+CR150_LANE_CMAKE\s+CONFIGURE_DEPENDS\s+'
-                r'"\$\{CMAKE_CURRENT_SOURCE_DIR\}/cr150\.d/\*\.cmake"\s*', body):
+                r'\s*GLOB\s+LANE_CMAKE\s+CONFIGURE_DEPENDS\s+'
+                r'"\$\{CMAKE_CURRENT_SOURCE_DIR\}/lanes\.d/\*\.cmake"\s*', body):
             return
-        directory = self.root / 'tests' / 'cr150.d'
+        directory = self.root / 'tests' / 'lanes.d'
         try:
             paths = list(directory.iterdir())
         except FileNotFoundError:
@@ -648,18 +648,18 @@ class Rows:
         except OSError as error:
             raise Unparseable(
                 f'{self.path}:{line_i + 1}: cannot read {directory}: {error}') from error
-        self.cr150_lane_files = sorted(path for path in paths
-                                       if path.name.endswith('.cmake'))
-        env['CR150_LANE_CMAKE'] = [str(path) for path in self.cr150_lane_files]
+        self.lane_files = sorted(path for path in paths
+                                 if path.name.endswith('.cmake'))
+        env['LANE_CMAKE'] = [str(path) for path in self.lane_files]
 
     def _do_cr150_include(self, body: str, line_i: int, env: dict,
                           conditions: tuple) -> None:
-        if '${cr150_lane_file}' not in body:
+        if '${lane_file}' not in body:
             return                          # existing non-lane include handling
-        if body.strip().strip('"') != '${cr150_lane_file}':
+        if body.strip().strip('"') != '${lane_file}':
             raise Unparseable(f'{self.path}:{line_i + 1}: unreadable CR-150 lane include')
-        target = Path(subst('${cr150_lane_file}', env))
-        if self.cr150_lane_files is None or target not in self.cr150_lane_files:
+        target = Path(subst('${lane_file}', env))
+        if self.lane_files is None or target not in self.lane_files:
             raise Unparseable(
                 f'{self.path}:{line_i + 1}: include({target}) is not a globbed CR-150 lane')
         if any(table.path == target for table in self.tables):

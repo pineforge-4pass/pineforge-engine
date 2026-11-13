@@ -244,8 +244,8 @@ class TamperTree:
         (self.root / 'scripts').mkdir(parents=True)
         shutil.copy(REPO / 'tests' / 'CMakeLists.txt', self.root / 'tests')
         shutil.copy(REPO / 'runner' / 'CMakeLists.txt', self.root / 'runner')
-        shutil.copytree(REPO / 'tests' / 'cr150.d',
-                        self.root / 'tests' / 'cr150.d')
+        shutil.copytree(REPO / 'tests' / 'lanes.d',
+                        self.root / 'tests' / 'lanes.d')
         # the sweep resolves a row's Python driver against the tree root, so
         # the tamper tree carries the scripts a real row names (the sweep
         # fails when a named driver is absent -- that is what it now checks)
@@ -269,7 +269,7 @@ class TamperTree:
         (self.root / 'benchmarks').mkdir()
         shutil.copy(REPO / 'benchmarks' / 'check_provenance.py',
                     self.root / 'benchmarks')
-        # The cr150.d rows test_sink_finalize, test_sink_finalize_native,
+        # The lanes.d rows test_sink_finalize, test_sink_finalize_native,
         # test_sink_to_json and test_run_json_bounded_transport name their
         # drivers under docker/; the sweep fails when a named driver is absent.
         (self.root / 'docker').mkdir()
@@ -530,7 +530,7 @@ add_test(NAME e2e_fb2c_pop_front_flow
     # A lane registration is swept at its own file:line, with the including
     # tests/ source directory. The same registration with public data is clean.
     def test_cr150_lane_private_path_is_red_and_public_is_green(self):
-        lane = self.tree.root / 'tests' / 'cr150.d' / 'e2e-path.cmake'
+        lane = self.tree.root / 'tests' / 'lanes.d' / 'e2e-path.cmake'
         private_path = f'{REMOVED_EXAMPLE}/bars.csv'
         relative_path = private_path[len('tests/'):]
         lane.write_text(f'''add_test(
@@ -540,7 +540,7 @@ add_test(NAME e2e_fb2c_pop_front_flow
 ''')
         red = run_sweep(self.tree.root)
         self.assertEqual(1, red.returncode, red.stdout + red.stderr)
-        self.assertIn('tests/cr150.d/e2e-path.cmake:1:', red.stdout)
+        self.assertIn('tests/lanes.d/e2e-path.cmake:1:', red.stdout)
         self.assertIn(f'test_e2e_cr150_lane_path names the removed path {private_path} '
                       'without being a pinned private-fixture row', red.stdout)
 
@@ -550,16 +550,16 @@ add_test(NAME e2e_fb2c_pop_front_flow
         self.assertIn('unpinned rows naming removed data: 0', green.stdout)
 
     def test_unreadable_cr150_lane_exits_2(self):
-        lane = self.tree.root / 'tests' / 'cr150.d' / 'e2e-unreadable.cmake'
+        lane = self.tree.root / 'tests' / 'lanes.d' / 'e2e-unreadable.cmake'
         # A dangling symlink is unreadable even when the lab runs as root.
         lane.symlink_to('missing-lane')
         result = run_sweep(self.tree.root)
         self.assertEqual(2, result.returncode, result.stdout + result.stderr)
-        self.assertIn('tests/cr150.d/e2e-unreadable.cmake', result.stdout)
+        self.assertIn('tests/lanes.d/e2e-unreadable.cmake', result.stdout)
         self.assertIn('cannot read', result.stdout)
 
     def test_cr150_lane_order_and_including_scope_at_include_site(self):
-        glob = 'file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")'
+        glob = 'file(GLOB LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/lanes.d/*.cmake")'
         private_path = f'{REMOVED_EXAMPLE}/bars.csv'
         self.tree.edit('tests/CMakeLists.txt', glob,
                        f'list(APPEND e2e_cr150_path {private_path})\n' + glob)
@@ -569,7 +569,7 @@ list(APPEND e2e_cr150_path tests/cr150_public/bars.csv)
 ''')
         # Create in reverse order; the walk and its file inventory must sort.
         for suffix in ('z-last', 'a-first'):
-            lane = self.tree.root / 'tests' / 'cr150.d' / f'e2e-{suffix}.cmake'
+            lane = self.tree.root / 'tests' / 'lanes.d' / f'e2e-{suffix}.cmake'
             lane.write_text(f'''add_test(NAME test_e2e_cr150_{suffix.replace('-', '_')}
     COMMAND ${{CMAKE_COMMAND}} -E echo ${{e2e_cr150_path}})
 ''')
@@ -586,11 +586,11 @@ list(APPEND e2e_cr150_path tests/cr150_public/bars.csv)
     def test_cr150_sort_requires_the_exact_configure_depends_lane_glob(self):
         cmake = self.tree.root / 'tests' / 'CMakeLists.txt'
         original = cmake.read_text()
-        glob = 'file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")'
+        glob = 'file(GLOB LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/lanes.d/*.cmake")'
         self.assertIn(glob, original)
         for replacement in ('# deliberately absent lane glob',
                             glob.replace(' CONFIGURE_DEPENDS', ''),
-                            glob.replace('cr150.d/*.cmake', 'other.d/*.cmake')):
+                            glob.replace('lanes.d/*.cmake', 'other.d/*.cmake')):
             with self.subTest(glob=replacement):
                 cmake.write_text(original.replace(glob, replacement, 1))
                 result = run_sweep(self.tree.root)

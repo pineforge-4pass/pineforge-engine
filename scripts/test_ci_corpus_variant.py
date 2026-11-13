@@ -57,7 +57,7 @@ COMMAND_CENSUS_EXEMPTIONS = (
     ('scripts/test_adapter_spec_shadowing.py', 'unnamed before this change'),
     ('scripts/test_aggregate_cpp_versions.py', 'unnamed before this change'),
     ('scripts/test_broker_state_hash_coverage.py', 'unnamed before this change'),
-    ('scripts/test_check_cr150_cmake_d.py', 'unnamed before this change'),
+    ('scripts/test_check_lanes_cmake_d.py', 'unnamed before this change'),
     ('scripts/test_check_kernel_profile_rows.py', 'unnamed before this change'),
     ('scripts/test_check_replay_off_golden.py', 'unnamed before this change'),
     ('scripts/test_ci_preflight_split.py', 'unnamed before this change'),

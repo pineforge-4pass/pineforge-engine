@@ -31,7 +31,7 @@ Clean: `rm -rf build`. There are no CMake presets. Submodules: `git submodule up
 | `src/engine_*.cpp`, `src/native_*.cpp`, `src/ta_*.cpp`, `src/market_*.cpp`, and the rest of `PINEFORGE_KERNEL_SOURCES` in `CMakeLists.txt` | the kernel (knows nothing about Pine) |
 | `src/source/`, `src/compat/pine/` | the Pine adapter: TradingView parity lives here |
 | `src/c_abi.cpp`, `src/native_c_host.cpp` | the two main C surfaces (a few additive `PF_API` exports also sit in `src/engine_report.cpp` and `src/selected_window_plan_c.cpp`) |
-| `tests/` | C++ unit, replay and pure-C tests and Python drivers; ctest registration in `tests/CMakeLists.txt` and `tests/cr150.d/*.cmake` |
+| `tests/` | C++ unit, replay and pure-C tests and Python drivers; ctest registration in `tests/CMakeLists.txt` and `tests/lanes.d/*.cmake` |
 | `examples/native/`, `runner/` | Pine-free native hosts (ctest rows only with `-DPINEFORGE_BUILD_EXAMPLES=ON`, which `ci_verify.py` sets for `release` and `kernel`); the optional `pineforge-live` executable |
 | `scripts/` | CI drivers `ci_preflight.py` and `ci_verify.py`, checkers, corpus drivers, and their self-tests `test_*.py` |
 | `corpus/` (submodule) | public TradingView parity corpus; `scripts/corpus_parity_baseline.txt` is its byte oracle |
