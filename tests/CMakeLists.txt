@@ -8522,7 +8522,7 @@ if(TARGET pineforge_selected_admit_test_identity)
 endif()
 # --- lane selected-admit-helper end ---
 
-# --- CR-150 run-json-run-warnings begin ---
+# --- lane run-json-run-warnings begin ---
 # Test-only stub strategy libraries for the run-warnings rows: one exports the
 # optional warnings getter, the other is built without it (an older module).
 # The rows reach their paths through $<TARGET_FILE:...> in the lane file.
@@ -8544,7 +8544,7 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
     set_target_properties(run_json_no_run_warnings_strategy PROPERTIES
         PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/run_json_run_warnings")
 endif()
-# --- CR-150 run-json-run-warnings end ---
+# --- lane run-json-run-warnings end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
