@@ -5,6 +5,7 @@
  */
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -13,6 +14,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/pending_order_mirror.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
 #include "oracle_fixture_config_shim.hpp"
@@ -79,6 +81,16 @@ Bar flat_bar(int index) {
 
 std::vector<Bar> opening_bars() {
     return {flat_bar(0), flat_bar(1), flat_bar(2)};
+}
+
+std::vector<Bar> oca_bars(int placement_bar = 0) {
+    std::vector<Bar> bars;
+    for (int i = 0; i <= placement_bar + 3; ++i) bars.push_back(flat_bar(i));
+    // The sibling's limit is untouched at placement and on the following bar.
+    // Both side mirrors reach it only on the bar where the book is closed.
+    bars[placement_bar + 2].high = 1.5;
+    bars[placement_bar + 2].low = 0.5;
+    return bars;
 }
 
 // Opens one long position with an explicit quantity on the first bar and
@@ -180,8 +192,10 @@ void test_explicit_entry_path() {
 // The source quantity stays literal; only its executable units use the lot grid.
 class ExplicitOrderProbe final : public pineforge::source::PineStrategyHost {
 public:
-    ExplicitOrderProbe(double requested, double step, bool is_long, int oca_type = 0)
-        : requested_(requested), is_long_(is_long), oca_type_(oca_type) {
+    ExplicitOrderProbe(double requested, double step, bool is_long, int oca_type = 0,
+                       double opposite_units = 0.0)
+        : requested_(requested), is_long_(is_long), oca_type_(oca_type),
+          opposite_units_(opposite_units) {
         source::PineStrategyConfig config;
         config.initial_capital = 100.0;
         config.default_qty_type = static_cast<int>(QtyType::FIXED);
@@ -198,28 +212,60 @@ public:
     }
 
     void on_source_bar(const Bar&) override {
-        if (pine_bar_index() == 0) {
+        const int placement_bar = opposite_units_ > 0.0 ? 1 : 0;
+        const int close_bar = placement_bar + (oca_type_ == 1 ? 2 : 1);
+        if (pine_bar_index() == 0 && opposite_units_ > 0.0) {
+            strategy_order("seed", !is_long_, opposite_units_);
+        }
+        if (pine_bar_index() == placement_bar) {
             strategy_order("open", is_long_, requested_, kNaN, kNaN,
                            oca_type_ == 1 ? "cancel" : "", oca_type_);
-        } else if (pine_bar_index() == 1) {
+            if (oca_type_ == 1) {
+                strategy_order("sibling", is_long_, 1.0, is_long_ ? 0.5 : 1.5,
+                               kNaN, "cancel", 1);
+                sibling_at_placement = pending_quantity("sibling");
+            }
+            source_quantity = pending_quantity("open");
+        }
+        if (pine_bar_index() == placement_bar + 1) {
+            position_after_primary = live_position_size();
+            sibling_after_primary = pending_quantity("sibling");
+        }
+        if (pine_bar_index() == close_bar) {
             position_before_close = live_position_size();
             strategy_close_all();
         }
     }
 
+    double source_quantity = kNaN;
+    double sibling_at_placement = kNaN;
+    double sibling_after_primary = kNaN;
+    double position_after_primary = kNaN;
     double position_before_close = kNaN;
 
 private:
+    double pending_quantity(const char* id) const {
+        for (int i = 0; i < pending_order_count(); ++i) {
+            pf_pending_order_v1_t row{};
+            if (pending_intent_view().copy_v1(i, &row) == 0
+                && std::strcmp(row.id, id) == 0) {
+                return row.quantity_intent_units;
+            }
+        }
+        return kNaN;
+    }
+
     double requested_;
     bool is_long_;
     int oca_type_;
+    double opposite_units_;
 };
 
-void test_explicit_order_decimal_boundary() {
+void test_explicit_order_decimal_boundary(const char* cancel_control_row = nullptr) {
     struct Row {
         const char* name;
         double request;
-        Decimal requested;
+        Decimal magnitude;
         Decimal step;
         bool has_grid;
     };
@@ -236,18 +282,20 @@ void test_explicit_order_decimal_boundary() {
         {"non-decimal grid control", 1.125, {1125, 3}, {25, 2}, true},
         {"gridless control", 3.3899999999998727,
          {33899999999998727LL, 16}, {1, 4}, false},
+        {"negative-qty control", -2.625, {2625, 3}, {25, 2}, true},
     };
     const auto bars = opening_bars();
-    for (const auto& row : rows) {
+    if (!cancel_control_row) for (const auto& row : rows) {
         for (bool is_long : {true, false}) {
             std::printf("  strategy.order %s %s\n", is_long ? "long" : "short", row.name);
             const double step = row.has_grid ? decimal_value(row.step) : 0.0;
             // Integer decimal division is independent of both engine floors.
             const double expected = row.has_grid
-                ? decimal_floor(row.requested, row.step) : row.request;
+                ? decimal_floor(row.magnitude, row.step) : std::abs(row.request);
             ExplicitOrderProbe probe(row.request, step, is_long);
             probe.run(bars.data(), static_cast<int>(bars.size()));
             CHECK(probe.last_error().empty());
+            CHECK(bits(probe.source_quantity) == bits(row.request));
             CHECK(bits(probe.position_before_close) == bits(is_long ? expected : -expected));
             CHECK(probe.trade_count() == 1);
             CHECK(probe.live_position_size() == 0.0);
@@ -261,34 +309,106 @@ void test_explicit_order_decimal_boundary() {
             CHECK(!trade.open_at_end);
         }
     }
+    const auto cancel_bars = oca_bars();
+    bool matched = false;
     for (const auto& row : rows) {
+        if (cancel_control_row && std::strcmp(cancel_control_row, row.name) != 0) continue;
+        matched = true;
         for (bool is_long : {true, false}) {
             std::printf("  strategy.order oca.cancel %s %s\n",
                         is_long ? "long" : "short", row.name);
             const double step = row.has_grid ? decimal_value(row.step) : 0.0;
             const double expected = row.has_grid
-                ? decimal_floor(row.requested, row.step) : row.request;
+                ? decimal_floor(row.magnitude, row.step) : std::abs(row.request);
+            // A selected cancellation-only control also runs on the earlier
+            // unfloored tree. Its quantities must equal either the independent
+            // decimal floor or the raw input magnitude. The default matrix
+            // always requires the exact floor, including the above-grid row.
+            const auto matches_units = [&](double actual) {
+                return bits(actual) == bits(expected)
+                    || (cancel_control_row
+                        && bits(actual) == bits(std::abs(row.request)));
+            };
             ExplicitOrderProbe probe(row.request, step, is_long, 1);
-            probe.run(bars.data(), static_cast<int>(bars.size()));
+            probe.run(cancel_bars.data(), static_cast<int>(cancel_bars.size()));
             CHECK(probe.last_error().empty());
-            CHECK(bits(probe.position_before_close) == bits(is_long ? expected : -expected));
+            CHECK(bits(probe.source_quantity) == bits(row.request));
+            CHECK(bits(probe.sibling_at_placement) == bits(1.0));
+            CHECK(std::isnan(probe.sibling_after_primary));
+            CHECK(matches_units(is_long ? probe.position_after_primary
+                                        : -probe.position_after_primary));
+            CHECK(matches_units(is_long ? probe.position_before_close
+                                        : -probe.position_before_close));
             CHECK(probe.trade_count() == 1);
             CHECK(probe.live_position_size() == 0.0);
+            for (std::size_t i = 0; i < probe.trade_count(); ++i) {
+                CHECK(probe.get_trade(i).entry_id != "sibling");
+            }
             if (probe.trade_count() != 1) continue;
             const auto trade = probe.get_trade(0);
-            CHECK(bits(trade.qty) == bits(expected));
+            CHECK(matches_units(trade.qty));
             CHECK(trade.is_long == is_long);
             CHECK(trade.entry_id == "open");
+            CHECK(trade.entry_time == cancel_bars[0].timestamp);
+            CHECK(trade.exit_time == cancel_bars[2].timestamp);
             CHECK(!trade.open_at_end);
         }
+    }
+    CHECK(matched);
+}
+
+void test_oca_cancel_floored_opposite_bound() {
+    const double request = 2.625;
+    const double step = decimal_value({25, 2});
+    const double executable = decimal_floor({2625, 3}, {25, 2});
+    const double opposite_units = decimal_value({1, 0});
+    const auto bars = oca_bars(1);
+    CHECK(opposite_units < executable);
+    for (bool is_long : {true, false}) {
+        std::printf("  strategy.order oca.cancel opposite bound %s\n",
+                    is_long ? "long" : "short");
+        ExplicitOrderProbe probe(request, step, is_long, 1, opposite_units);
+        probe.run(bars.data(), static_cast<int>(bars.size()));
+        CHECK(probe.last_error().empty());
+        CHECK(bits(probe.source_quantity) == bits(request));
+        CHECK(bits(probe.sibling_at_placement) == bits(1.0));
+        CHECK(probe.position_after_primary == 0.0);
+        CHECK(bits(probe.sibling_after_primary) == bits(1.0));
+        CHECK(bits(probe.position_before_close)
+              == bits(is_long ? 1.0 : -1.0));
+        CHECK(probe.live_position_size() == 0.0);
+        CHECK(probe.trade_count() == 2);
+        if (probe.trade_count() != 2) continue;
+        const auto seed = probe.get_trade(0);
+        CHECK(bits(seed.qty) == bits(opposite_units));
+        CHECK(seed.is_long == !is_long);
+        CHECK(seed.entry_id == "seed");
+        CHECK(seed.entry_time == bars[0].timestamp);
+        CHECK(seed.exit_time == bars[1].timestamp);
+        CHECK(!seed.open_at_end);
+        const auto sibling = probe.get_trade(1);
+        CHECK(bits(sibling.qty) == bits(1.0));
+        CHECK(sibling.is_long == is_long);
+        CHECK(sibling.entry_id == "sibling");
+        CHECK(sibling.entry_time == bars[3].timestamp);
+        CHECK(sibling.exit_time == bars[3].timestamp);
+        CHECK(!sibling.open_at_end);
     }
 }
 
 }  // namespace
 
-int main() {
-    test_explicit_entry_path();
-    test_explicit_order_decimal_boundary();
+int main(int argc, char** argv) {
+    if (argc == 1) {
+        test_explicit_entry_path();
+        test_explicit_order_decimal_boundary();
+        test_oca_cancel_floored_opposite_bound();
+    } else if (argc == 3 && std::strcmp(argv[1], "--oca-cancel-control") == 0) {
+        test_explicit_order_decimal_boundary(argv[2]);
+    } else {
+        std::fprintf(stderr, "usage: %s [--oca-cancel-control ROW]\n", argv[0]);
+        return 2;
+    }
     std::printf("\n=== Results: %d checks, %d failures ===\n",
                 checks, failures);
     return failures == 0 ? 0 : 1;

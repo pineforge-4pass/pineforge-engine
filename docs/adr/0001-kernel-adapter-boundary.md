@@ -93,7 +93,7 @@ summary of it.
   (`native_execution_consumer.cpp:1101-1115`) in the v19 continuation. The Pine
   adapter keeps its pending-book and chart-sampling policy in the source layer,
   reading the named input coordinate through `projection_bar_index`
-  (`pine_adapter.cpp:1272-1278`) where Pine still needs input cadence, and
+  (`pine_adapter.cpp:1273-1279`) where Pine still needs input cadence, and
   does not rewrite the kernel's lot or row indices.
 - **Requests.** `submit` / `replace` / `cancel` / `submit_market` / `replace_market`
   (`native_host.hpp:1255-1260`), plus `cancel_all` (`native_host.hpp:1300`) and `cancel_where`
@@ -232,7 +232,7 @@ kernel and own these quirks, each at its site:
   (`PendingSameBarCommand` pine_adapter.hpp:2137, `pending_bracket_legs_` pine_adapter.hpp:2810); the retained parent-before-child ordering of live handles — an
   exactly-shaped entry and its `from_entry` exit, re-created after a named cancel, on a flat book
   under `process_orders_on_close` (`src/compat/pine/order_priority.cpp:13-59`, applied by
-  `update_l4c_priority` `pine_adapter.cpp:1577-1656`). Kernel priority is acceptance/incarnation order.
+  `update_l4c_priority` `pine_adapter.cpp:1578-1657`). Kernel priority is acceptance/incarnation order.
 - **Exit-leg lifecycle.** Activation / suspension / revival barriers
   (`select_exit_activation` src/compat/pine/exit_activation.cpp:44, `select_exit_suspension` src/compat/pine/exit_lifecycle.cpp:11, `select_replacement_revival_definition` src/compat/pine/exit_lifecycle.cpp:51) and historical birth reach
   (`order_birth.cpp` `src/compat/pine/order_birth.cpp:5-14`).

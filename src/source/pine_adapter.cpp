@@ -25836,7 +25836,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     if (placement_snapshot && placement_snapshot->family == PineOrderFamily::Order
         && placement_snapshot->oca_type == 1 && !placement_snapshot->oca_name.empty()) {
         const bool fully_filled = !std::isfinite(placement_snapshot->requested_qty)
-            || event.filled_working >= placement_snapshot->requested_qty;
+            || event.filled_working >= explicit_entry_quantity_floor(std::abs(placement_snapshot->requested_qty), staged_.quantity_grid);
         if (fully_filled) {
             detail::ExitScratchRows<native_order::RequestHandle> siblings(*this);
             for (const auto& handle : live_handles_) {
