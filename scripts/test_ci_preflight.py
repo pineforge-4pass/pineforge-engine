@@ -7191,7 +7191,7 @@ exit "$lookup_exit"
         self.assertEqual(sources[3].count(block), 1)
         sources[3] = sources[3].replace(block, '', 1).rstrip() + '\n' + block
         self.assertNotIn(finding, ci_workflow_findings(*sources))
-        sources[3] += 'include("${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/late-properties.cmake")\n'
+        sources[3] += 'include("${CMAKE_CURRENT_SOURCE_DIR}/lanes.d/late-properties.cmake")\n'
         self.assertIn(finding, ci_workflow_findings(*sources))
 
     def test_reusable_heavy_profiles_keep_full_populations_and_dispatch(self):
