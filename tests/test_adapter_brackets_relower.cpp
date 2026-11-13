@@ -771,7 +771,8 @@ public:
             }
             break;
         case Shape::RelNegativeShort:
-            // A short's profit target far below zero is no limit leg at all.
+            // A short's profit target far below zero is a limit leg that
+            // can never fill: it rests at a zero trigger and is adopted.
             if (bar == 0) {
                 strategy_entry("S", false);
                 strategy_exit("X", "S", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
@@ -1056,9 +1057,10 @@ struct Named {
 // rel-cancel-exit-id (strategy.cancel removes the definition inside the same
 // evaluation: no leg exists to place). The withdrawals that remain are the
 // kernel cancelling a replaced, cancelled or declined parent's children
-// (rel-limit-parent, rel-reissue-changed, the breakout pair, ...), a zero-
-// capacity sibling (rel-two-exits) and an unrepresentable level
-// (rel-negative-short).
+// (rel-limit-parent, rel-reissue-changed, the breakout pair, ...), and a zero-
+// capacity sibling (rel-two-exits). For rel-negative-short, expectation
+// corrected: {2,1,1} -> {2,2,0}, because a negative level now rests as a
+// zero-trigger leg and is adopted rather than withdrawn.
 // R5 lane PAR-ORDERS re-pinned the four trailing-offset shapes (rel-trail-
 // offset, rel-short-trail, mag-rel-trail-offset, coof-rel-trail-offset) from
 // {1,1,0} to {0,0,0}: exit() seeds a trailing offset's running best at the
@@ -1098,7 +1100,7 @@ constexpr Named kShapes[] = {
     {"RelCancelAll", "rel-cancel-all", Shape::RelCancelAll, 1, {4, 2, 2}},
     {"RelCancelExitId", "rel-cancel-exit-id", Shape::RelCancelExitId, 1, {0, 0, 0}},
     {"RelStopParent", "rel-stop-parent", Shape::RelStopParent, 1, {2, 2, 0}},
-    {"RelNegativeShort", "rel-negative-short", Shape::RelNegativeShort, 1, {2, 1, 1}},
+    {"RelNegativeShort", "rel-negative-short", Shape::RelNegativeShort, 1, {2, 2, 0}},
     {"RelTwoExits", "rel-two-exits", Shape::RelTwoExits, 1, {4, 2, 2}},
     {"RelGapFill", "rel-gap-fill", Shape::RelGapFill, 1, {2, 2, 0}},
     {"RelShortTrail", "rel-short-trail", Shape::RelShortTrail, 1, {0, 0, 0}},

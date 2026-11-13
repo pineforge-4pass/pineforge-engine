@@ -701,6 +701,12 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         f.s("pineforge-owed-follow-up/v1");
         f.i(owed_follow_up_bar_); f.i(owed_follow_up_point_); f.d(owed_follow_up_units_);
     }
+    // Present for every armed long; absent on short and out-of-scope books.
+    if (long_tick_margin_active_) {
+        f.s("pineforge-long-tick-margin/v1");
+        f.b(long_tick_margin_active_); f.i(long_tick_margin_bar_);
+        f.i(long_tick_margin_point_); f.d(long_tick_margin_owed_units_);
+    }
     if (close_call_after_script_bar_ != std::numeric_limits<std::int64_t>::min()) {
         f.s("pineforge-close-call-after-script/v1");
         f.i(close_call_after_script_bar_); f.d(close_call_after_script_book_);
