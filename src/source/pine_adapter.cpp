@@ -11820,10 +11820,52 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     };
     const auto fresh_entry_origin = [&] {
         if (from_entry.empty() || !std::isfinite(qty)) return false;
+        const auto eligible_parent = [&](const PlacementSnapshot& parent) {
+            return parent.opening && parent.family == PineOrderFamily::Entry
+                && parent.source_id == from_entry && !parent.projection_over_pyramiding;
+        };
+        // A newly submitted parent is positive evidence even after every
+        // old opening of this id has settled. It can still be staged while
+        // entry() and both of its target exits run in one source evaluation.
+        for (const auto& pending : pending_entries_)
+            if (eligible_parent(pending.snapshot)) return true;
+        for (const auto& pending : pending_same_bar_commands_)
+            if (eligible_parent(pending.snapshot)) return true;
+        for (const auto& pending : pending_coof_requests_)
+            if (eligible_parent(pending.snapshot)) return true;
+        for (const auto& pending : delayed_market_orders_)
+            if (eligible_parent(pending.snapshot)) return true;
+        for (const auto& origin : live_handles_) {
+            const auto parent = placement_.find(origin.incarnation);
+            if (parent != placement_.end() && eligible_parent(parent->second)
+                && !consumed_origin(origin)) return true;
+        }
+        const auto follows_family = [&](const native_order::RequestHandle& origin) {
+            const auto follows = [&](const native_order::RunIdentity& run,
+                                     std::uint64_t incarnation) {
+                return incarnation != 0 && origin.run == run
+                    && origin.incarnation > incarnation;
+            };
+            // The settled prefix retains chronology, although it no longer
+            // retains per-origin consumed facts. This opening must postdate
+            // a member of this family; an absent/cancelled family proves none.
+            const auto archived = settled_bracket_families_.find(family_key);
+            if (archived != settled_bracket_families_.end())
+                return follows(archived->second.run, archived->second.last);
+            const auto family = bracket_families_.find(family_key);
+            if (family == bracket_families_.end()) return false;
+            const auto prefix = family->second.settled_record();
+            if (follows(prefix.run, prefix.last)) return true;
+            return std::any_of(family->second.begin(), family->second.end(),
+                [&](const native_order::RequestHandle& member) {
+                    return follows(member.run, member.incarnation);
+                });
+        };
         const auto cohort = cohorts_by_id_.find(from_entry);
         if (cohort == cohorts_by_id_.end()) return false;
         bool has_consumed_origin = false;
         bool has_fresh_origin = false;
+        bool has_later_origin = false;
         for (const auto& origin : cohort->second.opened) {
             if (consumed_origin(origin)) {
                 has_consumed_origin = true;
@@ -11832,22 +11874,13 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                        units != cohort->second.live_units_by_origin.end()
                            && units->second > internal::kQtyEpsilon) {
                 has_fresh_origin = true;
-            }
-        }
-        for (const auto& origin : live_handles_) {
-            const auto parent = placement_.find(origin.incarnation);
-            if (parent != placement_.end() && parent->second.opening
-                && parent->second.family == PineOrderFamily::Entry
-                && parent->second.source_id == from_entry
-                && !parent->second.projection_over_pyramiding
-                && !consumed_origin(origin)) {
-                has_fresh_origin = true;
+                has_later_origin = has_later_origin || follows_family(origin);
             }
         }
         // Absence of a family is not evidence of a new lifetime: a genuine
-        // cancellation can have removed it. Require both the old consumed
-        // origin and a distinct eligible opening before bypassing its marker.
-        return has_consumed_origin && has_fresh_origin;
+        // cancellation can have removed it. A live unconsumed opening needs
+        // either the old consumed origin or retained family chronology.
+        return has_fresh_origin && (has_consumed_origin || has_later_origin);
     };
     // ab9714be pine_strategy_commands.cpp:1661-1692: only a re-issue that is
     // itself explicitly partial against the live position (net of a same-bar

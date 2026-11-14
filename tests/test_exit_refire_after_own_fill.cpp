@@ -624,23 +624,68 @@ public:
             expect("native opening count", openings, 2);
             expect("add has a fresh origin",
                    add_origin_.incarnation != 0 && add_origin_ != first_origin_, true);
+            for (const auto& row : native_events(0))
+                if (row.ordinal > fresh_events_from_) fresh_events_from_ = row.ordinal;
         }
         if (index >= 4 && index <= 7) partial();
         if (index == 4) {
-            int fresh_legs = 0;
+            int fresh_families = 0;
             for (const auto& row : adapter_.fixture_pending_snapshots()) {
                 if (row.snapshot.source_id != kFreshExit) continue;
-                ++fresh_legs;
+                ++fresh_families;
                 expect("fresh leg is staged", row.staged, true);
+                expect("fresh bracket names entry", row.snapshot.from_entry == kFreshEntry, true);
                 expect("fresh leg binds added origin",
                        row.snapshot.bracket_origin == add_origin_, true);
                 expect("fresh leg reserved units", row.snapshot.projection_remaining_qty,
                        kFreshSlice);
+                expect("fresh bracket limit", row.snapshot.exit_levels.limit,
+                       price_for(row_, kLimit));
+                expect("fresh bracket stop", row.snapshot.exit_levels.stop,
+                       price_for(row_, kStopA));
             }
             // First behavioural RED on c7: its cycle-wide consumed return
-            // suppresses both legs before considering the added origin.
-            expect("fresh add exit leg count", fresh_legs, 2);
+            // suppresses the bracket before considering the added origin.
+            // expectation corrected: 2 -> 1, because fixture_pending_snapshots
+            // projects staged legs once per family, with both exit levels.
+            // Native acceptance below independently requires BOTH requests.
+            expect("fresh add bracket projection count", fresh_families, 1);
             add_seen = true;
+        }
+        if (index == 5) {
+            int limits = 0, stops = 0, accepted = 0;
+            std::uint64_t group = 0;
+            for (const auto& row : native_events(fresh_events_from_)) {
+                if (!row.command) continue;
+                const auto* event = std::get_if<native_order::AcceptedEvent>(&*row.command);
+                if (!event || event->request().label != kFreshExit) continue;
+                ++accepted;
+                const auto& request = event->request();
+                expect("fresh native FIFO owner",
+                       std::holds_alternative<native_order::Independent>(request.owner), true);
+                if (const auto* limit = std::get_if<native_order::Limit>(&request.trigger)) {
+                    ++limits;
+                    expect("fresh native limit", limit->price, price_for(row_, kLimit));
+                }
+                if (const auto* stop = std::get_if<native_order::Stop>(&request.trigger)) {
+                    ++stops;
+                    expect("fresh native stop", stop->price, price_for(row_, kStopA));
+                }
+                const auto* member = std::get_if<native_order::Member>(&request.group);
+                expect("fresh native OCA member", member != nullptr, true);
+                if (member) {
+                    expect("fresh native OCA group is nonzero", member->group != 0, true);
+                    if (group != 0)
+                        expect("fresh native legs share OCA group", member->group == group, true);
+                    group = member->group;
+                    expect("fresh native OCA cancels sibling",
+                           member->effect == native_order::GroupEffect::Cancel, true);
+                }
+            }
+            expect("fresh native request count", accepted, 2);
+            expect("fresh native limit count", limits, 1);
+            expect("fresh native stop count", stops, 1);
+            native_bracket_seen = true;
         }
         if (index >= 5 && index <= 8)
             expect("remaining units after fresh exit", std::abs(signed_position_size()),
@@ -650,7 +695,7 @@ public:
 
     double final_size() const { return signed_position_size(); }
     bool ok = true;
-    bool refusal_seen = false, add_seen = false;
+    bool refusal_seen = false, add_seen = false, native_bracket_seen = false;
 
 private:
     void partial() {
@@ -661,6 +706,7 @@ private:
     const Row& row_;
     native_order::RequestHandle first_origin_{}, add_origin_{};
     std::int64_t cycle_ = 0;
+    std::uint64_t fresh_events_from_ = 0;
 };
 
 bool run_fresh_add(const Row& row) {
@@ -689,6 +735,7 @@ bool run_fresh_add(const Row& row) {
     probe.expect("run succeeded", probe.last_error().empty(), true);
     probe.expect("refusal observed", probe.refusal_seen, true);
     probe.expect("fresh opening observed", probe.add_seen, true);
+    probe.expect("native bracket observed", probe.native_bracket_seen, true);
     probe.expect("trade count", probe.trade_count(), 3);
     double total = 0.0;
     for (int i = 0; i < probe.trade_count(); ++i) {
@@ -717,6 +764,239 @@ bool run_fresh_add(const Row& row) {
     return probe.ok;
 }
 
+constexpr const char* kSettledAdd = "added";
+constexpr const char* kSettledBase = "carried";
+constexpr std::array<const char*, 2> kSettledTargets{{"added-first", "added-second"}};
+constexpr double kSettledUnits = 2.0;
+constexpr double kSettledSlice = kSettledUnits / 2.0;
+constexpr Row kSettledRows[] = {
+    {"R-settled-add", true, false, false},
+    {"R-settled-add-short", false, false, false},
+};
+
+// Ordinary two-target calls, including entry() followed immediately by both
+// exits. The first Add is fully closed by its OWN stops; a later named entry
+// keeps the position nonflat. Thus no consumed origin remains in Add.opened.
+// The new Add's brackets must also accept a level update after its fill.
+// This covers the missing lifetime shape, not a replay of the private tape.
+class SettledAddProbe final : public source::PineStrategyHost {
+public:
+    explicit SettledAddProbe(const Row& row) : row_(row) {
+        attach_pine_execution_adapter();
+        source::PineStrategyConfig cfg{};
+        cfg.calc_on_order_fills = false;
+        cfg.process_orders_on_close = false;
+        cfg.pyramiding = 2;
+        cfg.initial_capital = 1'000'000.0;
+        cfg.default_qty_type = static_cast<int>(QtyType::FIXED);
+        cfg.default_qty_value = kSettledUnits;
+        cfg.margin_long = cfg.margin_short = 100.0;
+        cfg.commission_value = 0.0;
+        cfg.slippage = 0;
+        configure_pine_strategy(cfg);
+        set_syminfo_session("24x7");
+        set_syminfo_timezone("UTC");
+        set_syminfo_mintick(kTick);
+        set_syminfo_pointvalue(1.0);
+        set_syminfo_metadata("qty_step", kLot);
+        fixture_retain_all_events();
+    }
+
+    void expect(const std::string& field, double actual, double expected) {
+        if (!equal_number(row_, field, actual, expected)) ok = false;
+    }
+
+    void on_source_bar(const Bar&) override {
+        const int index = pine_bar_index();
+        if (index == 0)
+            strategy_entry(kSettledAdd, row_.is_long, kNaN, kNaN, kSettledUnits);
+        if (index == 1) {
+            expect("old Add position", std::abs(signed_position_size()), kSettledUnits);
+            for (const auto& row : native_events(0)) {
+                if (!row.command) continue;
+                const auto* event =
+                    std::get_if<native_order::ExecutionAppliedEvent>(&*row.command);
+                if (event && event->request().label == kSettledAdd) {
+                    old_origin = event->handle();
+                    cycle_ = event->cycle_after;
+                }
+            }
+            strategy_entry(kSettledBase, row_.is_long, kNaN, kNaN, kSettledUnits);
+            targets(0.0, kStopA);
+        }
+        if (index == 3) {
+            expect("old Add closed in two slices", trade_count(), 2);
+            expect("other entry keeps position open", std::abs(signed_position_size()),
+                   kSettledUnits);
+            expect("old Add no longer in opened roster",
+                   adapter_.retirement_population().opened, 1);
+            int lots = 0;
+            for (const auto& lot : native_open_lots(kNaN)) {
+                ++lots;
+                expect("only carried entry remains", lot.entry_label == kSettledBase, true);
+            }
+            expect("one carried lot", lots, 1);
+            for (const auto* id : kSettledTargets) {
+                const auto consumed = adapter_.fixture_consumed_partial_exit_cycles().lookup(
+                    std::string(id) + '\x1f' + kSettledAdd);
+                expect(std::string(id) + " old marker remains in live cycle",
+                       cycle_ > 0 && consumed && *consumed == cycle_, true);
+            }
+            for (const auto& row : native_working_requests())
+                for (const auto* id : kSettledTargets)
+                    expect("old target is not working",
+                           row.definition->request.label == id, false);
+            strategy_entry(kSettledAdd, row_.is_long, kNaN, kNaN, kSettledUnits);
+            targets(0.0, kStopA);
+            for (const auto& row : native_events(0)) {
+                if (!row.command) continue;
+                const auto* event = std::get_if<native_order::AcceptedEvent>(&*row.command);
+                if (event && event->request().label == kSettledAdd)
+                    fresh_origin = event->handle();
+            }
+            expect("new Add has distinct pending provenance",
+                   fresh_origin.incarnation != 0 && fresh_origin != old_origin, true);
+            projections(true, 0.0, kStopA);
+            settled_seen = true;
+        }
+        if (index == 4) {
+            expect("new Add opens beside carried entry", std::abs(signed_position_size()),
+                   2 * kSettledUnits);
+            int openings = 0;
+            for (const auto& row : native_events(0)) {
+                if (!row.command) continue;
+                const auto* event =
+                    std::get_if<native_order::ExecutionAppliedEvent>(&*row.command);
+                if (!event || event->opened_units == 0.0) continue;
+                ++openings;
+                expect("all openings share original cycle", event->cycle_after, cycle_);
+                expect("native opening units", std::abs(event->opened_units), kSettledUnits);
+                if (event->request().label == kSettledBase) base_origin = event->handle();
+                if (event->handle() == fresh_origin)
+                    expect("new Add opens on intended bar",
+                           event->interval_open_ms(), kStart + 4 * kInterval);
+            }
+            expect("three native openings", openings, 3);
+            targets(2.0, kStopA + 2.0);
+            projections(false, 2.0, kStopA + 2.0);
+            for (std::size_t i = 0; i < kSettledTargets.size(); ++i) {
+                int limits = 0, stops = 0;
+                for (const auto& row : native_working_requests()) {
+                    const auto& request = row.definition->request;
+                    if (request.label != kSettledTargets[i]) continue;
+                    expect("updated bracket uses FIFO",
+                           std::holds_alternative<native_order::Independent>(request.owner), true);
+                    if (const auto* limit = std::get_if<native_order::Limit>(&request.trigger)) {
+                        ++limits;
+                        expect("updated native target", limit->price,
+                               price_for(row_, kLimit + 8.0 * i + 2.0));
+                    }
+                    if (const auto* stop = std::get_if<native_order::Stop>(&request.trigger)) {
+                        ++stops;
+                        expect("updated native protection", stop->price,
+                               price_for(row_, kStopA + 2.0));
+                    }
+                }
+                expect("one updated native limit", limits, 1);
+                expect("one updated native stop", stops, 1);
+            }
+            update_seen = true;
+        }
+        if (index >= 5 && index <= 8) {
+            expect("remaining new Add units", std::abs(signed_position_size()), kSettledUnits);
+            if (index <= 7) targets(2.0, kStopA + 2.0);
+        }
+        if (index == 8) strategy_close_all();
+    }
+
+    double final_size() const { return signed_position_size(); }
+    bool ok = true, settled_seen = false, update_seen = false;
+    native_order::RequestHandle old_origin{}, base_origin{}, fresh_origin{};
+
+private:
+    void targets(double offset, double stop) {
+        for (std::size_t i = 0; i < kSettledTargets.size(); ++i)
+            strategy_exit(kSettledTargets[i], kSettledAdd,
+                          price_for(row_, kLimit + 8.0 * i + offset), price_for(row_, stop),
+                          kNaN, kNaN, kNaN, 100.0, {}, kSettledSlice);
+    }
+    void projections(bool staged, double offset, double stop) {
+        for (std::size_t i = 0; i < kSettledTargets.size(); ++i) {
+            int count = 0;
+            for (const auto& row : adapter_.fixture_pending_snapshots()) {
+                const auto& snapshot = row.snapshot;
+                if (snapshot.source_id != kSettledTargets[i]) continue;
+                ++count;
+                expect("target stage", row.staged, staged);
+                expect("target names Add", snapshot.from_entry == kSettledAdd, true);
+                expect("target binds new Add", snapshot.bracket_origin == fresh_origin, true);
+                expect("target slice", snapshot.projection_remaining_qty, kSettledSlice);
+                expect("target limit", snapshot.exit_levels.limit,
+                       price_for(row_, kLimit + 8.0 * i + offset));
+                expect("target protection", snapshot.exit_levels.stop, price_for(row_, stop));
+            }
+            expect("target projections (staged family or working legs)", count, staged ? 1 : 2);
+        }
+    }
+    const Row& row_;
+    std::int64_t cycle_ = 0;
+};
+
+bool run_settled_add(const Row& row) {
+    SettledAddProbe probe(row);
+    constexpr std::array<std::array<double, 4>, 11> prices{{
+        {100, 101, 99, 100}, // 0: old Add call
+        {100, 101, 99, 100}, // 1: old Add fill, carried entry and two targets
+        {100, 101, 87, 95},  // 2: carried entry fill, old Add fully stopped at 88
+        {100, 101, 99, 100}, // 3: new Add and both targets in the same callback
+        {100, 101, 99, 100}, // 4: new Add fill, update both stops to 90
+        {100, 101, 89, 95},  // 5: crosses updated 90, never the former 88
+        {112, 120, 110, 116},// 6: reissues must not refire their limits
+        {100, 101, 87, 95},  // 7: reissues must not refire their stops
+        {100, 102, 98, 100}, // 8: final close call
+        {101, 103, 99, 102}, // 9: final close fill
+        {102, 103, 100, 101},// 10: trailing bar
+    }};
+    std::array<Bar, prices.size()> bars{};
+    for (std::size_t i = 0; i < bars.size(); ++i) {
+        const auto& p = prices[i];
+        bars[i] = {price_for(row, p[0]), price_for(row, p[row.is_long ? 1 : 2]),
+                   price_for(row, p[row.is_long ? 2 : 1]), price_for(row, p[3]),
+                   1000, kStart + static_cast<std::int64_t>(i) * kInterval};
+    }
+    probe.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false);
+    probe.expect("run succeeded", probe.last_error().empty(), true);
+    probe.expect("settled old Add observed", probe.settled_seen, true);
+    probe.expect("fresh bracket update observed", probe.update_seen, true);
+    probe.expect("trade count", probe.trade_count(), 5);
+    double total = 0.0;
+    for (int i = 0; i < probe.trade_count(); ++i) {
+        const auto& trade = probe.get_trade(i);
+        const bool old = i < 2, final = i == 4;
+        const auto origin = old ? probe.old_origin
+            : (final ? probe.fresh_origin : probe.base_origin);
+        const std::string prefix = "trade " + std::to_string(i) + " ";
+        probe.expect(prefix + "entry id",
+                     trade.entry_id == (old || final ? kSettledAdd : kSettledBase), true);
+        probe.expect(prefix + "entry incarnation", trade.entry_incarnation == origin.incarnation, true);
+        probe.expect(prefix + "entry bar", trade.entry_bar_index, old ? 1 : (final ? 4 : 2));
+        probe.expect(prefix + "entry price", trade.entry_price, kEntryPrice);
+        probe.expect(prefix + "direction", trade.is_long, row.is_long);
+        probe.expect(prefix + "closed", trade.open_at_end, false);
+        probe.expect(prefix + "exit id",
+                     trade.exit_id == (final ? kFinalExitId : kSettledTargets[i % 2]), true);
+        probe.expect(prefix + "exit bar", trade.exit_bar_index, old ? 2 : (final ? 9 : 5));
+        probe.expect(prefix + "exit price", trade.exit_price,
+                     final ? bars[9].open : price_for(row, old ? kStopA : kStopA + 2.0));
+        probe.expect(prefix + "units", trade.qty, final ? kSettledUnits : kSettledSlice);
+        total += trade.qty;
+    }
+    probe.expect("total closed units", total, 3 * kSettledUnits);
+    probe.expect("final position", probe.final_size(), 0.0);
+    if (probe.ok) std::printf("PASS %s\n", row.name);
+    return probe.ok;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -739,6 +1019,11 @@ int main(int argc, char** argv) {
         if (argc == 2 && std::string(argv[1]) != row.name) continue;
         ++selected;
         if (!run_fresh_add(row)) ++failures;
+    }
+    for (const Row& row : kSettledRows) {
+        if (argc == 2 && std::string(argv[1]) != row.name) continue;
+        ++selected;
+        if (!run_settled_add(row)) ++failures;
     }
     if (selected == 0) {
         std::printf("Unknown row: %s\n", argv[1]);
