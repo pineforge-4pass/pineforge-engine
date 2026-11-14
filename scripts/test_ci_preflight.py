@@ -4465,6 +4465,9 @@ class CiFileLoading(unittest.TestCase):
         (tree / 'tests').mkdir()
         shutil.copyfile(ROOT / self.CMAKE, tree / self.CMAKE)
         (tree / 'scripts').mkdir(exist_ok=True)
+        for name in ('scripts/clang_cold_shards.py', 'scripts/clang_cold_setup.sh',
+                     'scripts/clang_build_shards.py'):
+            shutil.copyfile(ROOT / name, tree / name)
         shutil.copyfile(ROOT / CiFileLoading.CONSUMER, tree / CiFileLoading.CONSUMER)
         if include_helper:
             helper = CiFileLoading.HELPER
@@ -5185,7 +5188,8 @@ class RunnerGroupAllowlist(unittest.TestCase):
             'source-guard-cancellation', 'source-guard-cr150-source-bounds',
             'cr150-source-gate-tests', 'rng-draw-order-tests', 'rng-draw-order', 'verifier-tests',
             'preflight-tests', 'unittest-shards-tests', 'verifier-paths-tests',
-            'native-c-surface-tests', 'native-x86-release-tests', 'kernel-residuals-tests',
+            'native-c-surface-tests', 'native-x86-release-tests', 'clang-cold-tests',
+            'kernel-residuals-tests',
             'corpus-parity-identity-tests',
             'corpus-parity-subset-cover-tests', 'corpus-sha-validation-tests',
             'corpus-gitlink-result-tests', 'corpus-file-digest-tests',
@@ -5208,8 +5212,10 @@ class RunnerGroupAllowlist(unittest.TestCase):
         with mock.patch.object(ci_preflight.sys, 'platform', 'linux'):
             self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})], expected)
             # main() prepends actionlint-version to all/fast/github-only.
-            self.assertEqual(len(expected) + 1, 71)
-            self.assertEqual(len(check_commands(ROOT, tier='fast')), 66)
+            # expectation corrected: 71 -> 72 all and 66 -> 67 fast,
+            # because the cold Clang protocol controls are one new stage.
+            self.assertEqual(len(expected) + 1, 72)
+            self.assertEqual(len(check_commands(ROOT, tier='fast')), 67)
             self.assertEqual(len(check_commands(ROOT, tier='slow')), 4)
             self.assertEqual(len(check_commands(ROOT, tier='github-only')), 7)
         for platform in ('darwin', 'win32'):
@@ -5218,7 +5224,8 @@ class RunnerGroupAllowlist(unittest.TestCase):
                                      if name not in ('prebuilt-bookworm-tests', 'prebuilt-glibc-tests')]
                 self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})],
                                  expected_platform)
-                self.assertEqual(len(check_commands(ROOT, tier='fast')), 64)
+                # expectation corrected: 64 -> 65, same additional portable stage.
+                self.assertEqual(len(check_commands(ROOT, tier='fast')), 65)
 
 
 class PrebuiltGlibcRegistration(unittest.TestCase):
@@ -7522,6 +7529,15 @@ exit "$lookup_exit"
                           'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
                           'rerun-preempted.yml': {'rerun': 'ubuntu-24.04'},
                           'prebuilt-hosted-diagnostic.yml': {'observe': 'ubuntu-24.04'},
+                          # expectation corrected: no Clang hosted pins -> the
+                          # two cold shards, their plan/gate, and input collector,
+                          # because complete cold Clang builds require both shards and their inputs.
+                          'clang-build.yml': {
+                              'authz': HOSTED_X86, 'collect': HOSTED_X86, 'plan': HOSTED_X86,
+                              'clang-shard-1': HOSTED_X86, 'clang-shard-2': HOSTED_X86,
+                              'clang-gate': HOSTED_X86},
+                          'clang-cost-collection.yml': {
+                              'authz': HOSTED_X86, 'collect': HOSTED_X86},
                           'docs-post.yml': {'authz': HOSTED_X86, 'build': HOSTED_X86},
                           'native-live.yml': {'authz': HOSTED_X86,
                                               **EXPECTED_GKE_JOBS['native-live.yml'],
@@ -9324,7 +9340,13 @@ finally:
                         changed = dict(workflows)
                         changed[workflow] = in_job(changed[workflow], job, before, after)
                         timeout = f'{workflow} job {job} must declare no timeout-minutes (owner #827)'
-                        self.assertEqual(ci_preflight.runner_findings(changed), [timeout])
+                        expected = [timeout]
+                        if workflow in ('clang-build.yml', 'clang-cost-collection.yml'):
+                            if job == 'authz':
+                                expected.append(f'{workflow} must start with the verbatim canon authz job')
+                            expected.append(
+                                f'{workflow} must retain the reviewed complete cold Clang source contract')
+                        self.assertEqual(ci_preflight.runner_findings(changed), expected)
 
     def contract_stage(self, mutation, workflow_name='ci.yml'):
         """Run the ci-workflow-contract stage's argv in a copy of the tree."""
@@ -13528,6 +13550,101 @@ class GkeSmokeOutputAdmission(unittest.TestCase):
                     with self.subTest(steps=len(ci_preflight._steps(_jobs(workflow)[job])),
                                       job=job, before=before):
                         self.assert_refused(in_job(workflow, job, before, after), finding)
+
+
+class ColdClangSourceContract(unittest.TestCase):
+    """Pins for the complete cold Clang topology and its transitive source."""
+
+    def workflows(self):
+        return {name: (ROOT / '.github/workflows' / name).read_text()
+                for name in ('clang-build.yml', 'clang-cost-collection.yml')}
+
+    def test_cold_topology_canon_and_independent_fixtures_match_the_shipped_tree(self):
+        workflows = self.workflows()
+        for name, fixture in (
+                ('clang-build.yml', 'clang_cold_shards.yml'),
+                ('clang-cost-collection.yml', 'clang_cost_collection.yml')):
+            self.assertEqual(workflows[name],
+                             (ROOT / 'scripts/fixtures/ci_preflight' / fixture).read_text())
+            self.assertEqual(ci_preflight.clang_cold_workflow_findings(workflows[name], name), [])
+        self.assertEqual(set(_jobs(workflows['clang-build.yml'])),
+                         {'authz', 'collect', 'plan', 'clang-shard-1', 'clang-shard-2', 'clang-gate'})
+        self.assertEqual(set(_jobs(workflows['clang-cost-collection.yml'])), {'authz', 'collect'})
+        self.assertEqual(ci_preflight.runner_findings(workflows), [])
+        for name, workflow in workflows.items():
+            steps = ci_preflight._steps(_jobs(workflow)['authz'])
+            self.assertEqual(len(steps), 1)
+            self.assertEqual(hashlib.sha256((steps[0].rstrip('\n') + '\n').encode()).hexdigest(),
+                             ci_preflight.AUTHZ_STEP_SHA256)
+            self.assertEqual(ci_preflight._events(workflow),
+                             {'push', 'workflow_dispatch'} if name == 'clang-build.yml'
+                             else {'workflow_dispatch'})
+
+    def test_cold_workflow_head_costs_coverage_and_failure_controls_are_binding(self):
+        workflows = self.workflows()
+        for name, mutations in (
+                ('clang-build.yml', (
+                    ('needs: [authz, collect, plan, clang-shard-1, clang-shard-2]',
+                     'needs: [authz, collect, plan, clang-shard-1]'),
+                    ('test "$SHARD_TWO_RESULT" = success', 'true'),
+                    ('if: always()', 'if: success()'),
+                    ('--shard 2', '--shard 1'),
+                    ('clang-results/two/result.json', 'clang-results/one/result.json'),
+                    ('--job-records-file clang-jobs.json', '--job-records-file synthetic.json'),
+                    ('--costs-sha256 "$COST_SHA256"', '--costs-sha256 guessed'),
+                    ('--cost-run cost-run.json', '--cost-run other.json'),
+                    ('ref: ${{ github.sha }}', 'ref: main'),
+                    ('persist-credentials: false', 'persist-credentials: true'),
+                    ('run: bash scripts/clang_cold_setup.sh', 'run: true'),
+                    ('--output clang-shard-evidence', '--output clang-shard-evidence || true'))),
+                ('clang-cost-collection.yml', (
+                    ('collect --output', 'plan --output'),
+                    ('submodules: recursive', 'submodules: false'),
+                    ('lfs: true', 'lfs: false'),
+                    ('ref: ${{ github.sha }}', 'ref: main'),
+                    ('if-no-files-found: error', 'if-no-files-found: ignore')))):
+            for before, after in mutations:
+                with self.subTest(name=name, before=before):
+                    changed = workflows[name].replace(before, after, 1)
+                    self.assertNotEqual(changed, workflows[name])
+                    finding = f'{name} must retain the reviewed complete cold Clang source contract'
+                    self.assertIn(finding, ci_preflight.clang_cold_workflow_findings(changed, name))
+                    self.assertIn(finding, ci_preflight.runner_findings({**workflows, name: changed}))
+    def test_cold_transitive_sources_and_real_preflight_registration_are_bound(self):
+        sources = {name: (ROOT / name).read_text() for name in (
+            'scripts/clang_cold_shards.py', 'scripts/clang_cold_setup.sh',
+            'scripts/clang_build_shards.py')}
+        self.assertEqual(ci_preflight.clang_cold_source_findings(sources), [])
+        for name in sources:
+            with self.subTest(name=name):
+                missing = {key: value for key, value in sources.items() if key != name}
+                self.assertIn('cold Clang source contract requires every coupled helper',
+                              ci_preflight.clang_cold_source_findings(missing))
+                changed = {**sources, name: sources[name] + '\n# changed source\n'}
+                self.assertIn(f'{name} differs from the reviewed cold Clang source contract',
+                              ci_preflight.clang_cold_source_findings(changed))
+        for tier in ('all', 'fast'):
+            entries = dict(check_commands(ROOT, tier=tier))
+            self.assertEqual(entries['clang-cold-tests'], [
+                sys.executable, '-m', 'unittest', 'discover', '-s', str(ROOT / 'scripts'),
+                '-p', 'test_clang*.py'])
+
+    def test_real_loader_refuses_removing_both_workflows_or_a_coupled_helper(self):
+        # The existing loader fixture copies the complete real source. Actual
+        # missing files are judged by the real entry point, without a stub.
+        self.CONFIG, self.CMAKE = CiFileLoading.CONFIG, CiFileLoading.CMAKE
+        for removed in (
+                ('.github/workflows/clang-build.yml',),
+                ('.github/workflows/clang-build.yml', '.github/workflows/clang-cost-collection.yml'),
+                ('scripts/clang_cold_shards.py',)):
+            with self.subTest(removed=removed):
+                tree = CiFileLoading.make_tree(self)
+                for name in removed:
+                    (tree / name).unlink()
+                code, output = CiFileLoading.run_stage(tree, '--check-ci-workflow')
+                self.assertEqual(code, 1, output)
+                for name in removed:
+                    self.assertIn(Path(name).name, output)
 
 
 if __name__ == '__main__':
