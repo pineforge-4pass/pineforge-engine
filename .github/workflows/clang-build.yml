@@ -1,0 +1,310 @@
+name: Clang cold shards
+
+on:
+  push:
+    branches: [ci/clang-cold-shards]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# RULED-B: both cold jobs must pass, cover the full configured set exactly once,
+# and finish under 900 actual hosted seconds. No deadline drops unfinished work.
+jobs:
+  authz:
+    name: authz
+    runs-on: ubuntu-24.04
+    permissions: {}
+    # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
+    steps:
+      - name: Only our own pull requests and our own events run CI
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          WR_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          WR_ACTOR: ${{ github.event.workflow_run.triggering_actor.login }}
+          GH_TOKEN: ${{ github.token }}   # read-only use: one permission lookup for workflow_run
+          # Bot logins whose same-repository pull requests count as ours: dependabot[bot] (CI-DEPBOT A)
+          # and the org's own GitHub App bot logins by name (space-separated), nothing else.
+          ALLOWED_BOTS: "dependabot[bot] pineforge-app[bot]"
+        run: |
+          set -eu
+          fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          case "$EVENT" in
+            push|workflow_dispatch|schedule|merge_group|release|workflow_call|repository_dispatch)
+              # Only someone with write access to this repository (or our App's token) can cause these
+              # events; none of them runs pull-request code.
+              ;;
+            workflow_run)
+              # bind identity to the triggering run and its re-runner.
+              # These two App bots are fixed canon policy; ALLOWED_BOTS is PR-only.
+              [ -n "${WR_HEAD_REPO:-}" ] || fail "workflow_run head repository is missing"
+              [ -n "${WR_ACTOR:-}" ] || fail "workflow_run triggering actor is missing"
+              [ "$WR_HEAD_REPO" = "$REPO" ] || fail "workflow_run head repository does not match this repository"
+              case "$WR_ACTOR" in
+                "pineforge-app[bot]"|"pineforge-ci-dispatcher[bot]") ;;
+                *"[bot]") fail "workflow_run bot is not on the canon allowlist" ;;
+                *)
+                  perm=$(gh api "repos/$REPO/collaborators/$WR_ACTOR/permission" --jq .permission 2>/dev/null) || fail "workflow_run permission lookup failed"
+                  case "$perm" in admin|maintain|write) ;; *) fail "workflow_run triggering actor does not have write permission" ;; esac ;;
+              esac ;;
+            pull_request)
+              [ "$HEAD_REPO" = "$REPO" ] || fail "pull request from another repository (${HEAD_REPO:-unknown})"
+              [ "$HEAD_IS_FORK" = "false" ] || fail "pull request from a fork"
+              case "$ASSOCIATION" in
+                OWNER|MEMBER|COLLABORATOR) ;;
+                *)
+                  case " $ALLOWED_BOTS " in
+                    *" $PR_AUTHOR "*) ;;
+                    *)
+                      # A member whose org membership is private shows as CONTRIBUTOR: ask GitHub for the
+                      # author's permission on this repository; anything but admin/maintain/write (or a
+                      # failed call) refuses.
+                      perm=$(gh api "repos/$REPO/collaborators/$PR_AUTHOR/permission" --jq .permission 2>/dev/null || echo none)
+                      case "$perm" in admin|maintain|write) ;; *) fail "author ${PR_AUTHOR:-unknown} (${ASSOCIATION:-NONE}) has permission '$perm', not write, and is not an allowlisted bot" ;; esac ;;
+                  esac ;;
+              esac ;;
+            *) fail "event $EVENT does not run CI (pull_request_target and other events are not allowed)" ;;
+          esac
+          echo "authz: allowed ($EVENT${PR_AUTHOR:+ by $PR_AUTHOR})" >> "$GITHUB_STEP_SUMMARY"
+
+  collect:
+    needs: [authz]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      cost_sha256: ${{ steps.measure.outputs.cost_sha256 }}
+    steps:
+      - name: Checkout the exact event head
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          submodules: recursive
+          lfs: true
+          persist-credentials: false
+      - name: Prepare the uncached Clang environment
+        run: bash scripts/clang_cold_setup.sh
+      - name: Measure every configured target and test
+        id: measure
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 scripts/clang_cold_shards.py collect --output clang-cost-evidence
+          cost_sha=$(sha256sum clang-cost-evidence/costs.json)
+          cost_sha=${cost_sha%% *}
+          printf 'cost_sha256=%s\n' "$cost_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Retain complete measurements or the actual refusals
+        if: ${{ always() && needs.authz.result == 'success' && steps.checkout.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: clang-costs-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: clang-cost-evidence
+          if-no-files-found: error
+
+  plan:
+    needs: [authz, collect]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout the exact event head
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          submodules: recursive
+          lfs: true
+          persist-credentials: false
+      - name: Read the exact completed cost collection job
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" > cost-run.json
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" > cost-jobs.json
+
+      - name: Download the original collection
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: clang-costs-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: clang-cost-input
+
+      - name: Prepare the uncached Clang environment
+        run: bash scripts/clang_cold_setup.sh
+      - name: Validate real costs and plan the complete configured population
+        env:
+          COST_SHA256: ${{ needs.collect.outputs.cost_sha256 }}
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 scripts/clang_cold_shards.py plan \
+            --costs clang-cost-input/costs.json --costs-sha256 "$COST_SHA256" \
+            --cost-run cost-run.json --cost-jobs cost-jobs.json \
+            --cost-run-id "$GITHUB_RUN_ID" --cost-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output clang-plan
+
+      - name: Retain the measured complete plan
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: clang-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: clang-plan
+          if-no-files-found: error
+
+  clang-shard-1:
+    name: clang-shard-1
+    needs: [authz, plan]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the exact event head
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          submodules: recursive
+          lfs: true
+          persist-credentials: false
+      - name: Download this run's measured plan
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: clang-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: clang-plan
+      - name: Prepare the uncached Clang environment
+        run: bash scripts/clang_cold_setup.sh
+      - name: Build cold and run the measured test assignment
+        run: /usr/bin/python3 scripts/clang_cold_shards.py run --plan clang-plan/plan.json --shard 1 --output clang-shard-evidence
+
+      - name: Retain actual shard execution
+        if: ${{ always() && needs.authz.result == 'success' && steps.checkout.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: clang-shard-1-${{ github.run_id }}-${{ github.run_attempt }}
+          path: clang-shard-evidence
+          if-no-files-found: error
+
+  clang-shard-2:
+    name: clang-shard-2
+    needs: [authz, plan]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the exact event head
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          submodules: recursive
+          lfs: true
+          persist-credentials: false
+      - name: Download this run's measured plan
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: clang-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: clang-plan
+      - name: Prepare the uncached Clang environment
+        run: bash scripts/clang_cold_setup.sh
+      - name: Build cold and run the measured test assignment
+        run: /usr/bin/python3 scripts/clang_cold_shards.py run --plan clang-plan/plan.json --shard 2 --output clang-shard-evidence
+
+      - name: Retain actual shard execution
+        if: ${{ always() && needs.authz.result == 'success' && steps.checkout.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: clang-shard-2-${{ github.run_id }}-${{ github.run_attempt }}
+          path: clang-shard-evidence
+          if-no-files-found: error
+
+  clang-gate:
+    if: always()
+    needs: [authz, collect, plan, clang-shard-1, clang-shard-2]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Refuse an unauthorised run before anything else
+        if: ${{ needs.authz.result != 'success' }}
+        run: |
+          echo "::error::authz did not pass; nothing of this run's code is checked out or run"
+          exit 1
+
+      - name: Require both shards and the complete plan
+        env:
+          AUTHZ_RESULT: ${{ needs.authz.result }}
+          COLLECT_RESULT: ${{ needs.collect.result }}
+          PLAN_RESULT: ${{ needs.plan.result }}
+          SHARD_ONE_RESULT: ${{ needs.clang-shard-1.result }}
+          SHARD_TWO_RESULT: ${{ needs.clang-shard-2.result }}
+        run: |
+          set -eu
+          test "$AUTHZ_RESULT" = success
+          test "$COLLECT_RESULT" = success
+          test "$PLAN_RESULT" = success
+          test "$SHARD_ONE_RESULT" = success
+          test "$SHARD_TWO_RESULT" = success
+
+      - name: Checkout the exact event head
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          submodules: recursive
+          lfs: true
+          persist-credentials: false
+      - name: Download this run's measured plan
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: clang-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: clang-plan
+      - name: Download shard one execution
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: clang-shard-1-${{ github.run_id }}-${{ github.run_attempt }}
+          path: clang-results/one
+
+      - name: Download shard two execution
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: clang-shard-2-${{ github.run_id }}-${{ github.run_attempt }}
+          path: clang-results/two
+
+      - name: Read this exact attempt's completed hosted records
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" > clang-run.json
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" > clang-jobs.json
+
+      - name: Prove the actual execution union and both cold hosted durations
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 scripts/clang_cold_shards.py check \
+            --plan clang-plan/plan.json --result clang-results/one/result.json \
+            --result clang-results/two/result.json --jobs clang-jobs.json --run clang-run.json \
+            --needs "$NEEDS_JSON" --output clang-union.json
+
+      - name: Retain the actual union and hosted job records
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: clang-union-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            clang-union.json
+            clang-run.json
+            clang-jobs.json
+          if-no-files-found: error

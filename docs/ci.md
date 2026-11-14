@@ -134,6 +134,15 @@ the hosted `ubuntu-24.04` image; `probe` keeps its `release` environment.
 Tag pushes no longer trigger docs: the post fleet admits only engine `main`.
 Release and baseline promotion run on hosted `ubuntu-24.04`; the release ARM build retains `ubuntu-22.04-arm`.
 
+CR909's [cold Clang shards](ci-clang-cold.md) add two standard hosted
+Clang18 build/CTest jobs and one aggregate. On `ci/clang-cold-shards`, the
+workflow first measures the exact source's complete configured population,
+then plans both assignments from those records. Missing costs, an incomplete
+execution union, a skipped shard or either completed job taking 900 seconds
+or more fails. This source contract makes no cold timing claim before the
+hosted execution. The `clang-cold-tests` stage runs the protocol controls in
+the existing fast/all preflight tiers.
+
 Human-dispatched App-token jobs (`release.yml`'s `release` and `notify-hub`, and `release-ruleset-probe.yml`'s `probe`) are bound to `release` (main only). Automatic `promote-baseline.yml`'s `promote` uses `release-bot` (main only, no reviewer), including manual re-fires. Preflight requires a literal, non-empty environment for visible App minting or private-key secret handoffs. Same-named environment secrets shadow repository secrets. Rollback reverts this preflight guard and its probe pin and removes the `environment:` lines; repository secret copies remain until the owner deletes them after dry runs.
 
 Start with the preflight used by GitHub Actions. Install actionlint 1.7.12,

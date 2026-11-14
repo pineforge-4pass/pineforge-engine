@@ -305,6 +305,9 @@ JOB_COMMANDS = {
     'corpus-parity.yml': {'authz': None, 'corpus-parity': PARITY, 'corpus-parity-subset': PARITY},
     'docs.yml': {'authz': None, 'build': None},
     'docs-post.yml': {'authz': None, 'build': None},
+    'clang-build.yml': dict.fromkeys(
+        ('authz', 'collect', 'plan', 'clang-shard-1', 'clang-shard-2', 'clang-gate')),
+    'clang-cost-collection.yml': {'authz': None, 'collect': None},
 }
 GKE_PR_ARM_JOB_COMMANDS = {**JOB_COMMANDS['gke-pr.yml'], 'build-arm': None}
 GKE_PR_CORPUS_JOB_COMMANDS = {'corpus-gitlink-result': None}
@@ -321,6 +324,9 @@ HOSTED_JOB_RUNNERS = {
     'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
     'rerun-preempted.yml': {'rerun': 'ubuntu-24.04'},
     'prebuilt-hosted-diagnostic.yml': {'observe': 'ubuntu-24.04'},
+    'clang-build.yml': dict.fromkeys(
+        ('authz', 'collect', 'plan', 'clang-shard-1', 'clang-shard-2', 'clang-gate'), 'ubuntu-24.04'),
+    'clang-cost-collection.yml': {'authz': 'ubuntu-24.04', 'collect': 'ubuntu-24.04'},
     'promote-baseline.yml': GKE_JOB_RUNNERS['promote-baseline.yml'],
     'release-ruleset-probe.yml': GKE_JOB_RUNNERS['release-ruleset-probe.yml'],
 }
@@ -3251,6 +3257,9 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 findings.append(f'ci-post.yml {job} legs must keep their names: {display}')
     if 'prebuilt-hosted-diagnostic.yml' in workflows:
         findings += prebuilt_hosted_diagnostic_findings(workflows['prebuilt-hosted-diagnostic.yml'])
+    for name in ('clang-build.yml', 'clang-cost-collection.yml'):
+        if name in workflows:
+            findings += clang_cold_workflow_findings(workflows[name], name)
     if 'release.yml' in workflows:
         prebuilt = _jobs(workflows['release.yml']).get('prebuilt', '')
         if not _release_split_requested(_jobs(workflows['release.yml'])):
@@ -4084,6 +4093,44 @@ def prebuilt_hosted_diagnostic_findings(workflow: str) -> list[str]:
         return ['prebuilt-hosted-diagnostic.yml must keep its read-only same-repository '
                 'exact-head checkout and unauthenticated host observations']
     return []
+
+
+CLANG_COLD_WORKFLOW_SHA256 = {
+    'clang-build.yml': '84e314115ae411f5bf3e76ed2dbc565631c717abd5ff4b1c06e74796e65dfdbb',
+    'clang-cost-collection.yml': '44f3a6b8590f82030f1cc4824e8f1d4a32b0a95590e1574e49fdf5e5ab334068',
+}
+CLANG_COLD_SOURCE_SHA256 = {
+    'scripts/clang_cold_shards.py': '7237424f49fd2deb653321d4c80cefeaac0fad7db9c8342918896cfa617840bd',
+    'scripts/clang_cold_setup.sh': 'c433d898eb0723552eb606f3c39f17ae428e0f14026d474a0f2dee55b61ef531',
+    'scripts/clang_build_shards.py': 'e79783f8a39f69ff7958ea7b0ea462a0252bf415170c87f7415421f06505a4e2',
+}
+
+
+def clang_cold_workflow_findings(workflow: str, name: str) -> list[str]:
+    """Route A admits only these complete, cold, exact-source hosted workflows.
+
+    The read token is confined to the pinned artifact/API readers. Neither
+    workflow acquires an App token, write scope, environment or cache exception.
+    A source pin binds all execution keys as well as the shell and canon.
+    """
+    findings = gated_workflow_findings(workflow, name)
+    if (name not in CLANG_COLD_WORKFLOW_SHA256 or
+            hashlib.sha256(workflow.encode()).hexdigest() != CLANG_COLD_WORKFLOW_SHA256[name] or
+            set(_jobs(workflow)) != set(HOSTED_JOB_RUNNERS[name])):
+        findings.append(f'{name} must retain the reviewed complete cold Clang source contract')
+    return findings
+
+
+def clang_cold_source_findings(sources: dict[str, str]) -> list[str]:
+    """Bind the collector/planner/union and their transitive parser to review."""
+    findings = []
+    if set(sources) != set(CLANG_COLD_SOURCE_SHA256):
+        findings.append('cold Clang source contract requires every coupled helper')
+    for name, expected in CLANG_COLD_SOURCE_SHA256.items():
+        source = sources.get(name)
+        if source is None or hashlib.sha256(source.encode()).hexdigest() != expected:
+            findings.append(f'{name} differs from the reviewed cold Clang source contract')
+    return findings
 
 
 # Git blob identity of the transport, including build and archive-consumer launch.
@@ -5612,6 +5659,9 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
         _universal_newlines, (ci, native, promote, cmake, parity, docs, post, docs_post))
     curl_action = None if curl_action is None else _universal_newlines(curl_action)
     findings = runner_findings(workflows)
+    if bool(set(CLANG_COLD_WORKFLOW_SHA256) & workflows.keys()) and not (
+            set(CLANG_COLD_WORKFLOW_SHA256) <= workflows.keys()):
+        findings.append('cold Clang verification requires both the shard workflow and its cost collector')
     if (_release_split_requested(_jobs(workflows.get('release.yml', '')))
             and 'prebuilt-hosted-diagnostic.yml' not in workflows):
         findings.append('release.yml Option C requires its read-only hosted PR diagnostic')
@@ -6049,6 +6099,9 @@ def check_commands(source: Path, output: Path | None = None,
                      parallel=True),
         ('native-x86-release-tests',
          [sys.executable, str(source / 'scripts/test_ci_native_x86_release.py')]),
+        ('clang-cold-tests',
+         [sys.executable, '-m', 'unittest', 'discover', '-s', str(source / 'scripts'),
+          '-p', 'test_clang*.py']),
         ('kernel-residuals-tests',
          [sys.executable, str(source / 'scripts/test_check_kernel_residuals.py')]),
         ('corpus-parity-identity-tests',
@@ -6375,6 +6428,18 @@ def main() -> int:
              if path.suffix in ('.yml', '.yaml') and path.name not in named},
             curl_action=read_ci_text(ROOT / '.github/actions/setup-live-curl/action.yml', findings),
             actions=actions)
+        for name in CLANG_COLD_WORKFLOW_SHA256:
+            path = workflows / name
+            if path.is_symlink() or not path.is_file():
+                findings.append(f'{name} is a required regular cold Clang workflow')
+        clang_sources = {}
+        for name in CLANG_COLD_SOURCE_SHA256:
+            path = ROOT / name
+            if path.parent.is_symlink() or path.is_symlink() or not path.is_file():
+                findings.append(f'{name} must be a regular cold Clang source file')
+            else:
+                clang_sources[name] = read_ci_text(path, findings, ROOT)
+        checked += clang_cold_source_findings(clang_sources)
         image_path = ROOT / '.github/engine-toolchain-image.txt'
         if (image_path.parent.is_symlink() or image_path.is_symlink() or not image_path.is_file()):
             findings.append('release prebuilt toolchain pin must be a regular source file')
