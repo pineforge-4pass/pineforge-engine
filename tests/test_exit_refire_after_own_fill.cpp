@@ -262,8 +262,8 @@ bool run_row(const Row& row) {
 }
 
 // Extrapolation, not measured: the zero-capacity reissue must remove its
-// queued predecessor (src/source/pine_adapter.cpp:12322, exit()'s
-// clear_existing_exit_order contract; :15261, pending_bracket_legs_ erase).
+// queued predecessor (pine_adapter.cpp, exit()'s clear_existing_exit_order
+// contract and exit_cancel_bracket()'s pending_bracket_legs_ erase).
 // This case regresses the inherited LIVE-ONLY partial candidate. The original
 // 05552883 parent unconditionally cancels here and is expected to pass this
 // case; its release-refire failures are the separate four rows above.
@@ -536,7 +536,8 @@ constexpr Row kFreshRows[] = {
 };
 
 // expectation corrected: declared levels -> raw-path tick boundaries, because
-// exit() submits thresholds (src/source/pine_adapter.cpp:13300 and :13326)
+// exit() submits thresholds through exit_limit_trigger() and
+// source_trigger_threshold() in pine_adapter.cpp,
 // with calc_on_order_fills=false in both new probes. Independently invert
 // Q(p) = kTick * floor(p / kTick + 1/2) for these positive, on-grid levels:
 // upward reach starts at L - kTick/2; downward reach ends strictly below
@@ -658,7 +659,7 @@ public:
                 expect("fresh bracket stop", row.snapshot.exit_levels.stop,
                        price_for(row_, kStopA));
             }
-            // First behavioural RED on c7: its cycle-wide consumed return
+            // A cycle-wide consumed return would fail this assertion: it
             // suppresses the bracket before considering the added origin.
             // expectation corrected: 2 -> 1, because fixture_pending_snapshots
             // projects staged legs once per family, with both exit levels.
@@ -794,7 +795,7 @@ constexpr Row kSettledRows[] = {
 // exits. The first Add is fully closed by its OWN stops; a later named entry
 // keeps the position nonflat. Thus no consumed origin remains in Add.opened.
 // The new Add's brackets must also accept a level update after its fill.
-// This covers the missing lifetime shape, not a replay of the private tape.
+// The old and new openings have distinct lifetimes within one position cycle.
 class SettledAddProbe final : public source::PineStrategyHost {
 public:
     explicit SettledAddProbe(const Row& row) : row_(row) {
@@ -1014,6 +1015,267 @@ bool run_settled_add(const Row& row) {
     return probe.ok;
 }
 
+struct CancelAddRow {
+    const char* name;
+    bool all_na;
+};
+
+constexpr CancelAddRow kCancelAddRows[] = {
+    {"R-cancel-add", false},
+    {"R-na-cancel-add", true},
+};
+constexpr const char* kCancelEntry = "L";
+constexpr const char* kCancelExit = "X";
+constexpr double kCancelOpening = 6.0;
+constexpr double kCancelSlice = 2.0;
+constexpr double kCancelAdd = 2.0;
+
+// Both cancellations remove the family after its first partial fill. A new
+// entry may receive its own bracket, but must not re-arm the consumed origin.
+// FIFO still debits the oldest opening when that new bracket fills.
+class CancelAddProbe final : public source::PineStrategyHost {
+public:
+    explicit CancelAddProbe(const CancelAddRow& row)
+        : row_{row.name, true, false, false}, all_na_(row.all_na) {
+        attach_pine_execution_adapter();
+        source::PineStrategyConfig cfg{};
+        cfg.calc_on_order_fills = false;
+        cfg.process_orders_on_close = false;
+        cfg.pyramiding = 2;
+        cfg.close_entries_rule_any = false;
+        cfg.initial_capital = 1'000'000.0;
+        cfg.default_qty_type = static_cast<int>(QtyType::FIXED);
+        cfg.default_qty_value = kCancelOpening;
+        cfg.margin_long = cfg.margin_short = 100.0;
+        cfg.commission_value = 0.0;
+        cfg.slippage = 0;
+        configure_pine_strategy(cfg);
+        set_syminfo_session("24x7");
+        set_syminfo_timezone("UTC");
+        set_syminfo_mintick(kTick);
+        set_syminfo_pointvalue(1.0);
+        set_syminfo_metadata("qty_step", kLot);
+        fixture_retain_all_events();
+    }
+
+    void expect(const std::string& field, double actual, double expected) {
+        if (!equal_number(row_, field, actual, expected)) ok = false;
+    }
+
+    void on_source_bar(const Bar&) override {
+        const int index = pine_bar_index();
+        if (index == 0)
+            strategy_entry(kCancelEntry, true, kNaN, kNaN, kCancelOpening);
+        if (index == 1) {
+            expect("initial position", signed_position_size(), kCancelOpening);
+            for (const auto& row : native_events(0)) {
+                if (!row.command) continue;
+                const auto* fill =
+                    std::get_if<native_order::ExecutionAppliedEvent>(&*row.command);
+                if (fill && fill->request().label == kCancelEntry) {
+                    old_origin = fill->handle();
+                    cycle_ = fill->cycle_after;
+                    expect("initial native opening units", fill->opened_units, kCancelOpening);
+                }
+            }
+            expect("initial origin exists", old_origin.incarnation != 0, true);
+        }
+        if (index == 3) {
+            expect("first exit filled once", trade_count(), 1);
+            expect("old opening retains four units", signed_position_size(),
+                   kCancelOpening - kCancelSlice);
+            const auto consumed = adapter_.fixture_consumed_partial_exit_cycles().lookup(
+                std::string(kCancelExit) + '\x1f' + kCancelEntry);
+            expect("first exit consumed in current cycle",
+                   cycle_ > 0 && consumed && *consumed == cycle_, true);
+            for (const auto& row : native_events(0)) {
+                if (!row.command) continue;
+                const auto* fill =
+                    std::get_if<native_order::ExecutionAppliedEvent>(&*row.command);
+                if (fill && fill->request().label == kCancelExit)
+                    consumed_leg_ = fill->handle();
+            }
+            // Preserve this order: cancel, add, then the ordinary finite X
+            // call below. The all-na call is not the last exit request.
+            if (all_na_)
+                strategy_exit(kCancelExit, kCancelEntry, kNaN, kNaN,
+                              kNaN, kNaN, kNaN, 100.0, {}, kCancelSlice);
+            else
+                strategy_cancel_all();
+            int remaining = 0;
+            for (const auto& row : adapter_.fixture_pending_snapshots())
+                if (row.snapshot.source_id == kCancelExit) ++remaining;
+            expect("cancellation leaves no exit projection", remaining, 0);
+            expect("cancellation retains position", signed_position_size(),
+                   kCancelOpening - kCancelSlice);
+            strategy_entry(kCancelEntry, true, kNaN, kNaN, kCancelAdd);
+            for (const auto& row : native_events(0))
+                if (row.ordinal > replacement_events_from_)
+                    replacement_events_from_ = row.ordinal;
+        }
+        if (index >= 1) finite_exit();
+        if (index == 3) {
+            for (const auto& row : native_events(0)) {
+                if (!row.command) continue;
+                const auto* accepted =
+                    std::get_if<native_order::AcceptedEvent>(&*row.command);
+                if (accepted && accepted->request().label == kCancelEntry)
+                    fresh_origin = accepted->handle();
+            }
+            expect("add has distinct pending origin",
+                   fresh_origin.incarnation != 0 && fresh_origin != old_origin, true);
+            int projections = 0, old_brackets = 0;
+            for (const auto& row : adapter_.fixture_pending_snapshots()) {
+                if (row.snapshot.source_id != kCancelExit) continue;
+                ++projections;
+                if (row.snapshot.bracket_origin == old_origin) ++old_brackets;
+            }
+            // First regression assertion: cancellation must not erase the
+            // old origin's ineligibility when the pending add admits X.
+            expect("consumed opening rearmed", old_brackets, 0);
+            expect("one replacement projection", projections, 1);
+            for (const auto& row : adapter_.fixture_pending_snapshots()) {
+                const auto& snapshot = row.snapshot;
+                if (snapshot.source_id != kCancelExit) continue;
+                expect("replacement names entry", snapshot.from_entry == kCancelEntry, true);
+                expect("replacement binds add", snapshot.bracket_origin == fresh_origin, true);
+                expect("replacement reserves two units",
+                       snapshot.projection_remaining_qty, kCancelSlice);
+                expect("replacement limit", snapshot.exit_levels.limit, kLimit);
+            }
+            cancellation_seen = true;
+        }
+        if (index == 4) {
+            int openings = 0, accepted = 0, fills = 0;
+            double closed = 0.0;
+            native_order::RequestHandle accepted_leg{}, filled_leg{};
+            for (const auto& row : native_events(0)) {
+                if (!row.command) continue;
+                if (const auto* fill =
+                        std::get_if<native_order::ExecutionAppliedEvent>(&*row.command)) {
+                    if (fill->request().label == kCancelEntry) {
+                        ++openings;
+                        expect("openings retain cycle", fill->cycle_after, cycle_);
+                        if (fill->handle() == fresh_origin) {
+                            expect("add opens on bar four", fill->interval_open_ms(),
+                                   kStart + 4 * kInterval);
+                            expect("native add units", fill->opened_units, kCancelAdd);
+                        }
+                    }
+                    if (fill->request().label == kCancelExit
+                        && fill->interval_open_ms() == kStart + 4 * kInterval) {
+                        ++fills;
+                        closed += fill->closed_units;
+                        filled_leg = fill->handle();
+                    }
+                }
+                if (row.ordinal <= replacement_events_from_) continue;
+                if (const auto* event =
+                        std::get_if<native_order::AcceptedEvent>(&*row.command)) {
+                    if (event->request().label != kCancelExit) continue;
+                    ++accepted;
+                    accepted_leg = event->handle();
+                    expect("replacement is a new native leg",
+                           accepted_leg != consumed_leg_, true);
+                    const auto* limit =
+                        std::get_if<native_order::Limit>(&event->request().trigger);
+                    expect("replacement is native limit", limit != nullptr, true);
+                    if (limit)
+                        expect("native replacement threshold", limit->price,
+                               expected_native_exit_boundary(row_, kLimit, true));
+                }
+            }
+            expect("two native openings", openings, 2);
+            expect("one fresh native exit accepted", accepted, 1);
+            expect("one fresh native exit filled", fills, 1);
+            expect("bar four closes only fresh slice", closed, kCancelSlice);
+            expect("filled leg is accepted replacement", filled_leg == accepted_leg, true);
+            expect("two partial trades", trade_count(), 2);
+            fresh_fill_seen = true;
+        }
+        if (index == 4 || index == 5)
+            expect("position after fresh slice", signed_position_size(),
+                   kCancelOpening + kCancelAdd - 2 * kCancelSlice);
+        if (index == 5) strategy_close_all();
+    }
+
+    double final_size() const { return signed_position_size(); }
+    bool ok = true, cancellation_seen = false, fresh_fill_seen = false;
+    native_order::RequestHandle old_origin{}, fresh_origin{};
+
+private:
+    void finite_exit() {
+        strategy_exit(kCancelExit, kCancelEntry, kLimit, kNaN,
+                      kNaN, kNaN, kNaN, 100.0, {}, kCancelSlice);
+    }
+    const Row row_;
+    const bool all_na_;
+    std::int64_t cycle_ = 0;
+    std::uint64_t replacement_events_from_ = 0;
+    native_order::RequestHandle consumed_leg_{};
+};
+
+bool run_cancel_add(const CancelAddRow& row) {
+    CancelAddProbe probe(row);
+    const std::array<Bar, 8> bars{{
+        {100, 101, 99, 100, 1000, kStart},                  // 0: entry call
+        {100, 101, 99, 100, 1000, kStart + kInterval},      // 1: entry, X
+        {100, 109, 99, 108, 1000, kStart + 2 * kInterval},  // 2: X consumes 2
+        {105, 106, 104, 105, 1000, kStart + 3 * kInterval}, // 3: cancel, add, X
+        {100, 109, 99, 108, 1000, kStart + 4 * kInterval},  // 4: add, fresh X
+        {112, 114, 110, 112, 1000, kStart + 5 * kInterval}, // 5: no refire, close
+        {101, 103, 99, 102, 1000, kStart + 6 * kInterval},  // 6: final close
+        {102, 103, 100, 101, 1000, kStart + 7 * kInterval}, // 7: trailing bar
+    }};
+    probe.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false);
+    probe.expect("run succeeded", probe.last_error().empty(), true);
+    probe.expect("cancellation and finite reissue observed", probe.cancellation_seen, true);
+    probe.expect("fresh native fill observed", probe.fresh_fill_seen, true);
+    probe.expect("trade count", probe.trade_count(), 4);
+    double total = 0.0, fresh_closed = 0.0, old_final = 0.0, add_final = 0.0;
+    int fresh_trades = 0, final_trades = 0;
+    for (int i = 0; i < probe.trade_count(); ++i) {
+        const auto& trade = probe.get_trade(i);
+        const std::string prefix = "trade " + std::to_string(i) + " ";
+        const bool final = trade.exit_id == kFinalExitId;
+        const bool add = trade.entry_incarnation == probe.fresh_origin.incarnation;
+        probe.expect(prefix + "entry id", trade.entry_id == kCancelEntry, true);
+        probe.expect(prefix + "known entry origin",
+                     trade.entry_incarnation == probe.old_origin.incarnation || add, true);
+        probe.expect(prefix + "entry bar", trade.entry_bar_index, add ? 4 : 1);
+        probe.expect(prefix + "entry price", trade.entry_price, kEntryPrice);
+        probe.expect(prefix + "long", trade.is_long, true);
+        probe.expect(prefix + "closed", trade.open_at_end, false);
+        probe.expect(prefix + "exit id", final || trade.exit_id == kCancelExit, true);
+        probe.expect(prefix + "units", trade.qty, kCancelSlice);
+        probe.expect(prefix + "exit price", trade.exit_price, final ? bars[6].open : kLimit);
+        if (final) {
+            ++final_trades;
+            probe.expect(prefix + "close bar", trade.exit_bar_index, 6);
+            (add ? add_final : old_final) += trade.qty;
+        } else {
+            probe.expect(prefix + "FIFO closes old origin", add, false);
+            probe.expect(prefix + "partial bar",
+                         trade.exit_bar_index == 2 || trade.exit_bar_index == 4, true);
+            if (trade.exit_bar_index == 4) {
+                ++fresh_trades;
+                fresh_closed += trade.qty;
+            }
+        }
+        total += trade.qty;
+    }
+    probe.expect("bar four exit trade count", fresh_trades, 1);
+    probe.expect("bar four exit trade units", fresh_closed, kCancelSlice);
+    probe.expect("final close trade count", final_trades, 2);
+    probe.expect("old origin final remaining units", old_final,
+                 kCancelOpening - 2 * kCancelSlice);
+    probe.expect("add final remaining units", add_final, kCancelAdd);
+    probe.expect("total closed units", total, kCancelOpening + kCancelAdd);
+    probe.expect("final position", probe.final_size(), 0.0);
+    if (probe.ok) std::printf("PASS %s\n", row.name);
+    return probe.ok;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1041,6 +1303,11 @@ int main(int argc, char** argv) {
         if (argc == 2 && std::string(argv[1]) != row.name) continue;
         ++selected;
         if (!run_settled_add(row)) ++failures;
+    }
+    for (const CancelAddRow& row : kCancelAddRows) {
+        if (argc == 2 && std::string(argv[1]) != row.name) continue;
+        ++selected;
+        if (!run_cancel_add(row)) ++failures;
     }
     if (selected == 0) {
         std::printf("Unknown row: %s\n", argv[1]);

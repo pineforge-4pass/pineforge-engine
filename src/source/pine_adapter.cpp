@@ -6670,7 +6670,7 @@ void PineExecutionAdapter::cancel_exit_orders_for_full_close(
         if (!handles.empty()) family->second.remove_selected(
             removed, handles.context().run, selection,
             fixture_bracket_remove_precheck_);
-        if (family->second.empty()) family = bracket_families_.erase(family);
+        if (family->second.empty() && family->second.consumed_facts().empty()) family = bracket_families_.erase(family);
         else ++family;
     }
     refresh_pending_view();
@@ -6791,7 +6791,7 @@ void PineExecutionAdapter::retire_in_position_exits_at_flat(
         }
         for (auto family = bracket_families_.begin(); family != bracket_families_.end();) {
             family->second.remove_all(handles);
-            if (family->second.empty()) family = bracket_families_.erase(family);
+            if (family->second.empty() && family->second.consumed_facts().empty()) family = bracket_families_.erase(family);
             else ++family;
         }
     }
@@ -11481,7 +11481,7 @@ void PineExecutionAdapter::withdraw_void_exits(const SourceId& entry_id) {
     }
     for (auto family = bracket_families_.begin(); family != bracket_families_.end();) {
         family->second.remove_all(handles);
-        if (family->second.empty()) family = bracket_families_.erase(family);
+        if (family->second.empty() && family->second.consumed_facts().empty()) family = bracket_families_.erase(family);
         else ++family;
     }
     refresh_pending_view();
@@ -11584,7 +11584,7 @@ void PineExecutionAdapter::stash_id_bound_exits(const SourceId& entry_id) {
     }
     for (auto family = bracket_families_.begin(); family != bracket_families_.end();) {
         family->second.remove_all(handles);
-        if (family->second.empty()) family = bracket_families_.erase(family);
+        if (family->second.empty() && family->second.consumed_facts().empty()) family = bracket_families_.erase(family);
         else ++family;
     }
     refresh_pending_view();
@@ -11644,7 +11644,7 @@ void PineExecutionAdapter::settle_void_global_exits(bool market_entry) {
     }
     for (auto family = bracket_families_.begin(); family != bracket_families_.end();) {
         family->second.remove_all(handles);
-        if (family->second.empty()) family = bracket_families_.erase(family);
+        if (family->second.empty() && family->second.consumed_facts().empty()) family = bracket_families_.erase(family);
         else ++family;
     }
     refresh_pending_view();
@@ -11812,9 +11812,19 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     const auto physical = detail::run_position(require_host());
     const SourceId partial_exit_key = exit_id + "\x1f" + from_entry;
     const auto family_key = key_for(exit_id, from_entry);
+    const auto at_or_before_consumed_origin = [&](const native_order::RequestHandle& origin) {
+        if (origin.incarnation == 0) return false;
+        const auto family = bracket_families_.find(family_key);
+        if (family == bracket_families_.end()) return false;
+        const auto& facts = family->second.consumed_facts();
+        return std::any_of(facts.begin(), facts.end(), [&](const auto& fact) {
+            return origin.incarnation <= fact.second;
+        });
+    };
     const auto consumed_origin = [&](const native_order::RequestHandle& origin) {
         // Wholly settled, archived rosters have no per-origin consumed facts.
-        return origin_leg_consumed(family_key, PineOrderFamily::ExitLimit, origin)
+        return at_or_before_consumed_origin(origin)
+            || origin_leg_consumed(family_key, PineOrderFamily::ExitLimit, origin)
             || origin_leg_consumed(family_key, PineOrderFamily::ExitStop, origin)
             || origin_leg_consumed(family_key, PineOrderFamily::ExitTrail, origin);
     };
@@ -11897,9 +11907,9 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     const bool consumed_partial_reissue = consumed_cycle && partial_reissue
         && live_exit_units > internal::kQtyEpsilon
         && *consumed_cycle == current_position_cycle_;
-    if ((consumed_partial_reissue
-         || (partial_reissue && exit_tombstoned(exit_id, from_entry)))
-        && !fresh_entry_origin()) return;
+    const bool requires_fresh_origin = consumed_partial_reissue
+        || (partial_reissue && exit_tombstoned(exit_id, from_entry));
+    if (requires_fresh_origin && !fresh_entry_origin()) return;
     // A held global exit with relative legs over two or more entries covers
     // them entry by entry (per_entry_exit_call).
     if (from_entry.empty()
@@ -12426,27 +12436,11 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                            matches_exit)
             || std::any_of(anchored_relative_legs_.begin(), anchored_relative_legs_.end(),
                            matches_exit);
-        const bool consumed_origin_still_open = consumed_this_cycle
-            && !family_has_predecessor && [&] {
-                if (from_entry.empty() || !std::isfinite(qty))
-                    return live_exit_units > internal::kQtyEpsilon;
-                const auto cohort = cohorts_by_id_.find(from_entry);
-                if (cohort == cohorts_by_id_.end()) return false;
-                return std::any_of(cohort->second.opened.begin(), cohort->second.opened.end(),
-                    [&](const native_order::RequestHandle& origin) {
-                        const auto units =
-                            cohort->second.live_units_by_origin.find(origin.incarnation);
-                        return units != cohort->second.live_units_by_origin.end()
-                            && units->second > internal::kQtyEpsilon
-                            && consumed_origin(origin);
-                    });
-            }();
-        // Keep suppression only while its consumed opening still owns units.
-        // Other entries keeping the position nonflat do not extend that
-        // opening's lifetime. Fresh origins still get their own legs below.
+        // A consumed family with no predecessor retains its suppression
+        // while the position still holds units.
         // Any live or queued predecessor, including an anchored child without
         // a source live handle, still follows the legacy cancellation path.
-        if (!(consumed_this_cycle && consumed_origin_still_open
+        if (!(consumed_this_cycle && live_exit_units > internal::kQtyEpsilon
               && !family_has_predecessor)) {
             exit_cancel_bracket(exit_id, from_entry, comment);
         }
@@ -13268,7 +13262,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 return origin_leg_consumed(family_key, family, origin);
             };
             if (origin.incarnation != 0 && !has_live_leg && !origin_is_pending(origin)
-                && (!origin_opened || consumed_origin_leg())) {
+                && (!origin_opened || consumed_origin_leg()
+                    || (requires_fresh_origin && at_or_before_consumed_origin(origin)))) {
                 continue;
             }
             native_order::Owner owner = !void_issue && !config_.close_entries_rule_any
@@ -15336,6 +15331,31 @@ std::optional<double> PineExecutionAdapter::resolve_anchored_level(
     return installed;
 }
 
+BracketRoster PineExecutionAdapter::consumed_bracket_facts(std::uint64_t family_key) const {
+    BracketRoster facts;
+    const auto family = bracket_families_.find(family_key);
+    if (family == bracket_families_.end()) return facts;
+    for (const auto& fact : family->second.consumed_facts())
+        facts.record_consumed(fact.first, fact.second);
+    // Retirement may not have erased a filled leg's placement yet. Capture
+    // its existing consumed answer before cancelling any working members;
+    // a cancellation itself must never create a consumed-origin fact.
+    for (const auto& handle : family->second.working_tail()) {
+        const auto row = placement_.find(handle.incarnation);
+        if (row == placement_.end()) continue;
+        const auto& snapshot = row->second;
+        if (snapshot.placement_cycle != current_position_cycle_
+            || snapshot.from_entry.empty() || !std::isfinite(snapshot.requested_qty))
+            continue;
+        const auto origin = snapshot.bracket_origin;
+        if (origin.incarnation != 0
+            && origin_leg_consumed(family_key, snapshot.family, origin))
+            facts.record_consumed(static_cast<std::uint8_t>(snapshot.family),
+                                  origin.incarnation);
+    }
+    return facts;
+}
+
 void PineExecutionAdapter::exit_cancel_bracket(const SourceId& exit_id,
                                                const SourceId& from_entry,
                                                const std::string&) {
@@ -15355,10 +15375,12 @@ void PineExecutionAdapter::exit_cancel_bracket(const SourceId& exit_id,
     native_order::RunIdentity settled_run{};
     bool found_family = false;
     if (const auto found = bracket_families_.find(key); found != bracket_families_.end()) {
+        auto facts = consumed_bracket_facts(key);
         handles = found->second.members();
         settled = found->second.settled_count();
         settled_run = found->second.run_identity();
-        bracket_families_.erase(found);
+        if (facts.consumed_facts().empty()) bracket_families_.erase(found);
+        else found->second = std::move(facts);
         found_family = true;
     } else if (const auto archived = settled_bracket_families_.find(key);
                archived != settled_bracket_families_.end()) {
@@ -15466,6 +15488,15 @@ void PineExecutionAdapter::cancel(const SourceId& id) {
 
 void PineExecutionAdapter::cancel_all() {
     reroute_fixed_entries_before_request();
+    // Snapshot suppression before native cancellations retire working legs.
+    // The retained rosters have no members, so future cancels reproduce no
+    // additional outcomes and cannot reactivate an old request.
+    std::unordered_map<std::uint64_t, BracketRoster> consumed;
+    for (const auto& family : bracket_families_) {
+        auto facts = consumed_bracket_facts(family.first);
+        if (!facts.consumed_facts().empty())
+            consumed.emplace(family.first, std::move(facts));
+    }
     id_bound_exits_.clear();
     // The margin call a breach at this bar's close owes is an order the
     // script's cancel_all() withdraws too (close_point_margin_call).
@@ -15485,6 +15516,7 @@ void PineExecutionAdapter::cancel_all() {
     retire_cancelled_exits(nullptr, cancelled);
     pending_margin_revivals_.clear();
     clear_bracket_families();
+    bracket_families_.swap(consumed);
     pending_write(pending_bracket_legs_).clear();
     pending_write(pending_entries_).clear();
     delayed_market_orders_.clear();
@@ -24409,7 +24441,7 @@ bool PineExecutionAdapter::per_entry_exit_call(
         if (const auto family = bracket_families_.find(key_for(exit_id, from_entry));
             family != bracket_families_.end()) {
             family->second.remove_selected(whole);
-            if (family->second.empty()) bracket_families_.erase(family);
+            if (family->second.empty() && family->second.consumed_facts().empty()) bracket_families_.erase(family);
         }
         PerEntryExit added;
         added.exit_id = exit_id;
@@ -24777,7 +24809,7 @@ void PineExecutionAdapter::end_per_entry_exit(std::size_t index) {
     if (const auto family = bracket_families_.find(key_for(exit_id, SourceId{}));
         family != bracket_families_.end()) {
         family->second.remove_selected(legs);
-        if (family->second.empty()) bracket_families_.erase(family);
+        if (family->second.empty() && family->second.consumed_facts().empty()) bracket_families_.erase(family);
     }
 }
 
@@ -25853,6 +25885,12 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     const int next_sign = live_position > 0.0 ? 1 : (live_position < 0.0 ? -1 : 0);
     const bool flipped_position = current_position_sign_ != 0 && next_sign != 0
         && current_position_sign_ != next_sign;
+    if (next_sign == 0 || flipped_position) {
+        // Consumed-origin suppression belongs to this physical position
+        // cycle. Working members keep their native cancellation lifecycle.
+        for (auto& family : bracket_families_)
+            family.second.prune_consumed([](std::uint64_t) { return false; });
+    }
     if (flipped_position && event.closed_units > 0.0) {
         // A reversal retires the complete prior physical side before opening
         // the new one.  The generic settlement event owns that fact; mirror
@@ -29785,7 +29823,7 @@ void PineExecutionAdapter::cancel_reversal_exit_owners(
     // Even a no-owner cancel erased empty families. Preserve that effect once,
     // in the original family iteration order, independent of historical ids.
     for (auto family = bracket_families_.begin(); family != bracket_families_.end();) {
-        if (family->second.empty()) family = bracket_families_.erase(family);
+        if (family->second.empty() && family->second.consumed_facts().empty()) family = bracket_families_.erase(family);
         else ++family;
     }
 
@@ -29820,7 +29858,9 @@ void PineExecutionAdapter::cancel_reversal_exit_owners(
                 || coof_leg_reaches_exit(row->second));
         }
         assert(std::none_of(bracket_families_.begin(), bracket_families_.end(),
-            [](const auto& family) { return family.second.empty(); }));
+            [](const auto& family) {
+                return family.second.empty() && family.second.consumed_facts().empty();
+            }));
     });
 #endif
 
