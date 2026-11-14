@@ -11811,6 +11811,44 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     // facts remain in the snapshot for deferred/observer projections.
     const auto physical = detail::run_position(require_host());
     const SourceId partial_exit_key = exit_id + "\x1f" + from_entry;
+    const auto family_key = key_for(exit_id, from_entry);
+    const auto consumed_origin = [&](const native_order::RequestHandle& origin) {
+        // Wholly settled, archived rosters have no per-origin consumed facts.
+        return origin_leg_consumed(family_key, PineOrderFamily::ExitLimit, origin)
+            || origin_leg_consumed(family_key, PineOrderFamily::ExitStop, origin)
+            || origin_leg_consumed(family_key, PineOrderFamily::ExitTrail, origin);
+    };
+    const auto fresh_entry_origin = [&] {
+        if (from_entry.empty() || !std::isfinite(qty)) return false;
+        const auto cohort = cohorts_by_id_.find(from_entry);
+        if (cohort == cohorts_by_id_.end()) return false;
+        bool has_consumed_origin = false;
+        bool has_fresh_origin = false;
+        for (const auto& origin : cohort->second.opened) {
+            if (consumed_origin(origin)) {
+                has_consumed_origin = true;
+            } else if (const auto units =
+                           cohort->second.live_units_by_origin.find(origin.incarnation);
+                       units != cohort->second.live_units_by_origin.end()
+                           && units->second > internal::kQtyEpsilon) {
+                has_fresh_origin = true;
+            }
+        }
+        for (const auto& origin : live_handles_) {
+            const auto parent = placement_.find(origin.incarnation);
+            if (parent != placement_.end() && parent->second.opening
+                && parent->second.family == PineOrderFamily::Entry
+                && parent->second.source_id == from_entry
+                && !parent->second.projection_over_pyramiding
+                && !consumed_origin(origin)) {
+                has_fresh_origin = true;
+            }
+        }
+        // Absence of a family is not evidence of a new lifetime: a genuine
+        // cancellation can have removed it. Require both the old consumed
+        // origin and a distinct eligible opening before bypassing its marker.
+        return has_consumed_origin && has_fresh_origin;
+    };
     // ab9714be pine_strategy_commands.cpp:1661-1692: only a re-issue that is
     // itself explicitly partial against the live position (net of a same-bar
     // pending close) is suppressed; an explicit qty covering the whole
@@ -11822,13 +11860,13 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     if (!std::isnan(qty) && live_exit_units > internal::kQtyEpsilon)
         reissue_percent = std::min(qty, live_exit_units) / live_exit_units * 100.0;
     const bool partial_reissue = reissue_percent < 100.0 - internal::kFullPercentEps;
-    if (const auto consumed = consumed_partial_exit_cycles_.lookup(partial_exit_key);
-        consumed && partial_reissue
+    const auto consumed_cycle = consumed_partial_exit_cycles_.lookup(partial_exit_key);
+    const bool consumed_partial_reissue = consumed_cycle && partial_reissue
         && live_exit_units > internal::kQtyEpsilon
-        && *consumed == current_position_cycle_) {
-        return;
-    }
-    if (partial_reissue && exit_tombstoned(exit_id, from_entry)) return;
+        && *consumed_cycle == current_position_cycle_;
+    if ((consumed_partial_reissue
+         || (partial_reissue && exit_tombstoned(exit_id, from_entry)))
+        && !fresh_entry_origin()) return;
     // A held global exit with relative legs over two or more entries covers
     // them entry by entry (per_entry_exit_call).
     if (from_entry.empty()
@@ -12076,7 +12114,6 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         }
     }
     const bool dynamic = std::isnan(qty);
-    const auto family_key = key_for(exit_id, from_entry);
     const bool defer_for_same_bar_priority = !config_.calc_on_order_fills
         && std::any_of(pending_entries_.begin(), pending_entries_.end(),
             [](const PendingEntry& pending) {
@@ -12356,10 +12393,27 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                            matches_exit)
             || std::any_of(anchored_relative_legs_.begin(), anchored_relative_legs_.end(),
                            matches_exit);
-        // Keep an ended family's consumed witness for this position cycle.
+        const bool consumed_origin_still_open = consumed_this_cycle
+            && !family_has_predecessor && [&] {
+                if (from_entry.empty() || !std::isfinite(qty))
+                    return live_exit_units > internal::kQtyEpsilon;
+                const auto cohort = cohorts_by_id_.find(from_entry);
+                if (cohort == cohorts_by_id_.end()) return false;
+                return std::any_of(cohort->second.opened.begin(), cohort->second.opened.end(),
+                    [&](const native_order::RequestHandle& origin) {
+                        const auto units =
+                            cohort->second.live_units_by_origin.find(origin.incarnation);
+                        return units != cohort->second.live_units_by_origin.end()
+                            && units->second > internal::kQtyEpsilon
+                            && consumed_origin(origin);
+                    });
+            }();
+        // Keep suppression only while its consumed opening still owns units.
+        // Other entries keeping the position nonflat do not extend that
+        // opening's lifetime. Fresh origins still get their own legs below.
         // Any live or queued predecessor, including an anchored child without
         // a source live handle, still follows the legacy cancellation path.
-        if (!(consumed_this_cycle && live_exit_units > internal::kQtyEpsilon
+        if (!(consumed_this_cycle && consumed_origin_still_open
               && !family_has_predecessor)) {
             exit_cancel_bracket(exit_id, from_entry, comment);
         }

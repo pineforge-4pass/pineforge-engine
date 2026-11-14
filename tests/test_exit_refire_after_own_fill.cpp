@@ -524,6 +524,199 @@ bool run_queued_predecessor() {
     return probe.ok;
 }
 
+constexpr const char* kFreshEntry = "renewed-entry";
+constexpr const char* kFreshExit = "partial";
+constexpr double kFreshOpening = 4.0;
+constexpr double kFreshAdd = 4.0;
+constexpr double kFreshSlice = kFreshOpening / 2.0;
+constexpr double kFreshHolder = kFreshOpening - kFreshSlice;
+constexpr Row kFreshRows[] = {
+    {"R-fresh-add", true, false, false},
+    {"R-fresh-add-short", false, false, false},
+};
+
+// A refusal must keep the old opening's consumed bracket, without making a
+// later opening of the same id inherit it. The position never goes flat.
+// FIFO makes the fresh exit close the old opening's remaining units; the
+// final market close then owns exactly the added opening's units.
+class FreshAddProbe final : public source::PineStrategyHost {
+public:
+    explicit FreshAddProbe(const Row& row) : row_(row) {
+        attach_pine_execution_adapter();
+        source::PineStrategyConfig cfg{};
+        cfg.calc_on_order_fills = false;
+        cfg.process_orders_on_close = false;
+        cfg.pyramiding = 2;
+        cfg.initial_capital = 1'000'000.0;
+        cfg.default_qty_type = static_cast<int>(QtyType::FIXED);
+        cfg.default_qty_value = kFreshOpening;
+        cfg.margin_long = cfg.margin_short = 100.0;
+        cfg.commission_value = 0.0;
+        cfg.slippage = 0;
+        configure_pine_strategy(cfg);
+        set_syminfo_session("24x7");
+        set_syminfo_timezone("UTC");
+        set_syminfo_mintick(kTick);
+        set_syminfo_pointvalue(1.0);
+        set_syminfo_metadata("qty_step", kLot);
+        fixture_retain_all_events();
+    }
+
+    void expect(const std::string& field, double actual, double expected) {
+        if (!equal_number(row_, field, actual, expected)) ok = false;
+    }
+
+    void on_source_bar(const Bar&) override {
+        const int index = pine_bar_index();
+        if (index == 0)
+            strategy_entry(kFreshEntry, row_.is_long, kNaN, kNaN, kFreshOpening);
+        if (index == 1) {
+            expect("initial position", std::abs(signed_position_size()), kFreshOpening);
+            strategy_exit("holder", kFreshEntry, kNaN, price_for(row_, 50.0),
+                          kNaN, kNaN, kNaN, 100.0, {}, kFreshHolder);
+            partial();
+        }
+        if (index == 3) {
+            expect("own fill before refusal", trade_count(), 1);
+            expect("units before refusal", std::abs(signed_position_size()), kFreshHolder);
+            for (const auto& row : native_events(0)) {
+                if (!row.command) continue;
+                const auto* fill =
+                    std::get_if<native_order::ExecutionAppliedEvent>(&*row.command);
+                if (!fill) continue;
+                if (fill->request().label == kFreshEntry) {
+                    first_origin_ = fill->handle();
+                    cycle_ = fill->cycle_after;
+                }
+                if (fill->request().label == kFreshExit)
+                    expect("initial native closed units", fill->closed_units, kFreshSlice);
+            }
+            const auto consumed = adapter_.fixture_consumed_partial_exit_cycles().lookup(
+                std::string(kFreshExit) + '\x1f' + kFreshEntry);
+            expect("own fill marked this cycle",
+                   cycle_ > 0 && consumed && *consumed == cycle_, true);
+            // The holder reserves every remaining unit. This full-size
+            // reissue reaches the reservation refusal, not the partial guard.
+            partial();
+            int refused_legs = 0;
+            for (const auto& row : adapter_.fixture_pending_snapshots())
+                if (row.snapshot.source_id == kFreshExit) ++refused_legs;
+            expect("refused reissue leaves no queued leg", refused_legs, 0);
+            for (const auto& row : native_working_requests())
+                expect("refused reissue leaves no working leg",
+                       row.definition->request.label == kFreshExit, false);
+            strategy_entry(kFreshEntry, row_.is_long, kNaN, kNaN, kFreshAdd);
+            refusal_seen = true;
+        }
+        if (index == 4) {
+            expect("position after add", std::abs(signed_position_size()),
+                   kFreshHolder + kFreshAdd);
+            int openings = 0;
+            for (const auto& row : native_events(0)) {
+                if (!row.command) continue;
+                const auto* fill =
+                    std::get_if<native_order::ExecutionAppliedEvent>(&*row.command);
+                if (!fill || fill->request().label != kFreshEntry) continue;
+                ++openings;
+                expect("add remains in original cycle", fill->cycle_after, cycle_);
+                if (fill->handle() != first_origin_) add_origin_ = fill->handle();
+            }
+            expect("native opening count", openings, 2);
+            expect("add has a fresh origin",
+                   add_origin_.incarnation != 0 && add_origin_ != first_origin_, true);
+        }
+        if (index >= 4 && index <= 7) partial();
+        if (index == 4) {
+            int fresh_legs = 0;
+            for (const auto& row : adapter_.fixture_pending_snapshots()) {
+                if (row.snapshot.source_id != kFreshExit) continue;
+                ++fresh_legs;
+                expect("fresh leg is staged", row.staged, true);
+                expect("fresh leg binds added origin",
+                       row.snapshot.bracket_origin == add_origin_, true);
+                expect("fresh leg reserved units", row.snapshot.projection_remaining_qty,
+                       kFreshSlice);
+            }
+            // First behavioural RED on c7: its cycle-wide consumed return
+            // suppresses both legs before considering the added origin.
+            expect("fresh add exit leg count", fresh_legs, 2);
+            add_seen = true;
+        }
+        if (index >= 5 && index <= 8)
+            expect("remaining units after fresh exit", std::abs(signed_position_size()),
+                   kFreshHolder + kFreshAdd - kFreshSlice);
+        if (index == 8) strategy_close_all();
+    }
+
+    double final_size() const { return signed_position_size(); }
+    bool ok = true;
+    bool refusal_seen = false, add_seen = false;
+
+private:
+    void partial() {
+        strategy_exit(kFreshExit, kFreshEntry, price_for(row_, kLimit),
+                      price_for(row_, kStopA), kNaN, kNaN, kNaN,
+                      100.0, {}, kFreshSlice);
+    }
+    const Row& row_;
+    native_order::RequestHandle first_origin_{}, add_origin_{};
+    std::int64_t cycle_ = 0;
+};
+
+bool run_fresh_add(const Row& row) {
+    FreshAddProbe probe(row);
+    constexpr std::array<std::array<double, 4>, 11> prices{{
+        {100, 101, 99, 100},  // 0: first entry call
+        {100, 101, 99, 100},  // 1: first entry, holder and partial bracket
+        {100, 109, 99, 108},  // 2: first partial limit
+        {105, 106, 104, 105}, // 3: refused reissue, same-id add call
+        {100, 101, 99, 100},  // 4: add fills, fresh bracket call
+        {100, 109, 99, 108},  // 5: fresh partial limit
+        {112, 114, 110, 112}, // 6: repeated limit must not refire
+        {100, 101, 87, 95},   // 7: repeated stop must not refire
+        {100, 102, 98, 100},  // 8: final close call
+        {101, 103, 99, 102},  // 9: final close fill
+        {102, 103, 100, 101}, // 10: trailing bar
+    }};
+    std::array<Bar, prices.size()> bars{};
+    for (std::size_t i = 0; i < bars.size(); ++i) {
+        const auto& p = prices[i];
+        bars[i] = {price_for(row, p[0]), price_for(row, p[row.is_long ? 1 : 2]),
+                   price_for(row, p[row.is_long ? 2 : 1]), price_for(row, p[3]),
+                   1000, kStart + static_cast<std::int64_t>(i) * kInterval};
+    }
+    probe.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false);
+    probe.expect("run succeeded", probe.last_error().empty(), true);
+    probe.expect("refusal observed", probe.refusal_seen, true);
+    probe.expect("fresh opening observed", probe.add_seen, true);
+    probe.expect("trade count", probe.trade_count(), 3);
+    double total = 0.0;
+    for (int i = 0; i < probe.trade_count(); ++i) {
+        const Trade& trade = probe.get_trade(i);
+        const bool final = i == 2;
+        const int exit_bar = i == 0 ? 2 : (final ? 9 : 5);
+        const double units = final
+            ? kFreshOpening + kFreshAdd - 2 * kFreshSlice : kFreshSlice;
+        const std::string prefix = "trade " + std::to_string(i) + " ";
+        probe.expect(prefix + "entry id", trade.entry_id == kFreshEntry, true);
+        probe.expect(prefix + "entry bar", trade.entry_bar_index, final ? 4 : 1);
+        probe.expect(prefix + "entry price", trade.entry_price, kEntryPrice);
+        probe.expect(prefix + "direction", trade.is_long, row.is_long);
+        probe.expect(prefix + "closed", trade.open_at_end, false);
+        probe.expect(prefix + "exit id",
+                     trade.exit_id == (final ? kFinalExitId : kFreshExit), true);
+        probe.expect(prefix + "exit bar", trade.exit_bar_index, exit_bar);
+        probe.expect(prefix + "exit price", trade.exit_price,
+                     final ? bars[9].open : price_for(row, kLimit));
+        probe.expect(prefix + "units", trade.qty, units);
+        total += trade.qty;
+    }
+    probe.expect("total closed units", total, kFreshOpening + kFreshAdd);
+    probe.expect("final position", probe.final_size(), 0.0);
+    if (probe.ok) std::printf("PASS %s\n", row.name);
+    return probe.ok;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -541,6 +734,11 @@ int main(int argc, char** argv) {
     if (argc == 1 || std::string(argv[1]) == kQueuedRow) {
         ++selected;
         if (!run_queued_predecessor()) ++failures;
+    }
+    for (const Row& row : kFreshRows) {
+        if (argc == 2 && std::string(argv[1]) != row.name) continue;
+        ++selected;
+        if (!run_fresh_add(row)) ++failures;
     }
     if (selected == 0) {
         std::printf("Unknown row: %s\n", argv[1]);
