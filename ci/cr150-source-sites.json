@@ -45083,6 +45083,18 @@
    "ordinal": 1
   },
   {
+   "file": "src/source/pine_ta_length.cpp",
+   "symbol": "history_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "void SeriesSma :: ensure_capacity ( ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "history_ = . . .",
+   "ordinal": 1
+  },
+  {
    "file": "src/source/pine_value_admission.cpp",
    "symbol": "<temp:RunFailureArgs>",
    "scope": [

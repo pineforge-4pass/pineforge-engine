@@ -424,6 +424,7 @@ set(TEST_SOURCES
     test_ta_extremes_edge
     test_ta_extremes_ring
     test_series_percentile_nearest_rank
+    test_series_sma
     test_ta_voltrend_edge
     test_timezone_concurrency
     test_pointvalue
