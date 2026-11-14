@@ -262,8 +262,8 @@ bool run_row(const Row& row) {
 }
 
 // Extrapolation, not measured: the zero-capacity reissue must remove its
-// queued predecessor (src/source/pine_adapter.cpp:12249, exit()'s
-// clear_existing_exit_order contract; :15177, pending_bracket_legs_ erase).
+// queued predecessor (src/source/pine_adapter.cpp:12322, exit()'s
+// clear_existing_exit_order contract; :15261, pending_bracket_legs_ erase).
 // This case regresses the inherited LIVE-ONLY partial candidate. The original
 // 05552883 parent unconditionally cancels here and is expected to pass this
 // case; its release-refire failures are the separate four rows above.
