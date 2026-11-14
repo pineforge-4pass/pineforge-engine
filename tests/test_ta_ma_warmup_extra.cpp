@@ -227,7 +227,7 @@ static void test_sma_recompute_guards() {
     CHECK(near(v, 8.0));
 }
 
-// The Pine fixtures are campaign probes. This kernel witness uses their
+// The Pine fixtures are public examples. This kernel witness uses their
 // independent missing-value oracle; it does not claim to execute Pine or to
 // prove tuple storage, orders, or TradingView parity on a synthetic feed.
 static std::vector<int> startup_oracle() {
@@ -400,7 +400,7 @@ static void test_recursive_stage_recompute() {
 }
 
 int main(int argc, char** argv) {
-    // Selectors let the supervisor record each new witness or the original
+    // Selectors dispatch each new witness or the original
     // controls against the base without relying on a failure in another row.
     const std::string row = argc == 2 ? argv[1] : "";
     if (argc > 2 || (!row.empty() && row != "startup-oracle" &&
