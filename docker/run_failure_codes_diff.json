@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "75622a737a6ba8f114f6ad40ea5028ed15c8c15b42f2d95b9cd36f9a378e93c9"
+    "catalogSha256": "30d5c7ecec5ac32b91718d6898281c38de4bab6f4a6574589d60e1b8fbd6bc89"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -17,6 +17,33 @@
   "metadataChanges": [],
   "added": [],
   "changed": [
+    {
+      "code": "lot_grid_rejected",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "description",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": "The symbol's lot size (syminfo.mincontract, the quantity grid) is not a value the engine accepts.",
+          "after": "The symbol's quantity step (syminfo.qty_step) or minimum contract size (syminfo.mincontract) is not a value the engine accepts."
+        },
+        {
+          "path": "english",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "Pine adapter produced invalid native run spec field {field}",
+            "syminfo.mincontract must be a positive finite number, got {json_value_cut_80}"
+          ],
+          "after": [
+            "Pine adapter produced invalid native run spec field {field}",
+            "syminfo.mincontract must be a positive finite number, got {json_value_cut_80}",
+            "syminfo.qty_step must be a positive finite number, got {json_value_cut_80}"
+          ]
+        }
+      ]
+    },
     {
       "code": "run_options_rejected",
       "collection": "codes",

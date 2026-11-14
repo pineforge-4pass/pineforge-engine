@@ -32,6 +32,11 @@ version number follows semantic versioning over the surfaces the
   `path_order` modes outside 0, 1 and 2, now produce typed refusals instead of
   being ignored or reset to AUTO. An invalid `mintick` is refused as `symbol_feeds_refused` with reason
   `syminfo_mintick_invalid`; an invalid point value uses the existing symbol metadata error, `symbol_metadata_rejected` with field `point_value`.
+- The JSON harness now honors explicit `qty_step`; both `qty_step` and
+  `mincontract` require positive finite JSON numbers. The explicit step takes
+  precedence while the minimum retains its own value, and minimum-only inputs
+  keep their previous behavior. `pineforge-live` also accepts
+  `--syminfo mincontract=...`.
 - `strategy_get_run_warnings` exposes one named warning per `request.security` call site whose requested timeframe is not a multiple of its evaluator's feed timeframe; values, trades and run acceptance are unchanged (#718).
 - The Docker report and `scripts/run_strategy.py` now show the engine's run warnings as `diagnostics.warnings` when a run has any, and are unchanged otherwise (#718).
 - A percent-of-equity default quantity above 100 percent is now capped at 100 percent of equity when `margin_long` and `margin_short` are both 0 (#805).

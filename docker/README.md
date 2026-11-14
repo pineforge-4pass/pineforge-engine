@@ -488,32 +488,44 @@ An invalid value is refused like `--report-sink-fd` (entrypoint exit 4), and the
 `PINEFORGE_SYMINFO` (the harness's `--syminfo`) names a JSON file holding the
 instrument's metadata, either a flat object or `{"syminfo": {...}}`; an object
 with extra keys (for example a full instrument record) can be passed as is, keys
-the harness does not use are ignored. It applies `mincontract` first, then
-`series_origin_ms` when declared, then
+other than those the harness recognizes are ignored. The harness validates
+all recognized metadata before calling any setter. It applies quantity-grid
+metadata first, then `series_origin_ms` when declared, then
 `mintick`, `pointvalue`, `timezone` and `session`, each through the strategy
 library's `strategy_set_syminfo_*` setters.
 
-- `mincontract` is the instrument's lot size (TradingView's
-  `syminfo.mincontract`). It is set as the engine's `qty_step` metadata, so order
-  quantities are floored to that grid, and as `mincontract` metadata, so a
-  script's `syminfo.mincontract` reads return the same value.
-- Absent or `null`: no lot grid, and the run is the same as without the key.
-- Any other value that is not a positive finite JSON number (`0`, `-1`,
-  `"0.001"`, `true`, `NaN`, `Infinity`, a list or an object) fails the run
-  before it starts: one line `{"engine":"pineforge","error":"syminfo.mincontract
-  must be a positive finite number, got <value>"}` on stdout, where `<value>` is
-  the parsed value re-encoded as JSON (so `1e-400` shows as `0.0`) cut to 80
-  characters (`got true`, `got "0.001"`), harness exit status 1, entrypoint exit
-  4 (code `lot_grid_rejected`). A strategy library without
-  `strategy_set_syminfo_metadata` fails the same way when `mincontract` is set
-  (code `strategy_library_incompatible`): the harness never runs without the grid
-  it was given. A file that cannot be read, is not valid JSON or holds no JSON
-  object, and a `mintick` / `pointvalue` / `timezone` / `session` the setters
-  cannot take, fail the same way before any setter runs, with code
-  `syminfo_unreadable` and `args.reason` `io`, `not_json`, `not_object` or
-  `value_type` (see "The failure line" below).
-- An applied grid is recorded as `applied_runtime.syminfo`
-  (`{"qty_step": <v>, "mincontract": <v>}`) and so in
+- `qty_step` declares the quantity grid, so order quantities are floored to
+  that step. `mincontract` is the instrument's lot size (TradingView's
+  `syminfo.mincontract`) and is also supplied as its own metadata key, so a
+  script's `syminfo.mincontract` reads retain the declared minimum.
+- An explicit `qty_step` takes precedence over `mincontract`, regardless of
+  JSON member order. When both are declared, the grid uses the explicit step
+  while minimum readback keeps its own value. With `qty_step` absent or
+  `null`, a valid `mincontract` continues to supply both the grid and the
+  minimum metadata; minimum-only behavior is unchanged.
+- An absent or `null` key is ignored. If both quantity keys are absent or
+  `null`, no quantity metadata is applied and the run remains gridless.
+- Both keys require positive finite JSON numbers. Any other non-null value
+  (`0`, `-1`, `"0.001"`, `true`, `false`, `NaN`, `Infinity`, `-Infinity`, a list
+  or an object) fails the run before any setter runs. The failure line on
+  stdout uses code `lot_grid_rejected`; its message is
+  `syminfo.<key> must be a positive finite number, got <value>`, where `<key>`
+  is `qty_step` or `mincontract` and `<value>` is the parsed value re-encoded
+  as JSON (so `1e-400` shows as `0.0`) cut to 80 characters (`got true`,
+  `got "0.001"`). The harness exits with status 1 and the entrypoint with
+  status 4. A strategy library without `strategy_set_syminfo_metadata`
+  refuses a quantity value that would be applied, with code
+  `strategy_library_incompatible`: the harness never runs without the grid
+  it was given. An unreadable file, invalid JSON or a document without a JSON
+  object is refused with `syminfo_unreadable` and `args.reason` `io`,
+  `not_json` or `not_object`. A recognized non-quantity value that cannot be
+  converted uses `syminfo_unreadable` with reason `value_type`, also before
+  any setter runs (see "The failure line" below).
+- An applied grid is recorded as `applied_runtime.syminfo`. A `qty_step`-only
+  document records `{"qty_step": <step>}` without a `mincontract` member.
+  When a minimum is declared, the record is
+  `{"qty_step": <effective_step>, "mincontract": <minimum>}`; the two values
+  can differ. The same metadata is recorded in
   `fingerprint.provenance.runtime`: its fingerprint digest differs from the
   gridless run's. Without a grid or a declared series origin the key is absent
   and the report, fingerprint included, is what it was before these keys were
