@@ -632,6 +632,9 @@ class FragmentConsolidationIdentityTests(unittest.TestCase):
         self.assertIsNotNone(result.bounds)
         self.assertEqual(result.tv_gate_count, 0)
         self.assertEqual(result.eng_gate_count, 0)
+        self.assertEqual(result.count_abs_delta, 0)
+        self.assertEqual(result.net_count_abs_delta, 0)
+        self.assertTrue(result.count_ok)
         self.assertTrue(result.distinct_entry_identity_ok)
         self.assertEqual(result.distinct_entry_mismatches, 0)
         self.assertEqual(result.label, "excellent")
@@ -668,11 +671,17 @@ class FragmentConsolidationIdentityTests(unittest.TestCase):
 
         self.assertEqual(result.tv_count, 2)
         self.assertEqual(result.eng_count, 2)
-        self.assertEqual(result.count_abs_delta, 0)
+        # expectation corrected: 0 -> 2, because the unmatched long and short
+        # are separate mismatches despite equal gated list sizes.
+        self.assertEqual(result.count_abs_delta, 2)
+        self.assertEqual(result.net_count_abs_delta, 0)
+        self.assertFalse(result.count_ok)
         self.assertEqual(result.unmatched_in_window, 1)
         self.assertTrue(result.coverage_ok)
         self.assertFalse(result.distinct_entry_identity_ok)
         self.assertEqual(result.distinct_entry_mismatches, 1)
+        # expectation corrected: strong -> weak, because the unmatched TV long
+        # and engine short contribute two gross mismatches across two trades.
         self.assertEqual(result.label, "weak")
 
 
@@ -926,11 +935,17 @@ class DeclaredTierOverrideTests(unittest.TestCase):
                 result = analyze_strategy(self.strategy(name, meta))
                 self.assertTrue(result.no_aligned_trades)
                 self.assertEqual(result.label, expected)
+                self.assertEqual((result.tv_count, result.eng_count), (1, 1))
+                self.assertEqual(result.count_abs_delta, 2)
+                self.assertEqual(result.net_count_abs_delta, 0)
+                self.assertFalse(result.count_ok)
+                self.assertEqual(result.report_row()["count_abs_delta"], 2)
 
                 output = StringIO()
                 with redirect_stdout(output):
                     _print_verification(result)
                 self.assertIn(f"-> {expected}", output.getvalue())
+                self.assertIn("abs=2; net=0", output.getvalue())
 
     def test_both_empty_excellent_is_not_masked_by_stale_declarations(self) -> None:
         strategy = self.strategy(
@@ -947,6 +962,8 @@ class DeclaredTierOverrideTests(unittest.TestCase):
 
         self.assertTrue(result.no_aligned_trades)
         self.assertEqual(result.label, "excellent")
+        self.assertEqual(result.count_abs_delta, 0)
+        self.assertTrue(result.count_ok)
 
     def test_single_sided_empty_results_honor_valid_declarations(self) -> None:
         anomaly = analyze_strategy(self.strategy(
@@ -966,6 +983,10 @@ class DeclaredTierOverrideTests(unittest.TestCase):
             (engine_only.tv_raw_count, engine_only.eng_raw_count), (1, 0)
         )
         self.assertEqual(engine_only.label, "engine_only")
+        for result in (anomaly, engine_only):
+            self.assertEqual(result.count_abs_delta, 1)
+            self.assertEqual(result.net_count_abs_delta, 1)
+            self.assertFalse(result.count_ok)
 
     def test_matched_excellent_preserves_malformed_override_failure(self) -> None:
         strategy = self.strategy(
@@ -1039,6 +1060,7 @@ class DeclaredTierOverrideTests(unittest.TestCase):
 
             self.assertEqual(rc, expected_rc)
             self.assertIn(f"-> {expected_label}", output.getvalue())
+            self.assertIn("abs=2; net=0", output.getvalue())
 
 
 # TradingView's current trade-list header, verbatim. Only the header is real:
