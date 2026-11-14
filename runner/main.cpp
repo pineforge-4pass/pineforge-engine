@@ -711,7 +711,8 @@ class Strategy {
                     throw std::runtime_error("strategy rejected string metadata");
             } else {
                 double v = parse_json(value).real();
-                if (key == "mintick" || key == "pointvalue" || key == "qty_step") {
+                if (key == "mintick" || key == "pointvalue" || key == "qty_step" ||
+                    key == "mincontract") {
                     if (v <= 0)
                         throw std::runtime_error(
                             "symbol tick/point/quantity steps must be positive");

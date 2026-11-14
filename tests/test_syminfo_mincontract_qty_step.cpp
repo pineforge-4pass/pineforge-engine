@@ -10,6 +10,7 @@
 #include <limits>
 #include <string>
 
+#include <pineforge/pineforge.h>
 #include <pineforge/bar.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
@@ -238,6 +239,60 @@ int handle_lifetime() {
 
 }  // namespace
 
+#if defined(PINEFORGE_Q716_CALLER_ITEM)
+// Compile this source as either item's module for the real pineforge-live CLI
+// witness. No lot metadata is installed here: it must arrive from the caller.
+static_assert(PINEFORGE_Q716_CALLER_ITEM == 1 || PINEFORGE_Q716_CALLER_ITEM == 2,
+              "caller witness item must be 1 or 2");
+
+class CallerMetadataProbe final : public pineforge::source::PineStrategyHost {
+public:
+    CallerMetadataProbe() {
+        pineforge::source::PineStrategyConfig config;
+        config.initial_capital = 10000.0;
+        config.default_qty_type = static_cast<int>(
+            PINEFORGE_Q716_CALLER_ITEM == 1 ? pineforge::QtyType::PERCENT_OF_EQUITY
+                                           : pineforge::QtyType::FIXED);
+        config.default_qty_value = PINEFORGE_Q716_CALLER_ITEM == 1 ? 100.0 : 1.0;
+        config.commission_value = 0.0;
+        config.slippage = 0;
+        config.margin_long = config.margin_short = 100.0;
+        config.process_orders_on_close = false;
+        config.calc_on_order_fills = false;
+        configure_pine_strategy(config);
+        set_margin_call_enabled(false);
+    }
+
+    void on_source_bar(const pineforge::Bar&) override {
+        if (pine_bar_index() % 10 == 3)
+            strategy_entry("L", true, kNaN, kNaN,
+                           PINEFORGE_Q716_CALLER_ITEM == 1 ? kNaN : 0.123456789);
+        if (pine_bar_index() % 10 == 8)
+            strategy_close("L");
+    }
+};
+
+// The lifecycle follows runner/examples/strategy.cpp. Calling pf_abi_version
+// retains the real streaming and metadata exports from the static library.
+extern "C" {
+PF_API void* strategy_create(const char*) {
+    try {
+        return new CallerMetadataProbe;
+    } catch (...) {
+        return nullptr;
+    }
+}
+PF_API void strategy_free(void* state) { delete static_cast<CallerMetadataProbe*>(state); }
+PF_API void strategy_set_input(void* state, const char* key, const char* value) {
+    static_cast<CallerMetadataProbe*>(state)->set_input(key, value);
+}
+PF_API void strategy_set_override(void*, const char*, const char*) {}
+PF_API void report_free(pf_report_t* report) {
+    pineforge::BacktestEngine::free_report(reinterpret_cast<pineforge::ReportC*>(report));
+}
+PF_API int q716_caller_abi_version() { return pf_abi_version(); }
+}
+#else
 int main() {
     int failures = 0;
     failures += explicit_entries();
@@ -249,3 +304,4 @@ int main() {
     std::printf("mincontract quantity-step regression: %d failures\n", failures);
     return failures == 0 ? 0 : 1;
 }
+#endif

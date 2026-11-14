@@ -75,7 +75,7 @@ Schema:
     }
 
 applied_runtime (and so provenance.runtime) also holds "syminfo" when --syminfo
-set a lot grid ({"qty_step": float, "mincontract": float}) or declared a
+set a lot grid ({"qty_step": float}, with "mincontract" when supplied) or declared a
 series_origin_ms (see series_origin_echo for first-bar, offset and warning
 fields). The origin enables both EMA warmup and request.security aggregation
 from the first whole bucket at/after it, with plain expressions na until
@@ -3409,18 +3409,19 @@ class OutputsError(RunFailure, ValueError):
 
 
 # This file is vendored: pineforge-release copies it from the pineforge-engine
-# tag at every release. Keep the lot-grid handling (mincontract) identical in
+# tag at every release. Keep the lot-grid handling (qty_step/mincontract) identical in
 # both repos, or a sync drops it.
 def apply_syminfo(lib, strat, syminfo_path):
     """Apply syminfo.json (data-worker schema) via strategy_set_syminfo_*.
     Tolerant: missing keys skipped. Accepts {"syminfo": {...}} or a flat dict.
 
-    mincontract (TradingView's syminfo.mincontract, the instrument's lot size)
-    is strict: absent or null applies nothing; anything else must be a positive
-    finite JSON number, else SyminfoError lot_grid_rejected before any setter
-    runs. A valid one is set first, as the metadata key qty_step (the engine
-    floors order quantities to that grid) and as mincontract (what
-    syminfo.mincontract reads return).
+    qty_step and mincontract (TradingView's syminfo.mincontract, the instrument's
+    lot size) are strict: absent or null applies nothing; anything else must
+    be a positive finite JSON number, else SyminfoError lot_grid_rejected
+    before any setter runs. An explicit qty_step supplies the grid; otherwise
+    a valid mincontract supplies it. The minimum is also set as mincontract
+    for syminfo.mincontract reads, preserving its own value when both differ.
+    JSON member order does not change precedence.
 
     Every value is read before any setter runs. A file that cannot be read, is
     not JSON or holds no syminfo object, and a mintick, pointvalue, timezone or
@@ -3463,8 +3464,11 @@ def apply_syminfo(lib, strat, syminfo_path):
                          "not_object")
     applied = {}
     calls = []
-    lot = si.get("mincontract")
-    if lot is not None:
+    lot_values = {}
+    for key in ("qty_step", "mincontract"):
+        lot = si.get(key)
+        if lot is None:
+            continue
         try:
             v = (float(lot) if isinstance(lot, (int, float))
                  and not isinstance(lot, bool) else math.nan)
@@ -3472,11 +3476,18 @@ def apply_syminfo(lib, strat, syminfo_path):
             v = math.nan
         if not (math.isfinite(v) and v > 0):
             raise SyminfoError(
-                "syminfo.mincontract must be a positive finite number, got "
+                f"syminfo.{key} must be a positive finite number, got "
                 + json.dumps(lot)[:80], "lot_grid_rejected")
-        meta = setter("strategy_set_syminfo_metadata", "mincontract")
-        calls += [(meta, b"qty_step", v), (meta, b"mincontract", v)]
-        applied = {"qty_step": v, "mincontract": v}
+        lot_values[key] = v
+    if lot_values:
+        meta = setter("strategy_set_syminfo_metadata",
+                      "qty_step" if "qty_step" in lot_values else "mincontract")
+        step = lot_values.get("qty_step", lot_values.get("mincontract"))
+        calls.append((meta, b"qty_step", step))
+        applied["qty_step"] = step
+        if "mincontract" in lot_values:
+            calls.append((meta, b"mincontract", lot_values["mincontract"]))
+            applied["mincontract"] = lot_values["mincontract"]
     origin = si.get("series_origin_ms")
     if origin is not None:
         if type(origin) is not int or origin <= 0:

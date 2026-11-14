@@ -438,10 +438,11 @@
   "lot_grid_rejected": {
    "args": {},
    "class": "symbol_metadata",
-   "description": "The symbol's lot size (syminfo.mincontract, the quantity grid) is not a value the engine accepts.",
+   "description": "The symbol's quantity step (syminfo.qty_step) or minimum contract size (syminfo.mincontract) is not a value the engine accepts.",
    "english": [
     "Pine adapter produced invalid native run spec field {field}",
-    "syminfo.mincontract must be a positive finite number, got {json_value_cut_80}"
+    "syminfo.mincontract must be a positive finite number, got {json_value_cut_80}",
+    "syminfo.qty_step must be a positive finite number, got {json_value_cut_80}"
    ],
    "retryable": true,
    "since": "1.4.0"
