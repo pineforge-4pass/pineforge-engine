@@ -5188,7 +5188,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
             'native-c-surface-tests', 'native-x86-release-tests', 'kernel-residuals-tests',
             'corpus-parity-identity-tests',
             'corpus-parity-subset-cover-tests', 'corpus-sha-validation-tests',
-            'corpus-gitlink-result-tests', 'corpus-file-digest-tests',
+            'corpus-gitlink-result-tests', 'corpus-headline-evidence-tests', 'corpus-file-digest-tests',
             'corpus-admission-variant-tests', 'report-schema-key-tests',
             'selected-window-ownership-tests', 'report-outputs-key-tests', 'release-version-tests',
             'release-gate-tests', 'rerun-preempted-tests', 'prebuilt-bookworm-tests', 'prebuilt-glibc-tests',
@@ -5208,8 +5208,10 @@ class RunnerGroupAllowlist(unittest.TestCase):
         with mock.patch.object(ci_preflight.sys, 'platform', 'linux'):
             self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})], expected)
             # main() prepends actionlint-version to all/fast/github-only.
-            self.assertEqual(len(expected) + 1, 71)
-            self.assertEqual(len(check_commands(ROOT, tier='fast')), 66)
+            # expectation corrected: all 71 -> 72, fast 66 -> 67, because B4
+            # registers the ordinary standalone headline checker tests once.
+            self.assertEqual(len(expected) + 1, 72)
+            self.assertEqual(len(check_commands(ROOT, tier='fast')), 67)
             self.assertEqual(len(check_commands(ROOT, tier='slow')), 4)
             self.assertEqual(len(check_commands(ROOT, tier='github-only')), 7)
         for platform in ('darwin', 'win32'):
@@ -5218,7 +5220,8 @@ class RunnerGroupAllowlist(unittest.TestCase):
                                      if name not in ('prebuilt-bookworm-tests', 'prebuilt-glibc-tests')]
                 self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})],
                                  expected_platform)
-                self.assertEqual(len(check_commands(ROOT, tier='fast')), 64)
+                # expectation corrected: 64 -> 65, for the same added stage.
+                self.assertEqual(len(check_commands(ROOT, tier='fast')), 65)
 
 
 class PrebuiltGlibcRegistration(unittest.TestCase):
@@ -12271,6 +12274,8 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
         marker = '  corpus-parity-subset:\n'
         changed = self.original.replace(marker, self.ARM_JOB + marker, 1)
         self.assert_arm_refused(changed, [], baseline=self.original, shape=(
+            # B4 additionally binds the result body to this job family.
+            'gke-pr.yml result must match one complete OLD or NEW headline contract',
             'gke-pr.yml admit must publish only the base classifier outputs',
             'gke-pr.yml legs must require every selected proof',
             'gke-pr.yml result must require admission, preflight, native x86 and consistent proof results'))
@@ -12278,6 +12283,7 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
     def test_arm_job_removed_without_reverting_new_gates_is_refused(self) -> None:
         changed = self.workflow.replace(self.ARM_JOB, '', 1)
         self.assert_arm_refused(changed, [], shape=(
+            'gke-pr.yml result must match one complete OLD or NEW headline contract',
             'gke-pr.yml admit must publish only the base classifier outputs',
             'gke-pr.yml legs must require every selected proof',
             'gke-pr.yml result must require admission, preflight, native x86 and consistent proof results'))
@@ -12317,6 +12323,7 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
         self.assertTrue(new_step)
         changed = self.workflow.replace(new_step, old_step, 1)
         self.assert_arm_refused(changed, [], shape=(
+            'gke-pr.yml result must match one complete OLD or NEW headline contract',
             'gke-pr.yml result must require admission, preflight, native x86 and consistent proof results',))
 
     def test_old_legs_with_new_result_is_refused(self) -> None:
@@ -12375,6 +12382,7 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
         self.assertNotIn('build-arm', _jobs(changed))
         # The plain-key job reader folds this job into build-debug and selects OLD.
         shape = [
+            'gke-pr.yml result must match one complete OLD or NEW headline contract',
             'gke-pr.yml job build-debug must keep its read-only permissions',
             f'gke-pr.yml job build-debug must use {HOSTED_X86}',
             'gke-pr.yml admit must publish only the base classifier outputs',
@@ -12436,7 +12444,11 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
                  'gke-pr.yml result must require admission, preflight, native x86 and consistent proof results')):
             with self.subTest(job=job, change=after):
                 changed = in_job(self.workflow, job, before, after)
-                self.assert_arm_refused(changed, [], shape=(finding,))
+                # expectation corrected: one -> two findings for the result
+                # mutation, because B4 also pins the complete result contract.
+                shape = (('gke-pr.yml result must match one complete OLD or NEW headline contract',
+                          finding) if job == 'result' else (finding,))
+                self.assert_arm_refused(changed, [], shape=shape)
 
     def test_existing_required_jobs_stay_required(self) -> None:
         for job, body in _jobs(self.original).items():
@@ -13528,6 +13540,454 @@ class GkeSmokeOutputAdmission(unittest.TestCase):
                     with self.subTest(steps=len(ci_preflight._steps(_jobs(workflow)[job])),
                                       job=job, before=before):
                         self.assert_refused(in_job(workflow, job, before, after), finding)
+
+
+class HeadlineResultBridgeTests(unittest.TestCase):
+    """Independent complete result fixtures, separate from the policy catalog."""
+
+    CONTRACT = 'gke-pr.yml result must match one complete OLD or NEW headline contract'
+    STEP = '''      - name: Require recorded native corpus headline evidence
+        id: headline
+        if: ${{ needs.admit.result == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ needs.admit.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.admit.outputs.head_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA"
+          python3 scripts/check_corpus_headline_evidence.py --repo . --base "$BASE_SHA" --head "$HEAD_SHA" --pr "$PR_NUMBER"
+
+'''
+    OUTCOME = '          HEADLINE_RESULT: ${{ steps.headline.outcome }}\n'
+    REQUIRE = ('          test "$HEADLINE_RESULT" = success || '
+               'fail "corpus headline evidence did not pass"\n')
+
+    def setUp(self):
+        path = ROOT / 'scripts/fixtures/ci_preflight/gke_pr_legacy.yml'
+        announce_compare_fixture_paths(path)
+        data = path.read_bytes()
+        self.assertEqual(hashlib.sha256(data).hexdigest(),
+                         '21025075090a0a40bfd7360e54a36a0c9bbac9bb8109fbbaa86edce347c27b87')
+        self.arm = legacy_gke_arm_smoke(data.decode('utf-8'))
+
+    def fixture(self, *, arm=True, corpus=False, new=False):
+        workflow = self.arm
+        if not arm:
+            self.assertEqual(workflow.count(GkeArmAdmissionVariantTests.ARM_JOB), 1)
+            workflow = workflow.replace(GkeArmAdmissionVariantTests.ARM_JOB, '', 1)
+            workflow = in_job(
+                workflow, 'legs',
+                '    needs: [admit, build, build-debug, build-arm, build-x86-gcc133, corpus-parity-subset]\n',
+                '    needs: [admit, build, build-debug, build-x86-gcc133, corpus-parity-subset]\n')
+            for job, addition in (
+                    ('admit', '      arm_relevant: ${{ steps.classify.outputs.arm_relevant }}\n'),
+                    ('legs', '          ARM_RESULT: ${{ needs.build-arm.result }}\n'),
+                    ('legs', '          ARM_RELEVANT: ${{ needs.admit.outputs.arm_relevant }}\n'),
+                    ('legs', '          arm_passed() {\n'
+                     '            case "$1:$2" in\n'
+                     '              true:success|false:success|false:skipped) return 0 ;;\n'
+                     '              *) return 1 ;;\n'
+                     '            esac\n'
+                     '          }\n'),
+                    ('legs', '          arm_passed "$ARM_RELEVANT" "$ARM_RESULT"\n'),
+                    ('result', '          ADMIT_ARM_RELEVANT: ${{ needs.admit.outputs.arm_relevant }}\n'),
+                    ('result', '          SECOND_ARM_RELEVANT: ${{ steps.second-classify.outputs.arm_relevant }}\n'),
+                    ('result', '          test "$SECOND_ARM_RELEVANT" = "$ADMIT_ARM_RELEVANT" || fail "arm relevance classification changed"\n'
+                     '          case "$ADMIT_ARM_RELEVANT" in\n'
+                     '            true|false) ;;\n'
+                     '            *) fail "arm relevance classification is unanswered" ;;\n'
+                     '          esac\n')):
+                workflow = in_job(workflow, job, addition, '')
+        if corpus:
+            # This is an existing independent literal fixture, not policy data.
+            from test_ci_corpus_variant import CORPUS_JOB
+            workflow = workflow.replace('  legs:\n', CORPUS_JOB + '  legs:\n', 1)
+            workflow = in_job(
+                workflow, 'result',
+                '    needs: [admit, preflight, build-x86-gcc133, legs]\n',
+                '    needs: [admit, preflight, build-x86-gcc133, corpus-gitlink-result, legs]\n')
+            for anchor, addition in (
+                    ('          X86_RESULT: ${{ needs.build-x86-gcc133.result }}\n',
+                     '          CORPUS_RESULT: ${{ needs.corpus-gitlink-result.result }}\n'),
+                    ('          test "$X86_RESULT" = success || fail "native x86 GNU 13.3.0 build did not pass"\n',
+                     '          test "$CORPUS_RESULT" = success || fail "corpus validation did not pass"\n')):
+                workflow = in_job(workflow, 'result', anchor, anchor + addition)
+        if new:
+            workflow = in_job(
+                workflow, 'result', '    permissions: {contents: read}\n',
+                '    permissions: {contents: read, actions: read, pull-requests: read}\n')
+            workflow = in_job(workflow, 'result',
+                              '          fetch-depth: 1\n', '          fetch-depth: 0\n')
+            marker = '      - name: Require an independently consistent successful result\n'
+            workflow = in_job(workflow, 'result', marker, self.STEP + marker)
+            for anchor, addition in (
+                    ('          PREFLIGHT_RESULT: ${{ needs.preflight.result }}\n', self.OUTCOME),
+                    ('          test "$PREFLIGHT_RESULT" = success || fail "preflight did not pass"\n',
+                     self.REQUIRE)):
+                workflow = in_job(workflow, 'result', anchor, anchor + addition)
+        return workflow
+
+    def test_complete_old_and_new_contracts_cover_each_existing_family(self):
+        for arm in (False, True):
+            for corpus in (False, True):
+                for new in (False, True):
+                    with self.subTest(arm=arm, corpus=corpus, new=new):
+                        workflow = self.fixture(arm=arm, corpus=corpus, new=new)
+                        self.assertEqual(ci_preflight.gke_result_contract_version(workflow),
+                                         'NEW' if new else 'OLD')
+                        self.assertEqual(gke_admit_workflow_findings(workflow), [])
+                        self.assertEqual(main_admission_data_findings({'gke-pr.yml': workflow}), [])
+
+    def test_partial_and_modified_result_contracts_have_a_named_refusal(self):
+        for arm in (False, True):
+            for corpus in (False, True):
+                old = self.fixture(arm=arm, corpus=corpus)
+                new = self.fixture(arm=arm, corpus=corpus, new=True)
+                marker = '      - name: Require an independently consistent successful result\n'
+                cases = [
+                    in_job(old, 'result', marker, self.STEP + marker),
+                    in_job(old, 'result', 'fetch-depth: 1', 'fetch-depth: 0'),
+                    in_job(new, 'result', self.STEP, ''),
+                    in_job(new, 'result', self.OUTCOME, ''),
+                    in_job(new, 'result', self.REQUIRE, ''),
+                    in_job(new, 'result', self.OUTCOME,
+                           self.OUTCOME.replace('steps.headline.outcome', "'success'")),
+                    in_job(new, 'result', self.OUTCOME,
+                           self.OUTCOME.replace('steps.headline.outcome',
+                                                "steps.headline.outcome || 'success'")),
+                    in_job(new, 'result', '--head "$HEAD_SHA"', '--head "$BASE_SHA"'),
+                    in_job(new, 'result',
+                           '          python3 scripts/check_corpus_headline_evidence.py '
+                           '--repo . --base "$BASE_SHA" --head "$HEAD_SHA" --pr "$PR_NUMBER"\n',
+                           '          true\n'),
+                    in_job(new, 'result', self.STEP, self.STEP + self.STEP),
+                    in_job(new, 'result', '        id: headline\n',
+                           '        id: headline\n        continue-on-error: true\n'),
+                    in_job(new, 'result', '    steps:\n',
+                           '    env:\n      BASH_ENV: /outside\n    steps:\n'),
+                    in_job(old, 'result', '    steps:\n',
+                           '    defaults:\n      run:\n        shell: sh\n    steps:\n'),
+                    new + '\n  result:' + _jobs(new)['result'],
+                ]
+                for index, workflow in enumerate(cases):
+                    with self.subTest(arm=arm, corpus=corpus, case=index):
+                        self.assertNotIn(workflow, (old, new))
+                        self.assertIsNone(ci_preflight.gke_result_contract_version(workflow))
+                        self.assertIn(self.CONTRACT, gke_admit_workflow_findings(workflow))
+                        self.assertIn(self.CONTRACT, main_admission_data_findings(
+                            {'gke-pr.yml': workflow}))
+
+    def test_new_adapter_retains_the_existing_policy_outside_result(self):
+        for arm in (False, True):
+            for corpus in (False, True):
+                original = self.fixture(arm=arm, corpus=corpus, new=True)
+                changed = in_job(original, 'preflight', '--tier "$TIER"', '--tier all')
+                finding = 'gke-pr.yml preflight must run the selected fast or github-only tier'
+                with self.subTest(arm=arm, corpus=corpus):
+                    self.assertEqual(ci_preflight.gke_result_contract_version(changed), 'NEW')
+                    self.assertIn(finding, gke_admit_workflow_findings(changed))
+                    self.assertIn(finding, main_admission_data_findings({'gke-pr.yml': changed}))
+
+    def test_new_gate_requires_explicit_headline_success_and_native_x86(self):
+        for arm in (False, True):
+            for corpus in (False, True):
+                workflow = self.fixture(arm=arm, corpus=corpus, new=True)
+                script = job_script(workflow, 'result',
+                                    'Require an independently consistent successful result')
+                for docs, github, relevant in (
+                        ('false', 'false', 'true'), ('false', 'false', 'false'),
+                        ('true', 'false', 'false'), ('false', 'true', 'false')):
+                    values = {
+                        'ADMIT_RESULT': 'success', 'ALLOWED': 'true',
+                        'PREFLIGHT_RESULT': 'success', 'X86_RESULT': 'success',
+                        'HEADLINE_RESULT': 'success', 'CORPUS_RESULT': 'success',
+                        'LEGS_RESULT': 'skipped' if 'true' in (docs, github) else 'success',
+                        'ADMIT_DOCS_ONLY': docs, 'SECOND_DOCS_ONLY': docs,
+                        'ADMIT_GITHUB_ONLY': github, 'SECOND_GITHUB_ONLY': github,
+                        'ADMIT_ARM_RELEVANT': relevant, 'SECOND_ARM_RELEVANT': relevant,
+                        'CODE_EXTENSION': 'false',
+                    }
+                    def run(environment):
+                        return subprocess.run(
+                            ['bash', '--noprofile', '--norc', '-c', script],
+                            env={'PATH': '/usr/bin:/bin', **environment},
+                            capture_output=True, text=True)
+                    with self.subTest(arm=arm, corpus=corpus, docs=docs, github=github,
+                                      relevant=relevant):
+                        self.assertEqual(run(values).returncode, 0)
+                        for outcome in ('', 'failure', 'cancelled', 'skipped'):
+                            refused = run({**values, 'HEADLINE_RESULT': outcome})
+                            self.assertNotEqual(refused.returncode, 0)
+                            self.assertIn('corpus headline evidence did not pass', refused.stdout)
+                        missing = dict(values)
+                        del missing['HEADLINE_RESULT']
+                        self.assertNotEqual(run(missing).returncode, 0)
+                        refused = run({**values, 'X86_RESULT': 'failure'})
+                        self.assertNotEqual(refused.returncode, 0)
+                        self.assertIn('native x86 GNU 13.3.0 build did not pass', refused.stdout)
+
+
+class HeadlineWindowNativeTests(unittest.TestCase):
+    """Synthetic event/transport, real private Git history; no hosted evidence."""
+
+    PREFIX = 'corpus headline bridge refused: '
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.directory = Path(self.temp.name)
+        self.repo = self.directory / 'repo'
+        self.repo.mkdir()
+        self.git('init', '-q')
+        self.git('config', 'user.name', 'Fixture')
+        self.git('config', 'user.email', 'fixture@example.invalid')
+        fixtures = HeadlineResultBridgeTests()
+        fixtures.setUp()
+        self.workflow = fixtures.fixture()
+        self.files = {
+            '.github/workflows/gke-pr.yml': self.workflow.encode(),
+            'scripts/check_corpus_parity.sh': b'EXPECTED_VERIFY="${EXPECTED_VERIFY:-old}"\n',
+        }
+        self.base = self.snapshot()
+        self.head = self.snapshot(self.base, extra={'README.md': b'ordinary change\n'})
+        self.git('update-ref', 'HEAD', self.base)
+        self.fetched = self.directory / 'fetched'
+        self.target = self.fetched / '.github/workflows/gke-pr.yml'
+        self.target.parent.mkdir(parents=True)
+        self.target.write_text(self.workflow)
+        self.event_path = self.directory / 'event.json'
+        repository = {'full_name': 'pineforge-4pass/pineforge-engine', 'fork': False}
+        self.event = {
+            'number': 17, 'repository': repository,
+            'pull_request': {
+                'number': 17, 'draft': False,
+                'base': {'ref': 'main', 'sha': self.base, 'repo': repository},
+                'head': {'sha': self.head, 'repo': repository},
+            },
+        }
+        self.environment = {
+            'GITHUB_ACTIONS': 'true', 'GITHUB_EVENT_NAME': 'pull_request_target',
+            'GITHUB_EVENT_PATH': str(self.event_path),
+            'GITHUB_REPOSITORY': 'pineforge-4pass/pineforge-engine',
+            'GITHUB_SHA': self.base, 'GITHUB_REF': 'refs/heads/main',
+            'GITHUB_WORKFLOW_REF':
+                'pineforge-4pass/pineforge-engine/.github/workflows/gke-pr.yml@refs/heads/main',
+        }
+
+    def git(self, *args, data=None):
+        return subprocess.run(['git', '-C', str(self.repo), *args], input=data,
+                              check=True, capture_output=True).stdout.decode().strip()
+
+    def snapshot(self, *parents, extra=None, omit=()):
+        nested = {}
+        for path, data in {**self.files, **(extra or {})}.items():
+            if path in omit:
+                continue
+            current = nested
+            parts = path.split('/')
+            for part in parts[:-1]:
+                current = current.setdefault(part, {})
+            current[parts[-1]] = data
+        def tree(entries):
+            rows = []
+            for name, value in sorted(entries.items()):
+                if isinstance(value, dict):
+                    rows.append(f'040000 tree {tree(value)}\t{name}\n')
+                else:
+                    oid = self.git('hash-object', '-w', '--stdin', data=value)
+                    rows.append(f'100644 blob {oid}\t{name}\n')
+            return self.git('mktree', data=''.join(rows).encode())
+        argv = ['commit-tree', tree(nested)]
+        for parent in parents:
+            argv += ['-p', parent]
+        return self.git(*argv, '-m', 'private fixture')
+
+    def bind_pr(self, base, head, workflow):
+        self.git('update-ref', 'HEAD', base)
+        self.environment['GITHUB_SHA'] = base
+        self.event['pull_request']['base']['sha'] = base
+        self.event['pull_request']['head']['sha'] = head
+        self.target.write_text(workflow)
+
+    def verdict(self, *, fetch_source=None):
+        self.event_path.write_text(json.dumps(self.event))
+        actual = ci_preflight._headline_window_git
+        def transport(repo, *args):
+            if args[0] == 'fetch':
+                self.assertIn('https://github.com/pineforge-4pass/pineforge-engine.git', args)
+                self.assertEqual(args[-2:], (self.event['pull_request']['base']['sha'],
+                                            self.event['pull_request']['head']['sha']))
+                if fetch_source is not None:
+                    self.assertIn('--unshallow', args)
+                    local = [fetch_source.as_uri() if arg ==
+                             'https://github.com/pineforge-4pass/pineforge-engine.git'
+                             else arg for arg in args]
+                    return actual(repo, *local)
+                return b''
+            return actual(repo, *args)
+        with mock.patch.dict(os.environ, self.environment, clear=True), \
+                mock.patch.object(ci_preflight, '_headline_window_git', side_effect=transport):
+            return ci_preflight.headline_window_findings(self.repo, self.fetched)
+
+    def test_unchanged_old_contract_has_an_actual_git_control(self):
+        self.assertEqual(self.verdict(), [])
+
+    def test_old_window_compares_merge_base_and_complete_head(self):
+        changed = self.snapshot(self.base, extra={
+            'scripts/check_corpus_parity.sh': b'EXPECTED_VERIFY="${EXPECTED_VERIFY:-new}"\n'})
+        later = self.snapshot(changed, extra={
+            'scripts/check_corpus_parity.sh': b'EXPECTED_VERIFY="${EXPECTED_VERIFY:-new}"\n',
+            'README.md': b'later unrelated change\n'})
+        # The current base has independently acquired the same headline. It
+        # cannot replace the PR merge-base as the no-repin comparison source.
+        advanced = self.snapshot(self.base, extra={
+            'scripts/check_corpus_parity.sh': b'EXPECTED_VERIFY="${EXPECTED_VERIFY:-new}"\n',
+            'main-only.md': b'base advancement\n'})
+        self.git('update-ref', 'HEAD', advanced)
+        self.environment['GITHUB_SHA'] = advanced
+        self.event['pull_request']['base']['sha'] = advanced
+        self.event['pull_request']['head']['sha'] = later
+        self.assertEqual(self.verdict(), [
+            self.PREFIX + 'OLD result contract cannot change EXPECTED_VERIFY'])
+
+    def test_actual_old_base_refuses_new_head_changed_pin(self):
+        fixtures = HeadlineResultBridgeTests()
+        fixtures.setUp()
+        for arm in (False, True):
+            for corpus in (False, True):
+                old = fixtures.fixture(arm=arm, corpus=corpus)
+                new = fixtures.fixture(arm=arm, corpus=corpus, new=True)
+                base = self.snapshot(self.base, extra={
+                    '.github/workflows/gke-pr.yml': old.encode()})
+                head = self.snapshot(base, extra={
+                    '.github/workflows/gke-pr.yml': new.encode(),
+                    'scripts/check_corpus_parity.sh': b'EXPECTED_VERIFY="${EXPECTED_VERIFY:-new}"\n'})
+                self.bind_pr(base, head, new)
+                # pull_request_target still executes the base's OLD result job.
+                with self.subTest(arm=arm, corpus=corpus):
+                    self.assertEqual(self.verdict(), [
+                        self.PREFIX + 'OLD result contract cannot change EXPECTED_VERIFY'])
+
+    def test_actual_new_base_and_new_head_defer_changed_pin_to_their_checker(self):
+        fixtures = HeadlineResultBridgeTests()
+        fixtures.setUp()
+        for arm in (False, True):
+            for corpus in (False, True):
+                new = fixtures.fixture(arm=arm, corpus=corpus, new=True)
+                base = self.snapshot(self.base, extra={
+                    '.github/workflows/gke-pr.yml': new.encode()})
+                # Both branches adopt NEW after an OLD merge-base. Only the
+                # actual event base determines which workflow executes.
+                head = self.snapshot(self.base, extra={
+                    '.github/workflows/gke-pr.yml': new.encode(),
+                    'scripts/check_corpus_parity.sh': b'EXPECTED_VERIFY="${EXPECTED_VERIFY:-new}"\n'})
+                self.bind_pr(base, head, new)
+                with self.subTest(arm=arm, corpus=corpus):
+                    self.assertEqual(self.verdict(), [])
+
+    def test_missing_actual_base_workflow_fails_closed(self):
+        fixtures = HeadlineResultBridgeTests()
+        fixtures.setUp()
+        new = fixtures.fixture(new=True)
+        base = self.snapshot(self.base, omit=('.github/workflows/gke-pr.yml',))
+        head = self.snapshot(base, extra={
+            '.github/workflows/gke-pr.yml': new.encode(),
+            'scripts/check_corpus_parity.sh': b'EXPECTED_VERIFY="${EXPECTED_VERIFY:-new}"\n'})
+        self.bind_pr(base, head, new)
+        self.assertEqual(self.verdict(), [
+            self.PREFIX + 'not a regular tracked file: .github/workflows/gke-pr.yml'])
+
+    def test_unclassifiable_actual_base_workflow_fails_closed(self):
+        fixtures = HeadlineResultBridgeTests()
+        fixtures.setUp()
+        new = fixtures.fixture(new=True)
+        partial = in_job(new, 'result', fixtures.REQUIRE, '')
+        base = self.snapshot(self.base, extra={
+            '.github/workflows/gke-pr.yml': partial.encode()})
+        head = self.snapshot(base, extra={
+            '.github/workflows/gke-pr.yml': new.encode(),
+            'scripts/check_corpus_parity.sh': b'EXPECTED_VERIFY="${EXPECTED_VERIFY:-new}"\n'})
+        self.bind_pr(base, head, new)
+        self.assertEqual(self.verdict(), [self.PREFIX + fixtures.CONTRACT])
+
+    def test_event_identity_and_native_entry_cannot_be_omitted(self):
+        for key, value in (
+                ('GITHUB_ACTIONS', ''), ('GITHUB_EVENT_NAME', 'pull_request'),
+                ('GITHUB_REPOSITORY', 'elsewhere/repo'), ('GITHUB_SHA', self.head),
+                ('GITHUB_REF', 'refs/heads/feature'), ('GITHUB_WORKFLOW_REF', 'elsewhere')):
+            with self.subTest(key=key), mock.patch.dict(self.environment, {key: value}):
+                self.assertEqual(self.verdict(), [self.PREFIX + 'untrusted native admission context'])
+        for kind in ('draft', 'fork', 'base-ref', 'number', 'sha'):
+            original = json.loads(json.dumps(self.event))
+            if kind == 'draft':
+                self.event['pull_request']['draft'] = True
+            elif kind == 'fork':
+                self.event['pull_request']['head']['repo'] = {
+                    'full_name': 'pineforge-4pass/pineforge-engine', 'fork': True}
+            elif kind == 'base-ref':
+                self.event['pull_request']['base']['ref'] = 'feature'
+            elif kind == 'number':
+                self.event['number'] = True
+            else:
+                self.event['pull_request']['head']['sha'] = 'HEAD'
+            with self.subTest(kind=kind):
+                self.assertEqual(self.verdict(), [self.PREFIX + 'invalid immutable PR identity'])
+            self.event = original
+
+    def test_fetched_marker_or_new_job_cannot_replace_head_bytes(self):
+        self.target.write_text(self.workflow + '\n# headline marker\n')
+        self.assertEqual(self.verdict(), [self.PREFIX + 'fetched admission workflow differs from event head'])
+
+    def test_checker_checkout_must_match_the_event_base(self):
+        self.git('update-ref', 'HEAD', self.head)
+        self.assertEqual(self.verdict(), [self.PREFIX + 'checker checkout differs from event base'])
+
+    def test_missing_event_head_object_fails_closed(self):
+        self.event['pull_request']['head']['sha'] = '0' * 40
+        self.assertEqual(self.verdict(), [self.PREFIX + 'Git history unavailable'])
+
+    def test_fetch_failure_cannot_claim_complete_history(self):
+        actual = ci_preflight._headline_window_git
+        def failed_fetch(repo, *args):
+            if args[0] == 'fetch':
+                raise subprocess.CalledProcessError(128, ['git', 'fetch'], stderr=b'unavailable')
+            return actual(repo, *args)
+        self.event_path.write_text(json.dumps(self.event))
+        with mock.patch.dict(os.environ, self.environment, clear=True), \
+                mock.patch.object(ci_preflight, '_headline_window_git', side_effect=failed_fetch):
+            findings = ci_preflight.headline_window_findings(self.repo, self.fetched)
+        self.assertEqual(findings, [self.PREFIX + 'Git history unavailable'])
+
+    def test_shallow_history_must_actually_be_completed_before_comparison(self):
+        mirror = self.repo
+        self.git('update-ref', 'refs/heads/candidate', self.head)
+        shallow = self.directory / 'shallow'
+        subprocess.run(['git', 'clone', '-q', '--depth', '1', '--no-checkout',
+                        mirror.as_uri(), str(shallow)], check=True, capture_output=True)
+        self.repo = shallow
+        self.assertEqual(self.git('rev-parse', '--is-shallow-repository'), 'true')
+        self.assertEqual(self.verdict(), [self.PREFIX + 'incomplete Git history'])
+        # Only the transport is redirected to a private fixture. The real
+        # unshallow, merge-base and blob reads must now succeed.
+        self.assertEqual(self.verdict(fetch_source=mirror), [])
+        self.assertEqual(self.git('rev-parse', '--is-shallow-repository'), 'false')
+
+    def test_rules_only_calls_window_even_when_data_rules_refuse(self):
+        output = io.StringIO()
+        with mock.patch.object(sys, 'argv', ['ci_preflight.py', '--rules-only',
+                                            '--workflows-dir', str(self.fetched)]), \
+                mock.patch.object(ci_preflight, 'headline_window_findings',
+                                  return_value=[self.PREFIX + 'window control']) as window, \
+                mock.patch.object(ci_preflight, 'admit_rule_findings',
+                                  return_value=['data rule control']) as data, \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(ci_preflight.main(), 1)
+        window.assert_called_once_with(ci_preflight.ROOT, self.fetched)
+        data.assert_called_once_with(self.fetched)
+        self.assertEqual(output.getvalue().splitlines(),
+                         [self.PREFIX + 'window control', 'data rule control'])
 
 
 if __name__ == '__main__':

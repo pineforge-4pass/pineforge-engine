@@ -599,6 +599,142 @@ GKE_ARM_CORPUS_RESULT_STEP = GKE_ARM_RESULT_STEP
 for _anchor, _addition in _GKE_CORPUS_RESULT_INSERTIONS:
     GKE_CORPUS_RESULT_STEP = GKE_CORPUS_RESULT_STEP.replace(_anchor, _anchor + _addition, 1)
     GKE_ARM_CORPUS_RESULT_STEP = GKE_ARM_CORPUS_RESULT_STEP.replace(_anchor, _anchor + _addition, 1)
+# B4 pins the complete result job, not a marker or just its terminal gate.
+# The four existing arm/corpus families each have exactly two public forms.
+GKE_RESULT_CLASSIFIER_STEPS = r'''      - name: Checkout the base classifier
+        if: ${{ needs.admit.result == 'success' }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ needs.admit.outputs.base_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Re-read the payload-bound compare list
+        id: second-classify
+        if: ${{ needs.admit.result == 'success' }}
+        env:
+          REPO: ${{ github.repository }}
+          BASE_SHA: ${{ needs.admit.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.admit.outputs.head_sha }}
+          GH_TOKEN: ${{ github.token }}
+          PATH_FILE: ${{ runner.temp }}/gke-pr-result-paths
+        shell: python3 {0}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+
+          paths = []
+          endpoint = (f"repos/{os.environ['REPO']}/compare/"
+                      f"{os.environ['BASE_SHA']}...{os.environ['HEAD_SHA']}")
+          response = json.loads(subprocess.run(
+              ["gh", "api", endpoint], check=True,
+              capture_output=True, text=True).stdout)
+          rows = response.get("files")
+          if not isinstance(rows, list):
+              raise SystemExit("second compare response is unreadable")
+          if len(rows) >= 300:
+              raise SystemExit("second compare response is truncated at 300 files")
+          for row in rows:
+              if not isinstance(row, dict):
+                  raise SystemExit("second compare response has an unreadable file row")
+              filename = row.get("filename")
+              if (not isinstance(filename, str) or "\x00" in filename
+                      or any(part in ("", ".", "..") for part in filename.split("/"))):
+                  raise SystemExit("second compare filename is unreadable")
+              paths.append(filename)
+              if row.get("status") == "renamed" and "previous_filename" not in row:
+                  raise SystemExit("second compare response is missing a rename origin")
+              if "previous_filename" in row:
+                  previous = row["previous_filename"]
+                  if (not isinstance(previous, str) or "\x00" in previous
+                          or any(part in ("", ".", "..") for part in previous.split("/"))):
+                      raise SystemExit("second previous filename is unreadable")
+                  paths.append(previous)
+          if not paths:
+              raise SystemExit("second compare response has no changed paths")
+          Path(os.environ["PATH_FILE"]).write_bytes(
+              b"\0".join(path.encode("utf-8") for path in paths)
+              + (b"\0" if paths else b""))
+          subprocess.run(["python3", "scripts/ci_docs_only.py",
+                          "--paths", os.environ["PATH_FILE"],
+                          "--github-output", os.environ["GITHUB_OUTPUT"]],
+                         check=True)
+
+      - name: Apply the one-way code-extension veto
+        id: veto
+        if: ${{ needs.admit.result == 'success' }}
+        env:
+          PATH_FILE: ${{ runner.temp }}/gke-pr-result-paths
+        shell: python3 {0}
+        run: |
+          import os
+          from pathlib import Path
+
+          data = Path(os.environ["PATH_FILE"]).read_bytes()
+          paths = [] if not data else [item.decode("utf-8") for item in data.rstrip(b"\0").split(b"\0")]
+          extensions = {".cpp", ".hpp", ".h", ".c", ".cc", ".cmake", ".py", ".sh", ".txt"}
+          code = any(Path(path).suffix in extensions and not path.startswith("docs/")
+                     for path in paths)
+          Path(os.environ["GITHUB_OUTPUT"]).open("a").write(
+              f"code_extension={'true' if code else 'false'}\n")
+
+'''
+GKE_HEADLINE_EVIDENCE_STEP = '''      - name: Require recorded native corpus headline evidence
+        id: headline
+        if: ${{ needs.admit.result == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ needs.admit.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.admit.outputs.head_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA"
+          python3 scripts/check_corpus_headline_evidence.py --repo . --base "$BASE_SHA" --head "$HEAD_SHA" --pr "$PR_NUMBER"
+
+'''
+
+
+def _gke_result_contract(arm: bool, corpus: bool, *, headline: bool) -> str:
+    needs = 'admit, preflight, build-x86-gcc133'
+    gate = GKE_ARM_RESULT_STEP if arm else GKE_RESULT_STEP
+    if corpus:
+        needs += ', corpus-gitlink-result'
+        gate = GKE_ARM_CORPUS_RESULT_STEP if arm else GKE_CORPUS_RESULT_STEP
+    permissions = '{contents: read}'
+    classifiers = GKE_RESULT_CLASSIFIER_STEPS
+    if headline:
+        permissions = '{contents: read, actions: read, pull-requests: read}'
+        classifiers = classifiers.replace('          fetch-depth: 1\n',
+                                          '          fetch-depth: 0\n', 1)
+        classifiers += GKE_HEADLINE_EVIDENCE_STEP
+        for anchor, addition in (
+                ('          PREFLIGHT_RESULT: ${{ needs.preflight.result }}\n',
+                 '          HEADLINE_RESULT: ${{ steps.headline.outcome }}\n'),
+                ('          test "$PREFLIGHT_RESULT" = success || fail "preflight did not pass"\n',
+                 '          test "$HEADLINE_RESULT" = success || fail "corpus headline evidence did not pass"\n')):
+            assert gate.count(anchor) == 1, 'headline result insertion anchor drifted'
+            gate = gate.replace(anchor, anchor + addition, 1)
+    return (f'\n    needs: [{needs}, legs]\n'
+            '    if: always()\n'
+            '    runs-on: ubuntu-24.04\n'
+            f'    permissions: {permissions}\n'
+            '    steps:\n' + classifiers + gate)
+
+
+GKE_RESULT_CONTRACTS = {
+    (arm, corpus): {
+        'OLD': _gke_result_contract(arm, corpus, headline=False),
+        'NEW': _gke_result_contract(arm, corpus, headline=True),
+    }
+    for arm in (False, True) for corpus in (False, True)
+}
+GKE_RESULT_CONTRACT_FINDING = (
+    'gke-pr.yml result must match one complete OLD or NEW headline contract')
+
 BUILD_CACHE_KEY = 'ccache-main-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-'
 PREFLIGHT_LINTER_RUN = ' '.join(r'''|
 set -euo pipefail
@@ -1734,6 +1870,19 @@ def _gke_pr_corpus_variant(name: str, jobs: dict[str, str]) -> bool:
     return name == 'gke-pr.yml' and 'corpus-gitlink-result' in jobs
 
 
+def gke_result_contract_version(workflow: str) -> str | None:
+    """Match a whole executable job before selecting either bridge form."""
+    headers = _JOB_HEADER.finditer(_jobs_text(workflow) or '')
+    if sum(header.group(1) == 'result' for header in headers) != 1:
+        return None
+    jobs = _jobs(workflow)
+    family = (_gke_pr_arm_variant('gke-pr.yml', jobs),
+              _gke_pr_corpus_variant('gke-pr.yml', jobs))
+    actual = _code(jobs.get('result', ''))
+    return next((version for version, body in GKE_RESULT_CONTRACTS[family].items()
+                 if actual == _code(body)), None)
+
+
 GKE_PR_SMOKE_STEPS = r'''      - name: Checkout the admitted head
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -1780,6 +1929,16 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
     findings = []
     if not workflow:
         return [f'{name}: admission workflow is missing']
+    if name == 'gke-pr.yml':
+        version = gke_result_contract_version(workflow)
+        if version is None:
+            findings.append(GKE_RESULT_CONTRACT_FINDING)
+        elif version == 'NEW':
+            # Only a complete NEW match reaches this fixed existing-policy
+            # adapter. Every other job and all workflow-level policy stay live.
+            jobs = _jobs(workflow)
+            family = (_gke_pr_arm_variant(name, jobs), _gke_pr_corpus_variant(name, jobs))
+            workflow = workflow.replace(jobs['result'], GKE_RESULT_CONTRACTS[family]['OLD'], 1)
     if _events(workflow) != {'pull_request_target'}:
         findings.append(f'{name}: trigger must be exactly pull_request_target')
     if '  branches: [main]' not in workflow:
@@ -2188,6 +2347,84 @@ def admit_rule_findings(workflows_dir: Path, *, run_actionlint: bool = True) -> 
     action_findings += trusted_cache_findings(sources)
     action_findings += runner_findings(workflows)
     return list(dict.fromkeys(action_findings))
+
+
+def _headline_window_git(source: Path, *args: str) -> bytes:
+    return subprocess.run(
+        ['git', '--no-replace-objects', '--no-optional-locks', '-C', str(source), *args],
+        check=True, capture_output=True).stdout
+
+
+def headline_window_findings(source: Path, workflows_dir: Path) -> list[str]:
+    """Native base/head no-repin window, using the event and actual Git objects.
+
+    There is no CLI context override or marker-based opt-out. The trusted main
+    entry calls this independently of the fetched workflow's shape verdict.
+    """
+    import check_corpus_headline_evidence as evidence
+
+    try:
+        require = evidence.require
+        repository = 'pineforge-4pass/pineforge-engine'
+        workflow_path = '.github/workflows/gke-pr.yml'
+        require(os.environ.get('GITHUB_ACTIONS') == 'true'
+                and os.environ.get('GITHUB_EVENT_NAME') == 'pull_request_target'
+                and os.environ.get('GITHUB_REPOSITORY') == repository
+                and os.environ.get('GITHUB_REF') == 'refs/heads/main'
+                and os.environ.get('GITHUB_WORKFLOW_REF')
+                == repository + '/' + workflow_path + '@refs/heads/main',
+                'untrusted native admission context')
+        event = evidence.json_object(Path(os.environ['GITHUB_EVENT_PATH']).read_bytes())
+        pr = event.get('pull_request', {})
+        base, head = pr.get('base', {}), pr.get('head', {})
+        base_sha, head_sha = base.get('sha'), head.get('sha')
+        require(event.get('repository', {}).get('full_name') == repository
+                and type(event.get('number')) is int and event['number'] > 0
+                and type(pr.get('number')) is int and pr['number'] == event['number']
+                and pr.get('draft') is False and base.get('ref') == 'main'
+                and base.get('repo', {}).get('full_name') == repository
+                and head.get('repo', {}).get('full_name') == repository
+                and head.get('repo', {}).get('fork') is False
+                and isinstance(base_sha, str) and evidence.SHA.fullmatch(base_sha) is not None
+                and isinstance(head_sha, str) and evidence.SHA.fullmatch(head_sha) is not None,
+                'invalid immutable PR identity')
+        require(os.environ.get('GITHUB_SHA') == base_sha, 'untrusted native admission context')
+        require(_headline_window_git(source, 'rev-parse', '--verify', 'HEAD').strip()
+                == base_sha.encode(), 'checker checkout differs from event base')
+        shallow = _headline_window_git(source, 'rev-parse', '--is-shallow-repository').strip()
+        require(shallow in (b'true', b'false'), 'unreadable Git history depth')
+        fetch = ['fetch', '--no-tags', '--no-write-fetch-head']
+        if shallow == b'true':
+            fetch.append('--unshallow')
+        # The existing trusted checkout is depth 1 with credentials disabled.
+        # Fetch the public canonical repository, never a head-controlled URL/ref.
+        _headline_window_git(source, *fetch,
+                             'https://github.com/' + repository + '.git', base_sha, head_sha)
+        require(_headline_window_git(source, 'rev-parse', '--is-shallow-repository').strip()
+                == b'false', 'incomplete Git history')
+        for revision in (base_sha, head_sha):
+            require(_headline_window_git(source, 'rev-parse', '--verify',
+                                         revision + '^{commit}').strip() == revision.encode(),
+                    'event revision is not an available commit')
+        fetched = (workflows_dir / workflow_path).read_bytes()
+        require(fetched == evidence.blob(source, head_sha, workflow_path),
+                'fetched admission workflow differs from event head')
+        head_version = gke_result_contract_version(fetched.decode('utf-8'))
+        require(head_version is not None, GKE_RESULT_CONTRACT_FINDING)
+        # pull_request_target executes the event base workflow, independently
+        # of the PR head's workflow and the merge-base used for the pin diff.
+        base_workflow = evidence.blob(source, base_sha, workflow_path).decode('utf-8')
+        base_version = gke_result_contract_version(base_workflow)
+        require(base_version is not None, GKE_RESULT_CONTRACT_FINDING)
+        _, old, new = evidence.compared(source, base_sha, head_sha)
+        require((base_version == 'NEW' and head_version == 'NEW') or old == new,
+                'OLD result contract cannot change EXPECTED_VERIFY')
+        return []
+    except Exception as error:
+        # Do not echo subprocess commands, event contents or credentials.
+        detail = ('Git history unavailable' if isinstance(error, subprocess.CalledProcessError)
+                  else ' '.join(str(error).splitlines()))
+        return ['corpus headline bridge refused: ' + detail]
 
 
 def _job_values(body: str, key: str, *, unquote: bool = True) -> list[str]:
@@ -6061,6 +6298,8 @@ def check_commands(source: Path, output: Path | None = None,
          [sys.executable, str(source / 'scripts/test_validate_corpus_sha.py')]),
         ('corpus-gitlink-result-tests',
          [sys.executable, str(source / 'scripts/test_check_corpus_gitlink_result.py')]),
+        ('corpus-headline-evidence-tests',
+         [sys.executable, str(source / 'scripts/test_check_corpus_headline_evidence.py')]),
         ('corpus-file-digest-tests',
          [sys.executable, str(source / 'scripts/test_write_corpus_file_digests.py')]),
         ('corpus-admission-variant-tests',
@@ -6304,7 +6543,8 @@ def main() -> int:
         if args.workflows_dir is None:
             print('--rules-only requires --workflows-dir')
             return 1
-        findings = admit_rule_findings(args.workflows_dir)
+        findings = headline_window_findings(ROOT, args.workflows_dir)
+        findings += admit_rule_findings(args.workflows_dir)
         for finding in findings:
             print(finding)
         if not findings:
