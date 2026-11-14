@@ -721,9 +721,14 @@ chart-input ledger above.
 
 Keep symbol metadata consistent with the corresponding backtest. `--syminfo`
 supports `type`, `currency`, `basecurrency`, `description`, `volumetype`,
-`mintick`, `pointvalue`, `qty_step`, `margin_long` and `margin_short`. Omitted
-values retain the engine defaults; a symbol name alone does not download
-instrument metadata. `--session` defaults to `24x7`, `--timezone` to `UTC`;
+`mintick`, `pointvalue`, `qty_step`, `mincontract`, `margin_long` and `margin_short`.
+`qty_step` and `mincontract` must be finite positive numbers. The runner forwards
+both through the existing numeric metadata setter: `mincontract` supplies the
+quantity grid when `qty_step` is absent; an explicit `qty_step` wins in either
+CLI order. For example, `--syminfo mincontract=0.00001` supplies a grid without
+also declaring `qty_step`. Omitted values retain the engine defaults; a symbol
+name alone does not download instrument metadata. `--session` defaults to `24x7`,
+`--timezone` to `UTC`;
 `--chart-timezone` is independent and defaults to the engine UTC chart path.
 Repeat `--input TITLE=VALUE` and `--override KEY=VALUE` for strategy settings.
 Those setters belong to the compiled strategy; it must validate unsupported
