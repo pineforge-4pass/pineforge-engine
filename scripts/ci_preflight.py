@@ -4096,18 +4096,18 @@ def prebuilt_hosted_diagnostic_findings(workflow: str) -> list[str]:
 
 
 CLANG_COLD_WORKFLOW_SHA256 = {
-    'clang-build.yml': '84e314115ae411f5bf3e76ed2dbc565631c717abd5ff4b1c06e74796e65dfdbb',
+    'clang-build.yml': 'ed54c0e6d7a025c40d377a84da09879bc1eeb4de991da5358dc25d34df73f874',
     'clang-cost-collection.yml': '44f3a6b8590f82030f1cc4824e8f1d4a32b0a95590e1574e49fdf5e5ab334068',
 }
 CLANG_COLD_SOURCE_SHA256 = {
-    'scripts/clang_cold_shards.py': '7237424f49fd2deb653321d4c80cefeaac0fad7db9c8342918896cfa617840bd',
+    'scripts/clang_cold_shards.py': '8ec2cd3088e8658a68ef0004ac77429f4f72f3b04de75bed6c29abdbb8c0e672',
     'scripts/clang_cold_setup.sh': 'c433d898eb0723552eb606f3c39f17ae428e0f14026d474a0f2dee55b61ef531',
     'scripts/clang_build_shards.py': 'e79783f8a39f69ff7958ea7b0ea462a0252bf415170c87f7415421f06505a4e2',
 }
 
 
 def clang_cold_workflow_findings(workflow: str, name: str) -> list[str]:
-    """Route A admits only these complete, cold, exact-source hosted workflows.
+    """Pin complete cold workflows, exact test coverage and hosted durations.
 
     The read token is confined to the pinned artifact/API readers. Neither
     workflow acquires an App token, write scope, environment or cache exception.

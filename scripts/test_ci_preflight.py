@@ -7531,7 +7531,7 @@ exit "$lookup_exit"
                           'prebuilt-hosted-diagnostic.yml': {'observe': 'ubuntu-24.04'},
                           # expectation corrected: no Clang hosted pins -> the
                           # two cold shards, their plan/gate, and input collector,
-                          # because CR909 RULED-B explicitly admits this topology.
+                          # because complete cold Clang builds require both shards and their inputs.
                           'clang-build.yml': {
                               'authz': HOSTED_X86, 'collect': HOSTED_X86, 'plan': HOSTED_X86,
                               'clang-shard-1': HOSTED_X86, 'clang-shard-2': HOSTED_X86,
@@ -13553,7 +13553,7 @@ class GkeSmokeOutputAdmission(unittest.TestCase):
 
 
 class ColdClangSourceContract(unittest.TestCase):
-    """Route-A pins for the complete topology and its transitive source."""
+    """Pins for the complete cold Clang topology and its transitive source."""
 
     def workflows(self):
         return {name: (ROOT / '.github/workflows' / name).read_text()
@@ -13590,7 +13590,7 @@ class ColdClangSourceContract(unittest.TestCase):
                     ('if: always()', 'if: success()'),
                     ('--shard 2', '--shard 1'),
                     ('clang-results/two/result.json', 'clang-results/one/result.json'),
-                    ('--jobs clang-jobs.json', '--jobs synthetic.json'),
+                    ('--job-records-file clang-jobs.json', '--job-records-file synthetic.json'),
                     ('--costs-sha256 "$COST_SHA256"', '--costs-sha256 guessed'),
                     ('--cost-run cost-run.json', '--cost-run other.json'),
                     ('ref: ${{ github.sha }}', 'ref: main'),

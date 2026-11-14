@@ -8,7 +8,7 @@ on:
 permissions:
   contents: read
 
-# RULED-B: both cold jobs must pass, cover the full configured set exactly once,
+# Both cold jobs must pass, cover the full configured set exactly once,
 # and finish under 900 actual hosted seconds. No deadline drops unfinished work.
 jobs:
   authz:
@@ -296,7 +296,7 @@ jobs:
           set -euo pipefail
           /usr/bin/python3 scripts/clang_cold_shards.py check \
             --plan clang-plan/plan.json --result clang-results/one/result.json \
-            --result clang-results/two/result.json --jobs clang-jobs.json --run clang-run.json \
+            --result clang-results/two/result.json --job-records-file clang-jobs.json --run clang-run.json \
             --needs "$NEEDS_JSON" --output clang-union.json
 
       - name: Retain the actual union and hosted job records

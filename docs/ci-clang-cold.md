@@ -1,6 +1,6 @@
 # Cold Clang build and CTest shards
 
-CR909 RULED-B uses two `ubuntu-24.04` jobs, `clang-shard-1` and
+Cold Clang verification uses two `ubuntu-24.04` jobs, `clang-shard-1` and
 `clang-shard-2`, followed by `clang-gate`. Each job starts from a fresh
 checkout and an absent `build` directory. There is no compiler cache restore
 or save. A job that finishes in 900 seconds or more fails acceptance after
@@ -104,6 +104,9 @@ the two actual executions equal the entire configured test population
 exactly once. Their built-target union must equal default ALL; duplicated
 shared build dependencies do not grant duplicate test ownership.
 
+The checker's `--job-records-file` option reads the downloaded GitHub jobs
+API document (`clang-jobs.json`).
+
 Completed GitHub job `started_at` and `completed_at` timestamps determine
 each shard's elapsed seconds. They include checkout, installation,
 configuration, build, CTest and upload. Both jobs must be standard hosted
@@ -119,10 +122,9 @@ fixtures exercise refusals and are never real hosted performance evidence.
 
 ## Execution recipes
 
-All commands below are for executors, not the master host. A source edit
-alone supplies no timing or union evidence.
+A source edit alone supplies no timing or union evidence.
 
-For the small protocol controls on spark2, from an exact checkout:
+To run the protocol controls on a development machine, from an exact checkout:
 
 ```sh
 /usr/bin/python3 -m unittest discover -s scripts -p 'test_clang*.py'
@@ -131,23 +133,23 @@ For the small protocol controls on spark2, from an exact checkout:
 The ordinary PR preflight runs that same stage. Do not rerun it after it
 has passed without a changed source or an unresolved failure.
 
-For a full input collection on an Ubuntu 24.04 **x86_64** executor with
+For a full input collection on an Ubuntu 24.04 **x86_64** machine with
 Clang18, G++13, Eigen3, tzdata-legacy, strace, pytest and the repository's
 normal test dependencies installed, start with a fresh exact-source
 checkout, matching submodule/LFS contents and no `build` directory:
 
 ```sh
 /usr/bin/python3 scripts/derive_corpus_feeds.py
-/usr/bin/python3 scripts/clang_cold_shards.py collect --output .lane-notes/scratch/clang-cold-input
-sha256sum .lane-notes/scratch/clang-cold-input/costs.json
+/usr/bin/python3 scripts/clang_cold_shards.py collect --output build-clang-cold-scratch/clang-cold-input
+sha256sum build-clang-cold-scratch/clang-cold-input/costs.json
 ```
 
-An ARM spark2 collection cannot be relabelled as x86. Off-master records
-retain their real context; the hosted workflow collects its own same-head
-inputs and never relabels those records as hosted execution.
+An arm64 Linux collection cannot be relabelled as x86. Records from a
+development machine retain their real context; the hosted workflow collects
+its own same-head inputs and never relabels those records as hosted execution.
 
-The supervisor's authorized publication to `ci/clang-cold-shards` triggers
-the complete hosted path. For an already registered workflow:
+Pushes to `ci/clang-cold-shards` trigger the complete hosted path.
+For an already registered workflow:
 
 ```sh
 gh workflow run clang-build.yml --repo pineforge-4pass/pineforge-engine --ref ci/clang-cold-shards

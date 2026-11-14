@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Synthetic parser/coverage tests; these do not qualify a hosted build.
 
-Run only off-master. Fixtures and CLI outputs are kept in .lane-notes/scratch;
-the real archive parse and genuine mutation controls belong to the parent.
+Fixtures and CLI outputs are retained in build/clang-cold-scratch.
+Real archive validation and mutation controls require original records.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ TREE = '4' * 40
 RUN = '12345'
 JOB = 'clang-build'
 ARTIFACT_ID = '67890'
-SCRATCH = Path(__file__).resolve().parents[1] / '.lane-notes' / 'scratch'
+SCRATCH = Path(__file__).resolve().parents[1] / 'build' / 'clang-cold-scratch'
 
 
 def digest(data):

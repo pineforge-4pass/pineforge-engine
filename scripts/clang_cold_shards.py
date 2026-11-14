@@ -1037,7 +1037,7 @@ def main(argv=None):
     checker = sub.add_parser('check')
     checker.add_argument('--plan', required=True)
     checker.add_argument('--result', action='append', required=True)
-    checker.add_argument('--jobs', required=True)
+    checker.add_argument('--job-records-file', required=True)
     checker.add_argument('--run', required=True)
     checker.add_argument('--needs', required=True)
     checker.add_argument('--output', required=True)
@@ -1068,7 +1068,7 @@ def main(argv=None):
         elif args.command == 'run':
             run_shard(read_input(args.plan), args.shard, output)
         else:
-            jobs_pages = loads(read_input(args.jobs))
+            jobs_pages = loads(read_input(args.job_records_file))
             require(isinstance(jobs_pages, list), 'expected paginated jobs API array')
             jobs = [job for page in jobs_pages for job in page['jobs']]
             raw_needs = loads(args.needs)

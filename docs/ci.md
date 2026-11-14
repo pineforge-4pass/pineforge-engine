@@ -134,7 +134,7 @@ the hosted `ubuntu-24.04` image; `probe` keeps its `release` environment.
 Tag pushes no longer trigger docs: the post fleet admits only engine `main`.
 Release and baseline promotion run on hosted `ubuntu-24.04`; the release ARM build retains `ubuntu-22.04-arm`.
 
-CR909's [cold Clang shards](ci-clang-cold.md) add two standard hosted
+The [cold Clang shards](ci-clang-cold.md) add two standard hosted
 Clang18 build/CTest jobs and one aggregate. On `ci/clang-cold-shards`, the
 workflow first measures the exact source's complete configured population,
 then plans both assignments from those records. Missing costs, an incomplete
