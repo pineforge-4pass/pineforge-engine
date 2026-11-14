@@ -32,6 +32,10 @@ MACDResult MACD::compute(double src) {
     result.signal_line = na<double>();
     result.histogram = na<double>();
 
+    // Even if the upstream stages have no value on this evaluation, retain
+    // this bar's signal snapshot for a later finite recompute. Do not call
+    // the signal stage until it has an input: its seeding latches on use.
+    signal_ema.save();
     double fast_val = fast_ema.compute(src);
     double slow_val = slow_ema.compute(src);
 
@@ -39,13 +43,18 @@ MACDResult MACD::compute(double src) {
         return result;
     }
 
-    result.macd_line = fast_val - slow_val;
+    // Keep feeding the original recursion, including provisional upstream
+    // values. Availability advances only on ready upstream observations.
+    const double line = fast_val - slow_val;
+    const bool upstream_ready = fast_ema.ready() && slow_ema.ready();
+    const double signal_val = signal_ema.compute(line, upstream_ready);
 
-    double signal_val = signal_ema.compute(result.macd_line);
-    result.signal_line = signal_val;
-
-    if (!is_na(signal_val)) {
-        result.histogram = result.macd_line - signal_val;
+    if (upstream_ready) {
+        result.macd_line = line;
+        if (signal_ema.ready()) {
+            result.signal_line = signal_val;
+            result.histogram = line - signal_val;
+        }
     }
 
     return result;
@@ -678,39 +687,10 @@ double Dev::compute(double src) {
 
 // --- MACD ---
 MACDResult MACD::recompute(double src) {
-    MACDResult result;
-    result.macd_line = na<double>();
-    result.signal_line = na<double>();
-    result.histogram = na<double>();
-
-    // Check if the previous compute() produced non-na fast/slow
-    // by checking if signal_ema was called (i.e., fast/slow were non-na)
-    // We can determine this: if fast_ema and slow_ema both have enough bars,
-    // signal_ema was called. For correctness, always recompute fast and slow,
-    // and only recompute signal if it was called in the original compute.
-    // Since fast_ema.recompute() restores and re-calls compute(), and
-    // slow_ema.recompute() does the same, we need to check the ORIGINAL
-    // fast/slow results. But we can infer: if fast_ema produced non-na
-    // before recompute, it will after too (EMA is monotonically non-na after warmup).
-    // So the only edge case is at the exact warmup boundary.
-    // For simplicity and correctness, save whether signal was called.
-
-    double fast_val = fast_ema.recompute(src);
-    double slow_val = slow_ema.recompute(src);
-
-    if (is_na(fast_val) || is_na(slow_val)) {
-        return result;
-    }
-
-    result.macd_line = fast_val - slow_val;
-    double signal_val = signal_ema.recompute(result.macd_line);
-    result.signal_line = signal_val;
-
-    if (!is_na(signal_val)) {
-        result.histogram = result.macd_line - signal_val;
-    }
-
-    return result;
+    fast_ema.restore();
+    slow_ema.restore();
+    signal_ema.restore();
+    return compute(src);
 }
 
 // --- ATR ---
