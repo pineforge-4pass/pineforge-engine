@@ -11811,6 +11811,77 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     // facts remain in the snapshot for deferred/observer projections.
     const auto physical = detail::run_position(require_host());
     const SourceId partial_exit_key = exit_id + "\x1f" + from_entry;
+    const auto family_key = key_for(exit_id, from_entry);
+    const auto consumed_origin = [&](const native_order::RequestHandle& origin) {
+        // Wholly settled, archived rosters have no per-origin consumed facts.
+        return origin_leg_consumed(family_key, PineOrderFamily::ExitLimit, origin)
+            || origin_leg_consumed(family_key, PineOrderFamily::ExitStop, origin)
+            || origin_leg_consumed(family_key, PineOrderFamily::ExitTrail, origin);
+    };
+    const auto fresh_entry_origin = [&] {
+        if (from_entry.empty() || !std::isfinite(qty)) return false;
+        const auto eligible_parent = [&](const PlacementSnapshot& parent) {
+            return parent.opening && parent.family == PineOrderFamily::Entry
+                && parent.source_id == from_entry && !parent.projection_over_pyramiding;
+        };
+        // A newly submitted parent is positive evidence even after every
+        // old opening of this id has settled. It can still be staged while
+        // entry() and both of its target exits run in one source evaluation.
+        for (const auto& pending : pending_entries_)
+            if (eligible_parent(pending.snapshot)) return true;
+        for (const auto& pending : pending_same_bar_commands_)
+            if (eligible_parent(pending.snapshot)) return true;
+        for (const auto& pending : pending_coof_requests_)
+            if (eligible_parent(pending.snapshot)) return true;
+        for (const auto& pending : delayed_market_orders_)
+            if (eligible_parent(pending.snapshot)) return true;
+        for (const auto& origin : live_handles_) {
+            const auto parent = placement_.find(origin.incarnation);
+            if (parent != placement_.end() && eligible_parent(parent->second)
+                && !consumed_origin(origin)) return true;
+        }
+        const auto follows_family = [&](const native_order::RequestHandle& origin) {
+            const auto follows = [&](const native_order::RunIdentity& run,
+                                     std::uint64_t incarnation) {
+                return incarnation != 0 && origin.run == run
+                    && origin.incarnation > incarnation;
+            };
+            // The settled prefix retains chronology, although it no longer
+            // retains per-origin consumed facts. This opening must postdate
+            // a member of this family; an absent/cancelled family proves none.
+            const auto archived = settled_bracket_families_.find(family_key);
+            if (archived != settled_bracket_families_.end())
+                return follows(archived->second.run, archived->second.last);
+            const auto family = bracket_families_.find(family_key);
+            if (family == bracket_families_.end()) return false;
+            const auto prefix = family->second.settled_record();
+            if (follows(prefix.run, prefix.last)) return true;
+            return std::any_of(family->second.begin(), family->second.end(),
+                [&](const native_order::RequestHandle& member) {
+                    return follows(member.run, member.incarnation);
+                });
+        };
+        const auto cohort = cohorts_by_id_.find(from_entry);
+        if (cohort == cohorts_by_id_.end()) return false;
+        bool has_consumed_origin = false;
+        bool has_fresh_origin = false;
+        bool has_later_origin = false;
+        for (const auto& origin : cohort->second.opened) {
+            if (consumed_origin(origin)) {
+                has_consumed_origin = true;
+            } else if (const auto units =
+                           cohort->second.live_units_by_origin.find(origin.incarnation);
+                       units != cohort->second.live_units_by_origin.end()
+                           && units->second > internal::kQtyEpsilon) {
+                has_fresh_origin = true;
+                has_later_origin = has_later_origin || follows_family(origin);
+            }
+        }
+        // Absence of a family is not evidence of a new lifetime: a genuine
+        // cancellation can have removed it. A live unconsumed opening needs
+        // either the old consumed origin or retained family chronology.
+        return has_fresh_origin && (has_consumed_origin || has_later_origin);
+    };
     // ab9714be pine_strategy_commands.cpp:1661-1692: only a re-issue that is
     // itself explicitly partial against the live position (net of a same-bar
     // pending close) is suppressed; an explicit qty covering the whole
@@ -11822,13 +11893,13 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     if (!std::isnan(qty) && live_exit_units > internal::kQtyEpsilon)
         reissue_percent = std::min(qty, live_exit_units) / live_exit_units * 100.0;
     const bool partial_reissue = reissue_percent < 100.0 - internal::kFullPercentEps;
-    if (const auto consumed = consumed_partial_exit_cycles_.lookup(partial_exit_key);
-        consumed && partial_reissue
+    const auto consumed_cycle = consumed_partial_exit_cycles_.lookup(partial_exit_key);
+    const bool consumed_partial_reissue = consumed_cycle && partial_reissue
         && live_exit_units > internal::kQtyEpsilon
-        && *consumed == current_position_cycle_) {
-        return;
-    }
-    if (partial_reissue && exit_tombstoned(exit_id, from_entry)) return;
+        && *consumed_cycle == current_position_cycle_;
+    if ((consumed_partial_reissue
+         || (partial_reissue && exit_tombstoned(exit_id, from_entry)))
+        && !fresh_entry_origin()) return;
     // A held global exit with relative legs over two or more entries covers
     // them entry by entry (per_entry_exit_call).
     if (from_entry.empty()
@@ -12076,7 +12147,6 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         }
     }
     const bool dynamic = std::isnan(qty);
-    const auto family_key = key_for(exit_id, from_entry);
     const bool defer_for_same_bar_priority = !config_.calc_on_order_fills
         && std::any_of(pending_entries_.begin(), pending_entries_.end(),
             [](const PendingEntry& pending) {
@@ -12324,7 +12394,62 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         // a zero-capacity reissue removes its predecessor as well as refusing
         // the replacement (ab9714be:pine_strategy_commands.cpp:1688-1699,
         // :2739-2811).
-        exit_cancel_bracket(exit_id, from_entry, comment);
+        const auto consumed = consumed_partial_exit_cycles_.lookup(partial_exit_key);
+        const bool consumed_this_cycle = consumed
+            && *consumed == current_position_cycle_;
+        const auto matches_exit = [&](const auto& leg) {
+            return leg.exit_id == exit_id && leg.from_entry == from_entry;
+        };
+        const auto matches_placement = [&](const PlacementSnapshot& snapshot) {
+            const auto family = snapshot.family;
+            return snapshot.source_id == exit_id && snapshot.from_entry == from_entry
+                && (family == PineOrderFamily::ExitLimit
+                    || family == PineOrderFamily::ExitStop
+                    || family == PineOrderFamily::ExitTrail);
+        };
+        const bool family_has_predecessor = std::any_of(
+            live_handles_.begin(), live_handles_.end(), [&](const auto& handle) {
+                const auto found = placement_.find(handle.incarnation);
+                return found != placement_.end() && matches_placement(found->second);
+            })
+            || std::any_of(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
+                [&](const PendingBracketLeg& leg) { return leg.family_key == family_key; })
+            || std::any_of(pending_coof_requests_.begin(), pending_coof_requests_.end(),
+                [&](const PendingCoofRequest& pending) {
+                    return matches_placement(pending.snapshot);
+                })
+            || std::any_of(delayed_market_orders_.begin(), delayed_market_orders_.end(),
+                [&](const DelayedMarketOrder& pending) {
+                    return matches_placement(pending.snapshot);
+                })
+            || std::any_of(pending_relative_exits_.begin(), pending_relative_exits_.end(),
+                           matches_exit)
+            || std::any_of(anchored_relative_legs_.begin(), anchored_relative_legs_.end(),
+                           matches_exit);
+        const bool consumed_origin_still_open = consumed_this_cycle
+            && !family_has_predecessor && [&] {
+                if (from_entry.empty() || !std::isfinite(qty))
+                    return live_exit_units > internal::kQtyEpsilon;
+                const auto cohort = cohorts_by_id_.find(from_entry);
+                if (cohort == cohorts_by_id_.end()) return false;
+                return std::any_of(cohort->second.opened.begin(), cohort->second.opened.end(),
+                    [&](const native_order::RequestHandle& origin) {
+                        const auto units =
+                            cohort->second.live_units_by_origin.find(origin.incarnation);
+                        return units != cohort->second.live_units_by_origin.end()
+                            && units->second > internal::kQtyEpsilon
+                            && consumed_origin(origin);
+                    });
+            }();
+        // Keep suppression only while its consumed opening still owns units.
+        // Other entries keeping the position nonflat do not extend that
+        // opening's lifetime. Fresh origins still get their own legs below.
+        // Any live or queued predecessor, including an anchored child without
+        // a source live handle, still follows the legacy cancellation path.
+        if (!(consumed_this_cycle && consumed_origin_still_open
+              && !family_has_predecessor)) {
+            exit_cancel_bracket(exit_id, from_entry, comment);
+        }
         return;
     }
     const auto source_point = detail::callback_point(require_host());
