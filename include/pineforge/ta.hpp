@@ -274,10 +274,14 @@ class EMA {
     double alpha;
     double sum;
     int bar_count;
-    // Read only by EmaSeeding::SimpleAverage, which counts `length` finite
-    // inputs before seeding with their mean. The FirstValue recursion uses
-    // `alpha` alone and never reads this.
+    // The numerical FirstValue recursion uses `alpha` alone; the length
+    // also sets the observation requirement for composition readiness.
     int length_;
+
+    // Readiness is independent of numerical seeding. A composed stage may
+    // consume provisional values while only counting ready upstream inputs.
+    int ready_count_ = 0;
+    int saved_ready_count_ = 0;
 
     // saved state for recompute
     double saved_output_val_;
@@ -287,7 +291,7 @@ class EMA {
     // The instance's seeding (true = EmaSeeding::SimpleAverage): named by the
     // two-argument constructor, or latched from ema_na_warmup_flag() on the
     // first compute() and never revisited, so recompute()'s restore() (which
-    // only rewinds output_val/sum/bar_count) cannot flip the seeding
+    // rewinds the numerical and readiness state) cannot flip the seeding
     // mid-series. Deliberately NOT part of save()/restore().
     bool na_warmup_ = false;
     bool warmup_latched_ = false;
@@ -297,9 +301,14 @@ public:
     // Names the seeding at construction; the ambient default is never read.
     EMA(int length, EmaSeeding seeding);
     double compute(double src);
+    // Keeps the ordinary numerical recursion; input_ready controls only the
+    // availability clock. The one-argument form counts every finite input.
+    double compute(double src, bool input_ready);
+    bool ready() const noexcept { return ready_count_ >= length_; }
     void save();
     void restore();
     double recompute(double src);
+    double recompute(double src, bool input_ready);
 public:
     // All retained fields are inline scalars (or scalar-only aggregates).
     void observe_owned_storage(OwnedStorage&) const noexcept {}

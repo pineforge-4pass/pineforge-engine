@@ -25,6 +25,10 @@
 
 #include <cmath>
 #include <cstdio>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
 using namespace pineforge;
 
@@ -223,7 +227,201 @@ static void test_sma_recompute_guards() {
     CHECK(near(v, 8.0));
 }
 
-int main() {
+// The Pine fixtures are campaign probes. This kernel witness uses their
+// independent missing-value oracle; it does not claim to execute Pine or to
+// prove tuple storage, orders, or TradingView parity on a synthetic feed.
+static std::vector<int> startup_oracle() {
+    // Public case2-warmup-oracle.csv, verbatim including its final newline.
+    // SHA256: ab1ad0af637bb71380d448fb1d0fa4763d86541b85fddce71198b633d2ce50a3
+    static constexpr char csv[] = R"csv(bar_index,expected_hist,expected_v,expected_diff
+0,na,na,na
+1,na,na,na
+2,na,na,na
+3,na,na,na
+4,na,na,na
+5,na,na,na
+6,na,na,na
+7,na,na,na
+8,na,na,na
+9,na,na,na
+10,na,na,na
+11,na,na,na
+12,na,na,na
+13,na,na,na
+14,na,na,na
+15,na,na,na
+16,na,na,na
+17,na,na,na
+18,na,na,na
+19,na,na,na
+20,na,na,na
+21,na,na,na
+22,na,na,na
+23,na,na,na
+24,na,na,na
+25,na,na,na
+26,na,na,na
+27,na,na,na
+28,na,na,na
+29,na,na,na
+30,na,na,na
+31,na,na,na
+32,na,na,na
+)csv";
+    std::istringstream input(csv);
+    std::string line;
+    if (!std::getline(input, line) ||
+        line != "bar_index,expected_hist,expected_v,expected_diff") {
+        throw std::runtime_error("missing or malformed startup oracle header");
+    }
+    std::vector<int> bars;
+    while (std::getline(input, line)) {
+        const int bar = static_cast<int>(bars.size());
+        if (line != std::to_string(bar) + ",na,na,na") {
+            throw std::runtime_error("malformed startup oracle row");
+        }
+        bars.push_back(bar);
+    }
+    // The supplied CSV contains exactly 33 contiguous observations. A short
+    // or unreadable oracle is an evidence error, never a semantic failure.
+    if (input.bad() || bars.size() != 33) {
+        throw std::runtime_error("incomplete startup oracle");
+    }
+    return bars;
+}
+
+static double startup_source(int bar) {
+    return 50.0 + bar / 32.0 + ((17 * bar) % 23) / 8.0;
+}
+
+static void test_recursive_startup_oracle() {
+    const auto bars = startup_oracle();
+    ta::MACD producer(12, 26, 9);  // lengths in the three case2 Pine probes
+    for (int bar : bars) {
+        const auto result = producer.compute(startup_source(bar));
+        const double value = result.histogram;
+        if (!is_na(value)) {
+            std::fprintf(stderr,
+                         "startup-oracle bar=%d hist=%.17g expected=na\n",
+                         bar, value);
+        }
+        CHECK(is_na(value));
+        CHECK(is_na(value - result.histogram));
+        CHECK(!(value > 0.0));
+        CHECK(!(value <= 0.0));
+    }
+    // Prevent an implementation that suppresses the result indefinitely.
+    CHECK(std::isfinite(producer.compute(startup_source(
+              static_cast<int>(bars.size()))).histogram));
+}
+
+// Numerical reference deliberately has no availability mask. It retains the
+// original first-value recursion, including the signal's startup inputs.
+struct RecursiveReference {
+    double value = na<double>();
+    double update(double src, int length) {
+        if (is_na(src)) return na<double>();
+        const double alpha = 2.0 / (length + 1);
+        value = is_na(value) ? src : alpha * src + (1.0 - alpha) * value;
+        return value;
+    }
+};
+
+static bool same_startup_value(double actual, double expected) {
+    return is_na(expected) ? is_na(actual) : actual == expected;
+}
+
+static void test_recursive_stage_availability() {
+    // Reversed lengths, unit stages and interrupted input distinguish stage
+    // availability from a fixed calendar cutoff or a replacement EMA seed.
+    const int lengths[][3] = {
+        {12, 26, 9}, {2, 5, 3}, {5, 2, 1}, {1, 1, 2}, {1, 4, 1},
+    };
+    for (const auto& periods : lengths) {
+        ta::MACD producer(periods[0], periods[1], periods[2]);
+        RecursiveReference fast, slow, signal;
+        int observations = 0;
+        int signal_observations = 0;
+        const int upstream_length =
+            periods[0] > periods[1] ? periods[0] : periods[1];
+        for (int bar = 0; bar < 96; ++bar) {
+            const double src = bar < 2 || bar % 7 == 3
+                ? na<double>() : startup_source(bar);
+            const double line =
+                fast.update(src, periods[0]) - slow.update(src, periods[1]);
+            const double raw_signal = signal.update(line, periods[2]);
+            if (!is_na(src)) ++observations;
+            const bool upstream_ready = observations >= upstream_length;
+            if (!is_na(src) && upstream_ready) ++signal_observations;
+            const bool downstream_ready =
+                signal_observations >= periods[2];
+            const auto result = producer.compute(src);
+            CHECK(same_startup_value(result.macd_line,
+                  upstream_ready ? line : na<double>()));
+            CHECK(same_startup_value(result.signal_line,
+                  downstream_ready ? raw_signal : na<double>()));
+            CHECK(same_startup_value(result.histogram,
+                  downstream_ready ? line - raw_signal : na<double>()));
+        }
+    }
+}
+
+static bool same_startup_result(const ta::MACDResult& actual,
+                                const ta::MACDResult& expected) {
+    return same_startup_value(actual.macd_line, expected.macd_line) &&
+           same_startup_value(actual.signal_line, expected.signal_line) &&
+           same_startup_value(actual.histogram, expected.histogram);
+}
+
+static void test_recursive_stage_recompute() {
+    // A cold or missing initial evaluation may never call the downstream
+    // stage in the base. Restoring its previous bar's snapshot loses state.
+    // Cover both seeding policies and every availability boundary.
+    const bool previous = ta::ema_na_warmup_flag();
+    for (bool average_seed : {false, true}) {
+        ta::ema_na_warmup_flag() = average_seed;
+        ta::MACD producer(2, 5, 3), committed(2, 5, 3);
+        for (int bar = 0; bar < 48; ++bar) {
+            const double final_src = bar % 11 == 8
+                ? na<double>() : startup_source(bar);
+            if (bar != 0) {
+                producer.compute(bar % 2 == 0
+                    ? na<double>() : startup_source(bar) + 9.0);
+            }
+            producer.recompute(na<double>());
+            producer.recompute(startup_source(bar) - 4.0);
+            producer.recompute(na<double>());
+            const auto actual = producer.recompute(final_src);
+            const auto expected = committed.compute(final_src);
+            CHECK(same_startup_result(actual, expected));
+        }
+    }
+    ta::ema_na_warmup_flag() = previous;
+}
+
+int main(int argc, char** argv) {
+    // Selectors let the supervisor record each new witness or the original
+    // controls against the base without relying on a failure in another row.
+    const std::string row = argc == 2 ? argv[1] : "";
+    if (argc > 2 || (!row.empty() && row != "startup-oracle" &&
+                    row != "stage-availability" && row != "stage-recompute" &&
+                    row != "controls")) {
+        std::fprintf(stderr, "unknown warm-up row\n");
+        return 2;
+    }
+    try {
+        if (row.empty() || row == "startup-oracle")
+            test_recursive_startup_oracle();
+        if (row.empty() || row == "stage-availability")
+            test_recursive_stage_availability();
+        if (row.empty() || row == "stage-recompute")
+            test_recursive_stage_recompute();
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "EVIDENCE ERROR: %s\n", error.what());
+        return 2;
+    }
+    if (!row.empty() && row != "controls") return tests_failed == 0 ? 0 : 1;
+
     test_rma_na_input_guard();
     test_sma_periodic_exact_sum_recompute();
     test_wma_na_input_guard();

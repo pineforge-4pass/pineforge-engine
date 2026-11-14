@@ -299,7 +299,14 @@ EMA::EMA(int length, EmaSeeding seeding)
 }
 
 double EMA::compute(double src) {
+    return compute(src, true);
+}
+
+double EMA::compute(double src, bool input_ready) {
     save();
+    if (input_ready && std::isfinite(src) && ready_count_ < length_) {
+        ++ready_count_;
+    }
     // An instance that named no seeding latches the ambient default once, on
     // its first compute(), so a host that raises the default around one
     // evaluation context gets that context's instances SMA-seeded for life
@@ -515,15 +522,20 @@ void EMA::save() {
     saved_output_val_ = output_val;
     saved_sum_ = sum;
     saved_bar_count_ = bar_count;
+    saved_ready_count_ = ready_count_;
 }
 void EMA::restore() {
     output_val = saved_output_val_;
     sum = saved_sum_;
     bar_count = saved_bar_count_;
+    ready_count_ = saved_ready_count_;
 }
 double EMA::recompute(double src) {
+    return recompute(src, true);
+}
+double EMA::recompute(double src, bool input_ready) {
     restore();
-    return compute(src);
+    return compute(src, input_ready);
 }
 
 // --- SMA ---
