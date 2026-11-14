@@ -254,20 +254,20 @@ static void test_atr_tr_warmup() {
 }
 
 // ============================================================================
-// MACD: EMAs seed on the first non-na value (Pine ta.ema), so MACD is finite
-// from bar 1 — exercises the fast/slow EMA path and the histogram = macd-signal
-// branch in MACD::compute, plus the recompute mirror.
+// MACD: EMAs seed on the first non-na value, while publication waits for
+// each component's upstream observations. Exercise the histogram =
+// macd-signal branch after warm-up, plus the recompute mirror.
 // ============================================================================
 
 static void test_macd_seeded() {
     std::printf("test_macd_seeded\n");
     ta::MACD macd(3, 5, 2);
-    // Bar 1: both EMAs seed to src=10 → macd_line = 0; signal EMA seeds to
-    // macd_line=0 → signal_line = 0, histogram = 0.
+    // expectation corrected: (0, 0, 0) -> (na, na, na), because seeding the
+    // numerical recursion does not satisfy the stages' observation lengths.
     auto r0 = macd.compute(10.0);
-    CHECK(near(r0.macd_line, 0.0));
-    CHECK(near(r0.signal_line, 0.0));
-    CHECK(near(r0.histogram, 0.0));
+    CHECK(is_na(r0.macd_line));
+    CHECK(is_na(r0.signal_line));
+    CHECK(is_na(r0.histogram));
 
     // After a rising series macd_line > 0 (fast EMA leads slow EMA up) and
     // histogram = macd_line - signal_line is finite.

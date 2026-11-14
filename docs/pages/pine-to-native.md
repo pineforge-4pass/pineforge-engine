@@ -181,7 +181,7 @@ source-only features state why a native counterpart does not exist.
 | TR3 | Mapped by the migration table above. |
 | TR4 | Native `replace(..., ReplaceOptions{retain_trigger_state=true})` retains a trail extreme; Pine re-issue policy remains adapter-owned. |
 | TR5 | Mapped by the migration table above. |
-| SZ1 | Mapped by the migration table above. |
+| SZ1 | Mapped by the migration table above. Explicit `strategy.order()` quantities floor executable units at a declared decimal quantity step in the adapter; the source quantity remains verbatim. This boundary control is not measured against TradingView. |
 | SZ2 | Native counterpart: `resolve_execution_terms` / `HostSized` lets a host override resolved terms; Pine has no declaration parameter for this hook. |
 | SZ3 | Mapped by the migration table above. |
 | SZ4 | Mapped by the migration table above. |
