@@ -1032,7 +1032,9 @@ constexpr double kCancelAdd = 2.0;
 
 // Both cancellations remove the family after its first partial fill. A new
 // entry may receive its own bracket, but must not re-arm the consumed origin.
-// FIFO still debits the oldest opening when that new bracket fills.
+// FIFO still debits the oldest opening when that new bracket fills. The add
+// opens on the bar its bracket fills: that leg is the add's own exit, so its
+// two units are the whole of the exit there and no second fill covers the add.
 class CancelAddProbe final : public source::PineStrategyHost {
 public:
     explicit CancelAddProbe(const CancelAddRow& row)

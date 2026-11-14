@@ -2518,7 +2518,7 @@ private:
     // suspended.
     bool origin_leg_consumed(std::uint64_t family_key, PineOrderFamily,
                              const native_order::RequestHandle& origin) const noexcept;
-    // Suppression facts only, without any member that a cancel can target.
+    // What a bracket cancel keeps of a family: its consumed-leg answers, no member.
     BracketRoster consumed_bracket_facts(std::uint64_t family_key) const;
     // Whether an immediate strategy.close was placed on that bar.
     bool immediate_close_placed_on(std::int32_t bar) const noexcept;
