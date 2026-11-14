@@ -326,7 +326,7 @@ class VerificationResult:
     gating_matched_count: int = 0
     tv_gate_count: int = 0
     eng_gate_count: int = 0
-    count_delta: float = 0.0  # Gross unmatched count / larger gated trade count.
+    count_delta: float = 0.0  # Legacy relative difference of gated pool sizes.
     count_abs_delta: int = 0  # Unmatched TV trades plus unmatched engine trades.
     net_count_abs_delta: int = 0  # Report-only absolute difference of pool sizes.
     gross_unmatched_count: int = 0  # Alias of the canonical count_abs_delta.
@@ -1247,7 +1247,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
             eng_count=len(eng_cmp),
             tv_raw_count=len(tv),
             eng_raw_count=len(eng),
-            count_delta=count_abs_delta / max(len(tv_cmp), len(eng_cmp), 1),
+            count_delta=relative_max(len(tv_cmp), len(eng_cmp)),
             count_abs_delta=count_abs_delta,
             net_count_abs_delta=abs(len(tv_cmp) - len(eng_cmp)),
             gross_unmatched_count=count_abs_delta,
@@ -1313,7 +1313,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     unmatched_tv = tv_gate_n - count_matched_n
     unmatched_engine = eng_gate_n - count_matched_n
     count_abs_delta = unmatched_tv + unmatched_engine
-    count_delta = count_abs_delta / max(tv_gate_n, eng_gate_n, 1)
+    count_delta = relative_max(tv_gate_n, eng_gate_n)
     # A mark pair's entry is a fill on both sides, so the identity gate
     # sees it with the others: the engine's range-end row must carry an
     # entry incarnation at a TV-proven multi-entry key exactly as any

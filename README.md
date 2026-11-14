@@ -339,13 +339,17 @@ The hard lane combines <!-- pf:scoreboard.hardLane.corpusProbes|int -->309<!-- /
 Every script is exported from TradingView as-is (its own inputs, its own defaults) with the chart's trade list at full precision, transpiled with [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss), and run by this engine on the same OHLCV bars. The two trade lists are aligned trade-for-trade and graded by [`scripts/verify_corpus.py`](scripts/verify_corpus.py):
 
 - **excellent** — zero unmatched gated trades on either side, ≥ 99% of TradingView's trades matched, the distinct-entry identity check passed, entry and exit prices within 0.01% and PnL within 1% at the 90th percentile (trailing-stop scripts are graded on the *production* profile: exits within 0.02% and PnL within 1%, since a trail fill depends on TradingView's sub-bar path);
-- **strong** — ≥ 95% matched, gross unmatched count below 6% of the larger gated trade count, entries within 0.1% and exits within 0.5% at p90;
+- **strong** — ≥ 95% matched, difference in gated trade-list sizes below 6% of the larger count, entries within 0.1% and exits within 0.5% at p90;
 - **moderate** — ≥ 75% coverage with ≥ 90% of the in-window trades matched; **weak** — at least one match; **minimal** — none.
 
 The absolute mismatch metric, `count_abs_delta` (printed as `abs`), adds every
 unmatched gated TradingView trade and every unmatched gated engine trade.
 The separate `net_count_abs_delta` (`net`) reports the difference in list sizes.
-Excellent requires the absolute mismatch count to be zero.
+Excellent requires the absolute mismatch count to be zero. The percentage
+metric, `count_delta`, retains the legacy relative difference in gated list
+sizes for the strong tier and other percentage comparisons. It can be zero
+when both sides have unmatched trades; that does not satisfy the excellent
+count gate.
 
 The closed-test grades are the maintainers' own measurement of a fixed population; only the public board can be re-run from this repository.
 

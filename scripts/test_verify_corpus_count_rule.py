@@ -233,7 +233,13 @@ class ExactCountBehaviorTests(unittest.TestCase):
         self.assertEqual(result.qty_p100, 0.0)
         self.assertEqual((row["tv"], row["eng"], row["matched"]),
                          (result.tv_count, result.eng_count, result.matched_count))
-        self.assertEqual(row["count_delta"], result.count_delta)
+        # The input pool sizes define the legacy percentage independently of
+        # the analyzer's absolute unmatched count and its reported values.
+        legacy_count_delta = abs(tv_count - engine_count) / max(
+            tv_count, engine_count, 1
+        )
+        self.assertEqual(result.count_delta, legacy_count_delta)
+        self.assertEqual(row["count_delta"], legacy_count_delta)
         self.assertEqual(row["count_abs_delta"], result.count_abs_delta)
         self.assertIs(row["distinct_entry_identity_ok"], True)
         self.assertEqual(row["distinct_entry_mismatches"], 0)
@@ -380,7 +386,10 @@ class ExactCountBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(balanced.gross_unmatched_count, 2)
         self.assertEqual(balanced_row["gross_unmatched_count"], 2)
-        self.assertAlmostEqual(balanced.count_delta, 2 / 201, places=15)
+        # expectation corrected: 2 / 201 -> 0, because the legacy percentage
+        # compares the two input pool sizes, both 201; only the absolute
+        # unmatched count changes the excellent gate.
+        self.assertEqual(balanced.count_delta, 0.0)
         self.assertLess(
             balanced.count_delta,
             balanced_row["grading_policy"]["thresholds"]["count"],
@@ -388,6 +397,9 @@ class ExactCountBehaviorTests(unittest.TestCase):
         self.assertEqual(balanced.tier, "strong")
         self.assertNotEqual(balanced.tier, "excellent")
         self.assertEqual(balanced_cli["exit"], 0)
+        self.assertRegex(
+            balanced_cli["stdout"], r"Count delta:\s+0\.0000%\s+\(X;"
+        )
         self.assertIn("abs=2", balanced_cli["stdout"])
         self.assertIn("net=0", balanced_cli["stdout"])
         self.assertIn("-> strong", balanced_cli["stdout"])

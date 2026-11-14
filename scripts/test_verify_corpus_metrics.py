@@ -680,9 +680,12 @@ class FragmentConsolidationIdentityTests(unittest.TestCase):
         self.assertTrue(result.coverage_ok)
         self.assertFalse(result.distinct_entry_identity_ok)
         self.assertEqual(result.distinct_entry_mismatches, 1)
-        # expectation corrected: strong -> weak, because the unmatched TV long
-        # and engine short contribute two gross mismatches across two trades.
-        self.assertEqual(result.label, "weak")
+        # expectation corrected: weak -> strong, because the legacy percentage
+        # compares two TV trades with two engine trades and remains zero.
+        # Gross unmatched count and the identity gate still forbid excellent.
+        self.assertEqual(result.count_delta, 0.0)
+        self.assertEqual(result.report_row()["count_delta"], 0.0)
+        self.assertEqual(result.label, "strong")
 
 
 PRIVATE_FIXTURE_SKIP_LITERAL = "SKIP private fixtures not present: "
@@ -940,11 +943,19 @@ class DeclaredTierOverrideTests(unittest.TestCase):
                 self.assertEqual(result.net_count_abs_delta, 0)
                 self.assertFalse(result.count_ok)
                 self.assertEqual(result.report_row()["count_abs_delta"], 2)
+                # expectation corrected: 2 -> 0, because the legacy percentage
+                # compares one trade per tape even when none can align.
+                self.assertEqual(result.count_delta, 0.0)
+                self.assertEqual(result.report_row()["count_delta"], 0.0)
 
                 output = StringIO()
                 with redirect_stdout(output):
                     _print_verification(result)
                 self.assertIn(f"-> {expected}", output.getvalue())
+                self.assertRegex(
+                    output.getvalue(),
+                    r"Count delta:\s+0\.0000%\s+\(X; abs=2; net=0\)",
+                )
                 self.assertIn("abs=2; net=0", output.getvalue())
 
     def test_both_empty_excellent_is_not_masked_by_stale_declarations(self) -> None:
