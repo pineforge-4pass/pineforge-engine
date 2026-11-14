@@ -12324,7 +12324,45 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         // a zero-capacity reissue removes its predecessor as well as refusing
         // the replacement (ab9714be:pine_strategy_commands.cpp:1688-1699,
         // :2739-2811).
-        exit_cancel_bracket(exit_id, from_entry, comment);
+        const auto consumed = consumed_partial_exit_cycles_.lookup(partial_exit_key);
+        const bool consumed_this_cycle = consumed
+            && *consumed == current_position_cycle_;
+        const auto matches_exit = [&](const auto& leg) {
+            return leg.exit_id == exit_id && leg.from_entry == from_entry;
+        };
+        const auto matches_placement = [&](const PlacementSnapshot& snapshot) {
+            const auto family = snapshot.family;
+            return snapshot.source_id == exit_id && snapshot.from_entry == from_entry
+                && (family == PineOrderFamily::ExitLimit
+                    || family == PineOrderFamily::ExitStop
+                    || family == PineOrderFamily::ExitTrail);
+        };
+        const bool family_has_predecessor = std::any_of(
+            live_handles_.begin(), live_handles_.end(), [&](const auto& handle) {
+                const auto found = placement_.find(handle.incarnation);
+                return found != placement_.end() && matches_placement(found->second);
+            })
+            || std::any_of(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
+                [&](const PendingBracketLeg& leg) { return leg.family_key == family_key; })
+            || std::any_of(pending_coof_requests_.begin(), pending_coof_requests_.end(),
+                [&](const PendingCoofRequest& pending) {
+                    return matches_placement(pending.snapshot);
+                })
+            || std::any_of(delayed_market_orders_.begin(), delayed_market_orders_.end(),
+                [&](const DelayedMarketOrder& pending) {
+                    return matches_placement(pending.snapshot);
+                })
+            || std::any_of(pending_relative_exits_.begin(), pending_relative_exits_.end(),
+                           matches_exit)
+            || std::any_of(anchored_relative_legs_.begin(), anchored_relative_legs_.end(),
+                           matches_exit);
+        // Keep an ended family's consumed witness for this position cycle.
+        // Any live or queued predecessor, including an anchored child without
+        // a source live handle, still follows the legacy cancellation path.
+        if (!(consumed_this_cycle && live_exit_units > internal::kQtyEpsilon
+              && !family_has_predecessor)) {
+            exit_cancel_bracket(exit_id, from_entry, comment);
+        }
         return;
     }
     const auto source_point = detail::callback_point(require_host());
