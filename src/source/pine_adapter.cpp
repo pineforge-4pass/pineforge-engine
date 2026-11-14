@@ -30239,8 +30239,8 @@ PlacementTable::SequenceIndex& PlacementTable::sequence_index() const {
     if (!sequence_index_) {
         auto next = std::make_shared<SequenceIndex>(sequence_cache_capacity_);
         SequenceIndex::Transaction transaction(*next);
-        // A deferred first insertion leaves at most one row to build.
-        // Failed derived writes or a backing rebind can need a recovery walk.
+        // Appends and erasures can precede the first sequence reader.
+        // Build from the current retained rows, also on replacement or recovery.
         visit_rows([&](std::uint64_t incarnation, const PlacementSnapshot& row) {
             ++sequence_rows_;
             next->insert(incarnation, row);
@@ -30300,10 +30300,11 @@ void PlacementTable::change_sequences(std::uint64_t incarnation,
                                      const PlacementSnapshot* after) {
     static_assert(std::is_nothrow_move_assignable_v<PlacementSnapshot>,
                   "placement publication must not fail after its identity update");
-    // The first insertion has no index or certified answer to maintain.
-    // Avoid claiming an arena region before the authoritative cohort/rank
-    // stores admit it. The next mutation or query builds from retained rows.
-    if (!before && size_ == 0 && !sequence_index_) return;
+    // Appends and erasures need no index until a sequence reader asks for it:
+    // retained placements and erased minima remain authoritative. Keep the
+    // transactional identity replacement even before the first read, so a
+    // failed backed publication cannot change a retained row.
+    if (!sequence_index_ && (!before || !after)) return;
     if (before && after && before->source_id == after->source_id
         && before->from_entry == after->from_entry
         && before->command_sequence == after->command_sequence) return;
