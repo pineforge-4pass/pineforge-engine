@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <limits>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -260,6 +261,269 @@ bool run_row(const Row& row) {
     return true;
 }
 
+// Extrapolation, not measured: the zero-capacity reissue must remove its
+// queued predecessor (src/source/pine_adapter.cpp:12249, exit()'s
+// clear_existing_exit_order contract; :15177, pending_bracket_legs_ erase).
+// This case regresses the inherited LIVE-ONLY partial candidate. The original
+// 05552883 parent unconditionally cancels here and is expected to pass this
+// case; its release-refire failures are the separate four rows above.
+constexpr const char* kQueuedRow = "R-queued-predecessor";
+constexpr const char* kQueuedEntry = "queued-entry";
+constexpr const char* kHolderExit = "holder";
+constexpr const char* kConsumedExit = "consumed";
+constexpr double kQueuedLimit = 108.0;
+constexpr double kQueuedStop = 90.0;
+constexpr double kHolderStop = 50.0;
+
+class QueuedPredecessorProbe final : public source::PineStrategyHost {
+public:
+    QueuedPredecessorProbe() {
+        attach_pine_execution_adapter();
+        source::PineStrategyConfig cfg{};
+        cfg.calc_on_order_fills = false;
+        cfg.process_orders_on_close = false;
+        cfg.initial_capital = 1'000'000.0;
+        cfg.default_qty_type = static_cast<int>(QtyType::FIXED);
+        cfg.default_qty_value = 4.0;
+        cfg.margin_long = cfg.margin_short = 100.0;
+        cfg.commission_value = 0.0;
+        cfg.slippage = 0;
+        configure_pine_strategy(cfg);
+        set_syminfo_session("24x7");
+        set_syminfo_timezone("UTC");
+        set_syminfo_mintick(1.0);
+        set_syminfo_pointvalue(1.0);
+        // All amounts lie on this quarter-unit grid. The tombstone rule's
+        // power-of-ten scope must not mask a leaked queued stop here.
+        qty_step_ = 0.25;
+        fixture_retain_all_events();
+    }
+
+    void expect(const std::string& field, double actual, double expected) {
+        if (actual == expected) return;
+        std::printf("FAIL %s: %s actual=%.17g expected=%.17g\n",
+                    kQueuedRow, field.c_str(), actual, expected);
+        ok = false;
+    }
+
+    int working(const char* id) const {
+        int count = 0;
+        for (const auto& row : native_working_requests())
+            if (row.definition->request.label == id) ++count;
+        return count;
+    }
+
+    int pending(const char* id) const {
+        int count = 0;
+        for (const auto& row : adapter_.fixture_pending_snapshots())
+            if (row.snapshot.source_id == id
+                && row.snapshot.from_entry == kQueuedEntry) ++count;
+        return count;
+    }
+
+    source::PineExecutionAdapter::FixturePendingSnapshot observe(
+            const char* phase, const char* id, bool staged,
+            double requested, double reserved, source::PineOrderFamily family,
+            double level) {
+        source::PineExecutionAdapter::FixturePendingSnapshot observed;
+        int count = 0;
+        for (const auto& row : adapter_.fixture_pending_snapshots()) {
+            if (row.snapshot.source_id != id
+                || row.snapshot.from_entry != kQueuedEntry) continue;
+            ++count;
+            observed = row;
+        }
+        const std::string prefix = std::string(phase) + " ";
+        expect(prefix + "pending count", count, 1);
+        expect(prefix + "staged", observed.staged, staged);
+        expect(prefix + "requested units", observed.snapshot.requested_qty, requested);
+        expect(prefix + "reserved units", observed.snapshot.projection_remaining_qty,
+               reserved);
+        expect(prefix + "family", static_cast<int>(observed.snapshot.family),
+               static_cast<int>(family));
+        expect(prefix + "level", family == source::PineOrderFamily::ExitStop
+               ? observed.snapshot.exit_levels.stop : observed.snapshot.exit_levels.limit,
+               level);
+        return observed;
+    }
+
+    void on_source_bar(const Bar& bar) override {
+        const int index = pine_bar_index();
+        if (index == 0) strategy_entry(kQueuedEntry, true, kNaN, kNaN, 4.0);
+        if (index == 1) {
+            expect("opening position", signed_position_size(), 4.0);
+            holder(2.0);
+            strategy_exit(kConsumedExit, kQueuedEntry, kQueuedLimit, kNaN,
+                          kNaN, kNaN, kNaN, 100.0, {}, 2.0);
+            observe("initial holder", kHolderExit, true, 2.0, 2.0,
+                    source::PineOrderFamily::ExitStop, kHolderStop);
+            observe("initial limit", kConsumedExit, true, 2.0, 2.0,
+                    source::PineOrderFamily::ExitLimit, kQueuedLimit);
+            opening_seen = true;
+        }
+        if (index == 3) {
+            expect("partial fill count before sequence", trade_count(), 1);
+            expect("position before sequence", signed_position_size(), 2.0);
+            std::int64_t cycle = 0;
+            native_order::RunIdentity filled_run{};
+            int openings = 0, partials = 0;
+            for (const auto& row : native_events(0)) {
+                if (!row.command) continue;
+                const auto* fill =
+                    std::get_if<native_order::ExecutionAppliedEvent>(&*row.command);
+                if (!fill) continue;
+                if (fill->request().label == kQueuedEntry) {
+                    ++openings;
+                    expect("native opening units", fill->opened_units, 4.0);
+                    cycle = fill->cycle_after;
+                }
+                if (fill->request().label == kConsumedExit) {
+                    ++partials;
+                    expect("native partial units", fill->closed_units, 2.0);
+                    expect("native partial is limit",
+                           std::holds_alternative<native_order::Limit>(
+                               fill->request().trigger), true);
+                    filled_run = fill->handle().run;
+                }
+            }
+            expect("native opening count", openings, 1);
+            expect("native partial count", partials, 1);
+            const auto consumed = adapter_.fixture_consumed_partial_exit_cycles().lookup(
+                std::string(kConsumedExit) + '\x1f' + kQueuedEntry);
+            expect("consumed marker matches live cycle",
+                   cycle > 0 && consumed && *consumed == cycle, true);
+            expect("consumed family has no native leg", working(kConsumedExit), 0);
+            observe("standing holder", kHolderExit, false, 2.0, 2.0,
+                    source::PineOrderFamily::ExitStop, kHolderStop);
+
+            holder(1.0);
+            observe("shrunk holder", kHolderExit, false, 1.0, 1.0,
+                    source::PineOrderFamily::ExitStop, kHolderStop);
+            stop();
+            const auto queued = observe("queued stop", kConsumedExit, true, 2.0, 1.0,
+                                        source::PineOrderFamily::ExitStop, kQueuedStop);
+            expect("queued stop has no predecessor",
+                   queued.snapshot.projection_predecessor, 0);
+            expect("queued stop has no queue rank", queued.snapshot.chain_origin_sequence, 0);
+            expect("queued stop has no source sequence", queued.snapshot.source_sequence, 0);
+            expect("queued stop is not native", working(kConsumedExit), 0);
+            holder(2.0);
+            const auto expanded = observe("expanded holder", kHolderExit, false, 2.0, 2.0,
+                                          source::PineOrderFamily::ExitStop, kHolderStop);
+            expect("holder retains an earlier queue rank",
+                   expanded.snapshot.chain_origin_sequence > 0, true);
+            expect("expanded holder is native", working(kHolderExit), 1);
+            observe("stop still queued before refusal", kConsumedExit, true, 2.0, 1.0,
+                    source::PineOrderFamily::ExitStop, kQueuedStop);
+            expect("position unchanged before refusal", signed_position_size(), 2.0);
+
+            std::uint64_t cursor = 0;
+            for (const auto& row : native_events(0))
+                if (row.ordinal > cursor) cursor = row.ordinal;
+            stop();
+            // First cancellation assertion: the live-only partial leaves one.
+            expect("queued stop after failed reservation", pending(kConsumedExit), 0);
+            expect("failed replacement is not native", working(kConsumedExit), 0);
+            int cancelled_members = 0;
+            for (const auto& row : native_events(cursor)) {
+                if (!row.command) continue;
+                if (const auto* event =
+                        std::get_if<native_order::NotWorkingEvent>(&*row.command)) {
+                    ++cancelled_members;
+                    expect("cancel retains filled member run",
+                           event->target.run == filled_run, true);
+                    expect("cancel targets non-working sentinel",
+                           event->target.incarnation
+                               == std::numeric_limits<std::uint64_t>::max(), true);
+                }
+            }
+            expect("filled family cancellation outcome", cancelled_members, 1);
+            observe("holder after refusal", kHolderExit, false, 2.0, 2.0,
+                    source::PineOrderFamily::ExitStop, kHolderStop);
+            sequence_seen = true;
+        }
+        if (index == 4) {
+            stop_touch_seen = bar.low < kQueuedStop && bar.high > kQueuedStop
+                && bar.low > kHolderStop;
+            expect("later bar crosses only consumed stop", stop_touch_seen, true);
+            expect("remaining units after stop touch", signed_position_size(), 2.0);
+        }
+        if (index == 5) strategy_close_all();
+    }
+
+    double final_size() const { return signed_position_size(); }
+    bool ok = true;
+    bool opening_seen = false, sequence_seen = false, stop_touch_seen = false;
+
+private:
+    void holder(double qty) {
+        strategy_exit(kHolderExit, kQueuedEntry, kNaN, kHolderStop,
+                      kNaN, kNaN, kNaN, 100.0, {}, qty);
+    }
+    void stop() {
+        strategy_exit(kConsumedExit, kQueuedEntry, kNaN, kQueuedStop,
+                      kNaN, kNaN, kNaN, 100.0, {}, 2.0);
+    }
+};
+
+bool run_queued_predecessor() {
+    QueuedPredecessorProbe probe;
+    const std::array<Bar, 8> bars{{
+        {100, 101, 99, 100, 1000, kStart},                    // 0: entry call
+        {100, 101, 99, 100, 1000, kStart + kInterval},        // 1: entry, exits
+        {100, 109, 99, 108, 1000, kStart + 2 * kInterval},    // 2: limit fills 2
+        {105, 106, 104, 105, 1000, kStart + 3 * kInterval},   // 3: queue sequence
+        {100, 101, 89, 95, 1000, kStart + 4 * kInterval},     // 4: leaked stop
+        {100, 102, 98, 100, 1000, kStart + 5 * kInterval},    // 5: final close call
+        {101, 103, 99, 102, 1000, kStart + 6 * kInterval},    // 6: final close
+        {102, 103, 100, 101, 1000, kStart + 7 * kInterval},   // 7: trailing bar
+    }};
+    probe.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false);
+    probe.expect("run succeeded", probe.last_error().empty(), true);
+    probe.expect("opening setup observed", probe.opening_seen, true);
+    probe.expect("coexistence sequence observed", probe.sequence_seen, true);
+    probe.expect("later stop touch observed", probe.stop_touch_seen, true);
+    int stops_accepted = 0, stops_filled = 0;
+    for (const auto& row : probe.native_events(0)) {
+        if (!row.command) continue;
+        if (const auto* event = std::get_if<native_order::AcceptedEvent>(&*row.command))
+            if (event->request().label == kConsumedExit
+                && std::holds_alternative<native_order::Stop>(event->request().trigger))
+                ++stops_accepted;
+        if (const auto* event =
+                std::get_if<native_order::ExecutionAppliedEvent>(&*row.command))
+            if (event->request().label == kConsumedExit
+                && std::holds_alternative<native_order::Stop>(event->request().trigger))
+                ++stops_filled;
+    }
+    probe.expect("queued stop accepted after source drain", stops_accepted, 0);
+    probe.expect("queued stop later fill count", stops_filled, 0);
+    double total = 0.0;
+    for (int i = 0; i < probe.trade_count(); ++i) {
+        const Trade& trade = probe.get_trade(i);
+        std::printf("%s: exit=%s quantity=%.17g bar=%d price=%.17g\n",
+                    kQueuedRow, trade.exit_id.c_str(), trade.qty,
+                    trade.exit_bar_index, trade.exit_price);
+        const std::string prefix = "trade " + std::to_string(i) + " ";
+        probe.expect(prefix + "entry id", trade.entry_id == kQueuedEntry, true);
+        probe.expect(prefix + "entry bar", trade.entry_bar_index, 1);
+        probe.expect(prefix + "entry price", trade.entry_price, 100.0);
+        probe.expect(prefix + "long", trade.is_long, true);
+        probe.expect(prefix + "open at end", trade.open_at_end, false);
+        probe.expect(prefix + "exit id",
+                     trade.exit_id == (i == 0 ? kConsumedExit : kFinalExitId), true);
+        probe.expect(prefix + "quantity", trade.qty, 2.0);
+        probe.expect(prefix + "exit bar", trade.exit_bar_index, i == 0 ? 2 : 6);
+        probe.expect(prefix + "exit price", trade.exit_price, i == 0 ? kQueuedLimit : 101.0);
+        total += trade.qty;
+    }
+    probe.expect("trade count", probe.trade_count(), 2);
+    probe.expect("total closed units", total, 4.0);
+    probe.expect("final position", probe.final_size(), 0.0);
+    if (probe.ok) std::printf("PASS %s\n", kQueuedRow);
+    return probe.ok;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -273,6 +537,10 @@ int main(int argc, char** argv) {
         if (argc == 2 && std::string(argv[1]) != row.name) continue;
         ++selected;
         if (!run_row(row)) ++failures;
+    }
+    if (argc == 1 || std::string(argv[1]) == kQueuedRow) {
+        ++selected;
+        if (!run_queued_predecessor()) ++failures;
     }
     if (selected == 0) {
         std::printf("Unknown row: %s\n", argv[1]);

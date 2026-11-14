@@ -7,6 +7,7 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- A script that repeatedly calls the same `strategy.exit` while another exit holds part of the same entry could make that first exit fill again after it had already filled. The engine now keeps the first exit's filled share for the current position, fixing issue #854.
 - Multi-day charts restart their trading-date grid each year; measured on 24x7 daily input for chart bars, last_bar_index, barstate.islast and the open-trade report row. Streams keep the previous chart path; selected windows on generated N-day chart partitions are refused. Time offsets, exchange calendars and intraday input are not measured against TradingView.
 - `str.match` no longer reports "no match" after a memory failure; the failure now reaches `out_of_memory`.
   A pattern over the limits of the engine's regular-expression library stops the run with `pine_string_error` and reason `regex_resource_limit`, which is not retryable.
