@@ -3400,7 +3400,9 @@ class PostFleetRunnerPolicy(unittest.TestCase):
         # retain Option C's split-custody, auth and host-only PR diagnostic text.
         # expectation corrected: 2133 -> 2170, because the smoke-leg CI adds the
         # "Where the full suites run" section and re-words the trigger map.
-        self.assertEqual(len(docs.splitlines()), 2170)
+        # expectation corrected: 2170 -> 2177, because the shard/join contract
+        # paragraph adds seven lines to docs/ci.md.
+        self.assertEqual(len(docs.splitlines()), 2177)
         # The test-owned job catalog defines the protected label inventory.
         tables = re.findall(
             r"^\| Workflow \| Events/callers \| Inline jobs' `runs-on` \|\n"
@@ -5898,7 +5900,9 @@ class PreflightFailures(unittest.TestCase):
         # Option C's auth, artifact custody and host-only PR diagnostic text.
         # expectation corrected: 2133 -> 2170, because the smoke-leg CI adds the
         # "Where the full suites run" section and re-words the trigger map.
-        self.assertEqual(len(text.splitlines()), 2170)
+        # expectation corrected: 2170 -> 2177, because the shard/join contract
+        # paragraph adds seven lines to docs/ci.md.
+        self.assertEqual(len(text.splitlines()), 2177)
         slices = tuple(name for name in EXPECTED_PR_SLOW_ROWS
                        if name.startswith('test_ci_verify_slice_'))
         self.assertTrue(slices, 'verifier slice inventory must not be empty')
@@ -7187,7 +7191,7 @@ exit "$lookup_exit"
         self.assertEqual(sources[3].count(block), 1)
         sources[3] = sources[3].replace(block, '', 1).rstrip() + '\n' + block
         self.assertNotIn(finding, ci_workflow_findings(*sources))
-        sources[3] += 'include("${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/late-properties.cmake")\n'
+        sources[3] += 'include("${CMAKE_CURRENT_SOURCE_DIR}/lanes.d/late-properties.cmake")\n'
         self.assertIn(finding, ci_workflow_findings(*sources))
 
     def test_reusable_heavy_profiles_keep_full_populations_and_dispatch(self):

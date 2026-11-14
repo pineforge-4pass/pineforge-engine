@@ -7,16 +7,16 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-import check_cr150_cmake_d as checker
+import check_lanes_cmake_d as checker
 import ci_preflight
 from test_ci_preflight import CI_SOURCES
 
 FAST_FINDING = "PR fast rows must keep one pinned CMake label list and executable build target"
 INCLUDE_LOOP = (
-    'file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")\n'
-    'list(SORT CR150_LANE_CMAKE)\n'
-    'foreach(cr150_lane_file IN LISTS CR150_LANE_CMAKE)\n'
-    '    include("${cr150_lane_file}")\n'
+    'file(GLOB LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/lanes.d/*.cmake")\n'
+    'list(SORT LANE_CMAKE)\n'
+    'foreach(lane_file IN LISTS LANE_CMAKE)\n'
+    '    include("${lane_file}")\n'
     'endforeach()\n'
 )
 
@@ -39,7 +39,7 @@ def test_fast_rows_cannot_be_rewritten_after_validation(property_):
 @pytest.fixture
 def lane_tree(tmp_path, monkeypatch):
     tests = tmp_path / "tests"
-    lanes = tests / "cr150.d"
+    lanes = tests / "lanes.d"
     lanes.mkdir(parents=True)
     cmake = tests / "CMakeLists.txt"
     cmake.write_text(
@@ -52,7 +52,7 @@ def lane_tree(tmp_path, monkeypatch):
     monkeypatch.setattr(checker, "CMAKE", cmake)
     monkeypatch.setattr(checker, "LANE_DIR", lanes)
     # Reuse the existing policy's presence witness; do not create instructions.
-    monkeypatch.setattr(checker, "README", ROOT / "tests/cr150.d/README.md")
+    monkeypatch.setattr(checker, "README", ROOT / "tests/lanes.d/README.md")
     assert checker.main() == 0
     return lane
 

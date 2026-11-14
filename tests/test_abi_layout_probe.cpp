@@ -58,13 +58,14 @@ using Scratch = std::remove_reference_t<
 // The ABI pins apply to Linux x86_64 builds that use GNU libstdc++.
 // PlacementTable members added in #756 grow both enclosing layouts by 32 bytes.
 // The fill-time peak of the drawdown rule (one double) grows both by 8 bytes.
+// The long-tick margin state of a full-margin long (four adapter members) added in #812 grows both layouts by 32 bytes.
 static_assert(sizeof(Scratch) == 672, "RetiredRowScratch size changed");
-static_assert(sizeof(Adapter) == 90360, "PineExecutionAdapter size changed");
+static_assert(sizeof(Adapter) == 90392, "PineExecutionAdapter size changed");
 #ifndef PINEFORGE_RUNTIME_LAYOUT_MEASURE_ONLY
 // Linux x86_64 GNU libstdc++ compiler diagnostics agree in Release and Debug
 // on the integrated tree. Measurement mode skips this pin and is never a
 // passing ABI gate.
-static_assert(sizeof(Host) == 109264, "PineStrategyHost size changed; measure and pin the final layout");
+static_assert(sizeof(Host) == 109296, "PineStrategyHost size changed; measure and pin the final layout");
 #endif
 static_assert(PF_STREAM_ENGINE_LAYOUT_VERSION == 4u, "runtime contexts require layout stamp 4");
 static_assert(!HasRosterRoots<Scratch>::value,
@@ -134,9 +135,9 @@ int main() {
 #if defined(__linux__) && defined(__x86_64__) && defined(__GLIBCXX__)
     bool pins_hold = true;
     pins_hold &= pin("sizeof RetiredRowScratch", sizeof(Scratch), 672);
-    pins_hold &= pin("sizeof PineExecutionAdapter", sizeof(Adapter), 90360);
+    pins_hold &= pin("sizeof PineExecutionAdapter", sizeof(Adapter), 90392);
 #ifndef PINEFORGE_RUNTIME_LAYOUT_MEASURE_ONLY
-    pins_hold &= pin("sizeof PineStrategyHost", sizeof(Host), 109264);
+    pins_hold &= pin("sizeof PineStrategyHost", sizeof(Host), 109296);
 #else
     // A successful measurement command is never a successful layout test.
     pins_hold = false;
@@ -198,11 +199,11 @@ int main() {
     pins_hold &= pin("RetiredRowScratch::origin_fronts_pinned",
                      member_offset(adapter.*access(RetiredScratch{}), &Scratch::origin_fronts_pinned), 664);
     pins_hold &= pin("PineExecutionAdapter::pine_view_",
-                     member_offset(adapter, access(BeforeScratch{})), 89080);
+                     member_offset(adapter, access(BeforeScratch{})), 89112);
     pins_hold &= pin("PineExecutionAdapter::retired_row_scratch_",
-                     member_offset(adapter, access(RetiredScratch{})), 89088);
+                     member_offset(adapter, access(RetiredScratch{})), 89120);
     pins_hold &= pin("PineExecutionAdapter::staged_scopes_",
-                     member_offset(adapter, access(AfterScratch{})), 89760);
+                     member_offset(adapter, access(AfterScratch{})), 89792);
     pins_hold &= pin("PineStrategyHost::adapter_",
                      member_offset(host, access(HostAdapter{})), 6440);
     return pins_hold ? 0 : 1;
