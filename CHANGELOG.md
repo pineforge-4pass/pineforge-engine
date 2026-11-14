@@ -8,6 +8,7 @@ version number follows semantic versioning over the surfaces the
 ## Unreleased
 
 - Explicit `strategy.order()` quantities now floor executable units at declared decimal quantity steps while preserving the source quantity; the boundary control is not measured against TradingView (#716 item 2).
+- The corpus grader counts every unmatched gated trade on either side as a gross mismatch. One engine-only trade and one TradingView-only trade count as two mismatches, so equal list sizes cannot satisfy the exact-count gate; the strong-tier count fraction uses the same gross count (#836).
 - The prebuilt Linux archives need glibc 2.35 or newer (for example Ubuntu 22.04 or Debian 12 and later), and the release check now refuses an archive that needs a newer glibc.
 - Multi-day charts restart their trading-date grid each year; measured on 24x7 daily input for chart bars, last_bar_index, barstate.islast and the open-trade report row. Streams keep the previous chart path; selected windows on generated N-day chart partitions are refused. Time offsets, exchange calendars and intraday input are not measured against TradingView.
 - `str.match` no longer reports "no match" after a memory failure; the failure now reaches `out_of_memory`.

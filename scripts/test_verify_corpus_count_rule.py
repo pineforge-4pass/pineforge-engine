@@ -156,28 +156,35 @@ class ExactCountBehaviorTests(unittest.TestCase):
             )))
             print(f"Count-rule retained run directory: {self.run_root}", flush=True)
 
-    def _assert_other_gates(self, result, row, shared, engine_count):
+    def _assert_other_gates(
+        self, result, row, shared, engine_count, *, tv_count=None
+    ):
+        shared_count = len(shared)
+        if tv_count is None:
+            tv_count = shared_count
         self.assertTrue(result.tv_exists)
         self.assertTrue(result.eng_exists)
         self.assertFalse(result.no_aligned_trades)
         self.assertEqual(result.profile, "production")
         self.assertEqual(
-            (result.tv_raw_count, result.eng_raw_count), (200, engine_count)
+            (result.tv_raw_count, result.eng_raw_count), (tv_count, engine_count)
         )
-        self.assertEqual((result.tv_count, result.eng_count), (200, engine_count))
+        self.assertEqual((result.tv_count, result.eng_count), (tv_count, engine_count))
         self.assertEqual(
-            (result.tv_gate_count, result.eng_gate_count), (200, engine_count)
+            (result.tv_gate_count, result.eng_gate_count), (tv_count, engine_count)
         )
         self.assertEqual((result.matched_count, result.gating_matched_count),
-                         (200, 200))
-        self.assertEqual(len(result.matched), 200)
+                         (shared_count, shared_count))
+        self.assertEqual(len(result.matched), shared_count)
         self.assertEqual((result.trim_bars, result.warmup_bars), (0, 0))
         self.assertIsNone(result.bounds)
         self.assertEqual(result.open_mark_pairs, 0)
-        self.assertEqual(result.coverage_tv_count, 200)
-        self.assertEqual(result.coverage, 1.0)
-        self.assertEqual(result.unmatched_total, 0)
-        self.assertEqual(result.unmatched_in_window, engine_count - 200)
+        self.assertEqual(result.coverage_tv_count, tv_count)
+        self.assertEqual(result.coverage, shared_count / tv_count)
+        self.assertEqual(result.unmatched_total, tv_count - shared_count)
+        self.assertEqual(
+            result.unmatched_in_window, max(tv_count, engine_count) - shared_count
+        )
         for field in (
             "entry_ok", "exit_ok", "pnl_ok", "coverage_ok",
             "distinct_entry_identity_ok",
@@ -185,14 +192,15 @@ class ExactCountBehaviorTests(unittest.TestCase):
             self.assertIs(getattr(result, field), True, field)
         self.assertEqual(result.distinct_entry_mismatches, 0)
         self.assertEqual(
-            row["metric_observations"], {"entry": 200, "exit": 200, "pnl": 200}
+            row["metric_observations"],
+            {"entry": shared_count, "exit": shared_count, "pnl": shared_count},
         )
         policy = row["grading_policy"]
         self.assertEqual(policy["count_rule"], "exact")
         self.assertEqual(policy["profile"], result.profile)
         self.assertGreater(policy["thresholds"]["count"], 0.0)
         for metric in ("entry", "exit", "pnl"):
-            self.assertEqual(len(getattr(result, metric + "_deltas")), 200)
+            self.assertEqual(len(getattr(result, metric + "_deltas")), shared_count)
             self.assertEqual(getattr(result, metric + "_p90"), 0.0)
             self.assertEqual(getattr(result, metric + "_p100"), 0.0)
             self.assertEqual(row[metric + "_p90"], getattr(result, metric + "_p90"))
@@ -269,6 +277,70 @@ class ExactCountBehaviorTests(unittest.TestCase):
         # A nominal-fraction count gate must fail this real analyzer assertion.
         self.assertIs(unequal.count_ok, False)
         self.assertEqual(unequal.tier, "strong")
+
+    def test_balanced_unmatched_trades_do_not_cancel(self):
+        start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        shared = [
+            (start + timedelta(days=index),
+             start + timedelta(days=index, hours=1), f"entry-{index + 1}")
+            for index in range(200)
+        ]
+        engine_entry = shared[49][0] + timedelta(hours=12)
+        tv_entry = shared[149][0] + timedelta(hours=12)
+        for entry in (engine_entry, tv_entry):
+            for shared_entry, _, _ in shared:
+                self.assertGreater(
+                    abs((entry - shared_entry).total_seconds()),
+                    MATCH_WINDOW_SECONDS,
+                )
+        self.assertGreater(
+            (tv_entry - engine_entry).total_seconds(), MATCH_WINDOW_SECONDS
+        )
+        engine_only = (
+            engine_entry, engine_entry + timedelta(hours=1), "engine-only"
+        )
+        tv_only = (tv_entry, tv_entry + timedelta(hours=1), "tv-only")
+        tv_trades = sorted([*shared, tv_only])
+        engine_trades = sorted([*shared, engine_only])
+        for trades in (tv_trades, engine_trades):
+            self.assertEqual((trades[0], trades[-1]), (shared[0], shared[-1]))
+            self.assertEqual(len({entry for entry, _, _ in trades}), 201)
+
+        # Same row counts as the regression, but all 201 entries really match.
+        # Moving the engine-only input to the TV-only entry must restore Excellent.
+        control, control_row = _analyze_tapes(
+            self.run_root, "balanced-matched-control", tv_trades, tv_trades
+        )
+        self._assert_other_gates(control, control_row, tv_trades, 201)
+        self.assertEqual(control.count_abs_delta, 0)
+        self.assertEqual(control.count_delta, 0.0)
+        self.assertIs(control.count_ok, True)
+        self.assertEqual(control.tier, "excellent")
+
+        balanced, balanced_row = _analyze_tapes(
+            self.run_root, "balanced-unmatched", tv_trades, engine_trades
+        )
+        self._assert_other_gates(
+            balanced, balanced_row, shared, 201, tv_count=201
+        )
+        self.assertEqual(balanced.count_abs_delta, 0)
+        # This assertion fails on the net-count grader with delta=0 / Excellent,
+        # before reading the new gross-count field: setup failure is not the red.
+        self.assertIs(
+            balanced.count_ok, False,
+            f"balanced unmatched trades cancelled: "
+            f"delta={balanced.count_delta}, tier={balanced.tier}",
+        )
+        self.assertEqual(balanced.gross_unmatched_count, 2)
+        self.assertEqual(balanced_row["gross_unmatched_count"], 2)
+        self.assertAlmostEqual(balanced.count_delta, 2 / 201, places=15)
+        self.assertLess(
+            balanced.count_delta,
+            balanced_row["grading_policy"]["thresholds"]["count"],
+        )
+        self.assertEqual(balanced.tier, "strong")
+        self.assertEqual(control.gross_unmatched_count, 0)
+        self.assertEqual(control_row["gross_unmatched_count"], 0)
 
 
 if __name__ == "__main__":
