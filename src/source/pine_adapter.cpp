@@ -797,9 +797,10 @@ std::optional<double> decimal_floor_lot(double units, double grid) noexcept {
 // trades 3124, 1562 + 1562 after a 50% leg; literal 3124.9999995 trades 3124,
 // 3125.0000000000005 trades 3125; tests/fixtures/explicit_qty_floor). Only that
 // snap changes: an on-grid request, a floor below the request and a non-decimal
-// grid keep the grid floor's result. close() and exit() floor their explicit
-// quantities with it too; a tape covers the snap for close, not for exit. None
-// covers order() or a lot that is not a power of ten (0.5, 0.25): grid floor.
+// grid keep the grid floor's result. close(), exit(), and explicit
+// strategy.order() quantities floor their executable units with it; source
+// quantities remain verbatim. TradingView tapes cover close, while the
+// strategy.order boundary is a native control rather than a TV measurement.
 double explicit_entry_quantity_floor(double units, const std::optional<double>& grid) noexcept {
     const double floored = floor_quantity_grid(units, grid);
     if (!detail::script_rule_switches().explicit_qty_decimal_floor || floored != units
@@ -15442,6 +15443,12 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
         ? native_order::OrderIntent{native_order::HostSized{native_order::HostSizedKind::Open,
             is_long ? native_order::Side::Long : native_order::Side::Short}}
         : native_order::OrderIntent{native_order::Transact{is_long ? normalized_qty : -normalized_qty}};
+    // The epsilon floor can return an off-grid literal just below a lot boundary.
+    // Apply the entry floor to executable RAW units; retain qty in the source snapshot.
+    if (auto* transact = std::get_if<native_order::Transact>(&request.intent)) {
+        const double units = explicit_entry_quantity_floor(std::abs(qty), staged_.quantity_grid);
+        *transact = native_order::Transact{is_long ? units : -units};
+    }
     request.label = id;
     double native_limit = limit_price;
     double native_stop = stop_price;
@@ -16588,7 +16595,10 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         return result;
     }
     if (source.family == PineOrderFamily::Order && std::isfinite(source.requested_qty)) {
-        result.units = std::max(0.0, source.requested_qty);
+        const double executable_qty = source.oca_type == 1
+            ? explicit_entry_quantity_floor(std::abs(source.requested_qty), staged_.quantity_grid)
+            : source.requested_qty;
+        result.units = std::max(0.0, executable_qty);
         const bool opposite = facts.position.signed_units != 0.0
             && ((facts.position.signed_units > 0.0) != source.is_long);
         if (opposite) {
@@ -25826,7 +25836,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     if (placement_snapshot && placement_snapshot->family == PineOrderFamily::Order
         && placement_snapshot->oca_type == 1 && !placement_snapshot->oca_name.empty()) {
         const bool fully_filled = !std::isfinite(placement_snapshot->requested_qty)
-            || event.filled_working >= placement_snapshot->requested_qty;
+            || event.filled_working >= explicit_entry_quantity_floor(std::abs(placement_snapshot->requested_qty), staged_.quantity_grid);
         if (fully_filled) {
             detail::ExitScratchRows<native_order::RequestHandle> siblings(*this);
             for (const auto& handle : live_handles_) {

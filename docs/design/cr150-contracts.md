@@ -226,7 +226,7 @@ references; L15a must maintain these anchors and mechanically pin every current
 | Kernel instrument-feed pump: current bar, close, next open, count | `NativeExecutionConsumer::pump_instrument_subscription` `src/native_execution_consumer.hpp:1315` | 357-358 |
 | Host feed lookup/delivery and column reads | `installed_symbol_feed` `src/source/pine_security_eval.cpp:1081-1090`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1313-1323`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1342-1350` | 359-360 |
 | Feed validation: bar values/order, close length/bounds, column length; configure and consumer entry points | `feed.bars` `src/native_run_spec.cpp:259-290`; `instrument_feed_shapes` `src/native_run_spec.cpp:743`; `validate_native_instrument_feeds` `src/native_run_spec.cpp:1019-1022`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:10352`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:10352` | 361-363 |
-| Adapter projection validation: use the context normalizer; host stages after lending and before projection, using a context built from its store | `normalize_projected_spec` `src/source/pine_adapter.cpp:3269` | 361-363; V1/V2 change 5 |
+| Adapter projection validation: use the context normalizer; host stages after lending and before projection, using a context built from its store | `normalize_projected_spec` `src/source/pine_adapter.cpp:3270` | 361-363; V1/V2 change 5 |
 | Instrument-feed digest and cached/uncached continuation folds | `digest_instrument_feed_views` `src/native_run_spec.cpp:1162-1205`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:333`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:3043`; `native_run_spec_digest` `src/native_execution_consumer.cpp:14690` | 364-365 |
 | Staged feed counts in host state and its hash | `installed_symbol_feed` `src/source/pine_strategy_host.cpp:536-546`; `staged_.instrument_feeds` `src/source/pine_state_hash.cpp:339-346` | 366-367 |
 | Refresh of symbol-data digest and host hash fold | `refresh_symbol_data_digest` `src/source/pine_security_eval.cpp:1639-1652`; `symbol_data_digest_` `src/source/pine_state_hash.cpp:1249-1255` | 367-368 |
@@ -235,7 +235,7 @@ references; L15a must maintain these anchors and mechanically pin every current
 | Lower-path digest (count first) and continuation hash | `native_intrabar_path_digest` `src/native_run_spec.cpp:891-919`; `native_intrabar_path_digest` `src/native_execution_consumer.cpp:298` | 371,1223-1224 |
 | Per-script-bar lower-path binary search/walk | `candidate` `src/native_execution_consumer.cpp:9403-9410` | 371,1225 |
 | Scheduler sub-bar lookup and one-bar look-ahead | `PineScheduler::lower_path_bar_at` `src/source/pine_scheduler_native.cpp:322-344`; `next_open` `src/source/pine_scheduler_native.cpp:385-386` | 371,1226-1227 |
-| Lower-path emptiness test | `inactive_sampler_path` `src/source/pine_adapter.cpp:3714` | 371,1228 |
+| Lower-path emptiness test | `inactive_sampler_path` `src/source/pine_adapter.cpp:3715` | 371,1228 |
 
 Every count/digest must fold the same bytes/order for copied and borrowed
 feeds, including cached and uncached paths (2.2:372-375). Views replace storage;
@@ -333,7 +333,7 @@ already in the sink are emitted exactly once, followed by the resident suffix
 and open rows. The sink remains the complete row report.
 
 HostRecorded contract, also to be carried into DESIGN 3.6 and the release-notes
-draft: a host that owns and pushes the curve owns its memory; the production Pine host uses KernelRecordedAtHostMarks (src/source/pine_adapter.cpp:3119), whose recorded curve, with a report sink installed, is held as one point and streamed to the scratch file; without a sink the curve stays in memory.
+draft: a host that owns and pushes the curve owns its memory; the production Pine host uses KernelRecordedAtHostMarks (src/source/pine_adapter.cpp:3120), whose recorded curve, with a report sink installed, is held as one point and streamed to the scratch file; without a sink the curve stays in memory.
 HostRecorded's host-owned curve and the sink-OFF curve path retain their
 existing behavior.
 
