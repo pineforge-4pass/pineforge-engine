@@ -535,6 +535,20 @@ constexpr Row kFreshRows[] = {
     {"R-fresh-add-short", false, false, false},
 };
 
+// expectation corrected: declared levels -> raw-path tick boundaries, because
+// exit() submits thresholds (src/source/pine_adapter.cpp:13300 and :13326)
+// with calc_on_order_fills=false in both new probes. Independently invert
+// Q(p) = kTick * floor(p / kTick + 1/2) for these positive, on-grid levels:
+// upward reach starts at L - kTick/2; downward reach ends strictly below
+// L + kTick/2, so its endpoint is the preceding representable value.
+double expected_native_exit_boundary(const Row& row, double long_level, bool is_limit) {
+    const double level = price_for(row, long_level);
+    const bool upward = row.is_long == is_limit;
+    const double boundary = level + (upward ? -kTick : kTick) / 2.0;
+    return upward ? boundary : std::nextafter(
+        boundary, -std::numeric_limits<double>::infinity());
+}
+
 // A refusal must keep the old opening's consumed bracket, without making a
 // later opening of the same id inherit it. The position never goes flat.
 // FIFO makes the fresh exit close the old opening's remaining units; the
@@ -665,11 +679,13 @@ public:
                        std::holds_alternative<native_order::Independent>(request.owner), true);
                 if (const auto* limit = std::get_if<native_order::Limit>(&request.trigger)) {
                     ++limits;
-                    expect("fresh native limit", limit->price, price_for(row_, kLimit));
+                    expect("fresh native limit", limit->price,
+                           expected_native_exit_boundary(row_, kLimit, true));
                 }
                 if (const auto* stop = std::get_if<native_order::Stop>(&request.trigger)) {
                     ++stops;
-                    expect("fresh native stop", stop->price, price_for(row_, kStopA));
+                    expect("fresh native stop", stop->price,
+                           expected_native_exit_boundary(row_, kStopA, false));
                 }
                 const auto* member = std::get_if<native_order::Member>(&request.group);
                 expect("fresh native OCA member", member != nullptr, true);
@@ -889,12 +905,13 @@ public:
                     if (const auto* limit = std::get_if<native_order::Limit>(&request.trigger)) {
                         ++limits;
                         expect("updated native target", limit->price,
-                               price_for(row_, kLimit + 8.0 * i + 2.0));
+                               expected_native_exit_boundary(row_, kLimit + 8.0 * i + 2.0,
+                                                             true));
                     }
                     if (const auto* stop = std::get_if<native_order::Stop>(&request.trigger)) {
                         ++stops;
                         expect("updated native protection", stop->price,
-                               price_for(row_, kStopA + 2.0));
+                               expected_native_exit_boundary(row_, kStopA + 2.0, false));
                     }
                 }
                 expect("one updated native limit", limits, 1);
