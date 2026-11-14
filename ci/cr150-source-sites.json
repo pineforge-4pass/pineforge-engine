@@ -42915,7 +42915,7 @@
    "symbol": "pine_security_states_",
    "scope": [
     "namespace pineforge #1",
-    "void source :: PineStrategyHost :: register_security_eval ( int sec_id , const std :: string & requested_tf , const std :: string & input_tf , bool lookahead_on , bool gaps_on , bool heikinashi ) #1"
+    "void source :: PineStrategyHost :: register_security_eval ( int sec_id , const std :: string & requested_tf , const std :: string & input_tf , bool lookahead_on , bool gaps_on , bool heikinashi , bool historical_lookahead_projection ) #1"
    ],
    "cls": "subscript",
    "spelling": "pine_security_states_ [ . . . ]",

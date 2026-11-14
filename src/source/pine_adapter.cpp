@@ -11829,12 +11829,11 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         return;
     }
     if (partial_reissue && exit_tombstoned(exit_id, from_entry)) return;
-    // A held global exit with relative legs over two or more entries covers
-    // them entry by entry (per_entry_exit_call).
-    if (from_entry.empty()
-        && per_entry_exit_call(exit_id, from_entry, limit_price, stop_price, source_trail_points,
-                               source_trail_offset, source_trail_price, qty_percent, comment,
-                               qty, oca_name, profit_ticks, loss_ticks, command_sequence)) {
+    // Relative levels use each selected entry's fill price. FIFO still
+    // decides which open trades a triggered bracket closes.
+    if (per_entry_exit_call(exit_id, from_entry, limit_price, stop_price, source_trail_points,
+                           source_trail_offset, source_trail_price, qty_percent, comment,
+                           qty, oca_name, profit_ticks, loss_ticks, command_sequence)) {
         return;
     }
     double entry_price = require_host().position_avg_price();
@@ -11994,6 +11993,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     if (unresolved_relative && !void_issue) {
         PendingRelativeExit pending;
         pending.exit_id = exit_id; pending.from_entry = from_entry;
+        pending.limit_price = limit_price; pending.stop_price = stop_price;
+        pending.command_sequence = from_entry.empty() ? 0 : command_sequence;
         pending.trail_points = source_trail_points; pending.trail_offset = source_trail_offset;
         pending.trail_price = source_trail_price; pending.qty_percent = qty_percent;
         pending.comment = comment; pending.qty = qty; pending.oca_name = oca_name;
@@ -12009,7 +12010,9 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             const auto same = [](double left, double right) {
                 return same_double_bits(left, right) || (std::isnan(left) && std::isnan(right));
             };
-            const bool unchanged = same(existing->trail_points, pending.trail_points)
+            const bool unchanged = same(existing->limit_price, pending.limit_price)
+                && same(existing->stop_price, pending.stop_price)
+                && same(existing->trail_points, pending.trail_points)
                 && same(existing->trail_offset, pending.trail_offset)
                 && same(existing->trail_price, pending.trail_price)
                 && same(existing->qty_percent, pending.qty_percent)
@@ -14726,14 +14729,26 @@ void PineExecutionAdapter::materialize_relative_exits(
     for (auto& value : global_pending) pending.push_back(std::move(value));
     const double tick = staged_.syminfo.mintick;
     for (const auto& value : pending) {
-        double limit = kNaN;
-        double stop = kNaN;
+        // Bind a named tick definition to the entries that existed at its
+        // source call, using their individual fills and the original cutoff.
+        if (!value.from_entry.empty()
+            && per_entry_exit_call(value.exit_id, value.from_entry,
+                                   value.limit_price, value.stop_price,
+                                   value.trail_points, value.trail_offset,
+                                   value.trail_price, value.qty_percent, value.comment,
+                                   value.qty, value.oca_name, value.profit_ticks,
+                                   value.loss_ticks, value.command_sequence)) {
+            continue;
+        }
+        // The absolute sibling belongs to the same deferred definition.
+        double limit = value.limit_price;
+        double stop = value.stop_price;
         double offset = value.trail_offset;
         // `ticks` from the parent's fill, snapped to the grid on the side that
         // keeps the level at least that far away (the kernel's Directional
         // anchor rounding spells the same ladder point for an armed child).
         const double side = opening.is_long ? 1.0 : -1.0;
-        if (finite_positive(value.profit_ticks)) {
+        if (std::isnan(limit) && finite_positive(value.profit_ticks)) {
             limit = directional_tick(event.resolved_price + side * value.profit_ticks * tick,
                                      tick, opening.is_long);
             if (std::isfinite(event.resolved_price) && !std::isfinite(limit)) {
@@ -14741,7 +14756,7 @@ void PineExecutionAdapter::materialize_relative_exits(
                     EngineValueStage::relative_price, EngineValueReason::numeric_overflow);
             }
         }
-        if (finite_positive(value.loss_ticks)) {
+        if (std::isnan(stop) && finite_positive(value.loss_ticks)) {
             stop = directional_tick(event.resolved_price - side * value.loss_ticks * tick,
                                     tick, !opening.is_long);
             if (std::isfinite(event.resolved_price) && !std::isfinite(stop)) {
@@ -14868,11 +14883,11 @@ PineExecutionAdapter::relative_leg_shapes(const PendingRelativeExit& value,
     // distance from the parent's fill.
     std::vector<RelativeLegShape> shapes;
     const double side = parent_long ? 1.0 : -1.0;
-    if (finite_positive(value.profit_ticks)) {
+    if (std::isnan(value.limit_price) && finite_positive(value.profit_ticks)) {
         shapes.push_back({PineOrderFamily::ExitLimit, native_order::Limit{0.0},
                           side * value.profit_ticks, value.profit_ticks});
     }
-    if (finite_positive(value.loss_ticks)) {
+    if (std::isnan(value.stop_price) && finite_positive(value.loss_ticks)) {
         shapes.push_back({PineOrderFamily::ExitStop, native_order::Stop{0.0},
                           -side * value.loss_ticks, value.loss_ticks});
     }
@@ -15220,6 +15235,11 @@ void PineExecutionAdapter::exit_cancel_bracket(const SourceId& exit_id,
         [&](const PendingRelativeExit& value) {
             return value.exit_id == exit_id && value.from_entry == from_entry;
         }), pending_relative_exits_.end());
+    // The cancelled definition must not give a later fill another child.
+    per_entry_exits_.erase(std::remove_if(per_entry_exits_.begin(), per_entry_exits_.end(),
+        [&](const PerEntryExit& value) {
+            return value.exit_id == exit_id && value.from_entry == from_entry;
+        }), per_entry_exits_.end());
     if (!materializing_relative_) withdraw_anchored_relative_legs(&exit_id, &from_entry);
     pending_write(pending_bracket_legs_).erase(std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
         [&](const PendingBracketLeg& leg) { return leg.family_key == key; }), pending_bracket_legs_.end());
@@ -16458,9 +16478,13 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
             result.units = 0.0;
             return result;
         }
-        // One entry's bracket of a per-entry global exit closes that entry's
-        // units, the oldest lots first (global_exit_per_entry_levels).
-        if (PF_RARE(source.per_entry_origin != 0)) {
+        // Full per-entry brackets close their own units, oldest lots first.
+        // Named partial reservations retain their reservation sizing path.
+        if (PF_RARE(source.per_entry_origin != 0
+            && (source.from_entry.empty()
+                || (std::isnan(source.requested_qty) && !source.fixed_exit_reservation
+                    && (std::isnan(source.qty_percent)
+                        || source.qty_percent >= 100.0 - internal::kFullPercentEps))))) {
             result.grid_policy = native_order::ExecutionGridPolicy::ExplicitUnits;
             result.units = std::min(source.per_entry_units, facts.scope_exposure_units);
             return result;
@@ -24170,11 +24194,15 @@ bool PineExecutionAdapter::per_entry_exit_scope() const {
 // when a lot was not opened by a strategy.entry order (the tapes reach
 // nothing else).
 detail::ExitScratchRows<PineExecutionAdapter::PerEntryExitChild>
-PineExecutionAdapter::per_entry_open_entries(bool long_side) const {
+PineExecutionAdapter::per_entry_open_entries(bool long_side, const SourceId& from_entry) const {
     detail::ExitScratchRows<PerEntryExitChild> entries(*this);
     detail::exit_scratch_lots(entries.context(), require_host(), kNaN,
         [&](const NativeOpenLot& lot) {
         const auto row = placement_.find(lot.entry_incarnation);
+        if (!from_entry.empty()
+            && (row == placement_.end() || row->second.source_id != from_entry)) {
+            return true;
+        }
         if (row == placement_.end() || !row->second.opening
             || row->second.family != PineOrderFamily::Entry
             || (lot.signed_units > 0.0) != long_side || !finite_positive(lot.entry_price)
@@ -24190,12 +24218,13 @@ PineExecutionAdapter::per_entry_open_entries(bool long_side) const {
 }
 
 detail::ExitScratchRows<native_order::RequestHandle> PineExecutionAdapter::per_entry_child_legs(
-        const SourceId& exit_id, std::uint64_t origin) const {
+        const SourceId& exit_id, std::uint64_t origin, const SourceId& from_entry) const {
     detail::ExitScratchRows<native_order::RequestHandle> legs(*this);
     for (const auto& handle : live_handles_) {
         const auto row = placement_.find(handle.incarnation);
         if (row != placement_.end() && row->second.per_entry_origin != 0
             && row->second.source_id == exit_id
+            && row->second.from_entry == from_entry
             && (origin == 0 || row->second.per_entry_origin == origin)) {
             legs.push_back(handle);
         }
@@ -24233,12 +24262,14 @@ bool PineExecutionAdapter::per_entry_exit_call(
         double profit_ticks, double loss_ticks, std::uint64_t command_sequence) {
     const auto tracked = [&] {
         return std::find_if(per_entry_exits_.begin(), per_entry_exits_.end(),
-            [&](const PerEntryExit& row) { return row.exit_id == exit_id; });
+            [&](const PerEntryExit& row) {
+                return row.exit_id == exit_id && row.from_entry == from_entry;
+            });
     };
     const auto absent_or_positive = [](double value) {
         return std::isnan(value) || finite_positive(value);
     };
-    const bool relative_only = from_entry.empty() && std::isnan(limit) && std::isnan(stop)
+    const bool relative_only = std::isnan(limit) && std::isnan(stop)
         && std::isnan(trail_points) && std::isnan(trail_offset) && std::isnan(trail_price)
         && std::isnan(qty)
         && (std::isnan(qty_percent) || qty_percent >= 100.0 - internal::kFullPercentEps)
@@ -24264,10 +24295,10 @@ bool PineExecutionAdapter::per_entry_exit_call(
         return same_double_bits(left, right) || (std::isnan(left) && std::isnan(right));
     };
     if (record == per_entry_exits_.end()) {
-        auto entries = per_entry_open_entries(long_side);
-        if (entries.size() < 2) return false;
-        // Called over two entries already: each takes its own bracket, and a
-        // leg this exit holds over the whole position gives way to them.
+        auto entries = per_entry_open_entries(long_side, from_entry);
+        if (entries.empty() || (from_entry.empty() && entries.size() < 2)) return false;
+        // Each selected entry takes its own bracket; a leg this exit holds
+        // over their combined exposure gives way to those brackets.
         detail::ExitScratchRows<native_order::RequestHandle> whole(*this);
         for (const auto& handle : live_handles_) {
             const auto row = placement_.find(handle.incarnation);
@@ -24276,7 +24307,7 @@ bool PineExecutionAdapter::per_entry_exit_call(
             if ((leg.family == PineOrderFamily::ExitLimit
                  || leg.family == PineOrderFamily::ExitStop
                  || leg.family == PineOrderFamily::ExitTrail)
-                && leg.source_id == exit_id && leg.from_entry.empty()) {
+                && leg.source_id == exit_id && leg.from_entry == from_entry) {
                 whole.push_back(handle);
             }
         }
@@ -24288,6 +24319,8 @@ bool PineExecutionAdapter::per_entry_exit_call(
         }
         PerEntryExit added;
         added.exit_id = exit_id;
+        added.from_entry = from_entry;
+        added.command_sequence = from_entry.empty() ? 0 : command_sequence;
         added.cycle = current_position_cycle_;
         added.long_side = long_side;
         added.profit_ticks = profit_ticks;
@@ -24308,7 +24341,8 @@ bool PineExecutionAdapter::per_entry_exit_call(
     record->profit_ticks = profit_ticks;
     record->loss_ticks = loss_ticks;
     record->comment = comment;
-    for (const auto& entry : per_entry_open_entries(long_side)) {
+    record->command_sequence = from_entry.empty() ? 0 : command_sequence;
+    for (const auto& entry : per_entry_open_entries(long_side, from_entry)) {
         const bool known = std::any_of(record->children.begin(), record->children.end(),
             [&](const PerEntryExitChild& child) { return child.origin == entry.origin; });
         if (!known) record->children.push_back(entry);
@@ -24318,7 +24352,7 @@ bool PineExecutionAdapter::per_entry_exit_call(
          ++position) {
         const PerEntryExitChild child = per_entry_exits_[index].children[position];
         if (child.consumed) continue;
-        const auto legs = per_entry_child_legs(exit_id, child.origin);
+        const auto legs = per_entry_child_legs(exit_id, child.origin, from_entry);
         if (!legs.empty() && same_definition) continue;
         cancel_working_legs(legs);
         submit_per_entry_child(per_entry_exits_[index], child, command_sequence);
@@ -24341,11 +24375,16 @@ void PineExecutionAdapter::submit_per_entry_child(const PerEntryExit& exit,
     const double stop = finite_positive(exit.loss_ticks)
         ? source_level_on_price_grid(child.fill_price - side * exit.loss_ticks * tick, tick)
         : kNaN;
+    if ((finite_positive(exit.profit_ticks) && !std::isfinite(limit))
+        || (finite_positive(exit.loss_ticks) && !std::isfinite(stop))) {
+        engine_command_value_invalid_or_count("relative_price.level",
+            EngineValueStage::relative_price, EngineValueReason::numeric_overflow);
+    }
     const std::string origin_key = std::to_string(child.origin);
-    const SourceId group_name = exit.exit_id + "\x1f\x1f" + origin_key;
+    const SourceId group_name = exit.exit_id + "\x1f" + exit.from_entry + "\x1f" + origin_key;
     const OrderBirth birth = capture_order_birth();
     const PineSizingSnapshot sizing = sizing_snapshot();
-    const auto family_key = key_for(exit.exit_id, SourceId{});
+    const auto family_key = key_for(exit.exit_id, exit.from_entry);
     const auto submit = [&](PineOrderFamily family, native_order::Trigger trigger) {
         native_order::Request request;
         request.intent = native_order::HostSized{native_order::HostSizedKind::Close, std::nullopt};
@@ -24357,6 +24396,7 @@ void PineExecutionAdapter::submit_per_entry_child(const PerEntryExit& exit,
         PlacementSnapshot snapshot;
         snapshot.family = family;
         snapshot.source_id = exit.exit_id;
+        snapshot.from_entry = exit.from_entry;
         snapshot.comment = exit.comment;
         snapshot.qty_percent = 100.0;
         snapshot.deferred_cohort = true;
@@ -24371,7 +24411,7 @@ void PineExecutionAdapter::submit_per_entry_child(const PerEntryExit& exit,
         snapshot.per_entry_origin = child.origin;
         snapshot.per_entry_units = child.units;
         initialize_l4c_policy(snapshot, {});
-        const SourceId replacement_key = exit.exit_id + "\x1f\x1f"
+        const SourceId replacement_key = exit.exit_id + "\x1f" + exit.from_entry + "\x1f"
             + std::to_string(static_cast<int>(family)) + "\x1f" + origin_key;
         const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
                                                 replacement_key);
@@ -24405,7 +24445,9 @@ void PineExecutionAdapter::per_entry_exits_at_entry_fill(
     if (physical.signed_units == 0.0 || opening.is_long != long_side) return;
     const auto tracked = [&](const SourceId& exit_id) {
         return std::any_of(per_entry_exits_.begin(), per_entry_exits_.end(),
-            [&](const PerEntryExit& row) { return row.exit_id == exit_id; });
+            [&](const PerEntryExit& row) {
+                return row.exit_id == exit_id && row.from_entry.empty();
+            });
     };
     // The exits standing over the whole position: a from_entry "" stop or
     // limit leg with a relative operand, on the side held.
@@ -24431,6 +24473,9 @@ void PineExecutionAdapter::per_entry_exits_at_entry_fill(
     for (std::size_t index = 0; index < per_entry_exits_.size(); ++index) {
         auto& exit = per_entry_exits_[index];
         if (exit.cycle != current_position_cycle_ || exit.long_side != long_side
+            || (!exit.from_entry.empty()
+                && (exit.from_entry != opening.source_id
+                    || opening.command_sequence > exit.command_sequence))
             || std::any_of(exit.children.begin(), exit.children.end(),
                    [&](const PerEntryExitChild& child) { return child.origin == added.origin; })) {
             continue;
@@ -24481,7 +24526,7 @@ void PineExecutionAdapter::per_entry_exits_at_entry_fill(
         if (!uniform || !first) continue;
         // The position before this fill: the one entry these legs were placed
         // over, at its own levels.
-        const auto entries = per_entry_open_entries(long_side);
+        const auto entries = per_entry_open_entries(long_side, SourceId{});
         PerEntryExitChild prior{};
         std::size_t prior_count = 0;
         for (const auto& entry : entries) {
@@ -24533,7 +24578,8 @@ void PineExecutionAdapter::per_entry_exits_after_fill(
     if (per_entry_exits_.empty()) return;
     if (placement && placement->per_entry_origin != 0 && event.closed_units > 0.0) {
         for (auto& exit : per_entry_exits_) {
-            if (exit.exit_id != placement->source_id) continue;
+            if (exit.exit_id != placement->source_id
+                || exit.from_entry != placement->from_entry) continue;
             for (auto& child : exit.children)
                 if (child.origin == placement->per_entry_origin) child.consumed = true;
         }
@@ -24569,7 +24615,8 @@ void PineExecutionAdapter::order_per_entry_point_ties() {
     const auto exit_leg = [&](const PlacementSnapshot& row) {
         return (row.family == PineOrderFamily::ExitLimit
                 || row.family == PineOrderFamily::ExitStop)
-            && row.from_entry.empty() && std::isnan(row.requested_qty) && row.oca_name.empty()
+            && (row.from_entry.empty() || row.per_entry_origin != 0)
+            && std::isnan(row.requested_qty) && row.oca_name.empty()
             && (finite_positive(row.exit_levels.profit_ticks)
                 || finite_positive(row.exit_levels.loss_ticks))
             && std::isnan(row.exit_levels.trail_points)
@@ -24645,11 +24692,12 @@ void PineExecutionAdapter::order_per_entry_point_ties() {
 
 void PineExecutionAdapter::end_per_entry_exit(std::size_t index) {
     const SourceId exit_id = per_entry_exits_[index].exit_id;
+    const SourceId from_entry = per_entry_exits_[index].from_entry;
     per_entry_exits_.erase(per_entry_exits_.begin() + static_cast<std::ptrdiff_t>(index));
-    const auto legs = per_entry_child_legs(exit_id, 0);
+    const auto legs = per_entry_child_legs(exit_id, 0, from_entry);
     if (legs.empty()) return;
     cancel_working_legs(legs);
-    if (const auto family = bracket_families_.find(key_for(exit_id, SourceId{}));
+    if (const auto family = bracket_families_.find(key_for(exit_id, from_entry));
         family != bracket_families_.end()) {
         family->second.remove_selected(legs);
         if (family->second.empty()) bracket_families_.erase(family);
