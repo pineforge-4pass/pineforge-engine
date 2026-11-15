@@ -1250,6 +1250,11 @@ void PineExecutionAdapter::bind(NativeStrategyHost& host) noexcept {
         position_tail_summary_->invalidate(PositionTailGuard::Rebind,
                                            PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
     host_ = &host;
+    for (auto& entry : cohort_handle_cache_) {
+        entry.id.clear();
+        entry.handle = {};
+    }
+    cohort_handle_cache_next_ = 0;
     exit_scratch_ = nullptr;
     pine_view_host_ = nullptr;
     const auto* pine_host = pine_view_of(host_);
@@ -2662,6 +2667,8 @@ void PineExecutionAdapter::reset_for_run() {
     admission_journal.reset();
     cohort_opened_slot_count_ = 0;
     cohorts_by_id_.clear();
+    cohort_handle_cache_ = {};
+    cohort_handle_cache_next_ = 0;
     pending_scan_work_ = {}; retirement_work_ = {};
     placement_.clear();
     live_by_source_key_.clear();
@@ -3292,7 +3299,11 @@ native_order::CohortHandle PineExecutionAdapter::cohort_for(const SourceId& id) 
     // Read index bytes before find can spill and before the host issues a handle.
     cohorts_by_id_.require_insert(id);
     auto found = cohorts_by_id_.find(id);
-    if (found != cohorts_by_id_.end()) return found->second.handle;
+    if (found != cohorts_by_id_.end()) {
+        const auto handle = found->second.handle;
+        remember_cohort_handle(id, handle);
+        return handle;
+    }
     CohortFacts facts;
     cohorts_by_id_.admit(id, facts.spillable());
     facts.handle = require_host().cohort_open();
@@ -3302,7 +3313,37 @@ native_order::CohortHandle PineExecutionAdapter::cohort_for(const SourceId& id) 
     }
     const auto result = facts.handle;
     cohorts_by_id_.place(id, std::move(facts));
+    remember_cohort_handle(id, result);
     return result;
+}
+
+void PineExecutionAdapter::remember_cohort_handle(
+        const SourceId& id, native_order::CohortHandle handle) const {
+    for (const auto& entry : cohort_handle_cache_)
+        if (entry.handle.value != 0 && entry.id == id) {
+            assert(entry.handle == handle);
+            return;
+        }
+    auto& entry = cohort_handle_cache_[cohort_handle_cache_next_];
+    // Publish the validity word only after copying the exact spelling.
+    entry.handle = {};
+    entry.id = id;
+    entry.handle = handle;
+    cohort_handle_cache_next_ = (cohort_handle_cache_next_ + 1) % cohort_handle_cache_.size();
+}
+
+native_order::CohortHandle PineExecutionAdapter::find_cohort_handle(const SourceId& id) const {
+    const auto resident = cohorts_by_id_.find_resident(id);
+    if (resident != cohorts_by_id_.end()) return resident->second.handle;
+    for (const auto& entry : cohort_handle_cache_)
+        if (entry.handle.value != 0 && entry.id == id) return entry.handle;
+    // A miss still reads the authoritative history. Never cache absence or
+    // infer a handle from its allocation order.
+    const auto found = cohorts_by_id_.find(id);
+    if (found == cohorts_by_id_.end()) return {};
+    const auto handle = found->second.handle;
+    remember_cohort_handle(id, handle);
+    return handle;
 }
 PineSizingSnapshot PineExecutionAdapter::sizing_snapshot() const {
     PineSizingSnapshot snapshot;
@@ -5076,15 +5117,15 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         }
         const auto* sized = std::get_if<native_order::HostSized>(&request.intent);
         const auto* owner = std::get_if<native_order::BindCohort>(&request.owner);
-        const auto cohort = cohorts_by_id_.find(snapshot.from_entry);
+        const auto cohort = cohorts_by_id_.find_resident(snapshot.from_entry);
+        const bool cohort_owner = owner
+            && owner->cohort == find_cohort_handle(snapshot.from_entry);
         const bool fifo_live_owner = !config_.close_entries_rule_any
             && std::holds_alternative<native_order::Independent>(request.owner)
             && cohort != cohorts_by_id_.end()
             && cohort_exposure_for(snapshot.from_entry) > 0.0;
         if (!sized || sized->kind != native_order::HostSizedKind::Close || sized->side
-            || ((!owner || cohort == cohorts_by_id_.end()
-                 || owner->cohort != cohort->second.handle)
-                && !fifo_live_owner)) {
+            || (!cohort_owner && !fifo_live_owner)) {
             return false;
         }
         if (const auto* limit = std::get_if<native_order::Limit>(&request.trigger)) {
@@ -7144,7 +7185,12 @@ native_order::Owner PineExecutionAdapter::owner_for_close(const SourceId& id, bo
     // pine_fills.cpp:7669-7675 uses from_entry as a position-cycle existence
     // gate under FIFO; the actual reduction still consumes the global physical
     // roster.  ANY alone selects the named cohort as the settlement scope.
-    const auto found = cohorts_by_id_.find(id);
+    const auto found = cohorts_by_id_.find_resident(id);
+    const auto cohort_owner = [&] {
+        const auto handle = find_cohort_handle(id);
+        return handle.value != 0 ? handle
+            : const_cast<PineExecutionAdapter*>(this)->cohort_for(id);
+    };
     if (!config_.close_entries_rule_any) {
         // Before the named parent has opened, retain the generic cohort's
         // NoTarget deferral.  Once that parent is live, FIFO settles against
@@ -7152,7 +7198,7 @@ native_order::Owner PineExecutionAdapter::owner_for_close(const SourceId& id, bo
         if (found == cohorts_by_id_.end() || !(cohort_exposure_for(id) > 0.0)) {
             return native_order::BindCohort{
                 found == cohorts_by_id_.end()
-                    ? const_cast<PineExecutionAdapter*>(this)->cohort_for(id)
+                    ? cohort_owner()
                     : found->second.handle};
         }
         return native_order::Independent{};
@@ -7167,7 +7213,7 @@ native_order::Owner PineExecutionAdapter::owner_for_close(const SourceId& id, bo
     }
     if (dynamic || found == cohorts_by_id_.end()) {
         if (found == cohorts_by_id_.end())
-            return native_order::BindCohort{const_cast<PineExecutionAdapter*>(this)->cohort_for(id)};
+            return native_order::BindCohort{cohort_owner()};
         return native_order::BindCohort{found->second.handle};
     }
     return native_order::BindOpenings{found->second.opened, found->second.cycle};
@@ -11850,7 +11896,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     const bool parent_filled_this_cycle = physical.signed_units != 0.0
         && !from_entry.empty()
         && [&] {
-            const auto filled = cohorts_by_id_.find(from_entry);
+            const auto filled = cohorts_by_id_.find_resident(from_entry);
             return filled != cohorts_by_id_.end() && !filled->second.opened.empty();
         }();
     const auto observe_staged_parent = [&](const PlacementSnapshot& parent) {
@@ -11897,7 +11943,9 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         observe_staged_parent(parent.snapshot);
     for (const auto& parent : pending_coof_requests_)
         observe_staged_parent(parent.snapshot);
-    const auto cohort = cohorts_by_id_.find(from_entry);
+    // Spilled cohorts have no retained origin/opening/live quantity. These
+    // readers need that live view, not restoration of their scalar history.
+    const auto cohort = cohorts_by_id_.find_resident(from_entry);
     for (const auto& handle : live_handles_) {
         const auto parent = placement_.find(handle.incarnation);
         const bool already_opened = cohort != cohorts_by_id_.end()
@@ -12062,7 +12110,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         }
     }
     if (std::isnan(qty) && qty_percent == 100.0) {
-        const auto cohort = cohorts_by_id_.find(from_entry);
+        const auto cohort = cohorts_by_id_.find_resident(from_entry);
         if (cohort != cohorts_by_id_.end() && !cohort->second.origins.members().empty()) {
             const auto origin = cohort->second.origins.back();
             // An erased origin's flag is read by nobody: a sequential group's
@@ -12806,7 +12854,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                     if (!coof_remaining_recrosses(limit_price, long_position)) return false;
                     const PlacementSnapshot* parent = nullptr;
                     native_order::RequestHandle parent_handle{};
-                    if (const auto cohort = cohorts_by_id_.find(from_entry);
+                    if (const auto cohort = cohorts_by_id_.find_resident(from_entry);
                         cohort != cohorts_by_id_.end() && !cohort->second.opened.empty()) {
                         parent_handle = cohort->second.opened.back();
                         const auto found = placement_.find(parent_handle.incarnation);
@@ -13046,7 +13094,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             native_order::RequestHandle pending_origin{};
             bool defer_until_parent = false;
             if (!from_entry.empty()) {
-                const auto cohort = cohorts_by_id_.find(from_entry);
+                const auto cohort = cohorts_by_id_.find_resident(from_entry);
                 if (cohort != cohorts_by_id_.end() && cohort->second.opened.empty()) {
                     for (const auto position : live_origin_positions(cohort->second)) {
                         const auto& origin = cohort->second.origins[position];
@@ -13060,7 +13108,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             }
             native_order::Owner owner = dynamic_owner;
             if (defer_until_parent) {
-                const auto cohort = cohorts_by_id_.find(from_entry);
+                const auto cohort = cohorts_by_id_.find_resident(from_entry);
                 if (cohort != cohorts_by_id_.end())
                     owner = native_order::BindCohort{cohort->second.handle};
                 defer_until_parent = false;
@@ -13090,8 +13138,10 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         // without inventing a source id in the generic core; the source key
         // gives re-issues replacement semantics per (exit, from_entry, leg,
         // origin) rather than accidentally replacing a carried instance.
-        const auto cohort = cohort_for(from_entry);
-        const auto found = cohorts_by_id_.find(from_entry);
+        cohorts_by_id_.require_insert(from_entry);
+        auto cohort = find_cohort_handle(from_entry);
+        if (cohort.value == 0) cohort = cohort_for(from_entry);
+        const auto found = cohorts_by_id_.find_resident(from_entry);
         std::vector<native_order::RequestHandle> origins;
         if (found != cohorts_by_id_.end()) {
             // ab9714be keys (exit id, from_entry) per position cycle
@@ -13166,7 +13216,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     // binding and flattens the reversal's fresh lot at that lot's own entry
     // price on the same bar.
     const auto cycle_cohort = from_entry.empty()
-        ? cohorts_by_id_.end() : cohorts_by_id_.find(from_entry);
+        ? cohorts_by_id_.end() : cohorts_by_id_.find_resident(from_entry);
     const bool from_entry_filled_this_cycle = from_entry.empty()
         || (cycle_cohort != cohorts_by_id_.end()
             && !cycle_cohort->second.opened.empty());
