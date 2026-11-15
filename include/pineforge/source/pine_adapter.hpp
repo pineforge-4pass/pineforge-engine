@@ -1765,7 +1765,8 @@ public:
               double qty = std::numeric_limits<double>::quiet_NaN(),
               const std::string& oca_name = {},
               double profit_ticks = std::numeric_limits<double>::quiet_NaN(),
-              double loss_ticks = std::numeric_limits<double>::quiet_NaN());
+              double loss_ticks = std::numeric_limits<double>::quiet_NaN(),
+              std::uint64_t reservation_sequence = 0);
     void exit_cancel_bracket(const SourceId& exit_id, const SourceId& from_entry,
                              const std::string& comment = {});
     void cancel(const SourceId& id);
@@ -2161,6 +2162,8 @@ private:
     struct PendingRelativeExit {
         SourceId exit_id;
         SourceId from_entry;
+        // Queue position of the source call, before its levels can be lowered.
+        std::uint64_t reservation_sequence = 0;
         double trail_points = std::numeric_limits<double>::quiet_NaN();
         double trail_offset = std::numeric_limits<double>::quiet_NaN();
         double trail_price = std::numeric_limits<double>::quiet_NaN();
@@ -2315,7 +2318,9 @@ private:
                                   double& qty_percent,
                                   double live_basis,
                                   double percentage_basis,
-                                  double& reserved_qty) const;
+                                  double& reserved_qty,
+                                  std::uint64_t& reservation_sequence,
+                                  std::uint64_t origin = 0) const;
     void reconcile_deferred_exit_reservations(const SourceId& from_entry,
                                                double live_basis);
     void reconcile_exit_reservations_after_margin();
