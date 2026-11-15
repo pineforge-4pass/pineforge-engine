@@ -689,6 +689,98 @@ void test_declaring_at_begin() {
     }
 }
 
+void test_requested_native_clock_advances_without_auxiliary_observations() {
+    // Primary 30, auxiliary 15, requested 40. Native OHLCV differs from both
+    // observed feeds. A completely empty auxiliary feed, an empty slice,
+    // and a primary hole all use the accepted PRIMARY close as the horizon.
+    // This is a kernel API test, with no Pine script or TV equality claim.
+    const auto origin = origin_ms();
+    for (int shape : {0, 1, 2}) {
+        for (int variant : {0, 1}) {
+            scenario = shape == 0 ? "native clock with wholly empty auxiliary feed"
+                : shape == 1 ? "native clock with empty auxiliary slices"
+                             : "native clock with sparse auxiliary and primary hole";
+            const std::vector<int> input_minutes = shape == 2
+                ? std::vector<int>{0, 120, 150, 180, 210}
+                : std::vector<int>{0, 30, 60, 90, 120, 150, 180, 210};
+            auto inputs = minute_bars(origin, static_cast<int>(input_minutes.size()));
+            for (std::size_t i = 0; i < inputs.size(); ++i)
+                inputs[i].timestamp = origin + input_minutes[i] * kMinute;
+            const std::vector<int> fine_minutes = shape == 0 ? std::vector<int>{}
+                : shape == 1 ? std::vector<int>{0, 15, 60, 75, 120, 135, 180, 195, 210, 240}
+                             : std::vector<int>{0, 15, 120, 135, 180, 195, 210, 240};
+            auto fine = minute_bars(origin, static_cast<int>(fine_minutes.size()), 500);
+            for (std::size_t i = 0; i < fine.size(); ++i)
+                fine[i].timestamp = origin + fine_minutes[i] * kMinute;
+            std::vector<Bar> native;
+            for (int i = 0; i < 7; ++i) {
+                const double value = 1000.0 + 11 * i;
+                native.push_back({value + 7 * variant, value + 9 + 13 * variant,
+                                  value - 5 - 3 * variant, value + 2 + 5 * variant,
+                                  3001.0 + 17 * i + 23 * variant,
+                                  origin + i * 40 * kMinute});
+            }
+            auto spec = base_spec("native-aux-requested-clock");
+            spec.input_tf = "30";
+            spec.script_tf = "30";
+            NativeAuxiliaryFeed feed;
+            feed.tf = "15";
+            feed.bars = fine;
+            spec.auxiliary_feed = feed;
+            auto requested = series("40", NativeSeriesSource::AuxiliaryFeed);
+            requested.authoritative_bars = native;
+            spec.subscriptions.push_back(requested);
+            FeedHost host;
+            host.probes = 1;
+            const auto setup = host.configure_native(spec);
+            CHECK(setup.status == NativeSetupStatus::Applied);
+            if (setup.status != NativeSetupStatus::Applied) {
+                std::printf("  configure refused: error %d field %d\n",
+                            static_cast<int>(setup.validation.error),
+                            static_cast<int>(setup.validation.field));
+                continue;
+            }
+            host.run(inputs.data(), static_cast<int>(inputs.size()), "30", "30",
+                     false, 4, MagnifierDistribution::ENDPOINTS);
+            CHECK(host.last_error().empty());
+            if (!host.last_error().empty()) continue;
+
+            const std::vector<int> delivered_on = shape == 2
+                ? std::vector<int>{1, 1, 1, 2, 3, 4}
+                : std::vector<int>{1, 2, 3, 5, 6, 7};
+            // All six completed rows, in order; row 240 and fine bar 240
+            // lie beyond accepted history and cannot add a seventh delivery.
+            CHECK(host.deliveries.size() == 6);
+            for (std::size_t i = 0; i < host.deliveries.size() && i < 6; ++i) {
+                const auto& delivery = host.deliveries[i];
+                check_bucket(delivery.bar, native[i], "native payload through auxiliary path");
+                CHECK(delivery.subscription == 0);
+                CHECK(delivery.accessor_matches);
+                CHECK(delivery.bars_before == delivered_on[i]);
+                CHECK(delivery.context.delivered_at_ms
+                      == inputs[static_cast<std::size_t>(delivered_on[i])].timestamp);
+                CHECK(delivery.context.interval.open_ms == native[i].timestamp);
+                CHECK(delivery.context.interval.next_period_open_ms == native[i + 1].timestamp);
+                CHECK(delivery.context.completion == (shape == 2 && i < 3
+                    ? NativeCompletionKind::LazyComplete : NativeCompletionKind::Confirmed));
+            }
+            CHECK(host.bars_seen == static_cast<int>(inputs.size()));
+            CHECK(host.series_at_bar.size() == inputs.size());
+            for (std::size_t i = 0; i < host.series_at_bar.size(); ++i) {
+                const auto due = std::count_if(delivered_on.begin(), delivered_on.end(),
+                    [i](int at) { return at <= static_cast<int>(i); });
+                CHECK(host.series_at_bar[i].size() == 1);
+                if (host.series_at_bar[i].size() != 1) continue;
+                const auto& pulled = host.series_at_bar[i][0];
+                CHECK(pulled.has_value() == (due > 0));
+                if (pulled && due > 0)
+                    check_bucket(*pulled, native[static_cast<std::size_t>(due - 1)],
+                                 "native auxiliary at calculation");
+            }
+        }
+    }
+}
+
 // ---- 8. the continuation identity folds the feed --------------------------
 
 void test_continuation_identity() {
@@ -726,6 +818,7 @@ int main() {
     test_validation();
     test_digests_are_neutral_and_sensitive();
     test_declaring_at_begin();
+    test_requested_native_clock_advances_without_auxiliary_observations();
     test_continuation_identity();
     std::printf("test_native_auxiliary_feed: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

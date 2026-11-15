@@ -644,6 +644,96 @@ void test_authoritative_bars_override() {
     }
     CHECK(host.native_security_substitutions() == 4);
     CHECK(host.native_security_misses() == 0);
+
+    // Non-multiple fixed periods need their own completed-bar clock.
+    // Literal delivery indices come from half-open minute intervals, not
+    // the engine's aggregator. A native row at the accepted horizon is
+    // installed too: it must never leak into a callback or the pull series.
+    struct FixedCase {
+        int input_minutes;
+        int requested_minutes;
+        int input_count;
+        std::vector<int> delivered_on;
+    };
+    const FixedCase cases[] = {
+        {60, 75, 10, {1, 2, 3, 4, 6, 7, 8, 9}},
+        {30, 40, 8, {1, 2, 3, 5, 6, 7}},
+        {30, 75, 10, {2, 4, 7, 9}},
+    };
+    for (const auto& row : cases) {
+        for (int variant : {0, 1}) {
+            scenario = "authoritative non-multiple fixed period";
+            auto inputs = quarter_hour_bars(row.input_count);
+            for (std::size_t i = 0; i < inputs.size(); ++i)
+                inputs[i].timestamp = origin
+                    + static_cast<std::int64_t>(i) * row.input_minutes * kMinute;
+            std::vector<Bar> native;
+            for (std::size_t i = 0; i <= row.delivered_on.size(); ++i) {
+                const double value = 1000.0 + 11 * i;
+                native.push_back({value + 7 * variant, value + 9 + 13 * variant,
+                                  value - 5 - 3 * variant, value + 2 + 5 * variant,
+                                  3001.0 + 17 * i + 23 * variant,
+                                  origin + static_cast<std::int64_t>(i)
+                                      * row.requested_minutes * kMinute});
+            }
+            const auto input_tf = std::to_string(row.input_minutes);
+            NativeRunSpec fixed = base_spec(input_tf.c_str(), input_tf.c_str(),
+                                            "native-htf-fixed-authoritative");
+            NativeTimeframeSubscription requested;
+            requested.tf = std::to_string(row.requested_minutes);
+            requested.authoritative_bars = native;
+            fixed.subscriptions.push_back(requested);
+
+            auto no_native = fixed;
+            no_native.subscriptions[0].authoritative_bars.clear();
+            SeriesHost refused;
+            const auto refusal = refused.configure_native(no_native);
+            CHECK(refusal.status == NativeSetupStatus::Failed);
+            CHECK(refusal.validation.error == NativeRunSpecError::InvalidSubscriptionTimeframe);
+            CHECK(refusal.validation.field == NativeRunSpecField::SubscriptionTimeframe);
+
+            SeriesHost selected;
+            selected.probes = 1;
+            const auto configured = selected.configure_native(fixed);
+            if (configured.status != NativeSetupStatus::Applied)
+                std::printf("  input %d requested %d: configure error %d field %d\n",
+                            row.input_minutes, row.requested_minutes,
+                            static_cast<int>(configured.validation.error),
+                            static_cast<int>(configured.validation.field));
+            CHECK(configured.status == NativeSetupStatus::Applied);
+            if (configured.status != NativeSetupStatus::Applied) continue;
+            selected.run(inputs.data(), static_cast<int>(inputs.size()),
+                         input_tf, input_tf, false, 4, MagnifierDistribution::ENDPOINTS);
+            CHECK(selected.last_error().empty());
+            if (!selected.last_error().empty()) continue;
+            CHECK(selected.deliveries.size() == row.delivered_on.size());
+            for (std::size_t i = 0; i < selected.deliveries.size()
+                                    && i < row.delivered_on.size(); ++i) {
+                const auto& delivery = selected.deliveries[i];
+                check_bucket(delivery.bar, native[i], "fixed native payload");
+                CHECK(delivery.subscription == 0);
+                CHECK(delivery.accessor_matches);
+                CHECK(delivery.bars_before == row.delivered_on[i]);
+                CHECK(delivery.context.delivered_at_ms
+                      == inputs[static_cast<std::size_t>(row.delivered_on[i])].timestamp);
+                CHECK(delivery.context.completion == NativeCompletionKind::Confirmed);
+                CHECK(delivery.context.interval.open_ms == native[i].timestamp);
+                CHECK(delivery.context.interval.next_period_open_ms == native[i + 1].timestamp);
+            }
+            CHECK(selected.series_at_bar.size() == inputs.size());
+            for (std::size_t i = 0; i < selected.series_at_bar.size(); ++i) {
+                const auto due = std::count_if(row.delivered_on.begin(), row.delivered_on.end(),
+                    [i](int at) { return at <= static_cast<int>(i); });
+                CHECK(selected.series_at_bar[i].size() == 1);
+                if (selected.series_at_bar[i].size() != 1) continue;
+                const auto& pulled = selected.series_at_bar[i][0];
+                CHECK(pulled.has_value() == (due > 0));
+                if (pulled && due > 0)
+                    check_bucket(*pulled, native[static_cast<std::size_t>(due - 1)],
+                                 "fixed native at calculation");
+            }
+        }
+    }
 }
 
 // ---- 4. a series finer than the input is refused ---------------------------

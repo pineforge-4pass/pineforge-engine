@@ -25,6 +25,7 @@
 #include <pineforge/engine.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdint>
@@ -460,6 +461,252 @@ void test_tuple_request_without_the_feed_is_the_aggregate() {
     assert(probe.native_security_substitutions() == 0);
 }
 
+namespace {
+
+// Fixed-period consumption, separate from the daily settlement witnesses
+// above. These are synthetic API unit cases, not a TradingView tape.
+constexpr int64_t kFixedOrigin = 1704067200000LL;  // 2024-01-01 UTC
+
+std::vector<Bar> fixed_bars(const std::vector<int>& minutes, int base, int variant) {
+    std::vector<Bar> out;
+    for (std::size_t i = 0; i < minutes.size(); ++i) {
+        const double value = base + 11.0 * i;
+        out.push_back({value + 7 * variant, value + 9 + 13 * variant,
+                       value - 5 - 3 * variant, value + 2 + 5 * variant,
+                       3.0 * base + 17 * i + 1 + 23 * variant,
+                       kFixedOrigin + minutes[i] * kMinute});
+    }
+    return out;
+}
+
+void assert_fixed_bar(const Bar& actual, const Bar& expected) {
+    assert(actual.timestamp == expected.timestamp);
+    assert(actual.open == expected.open);
+    assert(actual.high == expected.high);
+    assert(actual.low == expected.low);
+    assert(actual.close == expected.close);
+    assert(actual.volume == expected.volume);
+}
+
+class FixedNativeProbe final : public pineforge::source::PineStrategyHost {
+public:
+    std::string requested = "75";
+    bool lookahead = false;
+    std::vector<Bar> delivered;
+    std::vector<bool> completed;
+    std::vector<Bar> chart;
+    std::vector<std::size_t> prefix;
+
+    void configure_security_evaluators() override {
+        security_eval_states_.clear();
+        register_security_eval(0, requested, input_tf_, lookahead, false);
+    }
+    void evaluate_security(int site, const Bar& bar, bool complete) override {
+        assert(site == 0);
+        delivered.push_back(bar);  // Keep partials too: none may escape this path.
+        completed.push_back(complete);
+    }
+    void on_source_bar(const Bar& bar) override {
+        chart.push_back(bar);
+        prefix.push_back(delivered.size());
+    }
+};
+
+void check_fixed_source(FixedNativeProbe& host, const std::vector<Bar>& inputs,
+                        const std::vector<Bar>& expected,
+                        const std::vector<int>& due_minutes,
+                        const std::string& input_tf = "30",
+                        const std::string& chart_tf = "30",
+                        const std::vector<Bar>* expected_chart = nullptr) {
+    assert(expected.size() == due_minutes.size());
+    host.run(inputs.data(), static_cast<int>(inputs.size()), input_tf, chart_tf,
+             false, 4, MagnifierDistribution::ENDPOINTS);
+    assert(host.last_error().empty());
+    // Compare actual consumed payload before population: a bound feed or
+    // matching callback count alone says nothing about its OHLCV.
+    for (std::size_t i = 0; i < host.delivered.size() && i < expected.size(); ++i) {
+        assert_fixed_bar(host.delivered[i], expected[i]);
+        assert(host.completed[i]);
+    }
+    assert(host.delivered.size() == expected.size());
+    assert(host.completed.size() == expected.size());
+    const auto& chart = expected_chart ? *expected_chart : inputs;
+    assert(host.chart.size() == chart.size());
+    assert(host.prefix.size() == chart.size());
+    for (std::size_t i = 0; i < chart.size(); ++i) {
+        assert_fixed_bar(host.chart[i], chart[i]);
+        std::size_t due = 0;
+        for (int minute : due_minutes)
+            if (kFixedOrigin + minute * kMinute <= chart[i].timestamp) ++due;
+        assert(host.prefix[i] == due);
+    }
+}
+
+void test_fixed_native_75_on_60_consumes_payload_at_completed_closes() {
+    // Accepted input ends at minute 600. The installed row opening at 600
+    // is future data and must never be evaluated. Every native OHLCV member
+    // differs from every coarse bar; both payload variants keep these times.
+    for (int variant : {0, 1}) {
+        const auto input = fixed_bars({0, 60, 120, 180, 240, 300, 360, 420, 480, 540},
+                                      100, variant);
+        const auto native = fixed_bars({0, 75, 150, 225, 300, 375, 450, 525, 600},
+                                       1000, variant);
+        FixedNativeProbe host;
+        host.set_syminfo_timezone("UTC");
+        host.set_syminfo_session("24x7");
+        assert(host.set_native_security_feed("75", native.data(),
+                                             static_cast<int>(native.size())));
+        check_fixed_source(host, input, {native.begin(), native.begin() + 8},
+                           {60, 120, 180, 240, 360, 420, 480, 540}, "60", "60");
+
+        // Preserve the no-native approximation and lookahead peeks. These
+        // controls are distinct from completed native-bar consumption.
+        FixedNativeProbe plain;
+        plain.set_syminfo_timezone("UTC");
+        plain.set_syminfo_session("24x7");
+        check_fixed_source(plain, input, input,
+                           {0, 60, 120, 180, 240, 300, 360, 420, 480, 540}, "60", "60");
+        FixedNativeProbe ahead;
+        ahead.lookahead = true;
+        ahead.set_syminfo_timezone("UTC");
+        ahead.set_syminfo_session("24x7");
+        assert(ahead.set_native_security_feed("75", native.data(),
+                                              static_cast<int>(native.size())));
+        check_fixed_source(ahead, input, input,
+                           {0, 60, 120, 180, 240, 300, 360, 420, 480, 540}, "60", "60");
+    }
+}
+
+void test_fixed_native_pending_first_bucket_survives_session_gap() {
+    // UTC session 09:30..16:00, followed by the next day's first bucket
+    // and a hole. That pending bucket must drain before the cursor skips
+    // the closed session. Labels and delivery times are integer-minute
+    // tables, independent of the engine's calendar/aggregator.
+    for (int width : {45, 75}) {
+        for (int variant : {0, 1}) {
+            std::vector<int> minutes;
+            std::vector<int> labels;
+            for (int day = 0; day < 2; ++day) {
+                for (int minute = 570; minute < 960; minute += 30) {
+                    if (day == 1 && (minute == 600 || (width == 75 && minute == 630)))
+                        continue;
+                    minutes.push_back(day * 1440 + minute);
+                }
+                for (int minute = 570; minute < 960; minute += width)
+                    labels.push_back(day * 1440 + minute);
+            }
+            const auto inputs = fixed_bars(minutes, 100, variant);
+            const auto expected = fixed_bars(labels, 1000, variant);
+            labels.push_back(2 * 1440 + 570);  // installed, beyond accepted history
+            const auto native = fixed_bars(labels, 1000, variant);
+            const std::vector<int> due = width == 45
+                ? std::vector<int>{600, 630, 690, 720, 780, 810, 870, 900, 930,
+                                   2070, 2070, 2130, 2160, 2220, 2250, 2310, 2340, 2370}
+                : std::vector<int>{630, 690, 780, 840, 930, 930,
+                                   2100, 2130, 2220, 2280, 2370, 2370};
+            FixedNativeProbe host;
+            host.requested = std::to_string(width);
+            host.set_syminfo_timezone("UTC");
+            host.set_syminfo_session("0930-1600");
+            host.set_syminfo_type("stock");
+            assert(host.set_native_security_feed(host.requested, native.data(),
+                                                 static_cast<int>(native.size())));
+            check_fixed_source(host, inputs, expected, due);
+        }
+    }
+}
+
+void test_fixed_native_half_day_and_split_session_completion() {
+    for (int variant : {0, 1}) {
+        // Preserve the existing early-close policy: exchange-traded stock
+        // completes the observed half-day tail on its last input; crypto
+        // waits for the next session. Installing native OHLCV changes neither.
+        for (bool early_close : {false, true}) {
+            const auto inputs = fixed_bars({570, 600, 630, 660, 690, 720, 2010},
+                                           100, variant);
+            const auto native = fixed_bars({570, 645, 720, 2010, 2085}, 1000, variant);
+            FixedNativeProbe host;
+            host.set_syminfo_timezone("UTC");
+            host.set_syminfo_session("0930-1600");
+            host.set_syminfo_type(early_close ? "stock" : "crypto");
+            assert(host.set_native_security_feed("75", native.data(),
+                                                 static_cast<int>(native.size())));
+            check_fixed_source(host, inputs, {native.begin(), native.begin() + 3},
+                               early_close ? std::vector<int>{630, 690, 720}
+                                           : std::vector<int>{630, 690, 2010});
+        }
+        // The 11:30 bucket completes at the 11:45 break, on input 11:30.
+        // The afternoon grid remains anchored to 09:00.
+        const auto inputs = fixed_bars({540, 570, 600, 630, 660, 690, 780, 810, 840, 870},
+                                       100, variant);
+        const auto native = fixed_bars({540, 615, 690, 765, 840, 1980}, 1000, variant);
+        FixedNativeProbe host;
+        host.set_syminfo_timezone("UTC");
+        host.set_syminfo_session("0900-1145,1300-1500");
+        host.set_syminfo_type("stock");
+        assert(host.set_native_security_feed("75", native.data(),
+                                             static_cast<int>(native.size())));
+        check_fixed_source(host, inputs, {native.begin(), native.begin() + 5},
+                           {600, 660, 690, 810, 870});
+    }
+}
+
+void test_fixed_native_auxiliary_holes_use_only_observed_fallback() {
+    for (int variant : {0, 1}) {
+        const auto input = fixed_bars({0, 30, 60, 90, 120, 150, 180, 210}, 100, variant);
+        const auto fine = fixed_bars({0, 15, 60, 75, 120, 135, 180, 195, 210},
+                                     300, variant);
+        const auto native = fixed_bars({0, 40, 80, 120, 160, 200, 240}, 1000, variant);
+        // Requested 40 is absent but has observed children at 60 and 75.
+        // Requested 80 has neither native nor children: publish nothing.
+        Bar fallback = fine[2];
+        fallback.timestamp = kFixedOrigin + 40 * kMinute;
+        fallback.high = std::max(fine[2].high, fine[3].high);
+        fallback.low = std::min(fine[2].low, fine[3].low);
+        fallback.close = fine[3].close;
+        fallback.volume += fine[3].volume;
+        const std::vector<Bar> holed = {native[0], native[3], native[4], native[5], native[6]};
+        FixedNativeProbe host;
+        host.requested = "40";
+        host.set_syminfo_timezone("UTC");
+        host.set_syminfo_session("24x7");
+        assert(host.set_native_security_feed("40", holed.data(),
+                                             static_cast<int>(holed.size())));
+        assert(host.set_aux_security_feed(fine.data(), static_cast<int>(fine.size()), "15"));
+        check_fixed_source(host, input, {native[0], fallback, native[3], native[4], native[5]},
+                           {30, 60, 150, 180, 210});
+    }
+}
+
+void test_divisibility_uses_source_evaluator_timeframe() {
+    // 45 does not divide chart 30, but the evaluator consumes 5-minute
+    // inputs: its 9-child buckets must retain their ordinary completion.
+    std::vector<int> minutes;
+    for (int minute = 0; minute < 180; minute += 5) minutes.push_back(minute);
+    const auto input = fixed_bars(minutes, 100, 0);
+    const auto native = fixed_bars({0, 45, 90, 135, 180}, 1000, 0);
+    std::vector<Bar> chart;
+    for (std::size_t first = 0; first < input.size(); first += 6) {
+        Bar bar = input[first];
+        for (std::size_t i = first + 1; i < first + 6; ++i) {
+            bar.high = std::max(bar.high, input[i].high);
+            bar.low = std::min(bar.low, input[i].low);
+            bar.close = input[i].close;
+            bar.volume += input[i].volume;
+        }
+        chart.push_back(bar);
+    }
+    FixedNativeProbe host;
+    host.requested = "45";
+    host.set_syminfo_timezone("UTC");
+    host.set_syminfo_session("24x7");
+    assert(host.set_native_security_feed("45", native.data(), static_cast<int>(native.size())));
+    check_fixed_source(host, input, {native.begin(), native.begin() + 4},
+                       {30, 60, 120, 150}, "5", "30", &chart);
+}
+
+}  // namespace
+
 int main() {
     test_completed_daily_bucket_carries_the_native_bar();
     test_a_bucket_without_a_native_bar_keeps_its_aggregate();
@@ -469,6 +716,11 @@ int main() {
     test_overnight_cme_session_labels_by_session_day();
     test_tuple_request_reads_the_native_daily_row();
     test_tuple_request_without_the_feed_is_the_aggregate();
+    test_fixed_native_75_on_60_consumes_payload_at_completed_closes();
+    test_fixed_native_pending_first_bucket_survives_session_gap();
+    test_fixed_native_half_day_and_split_session_completion();
+    test_fixed_native_auxiliary_holes_use_only_observed_fallback();
+    test_divisibility_uses_source_evaluator_timeframe();
     return 0;
 }
 
