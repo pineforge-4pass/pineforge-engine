@@ -404,6 +404,7 @@ set(TEST_SOURCES
     test_declined_reversal_close_leg
     test_bracket_lifecycle_declined_reversal
     test_exit_bracket_pending_entry_leg
+    test_issue810_partial_exits
     test_dual_entry_placement_sizing
     test_fams_same_bar_market_tx
     test_default_flat_market_gross_admission
@@ -8548,6 +8549,19 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
         PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/run_json_run_warnings")
 endif()
 # --- lane run-json-run-warnings end ---
+
+# --- lane entry-quantity-callers begin ---
+# Real source-host modules for the production JSON/LIVE caller tests.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(entry_quantity_percent MODULE entry_quantity_strategy.cpp)
+    target_link_libraries(entry_quantity_percent PRIVATE pineforge)
+    target_compile_definitions(entry_quantity_percent PRIVATE PINEFORGE_ENTRY_PERCENT=1)
+    target_compile_options(entry_quantity_percent PRIVATE -ffp-contract=off)
+    add_library(entry_quantity_explicit MODULE entry_quantity_strategy.cpp)
+    target_link_libraries(entry_quantity_explicit PRIVATE pineforge)
+    target_compile_options(entry_quantity_explicit PRIVATE -ffp-contract=off)
+endif()
+# --- lane entry-quantity-callers end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
