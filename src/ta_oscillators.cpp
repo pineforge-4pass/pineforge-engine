@@ -184,21 +184,32 @@ double Stoch::compute(double src, double high, double low) {
 
 Change::Change(int max_length) : max_length_(max_length) {}
 
-double Change::compute(double src, int length) {
-    history.push_back(src);
-
-    // Keep only enough history: we need at most max_length_ + 1 entries
-    int keep = std::max(max_length_, length) + 1;
-    while ((int)history.size() > keep) {
-        history.pop_front();
+void Change::ensure_room(std::size_t keep) {
+    if (size_ < history_.size() || size_ >= keep) return;
+    const auto capacity = history_.size();
+    const auto next = capacity == 0 ? std::min(keep, std::size_t{8})
+        : capacity + std::min(capacity, keep - capacity);
+    std::vector<double> replacement(next);
+    for (std::size_t i = 0; i < size_; ++i) {
+        replacement[i] = history_[index(i)];
     }
+    history_.swap(replacement);
+    head_ = 0;
+}
 
-    if ((int)history.size() <= length) {
+double Change::compute(double src, int length) {
+    // Keep only enough history: we need at most max_length_ + 1 entries
+    const auto keep = static_cast<std::size_t>(std::max(max_length_, length)) + 1;
+    ensure_room(keep); // No state changes if allocation fails.
+    head_ = head_ ? head_ - 1 : history_.size() - 1;
+    history_[head_] = src;
+    size_ = std::min(size_ + 1, keep);
+
+    if (size_ <= static_cast<std::size_t>(length)) {
         return na<double>();
     }
 
-    int idx = (int)history.size() - 1 - length;
-    double prev = history[idx];
+    double prev = history_[index(static_cast<std::size_t>(length))];
     if (is_na(src) || is_na(prev)) {
         return na<double>();
     }
@@ -688,15 +699,14 @@ double Stoch::recompute(double src, double high, double low) {
 
 // --- Change ---
 double Change::recompute(double src, int length) {
-    if (history.empty()) return compute(src, length);
-    history.back() = src;
+    if (size_ == 0) return compute(src, length);
+    history_[head_] = src;
 
-    if ((int)history.size() <= length) {
+    if (size_ <= static_cast<std::size_t>(length)) {
         return na<double>();
     }
 
-    int idx = (int)history.size() - 1 - length;
-    double prev = history[idx];
+    double prev = history_[index(static_cast<std::size_t>(length))];
     if (is_na(src) || is_na(prev)) {
         return na<double>();
     }

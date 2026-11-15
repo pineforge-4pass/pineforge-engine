@@ -91,6 +91,20 @@ KahanWindowSum::KahanWindowSum(int length)
       saved_evicted_value_(na<double>()), saved_evicted_addend_(na<double>()),
       saved_pushed_(false) {}
 
+void KahanWindowSum::ensure_room() {
+    const auto limit = static_cast<std::size_t>(length_);
+    if (size_ < window_.size() || size_ >= limit) return;
+    const auto capacity = window_.size();
+    const auto next = capacity == 0 ? std::min(limit, std::size_t{8})
+        : capacity + std::min(capacity, limit - capacity);
+    std::vector<Entry> replacement(next);
+    for (std::size_t i = 0; i < size_; ++i) {
+        replacement[i] = window_[index(i)];
+    }
+    window_.swap(replacement);
+    head_ = 0;
+}
+
 void KahanWindowSum::kahan_add(double v) {
     double y = v - comp_;
     double t = sum_ + y;
@@ -108,8 +122,9 @@ void KahanWindowSum::enter(double src, double comp_before) {
     double t = sum_ + y;
     comp_ = (t - sum_) - y;
     sum_ = t;
-    addends_.push_front(y);
-    values_.push_front(src);
+    head_ = head_ ? head_ - 1 : window_.size() - 1;
+    window_[head_] = {src, y};
+    ++size_;
     if (comp_before != 0.0) {
         // Round-10 pin (family W, stage 2): the re-sum fires whenever the
         // MAGNITUDE of the carried compensation, ADDED to the incoming source,
@@ -125,17 +140,20 @@ void KahanWindowSum::enter(double src, double comp_before) {
         const double z = src + std::fabs(comp_before);
         if (std::fabs(z - src) < std::fabs(comp_before)) {
             double total = 0.0;
-            for (double v : values_) {   // newest first
-                total += v;
+            for (std::size_t i = 0; i < size_; ++i) {   // newest first
+                total += window_[index(i)].value;
             }
             sum_ = total;
             comp_ = 0.0;
-            addends_.front() = src;      // the re-summed bar stores its raw source
+            window_[head_].addend = src; // the re-summed bar stores its raw source
         }
     }
 }
 
 double KahanWindowSum::push(double src) {
+    // Growth is the only throwing step; finish it before changing either
+    // the numerical state or the previous bar's rewind record.
+    ensure_room();
     saved_sum_ = sum_;
     saved_comp_ = comp_;
     saved_count_ = count_;
@@ -144,10 +162,10 @@ double KahanWindowSum::push(double src) {
     if (count_ >= length_) {
         // The window is full: the oldest compensated addend leaves before the
         // new source enters (sub-then-add order, pinned).
-        saved_evicted_value_ = values_.back();
-        saved_evicted_addend_ = addends_.back();
-        values_.pop_back();
-        addends_.pop_back();
+        const auto& evicted = window_[index(size_ - 1)];
+        saved_evicted_value_ = evicted.value;
+        saved_evicted_addend_ = evicted.addend;
+        --size_;
         kahan_add(-saved_evicted_addend_);
     } else {
         saved_evicted_value_ = na<double>();
@@ -164,11 +182,10 @@ void KahanWindowSum::note_no_push() {
 
 void KahanWindowSum::unpush() {
     if (!saved_pushed_) return;
-    values_.pop_front();
-    addends_.pop_front();
+    pop_front();
     if (!is_na(saved_evicted_addend_)) {
-        values_.push_back(saved_evicted_value_);
-        addends_.push_back(saved_evicted_addend_);
+        window_[index(size_)] = {saved_evicted_value_, saved_evicted_addend_};
+        ++size_;
     }
     sum_ = saved_sum_;
     comp_ = saved_comp_;
@@ -183,8 +200,7 @@ double KahanWindowSum::repush(double src) {
     // Rewind to the pre-bar (S, c) and replay the bar with the new source
     // against the same evicted addend; the ring fronts are overwritten in
     // place so the window shape is untouched.
-    values_.pop_front();
-    addends_.pop_front();
+    pop_front();
     sum_ = saved_sum_;
     comp_ = saved_comp_;
     count_ = saved_count_;
