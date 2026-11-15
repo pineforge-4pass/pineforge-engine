@@ -16478,13 +16478,11 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
             result.units = 0.0;
             return result;
         }
-        // Full per-entry brackets close their own units, oldest lots first.
-        // Named partial reservations retain their reservation sizing path.
-        if (PF_RARE(source.per_entry_origin != 0
-            && (source.from_entry.empty()
-                || (std::isnan(source.requested_qty) && !source.fixed_exit_reservation
-                    && (std::isnan(source.qty_percent)
-                        || source.qty_percent >= 100.0 - internal::kFullPercentEps))))) {
+        // A per-entry bracket closes at most its entry's units, oldest lots
+        // first. Named-cohort reservation reconciliation can change the
+        // reservation flags and percentages, but cannot enlarge this child
+        // into an exit of every entry selected by from_entry.
+        if (PF_RARE(source.per_entry_origin != 0)) {
             result.grid_policy = native_order::ExecutionGridPolicy::ExplicitUnits;
             result.units = std::min(source.per_entry_units, facts.scope_exposure_units);
             return result;
