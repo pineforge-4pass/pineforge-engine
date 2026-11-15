@@ -207,16 +207,19 @@ public:
         // Any partial link/rotation I/O error fails the run; it is never
         // converted to a successful absent lookup or retried as another id.
         end_ += header + key.size();
+        Links parent_row;
         if (parent != 0) {
-            auto old = links(parent);
-            (position.left ? old.left : old.right) = at;
-            put_links(parent, old);
+            parent_row = links(parent);
+            (position.left ? parent_row.left : parent_row.right) = at;
+            // Merge both links when the parent is also the insertion tail.
+            if (parent == last_) parent_row.next = at;
+            put_links(parent, parent_row);
         } else root_ = at;
-        if (last_ != 0) {
+        if (last_ != 0 && last_ != parent) {
             auto previous = links(last_);
             previous.next = at;
             put_links(last_, previous);
-        } else first_ = at;
+        } else if (last_ == 0) first_ = at;
         last_ = at;
         last_lower_ = position.lower;
         last_upper_ = position.upper;
@@ -224,7 +227,7 @@ public:
         last_lower_key_ = position.lower_key;
         last_upper_key_ = position.upper_key;
         ++size_;
-        rebalance(parent);
+        rebalance(parent, parent_row, at, row.height);
         return {at, true};
     }
     template<class F> void for_each_sorted(F&& visit) const {
@@ -422,9 +425,6 @@ private:
     }
     std::uint64_t height(Offset at) const { return at == 0 ? 0 : links(at).height; }
     void refresh(Links& row) const { row.height = 1 + std::max(height(row.left), height(row.right)); }
-    int balance(const Links& row) const {
-        return static_cast<int>(height(row.left)) - static_cast<int>(height(row.right));
-    }
     Offset rotate(Offset at, bool left) {
         auto old = links(at);
         const Offset top_at = left ? old.right : old.left;
@@ -451,26 +451,83 @@ private:
         put_links(top_at, top);
         return top_at;
     }
-    void rebalance(Offset at) {
+    // Only for frames/heights read without an intervening topology write.
+    // Preserve rotate's publication order and fresh parent/middle link reads.
+    Offset rotate_single(Offset at, bool left, Links old, Links top,
+                         std::uint64_t opposite_height, std::uint64_t middle_height,
+                         std::uint64_t outer_height) {
+        const Offset top_at = left ? old.right : old.left;
+        const Offset middle_at = left ? top.left : top.right;
+        const Offset parent_at = old.parent;
+        if (parent_at != 0) {
+            auto parent = links(parent_at);
+            (parent.left == at ? parent.left : parent.right) = top_at;
+            put_links(parent_at, parent);
+        } else root_ = top_at;
+        top.parent = parent_at;
+        old.parent = top_at;
+        (left ? old.right : old.left) = middle_at;
+        if (middle_at != 0) {
+            auto middle = links(middle_at);
+            middle.parent = at;
+            put_links(middle_at, middle);
+        }
+        old.height = 1 + std::max(opposite_height, middle_height);
+        put_links(at, old);
+        (left ? top.left : top.right) = at;
+        // refresh(top) would validate this newly written height on readback.
+        if (old.height == 0 || old.height > 128) io_error(EIO, "scratch id invalid node");
+        top.height = 1 + std::max(old.height, outer_height);
+        put_links(top_at, top);
+        return top_at;
+    }
+    void rebalance(Offset at, const Links& first_row,
+                   Offset child_at, std::uint64_t child_height) {
+        bool first_frame = true;
         while (at != 0) {
-            auto row = links(at);
+            // Only the first frame reuses published links. Each ancestor is
+            // read afresh, carrying only the child height just written below.
+            auto row = first_frame ? first_row : links(at);
             const auto previous_height = row.height;
-            const auto left_height = height(row.left), right_height = height(row.right);
+            if ((row.left == child_at || row.right == child_at)
+                && (child_height == 0 || child_height > 128))
+                io_error(EIO, "scratch id invalid node");
+            const auto left_height = row.left == child_at ? child_height : height(row.left);
+            const auto right_height = row.right == child_at ? child_height : height(row.right);
+            first_frame = false;
             row.height = 1 + std::max(left_height, right_height);
             const int lean = static_cast<int>(left_height) - static_cast<int>(right_height);
             if (lean > 1) {
-                if (balance(links(row.left)) < 0) (void)rotate(row.left, true);
-                (void)rotate(at, false);
+                const auto child = links(row.left);
+                const auto child_left_height = height(child.left);
+                const auto child_right_height = height(child.right);
+                if (child_left_height < child_right_height) {
+                    (void)rotate(row.left, true);
+                    (void)rotate(at, false); // Re-read after the inner mutation.
+                } else {
+                    (void)rotate_single(at, false, row, child, right_height,
+                                        child_right_height, child_left_height);
+                }
                 return; // Insertion's rotation restores the old subtree height.
             } else if (lean < -1) {
-                if (balance(links(row.right)) > 0) (void)rotate(row.right, false);
-                (void)rotate(at, true);
+                const auto child = links(row.right);
+                const auto child_left_height = height(child.left);
+                const auto child_right_height = height(child.right);
+                if (child_left_height > child_right_height) {
+                    (void)rotate(row.right, false);
+                    (void)rotate(at, true);
+                } else {
+                    (void)rotate_single(at, true, row, child, left_height,
+                                        child_left_height, child_right_height);
+                }
                 return;
             }
             // An unchanged subtree height cannot affect any ancestor.
             // Avoid rewriting it and invalidating otherwise reusable pages.
             if (row.height == previous_height) return;
             put_links(at, row);
+            child_at = at;
+            child_height = row.height;
             at = row.parent;
         }
     }

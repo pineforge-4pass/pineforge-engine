@@ -229,7 +229,15 @@ std::vector<std::uint64_t> run(std::size_t capacity, cache_sweep::Telemetry& tel
     reference.retained.clear();
     reference.erased.clear();
     put(1, 0, "reset", 111);
+    // Small books intentionally scan without opening a backing. Rebuild the
+    // original large population, beyond kWindowReserve (256), so the first
+    // query tests a recreated backing while distinct fillers preserve reset.
+    for (std::size_t i = 2; i != past_last; ++i) put(i, i, "entry", i * 13 + 5);
+    require(table.size() == past_last - 1
+                && table.sequence_work()[2] == 0 && watch.backing == nullptr,
+            "rebuilt retained population leaves the derived backing unopened before its first query");
     query(0, "reset");
+    require(output.back() == 111, "rebuilt retained population preserves the reset answer");
     require(watch.backing != nullptr
                 && watch.backing->cache_payload_bytes() <= telemetry.configured_payload
                 && watch.backing->cache_metadata_bytes() <= telemetry.configured_metadata

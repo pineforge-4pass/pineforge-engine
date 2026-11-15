@@ -41452,7 +41452,7 @@
    "scope": [
     "namespace pineforge :: source #7",
     "PlacementTable :: SequenceIndex & PlacementTable :: sequence_index ( ) const #1",
-    "if ( ! sequence_index_ ) #1"
+    "if ( ! sequence_index_ || ! sequence_index_ -> store ) #1"
    ],
    "cls": "assign",
    "spelling": "next = . . .",
@@ -41464,7 +41464,7 @@
    "scope": [
     "namespace pineforge :: source #7",
     "PlacementTable :: SequenceIndex & PlacementTable :: sequence_index ( ) const #1",
-    "if ( ! sequence_index_ ) #1"
+    "if ( ! sequence_index_ || ! sequence_index_ -> store ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_shared",
@@ -41476,7 +41476,7 @@
    "scope": [
     "namespace pineforge :: source #7",
     "PlacementTable :: SequenceIndex & PlacementTable :: sequence_index ( ) const #1",
-    "if ( ! sequence_index_ ) #1",
+    "if ( ! sequence_index_ || ! sequence_index_ -> store ) #1",
     "visit_rows ( [ & ] ( std :: uint64_t incarnation , const PlacementSnapshot & row ) #1"
    ],
    "cls": "grow",
@@ -48142,6 +48142,40 @@
    ],
    "cls": "decl",
    "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "store",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "struct PlacementTable :: SequenceIndex #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "remaining",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "struct PlacementTable :: SequenceIndex #1",
+    "bool watch_inline ( std :: string_view id , std :: string_view from , std :: uint64_t answer ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "remaining = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "sequence_index_",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "void PlacementTable :: begin_exit_sequence_certificate ( ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
    "ordinal": 1
   }
  ]

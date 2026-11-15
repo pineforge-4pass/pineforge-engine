@@ -333,6 +333,160 @@ void exercise(std::size_t population, std::size_t phase_rows, bool unchanged_pha
         expected.publish();
     }
 }
+
+void populated_inline_certificate_promotion(bool exact_pair_first) {
+#ifdef PINEFORGE_HAS_TRADE_SCRATCH_V1
+    ScratchFixture scratch;
+    CHECK(scratch.store.status() == detail::ScratchStatus::ok);
+#endif
+    Host actual;
+    Host expected;
+#ifdef PINEFORGE_HAS_TRADE_SCRATCH_V1
+    actual.set_trade_scratch(scratch.store);
+#endif
+    constexpr std::size_t population = 12;
+    populate(actual, population, population, false);
+    populate(expected, population, population, false);
+    auto& placement = actual.adapter().*access(PlacementTag{});
+    auto& reference = expected.adapter().*access(PlacementTag{});
+
+    const auto check_output = [&] {
+        CHECK(actual.closed_trade_count() == population + 1);
+        CHECK(actual.rows().size() == expected.rows().size());
+        for (std::size_t index = 0; index < actual.rows().size(); ++index)
+            same_trade(actual.rows()[index], expected.rows()[index]);
+        CHECK(actual.phase_values() == expected.phase_values());
+        CHECK(actual.adapter().*access(PhaseFinalTag{})
+              == expected.adapter().*access(PhaseFinalTag{}));
+        CHECK(actual.adapter().*access(PhaseDigestTag{})
+              == expected.adapter().*access(PhaseDigestTag{}));
+        CHECK(actual.adapter_hash() == expected.adapter_hash());
+    };
+    const auto check_query = [&](const std::string& id, const std::string& from,
+                                 std::uint64_t answer) {
+        CHECK(placement.command_sequence_for(id, from) == answer);
+        CHECK(reference.command_sequence_for(id, from) == answer);
+        CHECK(actual.adapter().command_sequence_for_exit(id, from) == answer);
+        CHECK(expected.adapter().command_sequence_for_exit(id, from) == answer);
+    };
+    const auto check_republication = [&] {
+        const auto before = actual.adapter().exit_group_work();
+        actual.publish();
+        const auto after = actual.adapter().exit_group_work();
+        CHECK(after.publications > before.publications);
+        CHECK(after.tail_rows == before.tail_rows);
+        CHECK(after.sequence_queries == before.sequence_queries);
+        CHECK(after.sequence_index_operations == before.sequence_index_operations);
+        CHECK(after.sequence_index_pages == before.sequence_index_pages);
+        CHECK(after.scratch_operations == before.scratch_operations);
+    };
+    const auto append = [&](std::uint64_t incarnation, const std::string& id,
+                            const std::string& from, std::uint64_t sequence) {
+        source::PlacementSnapshot row;
+        row.source_id = id;
+        row.from_entry = from;
+        row.command_sequence = sequence;
+        // The actual table already has the publication's dependencies.
+        // This public append must promote before publishing its new row.
+        CHECK(placement.try_emplace(incarnation, row).second);
+        CHECK(reference.try_emplace(incarnation, std::move(row)).second);
+    };
+    const auto republish_against_oracle = [&] {
+        reference_sort(expected);
+        expected.publish();
+        actual.publish();
+        check_output();
+        check_republication();
+#ifdef PINEFORGE_HAS_TRADE_SCRATCH_V1
+        scratch.check_empty();
+#endif
+    };
+
+    // Real publication records dependencies for s0/s1/s2 and absent unknown.
+    // Nonzero work/residency with no backing I/O proves this is inline;
+    // repeated publication proves that its populated certificate is valid.
+    actual.publish();
+    const auto inline_work = actual.adapter().exit_group_work();
+    CHECK(inline_work.retained_placements == 3);
+    CHECK(inline_work.tail_rows >= population);
+    CHECK(inline_work.sequence_rows > 0);
+    CHECK(inline_work.sequence_index_operations > 0);
+    CHECK(inline_work.sequence_index_resident_bytes > 0);
+    CHECK(inline_work.sequence_index_pages == 0);
+    const auto absent = ~std::uint64_t{0};
+    check_query("s0", "L", 10);
+    check_query("s1", "L", 20);
+    check_query("s2", "L", 30);
+    check_query("s0", "other", 10);
+    check_query("unknown", "L", absent);
+    check_republication();
+
+    const auto before_promotion = actual.adapter().exit_group_work();
+    append(4, "unrelated", "L", 40);
+    const auto promoted = actual.adapter().exit_group_work();
+    CHECK(promoted.retained_placements == 4);
+    CHECK(promoted.sequence_index_pages > inline_work.sequence_index_pages);
+    CHECK(promoted.sequence_index_resident_bytes > inline_work.sequence_index_resident_bytes);
+    // An unrelated append preserves the migrated certificate as well as its
+    // answers. No exception is caught or treated as a successful transition.
+    check_republication();
+    CHECK(actual.adapter().exit_group_work().tail_rows == before_promotion.tail_rows);
+    republish_against_oracle();
+    check_query("s0", "L", 10);
+    check_query("s1", "L", 20);
+    check_query("s2", "L", 30);
+    check_query("s0", "other", 10);
+    check_query("unknown", "L", absent);
+    check_query("unrelated", "L", 40);
+
+    // No publication may rebuild the migrated evidence before either
+    // scenario's first changing append.
+    CHECK(actual.adapter().exit_group_work().tail_rows == before_promotion.tail_rows);
+    const auto before_change = actual.rows();
+    const auto check_reordered = [&] {
+        bool reordered = false;
+        for (std::size_t index = 0; index < actual.rows().size(); ++index)
+            if (actual.rows()[index].entry_incarnation != before_change[index].entry_incarnation)
+                reordered = true;
+        CHECK(reordered);
+    };
+    if (exact_pair_first) {
+        // This invocation owns fresh hosts: the migrated exact-pair evidence
+        // must invalidate before any fallback change can rebuild it.
+        append(5, "s2", "L", 1);
+        const auto before_pair = actual.adapter().exit_group_work();
+        republish_against_oracle();
+        CHECK(actual.adapter().exit_group_work().tail_rows > before_pair.tail_rows);
+        check_reordered();
+        check_query("s0", "L", 10);
+        check_query("s1", "L", 20);
+        check_query("s2", "L", 1);
+        check_query("s2", "other", 1);
+        check_query("unknown", "L", absent);
+        return;
+    }
+
+    // The migrated absent answer depends on any-entry fallback evidence.
+    // Changing that answer must invalidate certification and reorder the tail.
+    append(5, "unknown", "other", 5);
+    const auto before_fallback = actual.adapter().exit_group_work();
+    republish_against_oracle();
+    CHECK(actual.adapter().exit_group_work().tail_rows > before_fallback.tail_rows);
+    check_reordered();
+    check_query("unknown", "L", 5);
+    check_query("unknown", "other", 5);
+
+    // The certificate rebuilt after fallback must also track paired changes.
+    append(6, "s2", "L", 1);
+    const auto before_pair = actual.adapter().exit_group_work();
+    republish_against_oracle();
+    CHECK(actual.adapter().exit_group_work().tail_rows > before_pair.tail_rows);
+    check_query("s0", "L", 10);
+    check_query("s1", "L", 20);
+    check_query("s2", "L", 1);
+    check_query("s2", "other", 1);
+    check_query("unknown", "L", 5);
+}
 }  // namespace
 
 int main() {
@@ -340,6 +494,8 @@ int main() {
     exercise(2048, 2048);
     exercise(97, 10);
     exercise(3, 3, true);  // row order changes; phase bytes and folded prefix do not
+    populated_inline_certificate_promotion(false);
+    populated_inline_certificate_promotion(true);
     std::printf("%s X07 same-bar trade scratch (%d failures)\n",
                 failures ? "FAIL" : "PASS", failures);
     return failures ? 1 : 0;
