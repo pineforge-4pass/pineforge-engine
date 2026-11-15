@@ -464,5 +464,87 @@ ta::SupertrendResult PineSupertrend::recompute(double factor, double atr_period,
     return step(high, low, close, true);
 }
 
+// --- SeriesSma ---
+
+std::size_t SeriesSma::checked_length(double current_length) {
+    if (!std::isfinite(current_length)) length_na("sma", "length");
+    long long length = 0;
+    if (!length_value(current_length, length)) length_na("sma", "length");
+    if (length <= 0) length_not_positive(length, "sma", "length");
+    if (length - 1 > SeriesWindowExtreme::kMaxBarsBack)
+        max_bars_back_exceeded(length);
+    return static_cast<std::size_t>(length);
+}
+
+void SeriesSma::ensure_capacity() {
+    if (history_.size() != 0) return;
+    // One bounded ring, independent of bars, current N and cache residency.
+    ::pineforge::detail::WindowValues<double> next(
+        kCapacity, na<double>(), history_.cache_capacity());
+    history_ = std::move(next);
+}
+
+double SeriesSma::mean(std::size_t length) const {
+    if (length > count_) return na<double>();
+
+    double sum = 0.0;
+    double correction = 0.0;
+    const auto first = (head_ + kCapacity - length) % kCapacity;
+    for (std::size_t i = 0; i != length; ++i) {
+        const double value = history_.read((first + i) % kCapacity);
+        if (is_na(value)) return na<double>();
+        const double next = sum + value;
+        if (std::fabs(sum) >= std::fabs(value))
+            correction += (sum - next) + value;
+        else
+            correction += (value - next) + sum;
+        sum = next;
+    }
+    return (sum + correction) / static_cast<double>(length);
+}
+
+double SeriesSma::compute(double source, double current_length) {
+    const auto length = checked_length(current_length);
+    const auto previous_head = head_;
+    const auto previous_count = count_;
+    // Save the oldest even on an NA call: a later replacement may evict it.
+    const double evicted = count_ == kCapacity
+        ? history_.read(head_) : na<double>();
+    if (!is_na(source)) {
+        ensure_capacity();
+        history_.write(head_, source);
+        head_ = (head_ + 1) % kCapacity;
+        count_ = std::min(count_ + 1, kCapacity);
+    }
+    // Publish state only after the required reads/writes succeed.
+    pre_update_head_ = previous_head;
+    pre_update_count_ = previous_count;
+    pre_update_evicted_ = evicted;
+    current_pushed_ = !is_na(source);
+    return mean(length);
+}
+
+double SeriesSma::recompute(double source, double current_length) {
+    const auto length = checked_length(current_length);
+    if (is_na(source)) {
+        // A full-ring push replaced the pre-update oldest slot. Restore its
+        // bytes before publishing the restored head/count, including on copies.
+        if (current_pushed_ && pre_update_count_ == kCapacity)
+            history_.write(pre_update_head_, pre_update_evicted_);
+        head_ = pre_update_head_;
+        count_ = pre_update_count_;
+        current_pushed_ = false;
+    } else {
+        ensure_capacity();
+        // The restored prefix plus this source has exactly this final slot.
+        // Write it directly: a failed second write cannot follow a rollback.
+        history_.write(pre_update_head_, source);
+        head_ = (pre_update_head_ + 1) % kCapacity;
+        count_ = std::min(pre_update_count_ + 1, kCapacity);
+        current_pushed_ = true;
+    }
+    return mean(length);
+}
+
 }  // namespace source
 }  // namespace pineforge
