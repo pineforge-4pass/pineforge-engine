@@ -35,7 +35,7 @@
 // The older site rows (probe-*, control-*, site-*) keep their roles.
 // The two-close_all sequence (close_all; entry X; close_all; entry X qty 2) is
 // NOT asserted here: the engine's outcome differs from the Pine statement
-// above and is carded separately (CX-CR277-DIVERGE).
+// above and remains a separately tracked two-close_all divergence.
 //
 // release-time-key was withdrawn: the lab measured it GREEN with the capture
 // reverted and on the fully unfixed adapter. reversal-close-all-capture uses

@@ -17,7 +17,7 @@ removes, so the case cannot pass by the compiler having dropped it); machine
 code that `strings` prints as `C0"TV"` is not a name; and a host with no
 stripping tool fails CLOSED at exit 2 instead of reading the debug info.
 
-R5 lane F6 (AUDIT3-opus2 H11, AUDIT3-opus kres §1.1) widens what the gate
+Vocabulary coverage widens what the gate
 reads, and these cases are its must-fail half: the audits' blind-spot probes
 (`security_lower_tf_probe`, `calc_on_every_tick`, `strategy_entry`,
 `syminfo_mintick_probe_fn`, `ta_ema_probe_fn`, the `__close__` sentinel,
@@ -30,7 +30,7 @@ name and a Mach-O underscore is not a second name; and the kernel profile's
 INSTALLED headers are read too -- code identifiers and string literals,
 never comments -- over exactly the header set the CMake install rule ships.
 
-Lane INT16b (PR #278, Linux kernel-only) adds the kernel-source surface: GCC 13
+The kernel-source surface (PR #278, Linux kernel-only) covers the case where GCC 13
 on x86-64 split `__kernel_liquidation__` into a vector constant and an
 immediate, so its archive's `strings` never carries the label and the ruling
 read stale on that platform alone. The cases reproduce that strings line: stale
@@ -38,7 +38,7 @@ without the source, live through the TU's literal, still stale when no surface
 carries it, never live through a comment or an include path; the surface is
 judged in both directions, and it is exactly the archive's own TU list.
 
-R5 lane H-DOCGATES (AUDIT4-opus X12, kres K4/K5/K11) closes the reach gaps
+Exact text rulings and namespace coverage close the reach gaps
 the fourth audit probed: a ruled NAME never covers a TEXT (the bare-word
 rulings `Pine` and `syminfo` passed "match Pine semantics exactly" and
 "syminfo.tickerid must be set"), so a text is ruled by its exact words; the
@@ -49,7 +49,7 @@ trade-date built-ins; a row whose second column says "no archive symbol" is
 held to it; the printed counts are the rulings the vocabulary reads; and the
 counts have floors that scripts/ci_verify.py passes.
 
-CR-352 adds bare-line corroboration controls: the machine-code-shaped TvJO
+For bare-line corroboration controls, the machine-code-shaped TvJO
 line is ignored without independent evidence, while symbols, installed
 headers and compiled escaped/adjacent literals still fail. The legacy
 source-literal findings and ruled-row presence remain independently tested.
@@ -162,8 +162,8 @@ GENERIC_LOOK_ALIKES = [
     "session.hpp", "include/pineforge/session_time.hpp",
 ]
 
-# AUDIT3-opus2's r2kernel/inject2/blind_probe.c, verbatim: Pine vocabulary
-# the gate's fixed pattern list did not contain until lane F6.
+# The blind-spot probe source, verbatim: Pine vocabulary
+# the gate's fixed pattern list did not previously contain.
 BLIND_PROBE_SOURCE = """
 extern "C" const char *pf_blind_text(void) { return "security_lower_tf_probe calc_on_every_tick strategy_entry"; }
 extern "C" int syminfo_mintick_probe_fn(int x) { return x + 2; }
@@ -175,7 +175,7 @@ BLIND_PROBE_NAMES = ("security_lower_tf_probe", "calc_on_every_tick", "strategy_
 
 def table_archive() -> tuple[list[str], list[str]]:
     """A synthetic archive holding exactly the ADR's ruled vocabulary -- all of
-    it but the header-only rows (R5 lane H-DOCGATES), which table_headers()
+    it but the header-only rows, which table_headers()
     ships where the kernel profile ships them."""
     strings = (sorted(RULED.identifiers - RULED.header_only)
                + sorted(RULED.phrases - RULED.header_only - RULED.debug_only) + NOISE_STRINGS)
@@ -358,8 +358,8 @@ def elf64(sections: list[tuple[str, bytes, int]]) -> bytes:
 
 
 class SanitizerAndDebugBuildTests(unittest.TestCase):
-    """R5 lane H-DOCGATES: the sanitizers profile's first run of the dotted-
-    namespace vocabulary (lab remote job rj-20260925t190344-64918a) found two
+    """The sanitizers profile's first run of the dotted-
+    namespace vocabulary on a lab build found two
     strings a release archive does not carry: UBSan's quoted type name
     `'struct SymInfo'` and Eigen's assert text `matrix.cols() ==
     matrix.rows()`."""
@@ -488,7 +488,7 @@ class EvaluatorTests(unittest.TestCase):
         findings, summary = self.evaluate(strings, nm)
         self.assertEqual(findings, [])
         # (expectation corrected: 3 -> every ruled text the vocabulary reads,
-        # because R5 lane H-DOCGATES rules each text by its exact words: the
+        # because the gate rules each text by its exact words: the
         # three feed texts, the deprecated aliases' texts, map.hpp's
         # static_assert texts and the runtime's dotted argument checks; the
         # table archive models a release archive, which carries no assert
@@ -1195,7 +1195,7 @@ class AuditBlindSpotTests(unittest.TestCase):
         findings, summary = self.evaluate(strings + metadata, nm)
         self.assertEqual(findings, [], [str(f) for f in findings])
         # (expectation corrected: the text alone -> the text and its bare
-        # `islastbar`, which R5 lane H-DOCGATES' vocabulary reads by itself.)
+        # `islastbar`, which the gate's vocabulary reads by itself.)
         self.assertEqual(self.unruled(strings + metadata + ["session.islastbar probe"], nm),
                          {"session.islastbar probe", "islastbar"})
         self.assertEqual(self.unruled(strings + ["session.start must precede its end"], nm),
@@ -1333,7 +1333,7 @@ class ArchiveSurfaceTests(unittest.TestCase):
 
 
 # The x86-64 GCC 13.3 archive's own `strings -a` line for the kernel's
-# liquidation label (lane INT16b, PR #278's kernel-only job): five 16-byte
+# liquidation label (PR #278's kernel-only job): five 16-byte
 # vector constants packed in .rodata.cst16, of which "__kernel_liquida" is one;
 # the label's last bytes are the immediate of a `movabs`, so no line carries the
 # whole `__kernel_liquidation__`.
@@ -1343,7 +1343,7 @@ SPLIT_LABEL = "__kernel_liquidation__"
 
 
 class KernelSourceSurfaceTests(unittest.TestCase):
-    """Lane INT16b: the string literals of the kernel's own translation units
+    """The string literals of the kernel's own translation units
     are a third surface, so a literal the compiler materialized as constants
     and immediates is judged the same on every platform -- and a ruling that
     no surface carries is still stale."""
@@ -1433,8 +1433,8 @@ class KernelSourceSurfaceTests(unittest.TestCase):
 
 
 class ReachTests(unittest.TestCase):
-    """R5 lane H-DOCGATES (AUDIT4-opus X12, kres K4/K5/K11): the fourth
-    audit's probes, each of which the lane's base checker (21bdc2e8) passed
+    """Namespace coverage probes from the fourth
+    audit, each of which the base checker (21bdc2e8) passed
     unflagged, and the two halves of the header-only and count rules."""
 
     def unruled(self, strings: list[str], nm: list[str], **surfaces) -> set[str]:

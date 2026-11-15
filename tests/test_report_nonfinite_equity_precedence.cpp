@@ -100,11 +100,11 @@ Failure fd_failure(const Curve& curve) {
     require(host.handle != nullptr, "C host creation failed");
     pf_native_run_spec_v1 spec{};
     spec.struct_size = static_cast<std::uint32_t>(sizeof spec);
-    spec.session_key = "CR-289-precedence";
+    spec.session_key = "nonfinite-equity-precedence";
     spec.run_number = 1;
     spec.input_tf = spec.script_tf = "1";
-    spec.ticker = "CR289";
-    spec.tickerid = "TEST:CR289";
+    spec.ticker = "EQUITY";
+    spec.tickerid = "TEST:EQUITY";
     spec.type = "crypto";
     spec.currency = spec.basecurrency = "USD";
     spec.description = spec.volumetype = spec.chart_timezone = "";
@@ -122,7 +122,7 @@ Failure fd_failure(const Curve& curve) {
     ext.report_policy = PF_NATIVE_REPORT_KERNEL_RECORDED;
     require(strategy_configure_native_ext_v1(host.handle, &spec, &ext) == PF_NATIVE_OK,
             "C host configuration failed");
-    const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.descriptors[1], "CR-289"};
+    const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.descriptors[1], "nonfinite-equity"};
     require(strategy_set_report_sink_fd_v1(host.handle, &sink) == 0, "C fd setter refused");
     std::array<pf_bar_t, 4> bars{};
     for (std::size_t i = 0; i < bars.size(); ++i)

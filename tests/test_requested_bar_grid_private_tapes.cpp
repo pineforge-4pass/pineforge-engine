@@ -33,7 +33,7 @@
  * enter when chart index > 6 and % 7 == 3, close when > 6 and % 7 == 5.
  * EXPLICIT sets only timezone, session and type; DEFAULT sets no symbol facts.
  * The two EXPLICIT rows are the fix criterion. DEFAULT rows remain owed under
- * the caller-metadata contract (CR-738), retained separately as a reverse patch.
+ * the caller-metadata contract, retained separately as a reverse patch.
  *
  * Diagnostics never echo paths, CSV cells, prices, OHLCV, full trade objects,
  * or engine exception messages. Only quantities, counts, indices, timestamps,
@@ -68,7 +68,7 @@ constexpr const char* kFeed = "PINEFORGE_REQBAR_NYSE_FEED";
 constexpr const char* kOrig = "PINEFORGE_REQBAR_NYSE_TAPE_ORIG";
 constexpr const char* kTrace = "PINEFORGE_REQBAR_NYSE_TAPE_TRACE";
 constexpr const char* kDefaultLabel =
-    "DEFAULT: waits on the caller-metadata contract (CR-738)";
+    "DEFAULT: waits on the caller-metadata contract";
 constexpr std::int64_t kHour = 3'600'000;
 constexpr std::size_t kEntries = 40;
 using Key = std::pair<std::int64_t, std::string>;

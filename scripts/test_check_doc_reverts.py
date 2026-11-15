@@ -12,7 +12,7 @@ ref starts after the newest merged pull request, as CI's merge base does, and
 still judges what came after it; and the replay mode the audit's acceptance uses
 reads only the message it is given.
 
-R5 lane H-DOCGATES (AUDIT4-opus X13, docs-a GAP-2).
+Legacy commit-subject literals below exercise the gate's provenance parser.
 """
 from __future__ import annotations
 
@@ -210,7 +210,7 @@ class MustFail(unittest.TestCase):
             self.assertIn(added[:guard.SHA_CHARS], out)
 
     def test_restoring_older_text_is_a_revert(self) -> None:
-        """The B-C-SURFACE precedent: a rebase that kept its own base's page put
+        """A rebase that kept its own base's page put
         older wording back over newer wording. Similar text, so not a deletion,
         but the text is the page's own past."""
         with repo() as r:
@@ -311,7 +311,7 @@ class MustPass(unittest.TestCase):
         with repo() as r:
             r.commit(BASE_PAGE, 'docs: the guide', gate=False)
             r.commit(with_keep_handle(), 'Docs: keep_handle (R5 lane V19-D)')
-            squash = r.commit(BASE_PAGE, 'INT26: wave H and the late picks (#290)')
+            squash = r.commit(BASE_PAGE, 'docs: merged guide updates (#290)')
             r.commit(BASE_PAGE + '\nA new sentence the next lane writes on the guide.\n',
                      'Docs: the next lane')
             code, out = r.run()

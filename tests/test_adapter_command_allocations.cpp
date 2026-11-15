@@ -1,4 +1,4 @@
-// R5 lane PERF-L5: the Pine adapter's command path copies and allocates less,
+// Command allocation reduction: the Pine adapter's command path copies and allocates less,
 // and every value it feeds is the one it fed.
 //
 // A re-issued source command used to copy the predecessor's whole placement
@@ -252,7 +252,7 @@ constexpr Script kScripts[] = {Script::ExitReissue, Script::FarReissue, Script::
                                Script::TrailReissue};
 
 #ifndef PINEFORGE_L5_HARVEST
-// expectation corrected (32 values), because v19's broker-state hash folds the closed rows as their count and a running digest, each row once when it is final (pineforge-broker-state/v19); this host projects one fixed execution hash, so the continuation does not enter; the recorded row count, the trades and the trade digest did not move; re-harvested the same way on INT19's tree; V19-A's tip (6211dc94) gives the same rows:
+// expectation corrected (32 values), because v19's broker-state hash folds the closed rows as their count and a running digest, each row once when it is final (pineforge-broker-state/v19); this host projects one fixed execution hash, so the continuation does not enter; the recorded row count, the trades and the trade digest did not move; re-harvested the same way on the closed-row hashing integration tree; the closed-row hashing commit (6211dc94) gives the same rows:
 //   Script::ExitReissue/false/false: rows_digest 0x45d5a3f28f256742ull -> 0xc5e49674997eb2ffull, final_hash 3451175041936365899ull -> 2994629124978087589ull
 //   Script::ExitReissue/false/true: rows_digest 0x80eab7cde808d29dull -> 0x50af34b38baba1a4ull, final_hash 3349836046584918293ull -> 240956321056682147ull
 //   Script::ExitReissue/true/false: rows_digest 0xa407c51973a95e40ull -> 0xfdd67afcaf5a1874ull, final_hash 15593133390039186596ull -> 4256117574465486300ull
@@ -291,7 +291,7 @@ constexpr Script kScripts[] = {Script::ExitReissue, Script::FarReissue, Script::
 //   Script::EntryReissue/false/true: rows_digest 0x1781a3542d87a7c9ull -> 0xf4677e5c1916337full, final_hash 5868802478351644387ull -> 9541687758077282854ull
 //   Script::EntryReissue/true/false: rows_digest 0x592d4b5617d2b6fcull -> 0x379d985d7c93b652ull, final_hash 11220719029914513450ull -> 7904694474988279479ull
 //   Script::EntryReissue/true/true: rows_digest 0x4afd65bc6d977d03ull -> 0x2fd97b436aac3c5dull, final_hash 12913321619721074841ull -> 8582209322861755784ull
-// expectation corrected (V19-FIX, 32 values), because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; this host projects one fixed execution hash, so the continuation does not enter; the recorded row count, the trades and the trade digest did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree:
+// expectation corrected (adapter hash cleanup, 32 values), because the Pine hashes change within v19: dead PineExecutionAdapter::path_order_ leaves pineforge-source-adapter/v4, script cancellation retires every named exit leg and the kernel releases withdrawn legs, and unbindable origins leave their kernel cohort rosters; this host's fixed execution hash excludes the continuation; recorded row count, trades and trade digest stay unchanged; this TU's harvest switch reproduced every old pin on main 91d65ad6 and harvested the corrected tree:
 //   Script::ExitReissue/false/false: rows_digest 0x378e8175f07c1d5dull -> 0xab588834fadd3803ull, final_hash 5455427604675993531ull -> 5699976773346796219ull
 //   Script::ExitReissue/false/true: rows_digest 0x9d581c7efdf21626ull -> 0x31d20a68825b4041ull, final_hash 5124001802418948517ull -> 5368550971089751205ull
 //   Script::ExitReissue/true/false: rows_digest 0x123a4d26c1440e48ull -> 0xcecfebbbe86fc767ull, final_hash 10475037478956129116ull -> 6863695800300943516ull
@@ -308,7 +308,7 @@ constexpr Script kScripts[] = {Script::ExitReissue, Script::FarReissue, Script::
 //   Script::TrailReissue/false/true: rows_digest 0x56954a0db7786b71ull -> 0x12bab345b4c21bdeull, final_hash 5779925080749936105ull -> 5117488907256490505ull
 //   Script::TrailReissue/true/false: rows_digest 0x09315718e551137full -> 0xbae98e9f6da67e3dull, final_hash 269689715775399305ull -> 1320551696866588489ull
 //   Script::TrailReissue/true/true: rows_digest 0x5ef417ff409d6fadull -> 0x7e3565d7ef6b9c34ull, final_hash 3401687048604417982ull -> 12226981095802833438ull
-// expectation corrected (INT26 v19 hash re-pin, 32 values over 16 rows), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; this host projects one fixed execution hash, so the continuation does not enter; the recorded row count, the trades and the trade digest did not move:
+// expectation corrected (integrated source rules v19 hash correction, 32 values over 16 rows), because hashes change within unreleased v19: the Pine excursion model leaves the source fold, FIFO exits reserve their own entry quantity, transient coof_fill_forced_ and the post-fill margin waypoint enter the fold, and cash-fee percent-of-equity sizing folds the snapshot's strategy.equity; every intervening commit kept the pins from the pending-entry timestamp correction (1518fa8f); this TU's switch harvested the integrated tree and every commit boundary; this host's fixed execution hash excludes the continuation; recorded row count, trades and trade digest stay unchanged:
 //   Script::ExitReissue/false/false: rows_digest 0xab588834fadd3803ull -> 0x531f1841e4e5968dull, final_hash 5699976773346796219ull -> 2515667530823692736ull [H-THIN]
 //   Script::ExitReissue/false/true: rows_digest 0x31d20a68825b4041ull -> 0x904f0e658a3f9a84ull, final_hash 5368550971089751205ull -> 10620900185585014094ull [H-THIN]
 //   Script::ExitReissue/true/false: rows_digest 0xcecfebbbe86fc767ull -> 0xb7d5805919147374ull, final_hash 6863695800300943516ull -> 15062163376854141177ull [H-THIN]
@@ -325,12 +325,12 @@ constexpr Script kScripts[] = {Script::ExitReissue, Script::FarReissue, Script::
 //   Script::TrailReissue/false/true: rows_digest 0x12bab345b4c21bdeull -> 0xa8b81e0ff7a1ed94ull, final_hash 5117488907256490505ull -> 16557720182371283228ull [H-THIN]
 //   Script::TrailReissue/true/false: rows_digest 0xbae98e9f6da67e3dull -> 0x98ba7b2c66e6130bull, final_hash 1320551696866588489ull -> 16341311528503403960ull [H-THIN]
 //   Script::TrailReissue/true/true: rows_digest 0x7e3565d7ef6b9c34ull -> 0xfdd8fbf5bc9ecc0aull, final_hash 12226981095802833438ull -> 15203686385562626719ull [H-THIN]
-// Phase B (2e976fb11f), proof rj-20261022t033804-5368ab, box i-09ed19f2aa5a5fc42, harvest harvest-evidence-20261022T053127Z/out/fix-test_adapter_command_allocations.txt: 10 lines moved; the harvest owns these values, never edit one by hand.
-// Join head (7ca2baba67, s1c line), harvest job rj-20261022t111407-69377e (NTU2, engine 8825bf1cd2 = the join head with
+// Pinned values (2e976fb11f), recorded by this test's harvest output: 10 lines moved; the harvest owns these values, never edit one by hand.
+// Integration head (7ca2baba67), harvested with engine 8825bf1cd2 (the integration head with
 // PINEFORGE_L5_HARVEST on): 32 values moved (rows_digest 16 of 16, final_hash 16 of 16); the row count 60, trades_digest
 // and trades moved 0 of 16. Cause: the exit and trade scratch folds of 3c6f46d159 and the provider's context.versions of
 // 4b5ef3dd28; design, not a bug. The harvest owns these values, never edit one by hand.
-// expectation corrected (LAB-QUIETFIX, kPins rows_digest/final_hash, 32 of 32 values over 16 rows), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_L5_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_command_allocations.txt:
+// expectation corrected (scope-allocation hash correction, kPins rows_digest/final_hash, 32 of 32 values over 16 rows), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_L5_HARVEST mode on 2cf32840b8, with private fixtures overlaid, using this test's harvest output:
 //   Script::ExitReissue/false/false: rows_digest 0xb5de258afc406381ull -> 0x2928ce4a979734a7ull, final_hash 13065747784831568330ull -> 16148908129546587066ull
 //   Script::ExitReissue/false/true: rows_digest 0x9d2e52d5691421d1ull -> 0xf72529ad14524173ull, final_hash 16213827458903396160ull -> 8346103333910200784ull
 //   Script::ExitReissue/true/false: rows_digest 0xcf120d45f8aeddcaull -> 0x9934e05dc314c37eull, final_hash 7645780866322835415ull -> 9694573989467341521ull

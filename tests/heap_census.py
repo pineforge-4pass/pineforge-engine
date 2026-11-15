@@ -427,13 +427,13 @@ def corpus_worker(probe: Path, bars_limit: int, output: Path) -> int:
         finally:
             active_chart = None
 
-    # Derived feeds must be made fresh ONCE by CORE-TOP before starting the
+    # Derived feeds must be made fresh ONCE by the caller before starting the
     # census. Refuse a derivation attempt rather than racing its fixed .new.
     def no_derive():
         import derive_corpus_feeds as feeds
         if (not feeds.SOURCE_1M.is_file() or not feeds._derived_cache_is_fresh(
                 feeds.SOURCE_1M, (feeds.DERIVED_15M, feeds.DERIVED_15M_WINDOW), feeds.DERIVATION_STAMP)):
-            raise ValueError("CORE-TOP must prepare derived corpus feeds before census")
+            raise ValueError("prepare derived corpus feeds before census")
 
     runner._load_bars, runner.Strategy.run, runner.ensure_derived = load, run, no_derive
     runner._parse_requests_feed = parse_feed
@@ -444,7 +444,7 @@ def corpus_worker(probe: Path, bars_limit: int, output: Path) -> int:
 
 
 def _markdown(report: dict) -> str:
-    lines = ["# CR-150 L0B measured heap census", "", f"Status: **{report['status']}**.", "",
+    lines = ["# Measured heap census", "", f"Status: **{report['status']}**.", "",
              f"Engine HEAD: `{report['head']}`. Schema: `{SCHEMA}`.", "",
              "Live Massif requested bytes at native_return; allocator overhead and RSS are separate.",
              "Every positive allocation-site delta is listed in census.json. Unknown sites belong to L19j.", "",

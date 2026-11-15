@@ -1,15 +1,15 @@
-// R5 lane V19-E: the transcript digests test_adapter_live_state_equivalence
+// Live adapter state retirement: the transcript digests test_adapter_live_state_equivalence
 // pins, harvested on engine be372243 (the lane's base: every placement row
 // retained, pineforge-source-adapter/v3) by that TU compiled with
 // -DPINEFORGE_V19E_HARVEST. Generated data: rebuild it the same way, never by
 // hand. Included inside that TU's anonymous namespace. One configuration
 // (reversals seed 3246599) ended in the kernel's own "native current evaluated
 // allowance mismatch" failure on the base too, and the failure was part of
-// what its transcript pinned, until R5 lane PAR-ORDERS-2: the kernel now
+// what its transcript pinned, until the current execution order correction: the kernel now
 // refuses the current execution that failed (a request bound to a host
 // roster), and the run completes.
 //
-// R5 lane V19-D re-pinned every value once, on its tree: the adapter re-issues
+// Cached views and carried bindings re-pinned every value once, on its tree: the adapter re-issues
 // with a carried binding (ReplaceOptions::keep_binding), so the kernel records
 // no CloseBoundEvent where a re-issued exit's position has not moved -- and
 // those events are part of the transcript. The same TU with every re-issue a
@@ -21,7 +21,7 @@
 
 // K-IDX Option A re-pins the v19 transcript digests once for the script/input coordinate fold.
 //
-// R5 lane PAR-MARGIN re-harvested three values the same way, on its tree:
+// Intrabar margin checks re-harvested three values the same way, on its tree:
 // reversals seeds 1570935, 2827683 and 3456057, the leveraged (margin 25,
 // default 700 %) configurations whose openings breach on their own entry bar.
 // on_applied now admits the kernel's post-fill margin point there
@@ -29,7 +29,7 @@
 // margin call on the entry bar instead of a bar later; the other 105 values
 // are unchanged.
 //
-// R5 lane PAR-MARGIN-2 re-harvested five more the same way, on its tree, each
+// Post-fill margin checks re-harvested five more the same way, on its tree, each
 // a leveraged configuration whose margin call moves onto the bar its fill was
 // on, or is re-sized there on the book that fill left -- TradingView's rule on
 // its tapes (tests/fixtures/margin_entry_bar/pm2-*):
@@ -42,9 +42,9 @@
 //     the adapter now admits the post-fill point on those fills' bars.
 // The other 103 values are unchanged.
 
-// R5 lane PAR-ORDERS re-harvested it the same way on its tree (29 of 108 digests
+// Pending-entry order handling re-harvested it the same way on its tree (29 of 108 digests
 // move; see the lane's hash commit for why each moves).
-// R5 lane PAR-ORDERS-2 moves 16 of 108 digests (INT26: the behaviour half of
+// Current execution order corrections move 16 of 108 digests (integrated source rules: the behaviour half of
 // the lane's hash commit 9f7a025c, which says why each moves; harvested the
 // same way on the integrated tree, every value equal to the lane's):
 //   reversals seed 104729: 8320704943709246891 -> 17062111550189209216 (131 trades, 397 commands, 426 rows placed -> 131 trades, 397 commands, 431 rows placed)
@@ -63,7 +63,7 @@
 //   chains seed 314189: 10134000431367652603 -> 5640170146031748940 (107 trades, 526 commands, 444 rows placed -> 107 trades, 526 commands, 454 rows placed)
 //   chains seed 1780395: 632278533107602324 -> 11993708214650334332 (82 trades, 480 commands, 426 rows placed -> 82 trades, 480 commands, 436 rows placed)
 //   chains seed 3246601: 17544117140908072910 -> 17828078233634427072 (98 trades, 485 commands, 468 rows placed -> 98 trades, 485 commands, 466 rows placed)
-// R5 lane H-THIN moves 96 of 108 digests (INT26: the behaviour half of its hash
+// Source hash cleanup moves 96 of 108 digests (integrated source rules: the behaviour half of its hash
 // step ab297364, harvested on the integrated tree with this TU's own switch;
 // the transcript holds no hash value): P10 moves the trades of configurations
 // with a FIFO exit from one of several entries, E19 the excursion fields every
@@ -164,11 +164,11 @@
 //   chains seed 3560788: 5397962162622300398 -> 2170094277734349720 (an earlier pick had moved it too) (chains seed 3560788, 73 trades, 359 commands, 337 rows placed -> chains seed 3560788, 60 trades, 363 commands, 422 rows placed)
 //   chains seed 3665517: 3084783482698433102 -> 11220893490402964604 (chains seed 3665517, 70 trades, 347 commands, 326 rows placed -> chains seed 3665517, 70 trades, 347 commands, 380 rows placed)
 //   chains seed 3770246: 15996277680102595200 -> 1535576416135278226 (chains seed 3770246, 76 trades, 362 commands, 298 rows placed -> chains seed 3770246, 62 trades, 346 commands, 372 rows placed)
-// R5 lane PAR-ORDERS-3 moves 6 of the 108 digests on the integrated tree (INT27:
+// Fill recalculation corrections move 6 of the 108 digests on the integrated tree (fill recalculation integration:
 // the behaviour half of the lane's hash commit b65cee22, which says why each
 // moves -- finding 4, bc5f7a21). Harvested with PINEFORGE_V19E_HARVEST; the
 // lane's seventh, chains seed 1780395 (a digest-only move on its tree), does
-// not move here, and every count is this tree's (INT26's picks had moved each
+// not move here, and every count is this tree's (the integrated source rules' picks had moved each
 // of these seeds before):
 //   reversals seed 314187: 2936193272230691901 -> 8480529943005853423 (168 trades, 628 commands, 582 rows placed -> 196 trades, 673 commands, 657 rows placed)
 //   reversals seed 1780393: 15749505417408196912 -> 17449904882900142298
@@ -176,7 +176,7 @@
 //   brackets seed 314188: 6185985077652624317 -> 15155965389917690170 (144 trades, 818 commands, 919 rows placed -> 134 trades, 837 commands, 932 rows placed)
 //   brackets seed 1780394: 5435028051816123314 -> 12091946260420883994 (95 trades, 697 commands, 705 rows placed -> 96 trades, 721 commands, 761 rows placed)
 //   chains seed 314189: 3920721464232107171 -> 14595591561869877759 (62 trades, 465 commands, 490 rows placed -> 75 trades, 498 commands, 527 rows placed)
-// INT28 re-harvested it once on the integrated tree (main 962960b3 and the
+// Integrated order and margin rules re-harvested it once on the integrated tree (main 962960b3 and the
 // wave-J picks) with PINEFORGE_V19E_HARVEST; the same harvest against main
 // reproduces every old value. 108 of 108 digests move, each marked with
 // the pick(s) at whose boundary it moved (a harvest at every pick); an
@@ -292,9 +292,9 @@
 //   chains seed 3560788: 2170094277734349720 -> 3614987093622666609 (60 trades, 363 commands, 422 rows placed -> 61 trades, 363 commands, 426 rows placed) [W3B void exit; W8A R-B]
 //   chains seed 3665517: 11220893490402964604 -> 11464826053545175105 (70 trades, 347 commands, 380 rows placed -> 72 trades, 347 commands, 376 rows placed) [W3B void exit; W8A R-B]
 //   chains seed 3770246: 1535576416135278226 -> 6257524543885771248 (62 trades, 346 commands, 372 rows placed -> 63 trades, 346 commands, 364 rows placed) [W3B void exit; W5 C1; W4 F08]
-// INT28-FIX re-harvested it once on the integrated tree (INT28 4efcb8c5 and
-// INT28-FIX's ten commits) with PINEFORGE_V19E_HARVEST; the same harvest against
-// INT28 reproduces every old row. 4 of 108 digests move, each marked with the
+// Admission and margin corrections re-harvested it once on the integrated tree (integrated order and margin rules 4efcb8c5 and
+// Admission and margin corrections' ten commits) with PINEFORGE_V19E_HARVEST; the same harvest against
+// Integrated order and margin rules reproduces every old row. 4 of 108 digests move, each marked with the
 // commit(s) at whose boundary it moved (a harvest at every commit): only the
 // picked W5B-ENG-MARGIN-RESIDUAL rules SB and PC move any; CA, PA, SZ, FU,
 // MS, SS, OU and OF move none. The rules are TradingView's (their lanes'
@@ -303,7 +303,7 @@
 //   reversals seed 1675664: 10035800005689134556 -> 9885010638859166194 (111 trades, 379 commands, 394 rows placed -> 110 trades, 379 commands, 394 rows placed) [W5B SB]
 //   reversals seed 2199309: 5727820387840827666 -> 3773617840179934238 (122 trades, 400 commands, 378 rows placed -> 122 trades, 400 commands, 380 rows placed) [W5B PC]
 //   reversals seed 3351328: 14703653017612176717 -> 6358143307834022586 (108 trades, 414 commands, 363 rows placed -> 106 trades, 414 commands, 363 rows placed) [W5B SB]
-// R5 lane TAIL-D re-harvested it the same way on its tree (8988faff and the
+// Fill recalculation corrections re-harvested it the same way on its tree (8988faff and the
 // lane's ten rule commits); the same harvest against 8988faff reproduces every
 // old value. 6 of 108 digests move, and a harvest after each rule commit places
 // each move at the commits named in brackets: M1 (a close the recalculation of
@@ -332,8 +332,8 @@
 //   chains seed 1885124: 6942996273005923496 -> 15441784586956253521 (60 trades, 362 commands, 336 rows placed) [TAIL-H PK]
 //   chains seed 2199311: 4082722409939848804 -> 2275122436928983111 (56 trades, 321 commands, 328 rows placed) [TAIL-H PK]
 //   chains seed 3456059: 8183628840974573929 -> 17080496727403308679 (43 trades, 310 commands, 268 rows placed) [TAIL-H PK]
-// R5 lane TAIL-C re-harvested it once on its tree (r5/tail-c: lane W8E-EXITS's
-// rule A picked onto INT29 8988faff, then TAIL-C's six rules) with
+// Fill and close-pass corrections re-harvested it once on its tree (the exit correction's
+// rule applied to order and timing integration 8988faff, then the six fill and close rules) with
 // PINEFORGE_V19E_HARVEST; the same harvest against 8988faff reproduces every
 // old row. 13 of 108 digests move, each marked with the commit(s) at whose
 // boundary it moved (a harvest at every commit; W8E's rule A and TAIL-C's
@@ -353,7 +353,7 @@
 //   brackets seed 1780394: 7524564435896309120 -> 14543837208249092685 (93 trades, 692 commands, 780 rows placed -> 93 trades, 692 commands, 781 rows placed) [TAIL-C OPEN]
 //   chains seed 314189: 800157839082870006 -> 1760223447026107653 (83 trades, 491 commands, 516 rows placed -> 81 trades, 487 commands, 505 rows placed) [TAIL-C W2]
 //   chains seed 1780395: 14674860695032071620 -> 17472316981750834312 (67 trades, 440 commands, 482 rows placed -> 63 trades, 430 commands, 475 rows placed) [TAIL-C W2]
-// R5 lane TAIL-E re-harvested it once on its tree with PINEFORGE_V19E_HARVEST.
+// Immediate-close recalculation correction re-harvested it once on its tree with PINEFORGE_V19E_HARVEST.
 // 3 of 108 digests move, all at its commit "an immediate close the bar's
 // calculation executes is final for the bar" (the table held at the lane's
 // time() commit 1b67b6c6: its debug ctest ran this row green). Each is a
@@ -364,7 +364,7 @@
 //   reversals seed 1780393: 3777516334616247576 -> 1465470659302029377 (192 trades, 691 commands, 650 rows placed -> 191 trades, 700 commands, 665 rows placed)
 //   chains seed 314189: 800157839082870006 -> 15999827188627897905 (83 trades, 491 commands, 516 rows placed -> 94 trades, 526 commands, 543 rows placed)
 //   chains seed 1780395: 14674860695032071620 -> 1417054795560865178 (67 trades, 440 commands, 482 rows placed -> 73 trades, 456 commands, 505 rows placed)
-// INT30 harvested it once more on the integrated tree (engine main 7239ab37
+// Combined fill and margin integration harvested it once more on the integrated tree (engine main 7239ab37
 // with lanes TAIL-A, TAIL-B, TAIL-G, TAIL-D, TAIL-H, TAIL-E and TAIL-C picked,
 // in that order) and at each lane boundary of that history. main reproduces
 // every old value; TAIL-A, TAIL-B, TAIL-G, TAIL-H's rule PS, TAIL-E's time()
@@ -423,8 +423,8 @@
 // here: the key at release is the only effect. The transcript folds events, pending-order rows, working requests,
 // position, equity and counts, no hash. The measured difference of reversals seed 837832 is one closed trade fewer
 // (90 -> 89) with commands (401) and rows placed (369) unchanged; which trade it is has not been identified. Harvested
-// by the generator (tree = the 1.7.0 picks head 57e662382d, job rj-20261023t194305-8550f4, lab-only); the same
-// configuration still passes with the old value when the two captures are reverted (job rj-20261023t182901-ced80d,
+// by the generator (tree = the 1.7.0 picks head 57e662382d, lab build); the same
+// configuration still passes with the old value when the two captures are reverted (control run,
 // on the pre-picks tree):
 //   reversals seed 837832: 11651815776502670583 -> 7945713857493298121
 // Pins the behaviour of the reversal-bookkeeping fix (credited-cohort skip in
