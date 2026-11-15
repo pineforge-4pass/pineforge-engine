@@ -6244,7 +6244,8 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
             stage['seconds'] = seconds
             if log:
                 print(f'ci_preflight: {name}: output ({stage["log"]})', flush=True)
-                print(log.decode('utf-8', 'replace'), end='', flush=True)
+                print(log.decode('utf-8', 'replace'),
+                      end='' if log.endswith(b'\n') else '\n', flush=True)
             if (code == 77 and not advisory and not private_fixtures_overlay()
                     and PRIVATE_FIXTURE_SKIP_LITERAL.encode() in log):
                 # A source guard whose private fixture input the tree lacks exits
@@ -6261,6 +6262,9 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
                 stage.update(status='reported', exitCode=code)
             else:
                 stage.update(status='passed' if code == 0 else 'failed', exitCode=code)
+            if stage['status'] == 'failed':
+                print(f'ci_preflight: FAIL {name}: exit {code}; '
+                      f'log: {output / stage["log"]}', flush=True)
             record()
 
     parallel = []
@@ -6281,6 +6285,9 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
     summary.update(status='passed' if passed else 'failed', exitCode=0 if passed else 1,
                    seconds=round(time.monotonic() - run_t0, 3))
     record()
+    failed = [stage['name'] for stage in summary['stages'] if stage['status'] == 'failed']
+    print(f'ci_preflight: summary: {summary["status"]}; {len(failed)} failed binding stage(s)'
+          + (': ' + ', '.join(failed) if failed else ''), flush=True)
     return summary['exitCode']
 
 
