@@ -12451,14 +12451,14 @@
   },
   {
    "file": "include/pineforge/ta.hpp",
-   "symbol": "history",
+   "symbol": "history_",
    "scope": [
     "namespace pineforge #1",
     "namespace ta #1",
     "class Change #1"
    ],
    "cls": "decl",
-   "spelling": "OwnedDeque < double >",
+   "spelling": "std :: vector < double >",
    "ordinal": 1
   },
   {
@@ -12482,7 +12482,7 @@
     "class StdDev #1"
    ],
    "cls": "decl",
-   "spelling": "OwnedDeque < double >",
+   "spelling": "std :: optional < OwnedDeque < double > >",
    "ordinal": 1
   },
   {
@@ -13287,24 +13287,13 @@
   },
   {
    "file": "include/pineforge/window_sum.hpp",
-   "symbol": "values_",
+   "symbol": "window_",
    "scope": [
     "namespace pineforge #1",
     "class KahanWindowSum #1"
    ],
    "cls": "decl",
-   "spelling": "OwnedDeque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/window_sum.hpp",
-   "symbol": "addends_",
-   "scope": [
-    "namespace pineforge #1",
-    "class KahanWindowSum #1"
-   ],
-   "cls": "decl",
-   "spelling": "OwnedDeque < double >",
+   "spelling": "std :: vector < Entry >",
    "ordinal": 1
   },
   {
@@ -41424,6 +41413,29 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "store",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "struct PlacementTable :: SequenceIndex #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "remaining",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "struct PlacementTable :: SequenceIndex #1",
+    "bool watch_inline ( std :: string_view id , std :: string_view from , std :: uint64_t answer ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "remaining = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "result",
    "scope": [
     "namespace pineforge :: source #7",
@@ -41432,6 +41444,17 @@
    ],
    "cls": "assign",
    "spelling": "result = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "sequence_index_",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "void PlacementTable :: begin_exit_sequence_certificate ( ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
    "ordinal": 1
   },
   {
@@ -46769,48 +46792,13 @@
   },
   {
    "file": "src/ta_moving_averages.cpp",
-   "symbol": "addends_",
+   "symbol": "replacement",
    "scope": [
     "namespace pineforge #1",
-    "void KahanWindowSum :: enter ( double src , double comp_before ) #1"
+    "void KahanWindowSum :: ensure_room ( ) #1"
    ],
-   "cls": "grow",
-   "spelling": "addends_ . push_front ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_moving_averages.cpp",
-   "symbol": "values_",
-   "scope": [
-    "namespace pineforge #1",
-    "void KahanWindowSum :: enter ( double src , double comp_before ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "values_ . push_front ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_moving_averages.cpp",
-   "symbol": "values_",
-   "scope": [
-    "namespace pineforge #1",
-    "void KahanWindowSum :: unpush ( ) #1",
-    "if ( ! is_na ( saved_evicted_addend_ ) ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "values_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_moving_averages.cpp",
-   "symbol": "addends_",
-   "scope": [
-    "namespace pineforge #1",
-    "void KahanWindowSum :: unpush ( ) #1",
-    "if ( ! is_na ( saved_evicted_addend_ ) ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "addends_ . push_back ( . . . )",
+   "cls": "decl",
+   "spelling": "std :: vector < Entry >",
    "ordinal": 1
   },
   {
@@ -46887,14 +46875,14 @@
   },
   {
    "file": "src/ta_oscillators.cpp",
-   "symbol": "history",
+   "symbol": "replacement",
    "scope": [
     "namespace pineforge #1",
     "namespace ta #1",
-    "double Change :: compute ( double src , int length ) #1"
+    "void Change :: ensure_room ( std :: size_t keep ) #1"
    ],
-   "cls": "grow",
-   "spelling": "history . push_back ( . . . )",
+   "cls": "decl",
+   "spelling": "std :: vector < double >",
    "ordinal": 1
   },
   {
@@ -47083,10 +47071,22 @@
    "scope": [
     "namespace pineforge #1",
     "namespace ta #1",
+    "StdDev :: StdDev ( int length , bool biased ) : length_ ( length ) , biased_ ( biased ) , sum_x_ ( length ) , sum_xx_ ( length ) , bar_count_ ( 0 ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "buffer_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_volatility_trend.cpp",
+   "symbol": "buffer",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
     "double StdDev :: compute ( double src ) #1"
    ],
    "cls": "grow",
-   "spelling": "buffer_ . push_back ( . . . )",
+   "spelling": "buffer . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -48145,37 +48145,26 @@
    "ordinal": 1
   },
   {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "store",
+   "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "id",
    "scope": [
-    "namespace pineforge :: source #7",
-    "struct PlacementTable :: SequenceIndex #1"
+    "namespace pineforge :: source #2",
+    "class PineExecutionAdapter #1",
+    "struct CohortHandleCacheEntry #1"
    ],
-   "cls": "alloc",
-   "spelling": "make_unique",
+   "cls": "decl",
+   "spelling": "SourceId",
    "ordinal": 1
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "remaining",
+   "symbol": "id",
    "scope": [
-    "namespace pineforge :: source #7",
-    "struct PlacementTable :: SequenceIndex #1",
-    "bool watch_inline ( std :: string_view id , std :: string_view from , std :: uint64_t answer ) #1"
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: remember_cohort_handle ( const SourceId & id , native_order :: CohortHandle handle ) const #1"
    ],
    "cls": "assign",
-   "spelling": "remaining = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "sequence_index_",
-   "scope": [
-    "namespace pineforge :: source #7",
-    "void PlacementTable :: begin_exit_sequence_certificate ( ) #1"
-   ],
-   "cls": "alloc",
-   "spelling": "make_shared",
+   "spelling": "id = . . .",
    "ordinal": 1
   }
  ]

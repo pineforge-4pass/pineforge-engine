@@ -6,6 +6,7 @@
 #include <cmath>
 #include <vector>
 #include <string>
+#include <optional>
 
 namespace pineforge {
 
@@ -418,16 +419,28 @@ public:
 // --- Change ---
 
 class Change {
-    OwnedDeque<double> history;
+    // Newest first, in one independently owned checkpoint buffer. Grow only
+    // as calls require history; a smaller requested length still trims it.
+    std::vector<double> history_;
+    std::size_t head_ = 0;
+    std::size_t size_ = 0;
     int max_length_;
+
+    std::size_t index(std::size_t offset) const noexcept {
+        const auto position = head_ + offset;
+        return position < history_.size() ? position : position - history_.size();
+    }
+    void ensure_room(std::size_t keep);
 
 public:
     explicit Change(int max_length = 1);
+    Change(const Change&) = default;
+    Change& operator=(const Change&) = default;
     double compute(double src, int length = 1);
     double recompute(double src, int length = 1);
 public:
     void observe_owned_storage(OwnedStorage& out) const noexcept {
-        observe_owned_members(out, history);
+        observe_owned_members(out, history_);
     }
 };
 
@@ -507,7 +520,7 @@ public:
 class StdDev {
     int length_;
     bool biased_;
-    OwnedDeque<double> buffer_;      // unbiased path only
+    std::optional<OwnedDeque<double>> buffer_; // materialized only for the unbiased path
     KahanWindowSum sum_x_;           // Sx  (biased path)
     KahanWindowSum sum_xx_;          // Sxx (biased path)
     int bar_count_;

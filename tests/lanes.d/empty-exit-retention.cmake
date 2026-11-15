@@ -1,0 +1,6 @@
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_issue858_empty_exit_retention)
+    pineforge_add_unit_test(test_issue858_empty_exit_retention)
+    list(APPEND TEST_SOURCES test_cohort_handle_cache_rebuild)
+    pineforge_add_unit_test(test_cohort_handle_cache_rebuild)
+endif()

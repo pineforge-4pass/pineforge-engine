@@ -3697,7 +3697,7 @@ The Pine adapter emits `Sized` for the default-quantity entries above and no
 Pine/generated hosts derive from `pineforge::source::PineStrategyHost`, which
 derives from `NativeStrategyHost`; handwritten native hosts also derive from
 `NativeStrategyHost`. The source adapter/scheduler hash domain is
-`kSourceAdapterDomain` `pine_adapter.hpp:59`
+`kSourceAdapterDomain` `pine_adapter.hpp:60`
 (`"pineforge-source-adapter/v4"`), while the public C ABI remains version 4.
 
 The ownership switch is complete: the compatibility loop and the source

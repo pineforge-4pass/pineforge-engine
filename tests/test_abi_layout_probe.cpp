@@ -59,13 +59,16 @@ using Scratch = std::remove_reference_t<
 // PlacementTable members added in #756 grow both enclosing layouts by 32 bytes.
 // The fill-time peak of the drawdown rule (one double) grows both by 8 bytes.
 // The long-tick margin state of a full-margin long (four adapter members) added in #812 grows both layouts by 32 bytes.
+// The eight exact-id cohort handle cache entries and replacement cursor add
+// 328 bytes. Linux x86_64 GNU Debug compiler diagnostics on the PR head
+// measured Adapter=90720 and Host=109624; these pins are x86_64-only.
 static_assert(sizeof(Scratch) == 672, "RetiredRowScratch size changed");
-static_assert(sizeof(Adapter) == 90392, "PineExecutionAdapter size changed");
+static_assert(sizeof(Adapter) == 90720, "PineExecutionAdapter size changed");
 #ifndef PINEFORGE_RUNTIME_LAYOUT_MEASURE_ONLY
 // Linux x86_64 GNU libstdc++ compiler diagnostics agree in Release and Debug
 // on the integrated tree. Measurement mode skips this pin and is never a
 // passing ABI gate.
-static_assert(sizeof(Host) == 109296, "PineStrategyHost size changed; measure and pin the final layout");
+static_assert(sizeof(Host) == 109624, "PineStrategyHost size changed; measure and pin the final layout");
 #endif
 static_assert(PF_STREAM_ENGINE_LAYOUT_VERSION == 4u, "runtime contexts require layout stamp 4");
 static_assert(!HasRosterRoots<Scratch>::value,
@@ -135,9 +138,9 @@ int main() {
 #if defined(__linux__) && defined(__x86_64__) && defined(__GLIBCXX__)
     bool pins_hold = true;
     pins_hold &= pin("sizeof RetiredRowScratch", sizeof(Scratch), 672);
-    pins_hold &= pin("sizeof PineExecutionAdapter", sizeof(Adapter), 90392);
+    pins_hold &= pin("sizeof PineExecutionAdapter", sizeof(Adapter), 90720);
 #ifndef PINEFORGE_RUNTIME_LAYOUT_MEASURE_ONLY
-    pins_hold &= pin("sizeof PineStrategyHost", sizeof(Host), 109296);
+    pins_hold &= pin("sizeof PineStrategyHost", sizeof(Host), 109624);
 #else
     // A successful measurement command is never a successful layout test.
     pins_hold = false;

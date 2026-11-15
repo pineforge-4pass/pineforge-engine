@@ -18,6 +18,7 @@
 #include <pineforge/source/exit_scratch.hpp>
 #include <pineforge/source/live_source_identity.hpp>
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -2271,6 +2272,8 @@ private:
     bool modeled_input() const;
     void require_cohort_ticket(const SourceId* prospective = nullptr) const;
     native_order::CohortHandle cohort_for(const SourceId& id);
+    native_order::CohortHandle find_cohort_handle(const SourceId&) const;
+    void remember_cohort_handle(const SourceId&, native_order::CohortHandle) const;
     std::optional<native_order::RequestHandle> submit_or_replace(
         native_order::Request request, PlacementSnapshot snapshot, bool opening,
         const SourceId& replacement_key = {});
@@ -3101,6 +3104,13 @@ private:
     SourceId open_exit_first_id_{};
     double open_exit_first_fill_ = 0.0;
     // @source-state end
+    // Derived, bounded lookup of immutable run-local handles. No live
+    // payload, negative lookup or iterator is retained; eviction changes
+    // only lookup work. Admission still precedes every close-owner lookup.
+    struct CohortHandleCacheEntry {
+        SourceId id;
+        native_order::CohortHandle handle{};
+    };
     // Diagnostic work counter: written from const methods, never read by a
     // decision, deliberately outside source state and the broker hash.
     mutable PendingScanWork pending_scan_work_{};
@@ -3366,6 +3376,9 @@ private:
         std::int64_t broker_expiry = std::numeric_limits<std::int64_t>::max();
     };
     RetirementGate retirement_gate_;
+    // Append derived cache storage so existing member offsets remain stable.
+    mutable std::array<CohortHandleCacheEntry, 8> cohort_handle_cache_{};
+    mutable std::size_t cohort_handle_cache_next_ = 0;
     void invalidate_retirement() noexcept { retirement_gate_.certified = false; }
     bool capture_retirement_inputs(RetirementInputs&) const;
     void observe_retirement_expiry(const PlacementSnapshot&, std::int64_t interval) noexcept;
