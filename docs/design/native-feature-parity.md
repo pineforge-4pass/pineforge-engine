@@ -1251,7 +1251,7 @@ percentage exits, so neither retention nor lookup requires a finite quantity.
 A never-filled withdrawn leg contributes no fact. True bound partial fills
 record Limit, Stop and Trail consumption together, and cancellation preserves
 that result (`record_consumed` and `cancel_members`,
-`include/pineforge/source/pine_adapter.hpp:1285`,
+`include/pineforge/source/pine_adapter.hpp:1285-1305`,
 `include/pineforge/source/pine_adapter.hpp:1305`).
 
 Facts are pruned before emptiness is tested at flat or reversal. While any
@@ -1821,7 +1821,7 @@ std::optional<Bar> current_partial_bar() const;                                 
 
 Callback chronology contract (the normative part of the lane; F P4.1 + O G8):
 
-1. At one point: match and settle → `on_native_applied` per applied event, FIFO (rule already at `on_native_applied` native-engine.md:1729-1730) → with `BarCloseAndFills`, one recalculation at the fill cursor (reason `OrderFill`), driven from the existing notification drain (native_execution_consumer.cpp:8666-8686) under its re-entrancy guard, bounded by `max_recalculations_per_point`. S would run it *before* the drain; not chosen, the drain order is frozen (E4).
+1. At one point: match and settle → `on_native_applied` per applied event, FIFO (rule already at `on_native_applied` native-engine.md:1740-1741) → with `BarCloseAndFills`, one recalculation at the fill cursor (reason `OrderFill`), driven from the existing notification drain (native_execution_consumer.cpp:8666-8686) under its re-entrancy guard, bounded by `max_recalculations_per_point`. S would run it *before* the drain; not chosen, the drain order is frozen (E4).
 2. Requests born in any of these callbacks follow the existing birth rule: eligible on the unconsumed rest of the bar (`born_on_remaining_path` native_execution_consumer.cpp:7048). `born_on_remaining_path` (native_execution_consumer.cpp:7048) is not touched — the adapter's COOF deferral (`pending_coof_requests_`, element type `PendingCoofRequest` pine_adapter.hpp:2249) is calibrated against it.
 3. `EveryModeledPoint`: a calculation at each magnifier sample / observed print, in batch as well as stream (every delivery loop asks the per-point guard `recalculate_at_point` native_execution_consumer.hpp:1470-1475, whose body is `recalculate_at_modeled_point` native_execution_consumer.cpp:8504). `on_native_tick` stays the observation hook (S).
 4. `current_partial_bar()` derives from the driver points already recorded (`record_driver` native_execution_consumer.cpp:3670); valid in bar-open, applied and tick callbacks.
