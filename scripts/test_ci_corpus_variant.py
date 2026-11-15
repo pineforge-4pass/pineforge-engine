@@ -145,8 +145,8 @@ class GkeCorpusAdmissionVariantTests(unittest.TestCase):
         workflow = workflow.replace(CORPUS_JOB, '', 1)
         workflow = self.replace_job(
             workflow, 'result',
-            '    needs: [admit, preflight, build-x86-gcc133, corpus-gitlink-result, legs]\n',
-            '    needs: [admit, preflight, build-x86-gcc133, legs]\n')
+            '    needs: [admit, preflight, build-x86-gcc133, build-tests, build-tests-result, corpus-gitlink-result, legs]\n',
+            '    needs: [admit, preflight, build-x86-gcc133, build-tests, build-tests-result, legs]\n')
         for addition in (
                 '          CORPUS_RESULT: ${{ needs.corpus-gitlink-result.result }}\n',
                 '          test "$CORPUS_RESULT" = success || fail "corpus validation did not pass"\n'):
@@ -161,8 +161,8 @@ class GkeCorpusAdmissionVariantTests(unittest.TestCase):
         self.assertEqual(changed.replace(CORPUS_JOB, '', 1), workflow)
         changed = self.replace_job(
             changed, 'result',
-            '    needs: [admit, preflight, build-x86-gcc133, legs]\n',
-            '    needs: [admit, preflight, build-x86-gcc133, corpus-gitlink-result, legs]\n')
+            '    needs: [admit, preflight, build-x86-gcc133, build-tests, build-tests-result, legs]\n',
+            '    needs: [admit, preflight, build-x86-gcc133, build-tests, build-tests-result, corpus-gitlink-result, legs]\n')
         # Literal result hunk; these anchors are independent of checker templates.
         for anchor, addition in (
                 ('          X86_RESULT: ${{ needs.build-x86-gcc133.result }}\n',
@@ -240,11 +240,11 @@ class GkeCorpusAdmissionVariantTests(unittest.TestCase):
     def test_job_present_with_old_result_needs_is_refused(self) -> None:
         changed = self.replace_job(
             self.workflow, 'result',
-            '    needs: [admit, preflight, build-x86-gcc133, corpus-gitlink-result, legs]\n',
-            '    needs: [admit, preflight, build-x86-gcc133, legs]\n')
+            '    needs: [admit, preflight, build-x86-gcc133, build-tests, build-tests-result, corpus-gitlink-result, legs]\n',
+            '    needs: [admit, preflight, build-x86-gcc133, build-tests, build-tests-result, legs]\n')
         self.assert_refused(
             changed, 'gke-pr.yml result must need admit, preflight, build-x86-gcc133, '
-            'corpus-gitlink-result and legs')
+            'build-tests, build-tests-result, corpus-gitlink-result and legs')
         self.assertIn(
             'gke-pr.yml result must require admission, preflight, native x86, '
             'corpus validation and consistent proof results',
@@ -263,10 +263,11 @@ class GkeCorpusAdmissionVariantTests(unittest.TestCase):
     def test_job_absent_with_corpus_result_needs_is_refused(self) -> None:
         changed = self.replace_job(
             self.original, 'result',
-            '    needs: [admit, preflight, build-x86-gcc133, legs]\n',
-            '    needs: [admit, preflight, build-x86-gcc133, corpus-gitlink-result, legs]\n')
+            '    needs: [admit, preflight, build-x86-gcc133, build-tests, build-tests-result, legs]\n',
+            '    needs: [admit, preflight, build-x86-gcc133, build-tests, build-tests-result, corpus-gitlink-result, legs]\n')
         self.assert_refused(
-            changed, 'gke-pr.yml result must need admit, preflight, build-x86-gcc133 and legs',
+            changed, 'gke-pr.yml result must need admit, preflight, build-x86-gcc133, '
+            'build-tests, build-tests-result and legs',
             baseline=self.original)
 
     def test_job_absent_with_corpus_result_environment_is_refused(self) -> None:
