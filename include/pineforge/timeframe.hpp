@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 #include <memory>
+#include <optional>
 #include "bar.hpp"
 #include <pineforge/detail/feed_projection.hpp>
 #include <pineforge/owned_storage.hpp>
@@ -19,6 +20,15 @@ struct AggregatedBar {
     Bar bar;
     bool is_complete;
     int sub_bar_count;
+};
+
+// A fixed-period completion cursor, separate from count-based aggregation.
+// Empty buckets retain a clock but no observed OHLCV. The caller owns and
+// hashes this bounded record; no input or completed-bar queue is retained.
+struct FixedPeriodClock {
+    std::optional<int64_t> cursor_ms;
+    Bar observed{};
+    int observed_count = 0;
 };
 
 // ─── TF string helpers ─────────────────────────────────────────────────────────
@@ -413,6 +423,25 @@ public:
     /// actual last bar completes the period either way.
     AggregatedBar feed(const Bar& input_bar, int64_t next_input_ms,
                        int64_t calling_close_ms);
+
+    /// Strictly coarser fixed periods whose width does not divide the actual
+    /// evaluator input cadence. Calendar and ordinary divisible paths are
+    /// unchanged. Installing authoritative data is the caller's opt-in.
+    bool supports_fixed_completion() const;
+
+    /// Observe real input only, after draining completions through its open.
+    /// A child of a bucket already finalized by a session close is ignored.
+    void observe_fixed(FixedPeriodClock& clock, const Bar& input_bar) const;
+
+    /// Return the next bucket closed by `horizon_ms`, advancing the clock
+    /// once. Zero observed children means the caller needs an authoritative
+    /// payload to publish it. `last_input_ms` / `next_input_ms` preserve the
+    /// existing exchange early-close rule; they never enlarge the horizon.
+    /// The caller initializes cursor_ms from its first accepted input open
+    /// and supplies a real accepted close, bounded by any known successor.
+    std::optional<AggregatedBar> next_fixed_completion(
+        FixedPeriodClock& clock, int64_t horizon_ms,
+        int64_t last_input_ms = 0, int64_t next_input_ms = 0) const;
 
     /// Current in-progress bar.
     Bar current() const;

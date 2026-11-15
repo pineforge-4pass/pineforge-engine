@@ -38,6 +38,30 @@ class Coverage(unittest.TestCase):
     def test_current_tree_passes(self):
         self.assertEqual(self.check()[0], 0)
 
+    def test_fixed_security_clock_fields_and_bindings_are_pinned(self):
+        for relative, before, after in (
+            ("include/pineforge/timeframe.hpp", "int observed_count = 0;",
+             "int observed_count = 0; int retained_extra = 0;"),
+            ("src/engine_state_hash.cpp", "f.b(clock.cursor_ms.has_value());", ""),
+            ("src/engine_state_hash.cpp", "if (clock.cursor_ms) f.i(*clock.cursor_ms);", ""),
+            ("src/engine_state_hash.cpp", "f.d(clock.observed.open);", ""),
+            ("src/engine_state_hash.cpp", "f.d(clock.observed.high);", ""),
+            ("src/engine_state_hash.cpp", "f.d(clock.observed.low);", ""),
+            ("src/engine_state_hash.cpp", "f.d(clock.observed.close);", ""),
+            ("src/engine_state_hash.cpp", "f.d(clock.observed.volume);", ""),
+            ("src/engine_state_hash.cpp", "f.i(clock.observed.timestamp);", ""),
+            ("src/engine_state_hash.cpp", "f.i(clock.observed_count);", ""),
+            ("src/engine_state_hash.cpp", "f.i(state.feed_count);", ""),
+            ("src/engine_state_hash.cpp", "f.i(state.eval_complete_count);", ""),
+            ("src/engine_state_hash.cpp", "    hash_fixed_security_clocks(f);", ""),
+            ("src/native_execution_consumer.cpp",
+             "if (downcast_engine_->hash_fixed_security_clocks(clocks)) f.u(clocks.h);", ""),
+        ):
+            with self.subTest(before=before):
+                result, output = self.check(((relative, before, after),))
+                self.assertEqual(result, 1, output)
+                self.assertIn("FixedPeriodClock", output)
+
     def test_scratch_store_state_digest_prefix_is_pinned(self):
         # The old checker ignores this implementation, so every mutation
         # below returns success there and this test fails. No digest literal

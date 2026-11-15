@@ -170,6 +170,11 @@ summary of it.
   `set_native_security_feed` (`engine.hpp:2086`) is the pre-run door for a series'
   authoritative bars and still throws in-run
   (`guard_native_mutation` `engine_aux_security.cpp:84`).
+  Same-period authoritative data also enables strictly coarser non-multiple
+  fixed subscriptions. Their clock drains only through accepted input closes;
+  an auxiliary subscription uses the primary acceptance horizon even with no
+  fine observations. A missing payload falls back only to observed children.
+  This uses the existing authoritative-data opt-in, with no additional flag.
   Indicators are `ta_*.cpp`, session/calendar `session_time.cpp` / `native_calendar.cpp`, FX
   `configure_native_fx_curve` (`native_host.hpp:1228`).
 - **Reporting.** `fill_report` (`engine.hpp:2235`, `src/engine_report.cpp:337`) gives a bare host
@@ -821,6 +826,7 @@ The table records, at the tree the doc wave read, what each block described and 
 
 | kernel site | the mechanism | (a) generic because | (b) a knob would be | pinned by |
 |---|---|---|---|---|
+| `next_fixed_completion` `src/timeframe.cpp:1250`, composed with `next_native_fixed_security_bar` `src/engine_security.cpp:105` | a non-multiple fixed requested clock drains completed buckets through a positive accepted close; native data supplies full OHLCV and observed children alone supply fallback | period completion and authoritative payload selection are feed operations; the clock uses the run's session, timezone, actual evaluator input and accepted interval, without platform or script identity | a flag would duplicate the existing decision to install same-period native data; no-native, divisible and calendar paths retain their behavior | `tests/test_native_htf_subscriptions.cpp`, `tests/test_native_auxiliary_feed.cpp`, `tests/test_native_security_feed_l4d.cpp`; shortened-close API cases in `tests/test_timeframe_aggregator_extra.cpp` and retained-state mutations in `tests/test_pine_security_state_hash.cpp` (unit expectations, not reporter TradingView parity) |
 | `utc_floor_day_ms` `src/timeframe.cpp:187` (the `TradingView` comment `sha256:1868eeadaab06b664c5ba966a86e70d6de2ad74d3645afe1846ed736d0c2afce` :180-183) | daily boundaries are anchored at symbol-local midnight | the anchor is `spec.timezone`'s data, not a platform's; another venue is driven by naming its zone | a "which midnight" field over a zone the spec already names | `tests/test_native_calendar.cpp`, `tests/test_session_day_anchors.cpp` |
 | `session_period_last_traded_close_ms` `src/timeframe.cpp:999` (the `TradingView` comment `sha256:a650d166e35a1e22188ff5c3ee50c5534519730913a3fe713cf0b93b0f66d4ca` :989-998) | a D/W/M period is finished at the last traded close of its last session | every venue calendar must answer "is this period over"; the answer is computed from `spec.session` and `spec.timezone` | a per-run completion-rule switch over a choice the session template already makes | `tests/test_calendar_aggregation_wm.cpp`, `tests/test_session_calendar_extra.cpp` |
 | the session-day split `crosses_boundary` `src/timeframe.cpp:1077-1083` | calendar periods split on the session-day clock, not the civil one | continuous-session instruments need a session-day clock whatever platform asks; the class comes from `spec.type` | hash-visible surface for what `spec.type` decides | `tests/test_session_day_anchors.cpp` |

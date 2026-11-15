@@ -245,6 +245,37 @@ def require_once(text: str, value: str, label: str) -> None:
         raise ValueError(label + " must appear exactly once")
 
 
+def fixed_security_clock_fields(root: Path, engine_hash: str) -> None:
+    # Generic counterpart of the source NESTED_STRUCTS inventory: this
+    # record lives in timeframe.hpp and must fold before a host override.
+    label = "FixedPeriodClock"
+    header = clean((root / "include/pineforge/timeframe.hpp").read_text())
+    fields = _data_fields(_named_body(header, "struct", label), trailing_underscore=False)
+    expected = {"cursor_ms", "observed", "observed_count"}
+    if fields != expected:
+        raise ValueError(label + " fields: unclassified=" + repr(sorted(fields - expected))
+                         + ", stale=" + repr(sorted(expected - fields)))
+    fold = _function_body(
+        engine_hash, r"\bbool\s+BacktestEngine::hash_fixed_security_clocks\s*\(", label)
+    for statement in (
+        'constexpr char domain[] = "pineforge-fixed-security-clock/v1";',
+        "f.u(sizeof(domain) - 1);", "f.bytes(domain, sizeof(domain) - 1);",
+        "f.b(clock.cursor_ms.has_value());", "if (clock.cursor_ms) f.i(*clock.cursor_ms);",
+        "f.d(clock.observed.open);", "f.d(clock.observed.high);",
+        "f.d(clock.observed.low);", "f.d(clock.observed.close);",
+        "f.d(clock.observed.volume);", "f.i(clock.observed.timestamp);",
+        "f.i(clock.observed_count);", "f.i(state.feed_count);",
+        "f.i(state.eval_complete_count);",
+    ):
+        require_once(fold, statement, label + " fold " + statement)
+    require_once(engine_hash, "hash_fixed_security_clocks(f);", label + " generic binding")
+    native_hash = executable_hash_text(
+        (root / "src/native_execution_consumer.cpp").read_text())
+    require_once(native_hash,
+                 "if (downcast_engine_->hash_fixed_security_clocks(clocks)) f.u(clocks.h);",
+                 label + " native continuation binding")
+
+
 def scratch_store_state_digest_leaf(root: Path) -> str:
     """Cover the logical 24-byte prefix, independently of physical storage."""
     # X25-X27 select order id 0x5832355832370002. The generic implementation
@@ -356,6 +387,7 @@ def trade_scratch_folds(source_hash: str) -> None:
 def main(root: Path = ROOT) -> int:
     try:
         engine_hash = executable_hash_text((root / "src/engine_state_hash.cpp").read_text())
+        fixed_security_clock_fields(root, engine_hash)
         source_hash_raw = (root / "src/source/pine_state_hash.cpp").read_text()
         source_hash = executable_hash_text(source_hash_raw)
         adapter_header = (root / "include/pineforge/source/pine_adapter.hpp").read_text()

@@ -88,6 +88,26 @@ These are counted in `pf_report_t::security_complete_total` and
 `pf_report_t::security_partial_total`. Per-site counters live in
 `security_diag[i]`.
 
+When a fixed request is coarser than the evaluator's input but is not a
+multiple of it, install the requested timeframe's own OHLCV through
+`set_native_security_feed` (`src/engine_aux_security.cpp:82`).
+With lookahead off, the completed requested clock consumes those payloads
+through the real accepted input close. On an auxiliary path the accepted
+primary close advances the clock even when a fine slice is empty. A missing
+native row uses only observed children; a bucket with neither a native row
+nor observed children publishes nothing (`next_native_fixed_security_bar`
+`src/engine_security.cpp:105`). Supplying data does not make any later row
+visible before its requested close.
+
+The completion iterator (`next_fixed_completion` `src/timeframe.cpp:1250`)
+uses the existing session grid, window closes and instrument early-close
+policy. It compares the request against the actual evaluator input cadence,
+which may be finer than the chart. Existing no-native approximations,
+lookahead behavior, divisible requests and calendar requests retain their
+paths. Native subscriptions admit this fixed-period class only with a valid
+same-period authoritative feed. Accurate TradingView comparison still
+requires matching symbol data, sessions and the chart window.
+
 For the lower-TF surface (`request.security_lower_tf`) — including the
 codegen contract, validation rules, and the contrast with TradingView's
 separate-feed model — see @ref mtf.

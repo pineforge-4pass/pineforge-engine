@@ -2369,6 +2369,10 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
             // Likewise only an instrument series has its feed cursor.
             if (subscription.instrument) f.u(subscription.instrument_cursor);
         }
+        if (downcast_engine_) {
+            BrokerStateHashSink clocks;
+            if (downcast_engine_->hash_fixed_security_clocks(clocks)) f.u(clocks.h);
+        }
     }
     // Bars a realtime stream appended to its declared auxiliary feed are
     // durable input no spec digest covers. Folded only for a run that
@@ -10246,6 +10250,17 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
             if (from_feed) engine.security_input_tf_ = spec.auxiliary_feed->tf;
             engine.register_security_eval(sec_id, declared.tf, spec.input_tf);
             if (from_feed) engine.security_input_tf_ = spec.input_tf;
+            auto& evaluator = engine.security_eval_states_.back();
+            const std::string& evaluator_tf =
+                from_feed ? spec.auxiliary_feed->tf : spec.input_tf;
+            TimeframeAggregator fixed(
+                declared.tf, evaluator_tf, spec.timezone, spec.session);
+            if (fixed.supports_fixed_completion()) {
+                // Admission already required a same-period authoritative
+                // feed, including one shared with another series instance.
+                fixed.set_early_close_completes(engine.session_template_knows_early_close());
+                evaluator.aggregator = std::move(fixed);
+            }
             if (declared.authoritative_bars.empty()) continue;
             if (!engine.set_native_security_feed(
                     declared.tf, declared.authoritative_bars.data(),
@@ -10475,11 +10490,99 @@ const Bar& NativeExecutionConsumer::auxiliary_bar(std::size_t at) const noexcept
 // the timestamp of its first contributing feed bar; the bucket bookkeeping is
 // the input pump's.
 template <typename Completed>
-bool NativeExecutionConsumer::feed_auxiliary_slice(
+bool NativeExecutionConsumer::feed_fixed_subscription(
         BacktestEngine& engine, TimeframeSubscription& subscription, int index,
-        std::int64_t input_period_end_ms, Completed&& completed) {
+        const Bar* input_bar, const native_calendar::NativeInterval& input_interval,
+        Completed&& completed) {
     auto& state =
         engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
+    const std::int64_t next_input = subscription_next_input_ms(index);
+    std::int64_t horizon = input_interval.last_traded_close_ms;
+    if (horizon <= input_interval.open_ms
+        || input_interval.next_period_open_ms <= input_interval.open_ms) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Input});
+        render(engine, "native fixed subscription requires a positive accepted interval");
+        return false;
+    }
+    horizon = std::min(horizon, input_interval.next_period_open_ms);
+    if (next_input > input_interval.open_ms) horizon = std::min(horizon, next_input);
+    if (!state.fixed_clock.cursor_ms) state.fixed_clock.cursor_ms = input_interval.open_ms;
+    if (subscription.bucket_first_index < 0) {
+        subscription.bucket_first_index = index;
+        subscription.bucket_first_ms = *state.fixed_clock.cursor_ms;
+    }
+    const auto drain = [&](std::int64_t until, NativeCompletionKind kind,
+                           std::int64_t last_ms = 0, std::int64_t successor = 0) {
+        for (;;) {
+            const std::int64_t first_observed = state.fixed_clock.observed.timestamp;
+            const auto bucket = engine.next_native_fixed_security_bar(
+                state, until, last_ms, successor);
+            if (!bucket) break;
+            state.current_bar = bucket->bar;
+            // Each completed context allocates its own requested-history slot,
+            // including authoritative buckets without observed children.
+            state.current_sub_bar_count = 1;
+            ++state.eval_complete_count;
+            engine.dispatch_security_eval(state, bucket->bar, true,
+                                          state.eval_complete_count - 1);
+            if (failed()) return false;
+            if (!completed(bucket->bar, subscription.bucket_first_index,
+                           bucket->sub_bar_count > 0 ? first_observed : bucket->bar.timestamp,
+                           kind)) return false;
+            const bool opened_here = *state.fixed_clock.cursor_ms < horizon;
+            subscription.bucket_first_index = opened_here ? index : -1;
+            subscription.bucket_first_ms = opened_here ? *state.fixed_clock.cursor_ms : 0;
+        }
+        return !failed();
+    };
+    const auto drain_observed = [&](const Bar& observed, std::int64_t close) {
+        if (!drain(std::min(observed.timestamp, input_interval.open_ms),
+                   NativeCompletionKind::LazyComplete)
+            || !drain(observed.timestamp, NativeCompletionKind::Confirmed)) return false;
+        state.aggregator.observe_fixed(state.fixed_clock, observed);
+        ++state.feed_count;
+        return drain(std::min(close, input_interval.open_ms), NativeCompletionKind::LazyComplete)
+            && drain(close, NativeCompletionKind::Confirmed);
+    };
+    if (subscription.auxiliary) {
+        const std::size_t total = auxiliary_bar_count();
+        while (subscription.auxiliary_cursor < total) {
+            const std::size_t at = subscription.auxiliary_cursor;
+            const Bar observed = auxiliary_bar(at);
+            if (observed.timestamp >= horizon) break;
+            const auto interval = native_calendar::interval_containing(
+                calendar_, *auxiliary_tf_, observed.timestamp, calendar_memo_);
+            if (!interval || interval->last_traded_close_ms <= observed.timestamp) {
+                fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                           NativeFailureOperation::Input});
+                render(engine, "native fixed subscription found an invalid auxiliary interval");
+                return false;
+            }
+            std::int64_t close = std::min(horizon, interval->last_traded_close_ms);
+            if (at + 1 < total) close = std::min(close, auxiliary_bar(at + 1).timestamp);
+            ++subscription.auxiliary_cursor;
+            if (!drain_observed(observed, close)) return false;
+        }
+    } else if (input_bar) {
+        if (!drain_observed(*input_bar, horizon)) return false;
+    }
+    // Older fine history has been consumed before this gap/empty-slice drain.
+    // The primary is a clock here; it never contributes auxiliary OHLCV.
+    return drain(input_interval.open_ms, NativeCompletionKind::LazyComplete)
+        && drain(horizon, NativeCompletionKind::Confirmed,
+                 input_interval.open_ms, next_input);
+}
+
+template <typename Completed>
+bool NativeExecutionConsumer::feed_auxiliary_slice(
+        BacktestEngine& engine, TimeframeSubscription& subscription, int index,
+        const native_calendar::NativeInterval& input_interval, Completed&& completed) {
+    auto& state =
+        engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
+    if (engine.native_fixed_security_clock(state))
+        return feed_fixed_subscription(
+            engine, subscription, index, nullptr, input_interval, completed);
+    const std::int64_t input_period_end_ms = input_interval.next_period_open_ms;
     const std::size_t total = auxiliary_bar_count();
     while (subscription.auxiliary_cursor < total) {
         const Bar feed_bar = auxiliary_bar(subscription.auxiliary_cursor);
@@ -10526,6 +10629,15 @@ bool NativeExecutionConsumer::feed_auxiliary_slice(
 bool NativeExecutionConsumer::project_timeframe_subscription(
         BacktestEngine& engine, TimeframeSubscription& subscription,
         const Bar* input_bars, int n_input) {
+    const auto record = [&subscription](const Bar& bucket, int first_index,
+                                        std::int64_t first_ms,
+                                        NativeCompletionKind completion) {
+        subscription.projected_bars.push_back(bucket);
+        subscription.projected_first_index.push_back(first_index);
+        subscription.projected_first_ms.push_back(first_ms);
+        subscription.projected_completion.push_back(completion);
+        return true;
+    };
     if (subscription.auxiliary) {
         // The same projection over the auxiliary feed: each historical input
         // folds its own slice, and a bucket is keyed to the input whose slice
@@ -10538,17 +10650,8 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
                 render(engine, "native auxiliary feed projection found an unaligned input");
                 return false;
             }
-            const auto record = [&subscription](const Bar& bucket, int first_index,
-                                                std::int64_t first_ms,
-                                                NativeCompletionKind completion) {
-                subscription.projected_bars.push_back(bucket);
-                subscription.projected_first_index.push_back(first_index);
-                subscription.projected_first_ms.push_back(first_ms);
-                subscription.projected_completion.push_back(completion);
-                return true;
-            };
             if (!feed_auxiliary_slice(engine, subscription, i,
-                                      interval->next_period_open_ms, record)) {
+                                      *interval, record)) {
                 return false;
             }
         }
@@ -10558,6 +10661,18 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
     int first_index = -1;
     std::int64_t first_ms = 0;
     for (int i = 0; i < n_input; ++i) {
+        if (engine.native_fixed_security_clock(state)) {
+            const auto interval = input_interval_at(input_bars[i].timestamp);
+            if (!interval) {
+                fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                           NativeFailureOperation::Begin});
+                render(engine, "native fixed subscription projection found an invalid input");
+                return false;
+            }
+            if (!feed_fixed_subscription(engine, subscription, i, &input_bars[i],
+                                         *interval, record)) return false;
+            continue;
+        }
         if (first_index < 0) {
             first_index = i;
             first_ms = input_bars[i].timestamp;
@@ -10592,15 +10707,16 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
     // the delivered context's interval is the span of the bucket's FIRST
     // contributing input bar (native_host.hpp), which for a bucket the warmup
     // opened is a warmup bar, not the first live one that continues it.
-    subscription.bucket_first_index = first_index;
-    subscription.bucket_first_ms = first_ms;
+    if (!engine.native_fixed_security_clock(state)) {
+        subscription.bucket_first_index = first_index;
+        subscription.bucket_first_ms = first_ms;
+    }
     return !failed();
 }
 
 bool NativeExecutionConsumer::pump_timeframe_subscriptions(
         BacktestEngine& engine, const Bar& bar, int index,
         const native_calendar::NativeInterval& input_interval) {
-    const std::int64_t input_period_end_ms = input_interval.next_period_open_ms;
     // barmerge.gaps_on for one series: the input delivered nothing of its
     // own, so the series has no value on it -- on the pull side
     // (native_series_bar answers nullopt) and on the push side
@@ -10653,7 +10769,7 @@ bool NativeExecutionConsumer::pump_timeframe_subscriptions(
                 return deliver_timeframe_bar(engine, subscription, bucket, first_ms,
                                              bar.timestamp, completion);
             };
-            if (!feed_auxiliary_slice(engine, subscription, index, input_period_end_ms,
+            if (!feed_auxiliary_slice(engine, subscription, index, input_interval,
                                       deliver)) {
                 return false;
             }
@@ -10662,6 +10778,18 @@ bool NativeExecutionConsumer::pump_timeframe_subscriptions(
         }
         auto& state =
             engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
+        if (engine.native_fixed_security_clock(state)) {
+            const auto deliver = [&](const Bar& bucket, int, std::int64_t first,
+                                     NativeCompletionKind completion) {
+                delivered = true;
+                return deliver_timeframe_bar(engine, subscription, bucket, first,
+                                             bar.timestamp, completion);
+            };
+            if (!feed_fixed_subscription(engine, subscription, index, &bar,
+                                         input_interval, deliver)) return false;
+            if (!delivered) clear_if_gapped(subscription);
+            continue;
+        }
         if (subscription.bucket_first_index < 0) {
             subscription.bucket_first_index = index;
             subscription.bucket_first_ms = bar.timestamp;
@@ -10998,6 +11126,14 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
     input_context.input_index = index;
     input_context.completes_script_interval =
         interval->next_period_open_ms >= script_interval->next_period_open_ms;
+    struct AcceptedInputContextScope {
+        const NativeInputContext*& slot;
+        const NativeInputContext* previous;
+        AcceptedInputContextScope(const NativeInputContext*& target,
+                                  const NativeInputContext& context)
+            : slot(target), previous(target) { slot = &context; }
+        ~AcceptedInputContextScope() { slot = previous; }
+    } accepted_context(accepted_input_context_, input_context);
     // The accepted pre-roll horizon of a selected batch: the first input at or
     // after T finds the last pre-T bucket still pending when its own inputs
     // stopped short of the script interval's end. It is completed here, ahead

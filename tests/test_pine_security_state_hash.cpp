@@ -73,6 +73,11 @@ public:
     void set_sub_bar_count(std::size_t index, int count) {
         security_eval_states_[index].current_sub_bar_count = count;
     }
+    FixedPeriodClock& fixed_clock() { return security_eval_states_[0].fixed_clock; }
+    void bump_fixed_counter(bool completed) {
+        if (completed) ++security_eval_states_[0].eval_complete_count;
+        else ++security_eval_states_[0].feed_count;
+    }
 };
 
 Bar literal_bar(std::int64_t ts, double close) {
@@ -301,6 +306,58 @@ int main() {
         host.set_sub_bar_count(0, 1);
         CHECK(host.slot_is_new(0));
         CHECK(host.slot_is_new(99));
+    }
+
+    // The retained fixed clock is generic state, so a source host override
+    // cannot hide it. Every field of a pending observed payload and the
+    // empty-clock cursor must affect the next-decision identity.
+    {
+        struct ClockMutation {
+            const char* name;
+            void (*apply)(FixedPeriodClock&);
+        };
+        const ClockMutation mutations[] = {
+            {"cursor presence", [](FixedPeriodClock& s) { s.cursor_ms.reset(); }},
+            {"cursor value", [](FixedPeriodClock& s) { *s.cursor_ms += 60; }},
+            {"observed_count", [](FixedPeriodClock& s) { ++s.observed_count; }},
+            {"observed.open", [](FixedPeriodClock& s) { s.observed.open += 1; }},
+            {"observed.high", [](FixedPeriodClock& s) { s.observed.high += 1; }},
+            {"observed.low", [](FixedPeriodClock& s) { s.observed.low -= 1; }},
+            {"observed.close", [](FixedPeriodClock& s) { s.observed.close += 1; }},
+            {"observed.volume", [](FixedPeriodClock& s) { s.observed.volume += 1; }},
+            {"observed.timestamp", [](FixedPeriodClock& s) { s.observed.timestamp += 1; }},
+        };
+        const auto seed = [](Probe& host) {
+            host.add_site(0, "40");
+            host.fixed_clock().cursor_ms = 1000;
+            host.fixed_clock().observed = literal_bar(1000, 100);
+            host.fixed_clock().observed_count = 2;
+        };
+        Probe plain;
+        seed(plain);
+        const auto baseline = plain.broker_state_hash();
+        for (const auto& row : mutations) {
+            Probe changed;
+            seed(changed);
+            row.apply(changed.fixed_clock());
+            const bool differs = changed.broker_state_hash() != baseline;
+            if (!differs) std::printf("fixed clock hash mutation lost: %s\n", row.name);
+            CHECK(differs);
+        }
+        for (bool completed : {false, true}) {
+            Probe changed;
+            seed(changed);
+            changed.bump_fixed_counter(completed);
+            CHECK(changed.broker_state_hash() != baseline);
+        }
+        Probe empty, advanced, absent;
+        empty.add_site(0, "40");
+        advanced.add_site(0, "40");
+        absent.add_site(0, "40");
+        empty.fixed_clock().cursor_ms = 1000;
+        advanced.fixed_clock().cursor_ms = 1060;
+        CHECK(empty.broker_state_hash() != advanced.broker_state_hash());
+        CHECK(empty.broker_state_hash() != absent.broker_state_hash());
     }
 
     std::printf("pine security state hash: %d checks, %d failures\n", g_checks, g_failures);

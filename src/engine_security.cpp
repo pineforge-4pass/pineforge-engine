@@ -98,6 +98,24 @@ void BacktestEngine::dispatch_security_eval(SecurityEvalState& state,
 }
 
 
+bool BacktestEngine::native_fixed_security_clock(const SecurityEvalState& state) const {
+    return state.native_feed_index >= 0 && state.aggregator.supports_fixed_completion();
+}
+
+std::optional<AggregatedBar> BacktestEngine::next_native_fixed_security_bar(
+        SecurityEvalState& state, int64_t horizon_ms,
+        int64_t last_input_ms, int64_t next_input_ms) {
+    while (auto completed = state.aggregator.next_fixed_completion(
+            state.fixed_clock, horizon_ms, last_input_ms, next_input_ms)) {
+        const bool native = substitute_native_security_bar(
+            state, completed->bar, completed->sub_bar_count > 0);
+        if (native || completed->sub_bar_count > 0) return completed;
+        // An unobserved bucket without its own authoritative row has no
+        // payload. Advancing a clock must never manufacture OHLCV.
+    }
+    return std::nullopt;
+}
+
 void BacktestEngine::feed_security_eval_state(
         SecurityEvalState& state, const Bar& input_bar) {
     // The next input bar's timestamp (0 when unknown) lets a calendar

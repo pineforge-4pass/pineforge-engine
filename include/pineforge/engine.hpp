@@ -1483,6 +1483,7 @@ protected:
         // span, label and completion bar are the native bar's own.
         int native_feed_index = -1;
         std::unordered_map<int64_t, Bar> native_bars_by_label;
+        FixedPeriodClock fixed_clock;
     };
 
     std::vector<SecurityEvalState> security_eval_states_;
@@ -1606,6 +1607,11 @@ protected:
     // and dispatch the completed bucket. Publication at the last contributing
     // input is the consumer's; a source host composes its own step.
     void feed_security_eval_state(SecurityEvalState& state, const Bar& input_bar);
+    bool native_fixed_security_clock(const SecurityEvalState& state) const;
+    std::optional<AggregatedBar> next_native_fixed_security_bar(
+        SecurityEvalState& state, int64_t horizon_ms,
+        int64_t last_input_ms = 0, int64_t next_input_ms = 0);
+    bool hash_fixed_security_clocks(BrokerStateHashSink& sink) const noexcept;
 
     // A new batch run (including stream_begin's historical warmup) starts a
     // fresh script lifecycle. Called once after broker reset, before any

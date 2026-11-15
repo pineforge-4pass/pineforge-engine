@@ -313,7 +313,38 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
                                state.eval_complete_count - 1);
     }
     const std::size_t missing = std::numeric_limits<std::size_t>::max();
-    if (begin == missing || end == missing) return;
+    // The accepted primary close advances an authoritative requested clock
+    // even when this chart slice has no fine observations. Initialize from
+    // the accepted chart open, then consume any real fine history BEFORE
+    // draining the remaining horizon below.
+    const auto finish_native_clocks = [&]() {
+        const auto retained = scheduler_.retained_input();
+        const std::int64_t next_primary = idx + 1 < retained.size()
+            ? retained[idx + 1].timestamp : 0;
+        for (auto& state : security_eval_states_) {
+            const auto& pine = pine_security_state(state.sec_id);
+            if (pine.lookahead_on || pine.no_loaded_bars || !native_fixed_security_clock(state)
+                || security_input_precedes_range_start(state, calling_bar->timestamp)) continue;
+            if (!state.fixed_clock.cursor_ms)
+                state.fixed_clock.cursor_ms = calling_bar->timestamp;
+            std::int64_t horizon = accepted_security_close_ms(calling_bar->timestamp);
+            if (next_primary > calling_bar->timestamp)
+                horizon = std::min(horizon, next_primary);
+            pine_drain_native_fixed_security(
+                state, horizon, calling_bar->timestamp, next_primary, true);
+        }
+    };
+    for (auto& state : security_eval_states_) {
+        const auto& pine = pine_security_state(state.sec_id);
+        if (!pine.lookahead_on && !pine.no_loaded_bars && native_fixed_security_clock(state)
+            && !state.fixed_clock.cursor_ms
+            && !security_input_precedes_range_start(state, calling_bar->timestamp))
+            state.fixed_clock.cursor_ms = calling_bar->timestamp;
+    }
+    if (begin == missing || end == missing) {
+        finish_native_clocks();
+        return;
+    }
 
     security_calling_close_ms_ = aux_security_calling_close_ms();
     // The calling chart bar's time, where TradingView merges a finer
@@ -435,6 +466,7 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
         }
     }
 
+    finish_native_clocks();
     security_calling_close_ms_ = 0;
 
     // On the pump's runtime block when it has one (the per-pump state cache).

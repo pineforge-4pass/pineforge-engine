@@ -1060,6 +1060,11 @@ private:
     // (src/source/pine_security_eval.cpp).
     void pine_feed_security_eval_state(SecurityEvalState& state, const Bar& input_bar,
                                        bool calling_bar_complete = false);
+    std::int64_t accepted_security_close_ms(std::int64_t input_stamp) const;
+    void pine_drain_native_fixed_security(
+        SecurityEvalState& state, std::int64_t horizon_ms,
+        std::int64_t last_input_ms = 0, std::int64_t next_input_ms = 0,
+        bool calling_bar_complete = false);
     // The site's Pine semantics; a sec_id registered outside this host's
     // register_security_eval (none today) reads as a plain site.
     PineSecurityEvalState& pine_security_state(int sec_id) {

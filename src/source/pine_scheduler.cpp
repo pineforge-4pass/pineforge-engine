@@ -27,11 +27,19 @@ void PineStrategyHost::init_security_eval_states_for_run(
         pine.historical_projection_cursor = 0;
         pine.historical_projection_dispatched = false;
         state.native_feed_index = -1;
+        state.fixed_clock = {};
         state.native_bars_by_label.clear();
         state.aggregator = TimeframeAggregator();
         if (pine.lower_tf_emulation || pine.lower_tf_use_input) continue;
         const int ratio = tf_ratio(effective_input_tf, state.tf);
-        if (ratio > 1 || ratio == -1) {
+        const TimeframeAggregator candidate(
+            state.tf, effective_input_tf, syminfo_.timezone, syminfo_.session);
+        const bool native_fixed = !pine.lookahead_on && candidate.supports_fixed_completion()
+            && std::any_of(native_security_feeds_.begin(), native_security_feeds_.end(),
+                [&](const NativeSecurityFeed& feed) {
+                    return feed.seconds == tf_to_seconds(state.tf) && !feed.bars.empty();
+                });
+        if (ratio > 1 || ratio == -1 || native_fixed) {
             state.aggregator = TimeframeAggregator(
                 state.tf, effective_input_tf, syminfo_.timezone, syminfo_.session);
         }

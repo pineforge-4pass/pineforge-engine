@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <utility>
 
 #include <pineforge/timeframe.hpp>
 #include <pineforge/bar.hpp>
@@ -176,6 +177,54 @@ static void test_passthrough_fallback_target_finer_than_input() {
     CHECK(agg.current().open == 90.0);
 }
 
+// A shorter accepted close must not be enlarged to nominal input cadence.
+// These are interval-API units, with literal accepted horizons, not TV tapes.
+static void test_fixed_clock_short_accepted_horizon() {
+    constexpr int64_t minute = 60000;
+    for (const auto& periods : {std::pair<int, int>{30, 40}, {60, 75}}) {
+        const int input = periods.first;
+        const int requested = periods.second;
+        const int64_t start = MON_2024_01_15_00;
+        TimeframeAggregator agg(std::to_string(requested), std::to_string(input),
+                                "UTC", "24x7");
+        FixedPeriodClock clock;
+        clock.cursor_ms = start;
+        const Bar first = make_bar(100, 110, 90, 105, 7, start);
+        const Bar second = make_bar(200, 220, 180, 210, 11, start + input * minute);
+        agg.observe_fixed(clock, first);
+        CHECK(!agg.next_fixed_completion(clock, start + input * minute));
+        agg.observe_fixed(clock, second);
+        // A real accepted interval ends five minutes before the requested
+        // boundary, though its nominal input duration would cross it.
+        const int64_t shorter_close = start + (requested - 5) * minute;
+        CHECK(!agg.next_fixed_completion(clock, shorter_close));
+        CHECK(clock.observed_count == 2);
+        CHECK(clock.observed.close == 210);
+        const auto complete = agg.next_fixed_completion(clock, start + requested * minute);
+        CHECK(complete.has_value());
+        if (complete) {
+            CHECK(complete->bar.timestamp == start);
+            CHECK(complete->bar.open == 100);
+            CHECK(complete->bar.high == 220);
+            CHECK(complete->bar.low == 90);
+            CHECK(complete->bar.close == 210);
+            CHECK(complete->bar.volume == 18);
+            CHECK(complete->sub_bar_count == 2);
+        }
+        CHECK(!agg.next_fixed_completion(clock, start + requested * minute));
+
+        // An empty accepted interval advances only the clock, and a pending
+        // context cannot complete merely because the nominal cadence is known.
+        FixedPeriodClock empty;
+        empty.cursor_ms = start;
+        CHECK(!agg.next_fixed_completion(empty, shorter_close));
+        const auto native_only = agg.next_fixed_completion(empty, start + requested * minute);
+        CHECK(native_only.has_value());
+        if (native_only) CHECK(native_only->sub_bar_count == 0);
+        CHECK(!agg.next_fixed_completion(empty, start + (2 * requested - 1) * minute));
+    }
+}
+
 // ─── main ─────────────────────────────────────────────────────────────────────
 
 int main() {
@@ -189,6 +238,7 @@ int main() {
     test_tf_change_secs_guard();
     test_crosses_boundary_none();
     test_passthrough_fallback_target_finer_than_input();
+    test_fixed_clock_short_accepted_horizon();
 
     std::printf("\n=== Results: %d passed, %d failed ===\n",
                 tests_passed, tests_failed);

@@ -2,6 +2,7 @@
 #include <pineforge/native_bar_views.hpp>
 #include <pineforge/market_driver.hpp>
 #include <pineforge/native_calendar.hpp>
+#include <pineforge/timeframe.hpp>
 
 #include <cmath>
 #include <cstring>
@@ -441,7 +442,8 @@ Result subscription_pairings(const std::vector<NativeTimeframeSubscription>& sub
         if (from_feed && auxiliary == nullptr) {
             return {Error::SubscriptionWithoutAuxiliaryFeed, Field::SubscriptionSource};
         }
-        switch (native_calendar::compatibility(from_feed ? *auxiliary : input, *requested)
+        const auto& built_from = from_feed ? *auxiliary : input;
+        switch (native_calendar::compatibility(built_from, *requested)
                     .pairing) {
         case native_calendar::TimeframePairing::Passthrough:
         case native_calendar::TimeframePairing::SameUnitMultiple:
@@ -453,6 +455,31 @@ Result subscription_pairings(const std::vector<NativeTimeframeSubscription>& sub
             return {from_feed ? Error::SubscriptionFinerThanAuxiliaryFeed
                               : Error::SubscriptionFinerThanInput,
                     active_field};
+        case native_calendar::TimeframePairing::IndivisibleFixed: {
+            // Only a real same-period authoritative feed opts into fixed
+            // completion. Calendar remainders and finer requests retain
+            // their refusals. Duplicate instances may share one feed.
+            if (!built_from.is_fixed() || !requested->is_fixed())
+                return {Error::InvalidSubscriptionTimeframe, active_field};
+            if (!TimeframeAggregator(subscription.tf, built_from.literal())
+                     .supports_fixed_completion())
+                return {Error::InvalidSubscriptionTimeframe, active_field};
+            bool supplied = false;
+            const auto key = subscription_period_key(*requested);
+            for (const auto& other : subscriptions) {
+                if (other.source == NativeSeriesSource::InstrumentFeed) continue;
+                const auto period = native_calendar::parse_timeframe(other.tf);
+                if (!period || subscription_period_key(*period) != key
+                    || other.authoritative_bars.empty()) continue;
+                for (const Bar& bar : other.authoritative_bars) {
+                    if (!native_bar_structurally_valid(bar))
+                        return {Error::NotFinitePositive, Field::SubscriptionBars};
+                }
+                supplied = true;
+            }
+            if (!supplied) return {Error::InvalidSubscriptionTimeframe, active_field};
+            break;
+        }
         default:
             return {Error::InvalidSubscriptionTimeframe, active_field};
         }

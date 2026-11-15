@@ -9,6 +9,29 @@
 
 namespace pineforge {
 
+bool BacktestEngine::hash_fixed_security_clocks(BrokerStateHashSink& f) const noexcept {
+    bool present = false;
+    for (const auto& state : security_eval_states_) {
+        const auto& clock = state.fixed_clock;
+        if (!clock.cursor_ms && clock.observed_count == 0) continue;
+        present = true;
+        // The same length-prefixed bytes as s(), without constructing a
+        // string inside the native consumer's noexcept continuation fold.
+        constexpr char domain[] = "pineforge-fixed-security-clock/v1";
+        f.u(sizeof(domain) - 1);
+        f.bytes(domain, sizeof(domain) - 1);
+        f.i(state.sec_id); f.s(state.tf);
+        f.b(clock.cursor_ms.has_value());
+        if (clock.cursor_ms) f.i(*clock.cursor_ms);
+        f.d(clock.observed.open); f.d(clock.observed.high);
+        f.d(clock.observed.low); f.d(clock.observed.close);
+        f.d(clock.observed.volume); f.i(clock.observed.timestamp);
+        f.i(clock.observed_count);
+        f.i(state.feed_count); f.i(state.eval_complete_count);
+    }
+    return present;
+}
+
 // A host that overrides nothing keeps the bytes it always folded: the generic
 // default reaches the deprecated spelling, whose default is the marker. That
 // same forward is what keeps a subclass still written against the deprecated
@@ -126,6 +149,7 @@ uint64_t BacktestEngine::broker_state_hash_from_execution_hash(
     f.u(trades_.size());
     f.u(as_native_consumer(execution_consumer()).closed_rows_digest(trades_));
 
+    hash_fixed_security_clocks(f);
     hash_host_extension(f);
     return f.h;
 }

@@ -164,6 +164,25 @@ public:
             std::int64_t stamp) const {
         return script_period_.source ? script_interval_at(stamp) : std::nullopt;
     }
+    // Accepted context for an adapter's immediate or delayed security step.
+    // Older accepted inputs resolve through the same interval provider used
+    // at acceptance; an unaccepted future input never obtains a horizon.
+    std::optional<native_calendar::NativeInterval> accepted_input_interval(
+            std::int64_t stamp) const {
+        if (accepted_input_context_
+            && accepted_input_context_->input_interval.open_ms == stamp)
+            return accepted_input_context_->input_interval;
+        if (input_callback_context_
+            && input_callback_context_->input_interval.open_ms == stamp)
+            return input_callback_context_->input_interval;
+        if (last_accepted_input_ && last_accepted_input_->open_ms == stamp)
+            return last_accepted_input_;
+        const auto* latest = accepted_input_context_
+            ? &accepted_input_context_->input_interval
+            : input_callback_context_ ? &input_callback_context_->input_interval
+            : last_accepted_input_ ? &*last_accepted_input_ : nullptr;
+        return latest && stamp < latest->open_ms ? input_interval_at(stamp) : std::nullopt;
+    }
 
     void run_simple(BacktestEngine& engine, const Bar* bars, int n) override;
     void run_tf(BacktestEngine& engine,
@@ -1297,8 +1316,13 @@ private:
     // AuxiliaryFeed series and hand each completed bucket to `completed`.
     template <typename Completed>
     bool feed_auxiliary_slice(BacktestEngine& engine, TimeframeSubscription& subscription,
-                              int index, std::int64_t input_period_end_ms,
+                              int index, const native_calendar::NativeInterval& input_interval,
                               Completed&& completed);
+    template <typename Completed>
+    bool feed_fixed_subscription(BacktestEngine& engine, TimeframeSubscription& subscription,
+                                 int index, const Bar* input_bar,
+                                 const native_calendar::NativeInterval& input_interval,
+                                 Completed&& completed);
     // A declared series is fed by accepted CONFIRMED input only, because that
     // is the only input a batch of the same bars also has. True (refused)
     // exactly when a stream that declares one is asked for tick-driven input.
@@ -2090,6 +2114,10 @@ private:
     std::size_t driver_mark_count_ = 0;
     std::uint64_t applied_events_ = 0;
     NativeDecisionContext callback_context_{};
+    // Borrowed from consume_confirmed_input's validated stack context for
+    // that call only, including deferred source work after on_native_input.
+    // Transport, never durable continuation state or a pointer to caller data.
+    const NativeInputContext* accepted_input_context_ = nullptr;
     std::optional<NativeInputContext> input_callback_context_;
     std::optional<Bar> input_callback_bar_;
     std::optional<NativeTickContext> tick_callback_context_;

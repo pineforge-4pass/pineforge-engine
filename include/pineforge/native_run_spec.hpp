@@ -448,6 +448,10 @@ struct IntrabarPath {
 /// `tf` must pair with NativeRunSpec::input_tf exactly as script_tf does
 /// (native_calendar::compatibility) and may not be strictly finer than the
 /// input: a lower-timeframe array is a different contract.
+/// A strictly coarser fixed non-multiple is also accepted when a same-period
+/// series supplies structurally valid authoritative_bars. Its requested clock
+/// completes only through positive accepted input closes, even without
+/// auxiliary observations; missing native rows use observed children only.
 ///
 /// `authoritative_bars` are the exchange's own bars of that timeframe, at most
 /// one per completed bucket. When present, a completed bucket takes its

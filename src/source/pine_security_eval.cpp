@@ -580,6 +580,53 @@ bool source::PineStrategyHost::aux_security_traded_between(int64_t from_ms,
 #endif
 
 
+std::int64_t source::PineStrategyHost::accepted_security_close_ms(
+        std::int64_t input_stamp) const {
+    const auto interval =
+        NativeExecutionConsumer::bound(*this).accepted_input_interval(input_stamp);
+    if (!interval || interval->last_traded_close_ms <= input_stamp
+        || interval->next_period_open_ms <= input_stamp) {
+        throw coded<std::runtime_error>(
+            RunFailureCode::engine_invariant, {},
+            "native security completion requires a positive accepted input interval");
+    }
+    return std::min(interval->last_traded_close_ms, interval->next_period_open_ms);
+}
+
+void source::PineStrategyHost::pine_drain_native_fixed_security(
+        SecurityEvalState& state, std::int64_t horizon_ms,
+        std::int64_t last_input_ms, std::int64_t next_input_ms,
+        bool calling_bar_complete) {
+    auto& pine = pine_security_state(state.sec_id);
+    internal::AmbientEmaSeedingScope warmup(
+        NativeExecutionConsumer::bound(*this).pump_ambient(),
+        security_range_start_na_warmup_);
+    while (auto completed = next_native_fixed_security_bar(
+            state, horizon_ms, last_input_ms, next_input_ms)) {
+        Bar bar = completed->bar;
+        if (pine.heikinashi) {
+            const double close = (bar.open + bar.high + bar.low + bar.close) / 4.0;
+            const double open = pine.ha_seeded
+                ? (pine.ha_prev_open + pine.ha_prev_close) / 2.0
+                : (bar.open + bar.close) / 2.0;
+            bar.high = std::max(bar.high, std::max(open, close));
+            bar.low = std::min(bar.low, std::min(open, close));
+            bar.open = open;
+            bar.close = close;
+            pine.ha_prev_open = open;
+            pine.ha_prev_close = close;
+            pine.ha_seeded = true;
+        }
+        state.current_bar = bar;
+        state.current_sub_bar_count = 1;
+        ++state.eval_complete_count;
+        pine.last_published_label = bar.timestamp;
+        const bool publish = pine.publish_gate_tf_seconds <= 0
+            || script_tf_seconds_ <= 0 || calling_bar_complete;
+        dispatch_security_eval(state, bar, publish, state.eval_complete_count - 1);
+    }
+}
+
 void source::PineStrategyHost::pine_feed_security_eval_state(
         SecurityEvalState& state, const Bar& input_bar,
         bool calling_bar_complete) {
@@ -828,6 +875,40 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
                                projection.is_complete
                                    ? state.eval_complete_count - 1
                                    : state.eval_complete_count);
+        return;
+    }
+
+    if (!pine.lookahead_on && native_fixed_security_clock(state)) {
+        std::int64_t horizon = 0;
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+        if (aux_security_feed_enabled()) {
+            const Bar* calling = scheduler_.current_script_bar();
+            const int seconds = tf_to_seconds(security_input_tf_);
+            if (!calling || seconds <= 0
+                || input_bar.timestamp > std::numeric_limits<std::int64_t>::max()
+                    - static_cast<std::int64_t>(seconds) * 1000) {
+                throw coded<std::runtime_error>(
+                    RunFailureCode::engine_invariant, {},
+                    "native security completion requires a valid auxiliary interval");
+            }
+            horizon = std::min(accepted_security_close_ms(calling->timestamp),
+                input_bar.timestamp + static_cast<std::int64_t>(seconds) * 1000);
+        } else
+#endif
+        {
+            horizon = accepted_security_close_ms(input_bar.timestamp);
+        }
+        if (security_next_input_ms_ > input_bar.timestamp)
+            horizon = std::min(horizon, security_next_input_ms_);
+        if (horizon <= input_bar.timestamp) return;
+        if (!state.fixed_clock.cursor_ms) state.fixed_clock.cursor_ms = input_bar.timestamp;
+        pine_drain_native_fixed_security(
+            state, input_bar.timestamp, 0, 0, calling_bar_complete);
+        state.aggregator.observe_fixed(state.fixed_clock, input_bar);
+        ++state.feed_count;
+        pine_drain_native_fixed_security(
+            state, horizon, input_bar.timestamp, security_next_input_ms_,
+            calling_bar_complete);
         return;
     }
 
