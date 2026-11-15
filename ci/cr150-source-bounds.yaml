@@ -124,7 +124,11 @@ ceilings:
   # argument JSON appenders moved from src/run_failure.cpp to
   # src/canonical_json.hpp, so their entry (U0746) now names the new file; the
   # count does not change: 1422 -> 1432.
-  unreviewed: 1432
+  # expectation corrected: 1432 -> 1434, because two more unreviewed groups:
+  # SequenceIndex's optional backed store and the inline index
+  # begin_exit_sequence_certificate creates. None is bounded in the gate's
+  # sense: no fixed input is declared for them.
+  unreviewed: 1434
   pending-flat-memory: 184
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1797,3 +1801,5 @@ entries:
   - {id: "U1735", file: "src/selected_capacity_source_stage.cpp", symbol: "chunk_", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "selected-capacity", phase: "unclassified", state: "unreviewed", line: 38}
   - {id: "U1736", file: "src/selected_capacity_source_stage.cpp", symbol: "window_", ops: ["decl", "grow"], container: "std::string", owner: "selected-capacity", phase: "unclassified", state: "unreviewed", line: 26}
   - {id: "U1737", file: "src/selected_capacity_source_stage.hpp", symbol: "message", ops: ["decl"], container: "std::string", owner: "selected-capacity", phase: "unclassified", state: "unreviewed", line: 44}
+  - {id: "U1854", file: "src/source/pine_adapter.cpp", symbol: "store", ops: ["alloc"], container: "std::unique_ptr<::pineforge::detail::CommandScratchStore>", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "SequenceIndex's backed constructor creates its optional store. Allocation and lifetime reviewed; no fixed-input bound established. OPEN.", line: 30094}
+  - {id: "U1855", file: "src/source/pine_adapter.cpp", symbol: "sequence_index_", ops: ["alloc"], container: "unresolved by the index: make_shared", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "begin_exit_sequence_certificate creates the inline SequenceIndex when absent; promotion is separately tracked by U1575. No fixed-input bound established. OPEN.", line: 30456}

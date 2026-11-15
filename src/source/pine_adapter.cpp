@@ -29969,10 +29969,10 @@ int PineExecutionAdapter::projected_level_resolved(
 
 namespace pineforge::source {
 
-// Retained identities and the current tail's dependencies use an independent
-// store. Neither its handles nor its physical layout enter the broker hash.
-// The comparison index has logarithmic population cost and fixed resident
-// workspace; it is not a constant-time radix directory.
+// Retained identities and the current tail's dependencies are derived evidence.
+// The backed comparison index has logarithmic population cost and fixed
+// resident workspace; small books can instead read authoritative rows and keep
+// an inline certificate. Neither representation enters the broker hash.
 struct PlacementTable::SequenceIndex {
     using Status = ::pineforge::detail::ScratchStatus;
     using Handle = ::pineforge::detail::ScratchHandle;
@@ -30077,17 +30077,67 @@ struct PlacementTable::SequenceIndex {
 
     mutable std::uint64_t operations = 0;
     std::unique_ptr<::pineforge::detail::ScratchBacking> backing;
-    ::pineforge::detail::CommandScratchStore store{
-        {2, 512, 1, 1, {0x6578697473657131ULL, this, compare},
-         ::pineforge::detail::ScratchOpenMode::create_empty}, backing.get()};
+    std::unique_ptr<::pineforge::detail::CommandScratchStore> store;
+    // Small retained books can answer readers directly. Keep their exact
+    // query dependencies in one fixed workspace page, without opening the
+    // backing/cache merely to certify an otherwise allocation-bounded sort.
+    // Overflow promotes through the normal production factory.
+    std::array<std::byte, ::pineforge::detail::scratch_min_page_size> dependencies{};
+    std::size_t dependency_bytes = 0;
     bool certified = false;
 
+    SequenceIndex() = default;
+    SequenceIndex(SequenceIndex&&) = delete;
+    SequenceIndex& operator=(SequenceIndex&&) = delete;
     explicit SequenceIndex(CacheCapacity capacity)
-        : backing(make_backing(capacity)) { require(store.status()); }
+        : backing(make_backing(capacity)),
+          store(std::make_unique<::pineforge::detail::CommandScratchStore>(
+              ::pineforge::detail::ScratchStoreConfig{
+                  2, 512, 1, 1, {0x6578697473657131ULL, this, compare},
+                  ::pineforge::detail::ScratchOpenMode::create_empty}, backing.get())) {
+        require(store->status());
+    }
+    template<class Visit>
+    bool visit_inline_dependencies(const Visit& visit) const {
+        std::size_t offset = 0;
+        while (offset < dependency_bytes) {
+            std::array<std::uint64_t, 3> header{};
+            std::memcpy(header.data(), dependencies.data() + offset, sizeof header);
+            offset += sizeof header;
+            const std::string_view id(
+                reinterpret_cast<const char*>(dependencies.data() + offset),
+                static_cast<std::size_t>(header[0]));
+            offset += id.size();
+            const std::string_view from(
+                reinterpret_cast<const char*>(dependencies.data() + offset),
+                static_cast<std::size_t>(header[1]));
+            offset += from.size();
+            ++operations;
+            if (visit(id, from, header[2])) return true;
+        }
+        return false;
+    }
+    bool watch_inline(std::string_view id, std::string_view from, std::uint64_t answer) {
+        if (visit_inline_dependencies([&](auto watched_id, auto watched_from, auto) {
+                return watched_id == id && watched_from == from;
+            })) return true;
+        const std::array<std::uint64_t, 3> header{id.size(), from.size(), answer};
+        const auto remaining = dependencies.size() - dependency_bytes;
+        if (remaining < sizeof header || id.size() > remaining - sizeof header
+            || from.size() > remaining - sizeof header - id.size()) return false;
+        auto* destination = dependencies.data() + dependency_bytes;
+        std::memcpy(destination, header.data(), sizeof header);
+        destination += sizeof header;
+        if (!id.empty()) std::memcpy(destination, id.data(), id.size());
+        destination += id.size();
+        if (!from.empty()) std::memcpy(destination, from.data(), from.size());
+        dependency_bytes += sizeof header + id.size() + from.size();
+        return true;
+    }
     void require(Status status) const {
         if (status == Status::ok) return;
         if (status == Status::io_error)
-            ::pineforge::detail::rethrow_carried_scratch_failure(store.carried_failure());
+            ::pineforge::detail::rethrow_carried_scratch_failure(store->carried_failure());
         throw coded<std::logic_error>(
             status == Status::io_error ? RunFailureCode::scratch_io_failed
                                        : RunFailureCode::engine_invariant,
@@ -30097,20 +30147,20 @@ struct PlacementTable::SequenceIndex {
         SequenceIndex& index;
         explicit Transaction(SequenceIndex& value) : index(value) {
             ++index.operations;
-            index.require(index.store.begin());
+            index.require(index.store->begin());
         }
         ~Transaction() {
-            if (index.store.transaction_active()) (void)index.store.rollback();
+            if (index.store->transaction_active()) (void)index.store->rollback();
         }
         void commit() {
             ++index.operations;
-            index.require(index.store.commit(::pineforge::detail::ScratchDurability::buffered));
+            index.require(index.store->commit(::pineforge::detail::ScratchDurability::buffered));
         }
     };
     Handle seek(const Key& key) const {
         ++operations;
         Handle handle = ::pineforge::detail::scratch_no_handle;
-        const auto status = store.lower_bound(key, handle);
+        const auto status = store->lower_bound(key, handle);
         if (status != Status::end) require(status);
         return handle;
     }
@@ -30118,7 +30168,7 @@ struct PlacementTable::SequenceIndex {
         if (handle == ::pineforge::detail::scratch_no_handle) return false;
         ::pineforge::detail::ScratchRecordInfo info{};
         ++operations;
-        require(store.point(handle, info));
+        require(store->point(handle, info));
         if (info.key_bytes < bytes || (bytes == key.size() && info.key_bytes != bytes))
             return false;
         std::array<std::byte, 128> left{}, right{};
@@ -30126,7 +30176,7 @@ struct PlacementTable::SequenceIndex {
             const auto count = static_cast<std::size_t>(
                 std::min<std::uint64_t>(left.size(), bytes - offset));
             ++operations;
-            require(store.read(handle, Field::key, offset, {left.data(), count}));
+            require(store->read(handle, Field::key, offset, {left.data(), count}));
             require(key.read(offset, {right.data(), count}));
             if (std::memcmp(left.data(), right.data(), count) != 0) return false;
             offset += count;
@@ -30144,7 +30194,7 @@ struct PlacementTable::SequenceIndex {
         if (!matches(handle, probe, probe.prefix_size())) return absent;
         std::array<std::byte, 8> bytes{};
         ++operations;
-        require(store.read(handle, Field::key, probe.prefix_size(), {bytes.data(), bytes.size()}));
+        require(store->read(handle, Field::key, probe.prefix_size(), {bytes.data(), bytes.size()}));
         std::uint64_t result = 0;
         for (const auto byte : bytes)
             result = (result << 8) | std::to_integer<unsigned char>(byte);
@@ -30154,7 +30204,7 @@ struct PlacementTable::SequenceIndex {
         ::pineforge::detail::ScratchSpanSource value(bytes);
         Handle handle = ::pineforge::detail::scratch_no_handle;
         ++operations;
-        require(store.put(key, value, handle));
+        require(store->put(key, value, handle));
     }
     void erase(const Key& key) {
         const auto handle = find(key);
@@ -30162,7 +30212,7 @@ struct PlacementTable::SequenceIndex {
             throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                           "retained sequence identity is absent");
         ++operations;
-        require(store.erase(handle));
+        require(store->erase(handle));
     }
     void insert(std::uint64_t incarnation, const PlacementSnapshot& row) {
         put(Key(0, row.source_id, std::nullopt, row.command_sequence, incarnation));
@@ -30174,12 +30224,13 @@ struct PlacementTable::SequenceIndex {
     }
     void clear_dependencies() {
         certified = false;
+        if (!store) { dependency_bytes = 0; return; }
         Transaction transaction(*this);
         const Key first(2, {});
         for (auto handle = seek(first); handle != ::pineforge::detail::scratch_no_handle;
              handle = seek(first)) {
             ++operations;
-            require(store.erase(handle));
+            require(store->erase(handle));
         }
         transaction.commit();
     }
@@ -30206,7 +30257,7 @@ struct PlacementTable::SequenceIndex {
         if (handle == ::pineforge::detail::scratch_no_handle) return;
         std::uint64_t previous = absent;
         ++operations;
-        require(store.read(handle, Field::value, 0,
+        require(store->read(handle, Field::value, 0,
                            {reinterpret_cast<std::byte*>(&previous), sizeof previous}));
         const auto paired = combined_minimum(1, id, from, erased);
         const auto current = paired != absent
@@ -30220,7 +30271,7 @@ struct PlacementTable::SequenceIndex {
             put(fallback);
         else if (paired != absent && dependency != ::pineforge::detail::scratch_no_handle) {
             ++operations;
-            require(store.erase(dependency));
+            require(store->erase(dependency));
         }
     }
     template<class Erased>
@@ -30232,7 +30283,7 @@ struct PlacementTable::SequenceIndex {
         const auto current = combined_minimum(0, id, std::nullopt, erased);
         std::array<std::byte, 8> bytes{};
         ++operations;
-        require(store.read(handle, Field::key, first.id_prefix_size(), {bytes.data(), bytes.size()}));
+        require(store->read(handle, Field::key, first.id_prefix_size(), {bytes.data(), bytes.size()}));
         std::uint64_t minimum = 0;
         for (const auto byte : bytes)
             minimum = (minimum << 8) | std::to_integer<unsigned char>(byte);
@@ -30246,7 +30297,7 @@ struct PlacementTable::SequenceIndex {
 };
 
 PlacementTable::SequenceIndex& PlacementTable::sequence_index() const {
-    if (!sequence_index_) {
+    if (!sequence_index_ || !sequence_index_->store) {
         auto next = std::make_shared<SequenceIndex>(sequence_cache_capacity_);
         SequenceIndex::Transaction transaction(*next);
         // Appends and erasures can precede the first sequence reader.
@@ -30256,6 +30307,23 @@ PlacementTable::SequenceIndex& PlacementTable::sequence_index() const {
             next->insert(incarnation, row);
             return false;
         });
+        if (sequence_index_) {
+            // Promotion preserves every exact answer, including absence and
+            // pair-less fallbacks. Admit dependencies in the same transaction
+            // as retained rows; watch() would open a nested transaction.
+            sequence_index_->visit_inline_dependencies(
+                [&](auto id, auto from, auto answer) {
+                    const SequenceIndex::Bytes value{
+                        reinterpret_cast<const std::byte*>(&answer), sizeof answer};
+                    next->put(SequenceIndex::Key(3, id, from), value);
+                    if (next->combined_minimum(1, id, from, erased_minima_)
+                        == SequenceIndex::absent)
+                        next->put(SequenceIndex::Key(2, id, from, answer), value);
+                    return false;
+                });
+            next->certified = sequence_index_->certified;
+            next->operations += sequence_index_->operations;
+        }
         transaction.commit();
         sequence_index_ = std::move(next);
     }
@@ -30315,6 +30383,12 @@ void PlacementTable::change_sequences(std::uint64_t incarnation,
     // transactional identity replacement even before the first read, so a
     // failed backed publication cannot change a retained row.
     if (!sequence_index_ && (!before || !after)) return;
+    // A retirement transfers the same answers into erased history. An
+    // uncertified inline workset has no valid answer to maintain on append.
+    // A certified workset is promoted before a potentially changing append;
+    // replacements always retain the backed transaction/admission path.
+    if (sequence_index_ && !sequence_index_->store
+        && (!after || (!before && !sequence_index_->certified))) return;
     if (before && after && before->source_id == after->source_id
         && before->from_entry == after->from_entry
         && before->command_sequence == after->command_sequence) return;
@@ -30343,16 +30417,33 @@ void PlacementTable::change_sequences(std::uint64_t incarnation,
 std::array<std::uint64_t, 2> PlacementTable::retained_sequences(
         const SourceId& id, const SourceId& from) const {
     constexpr auto absent = SequenceIndex::absent;
-    if (size_ == 0 && !sequence_index_) return {absent, absent};
+    if ((!sequence_index_ || !sequence_index_->store) && size_ <= kWindowReserve) {
+        // Bound the direct read by the existing window reservation size.
+        // These are authoritative rows, so identity rewrites and duplicate
+        // minima need neither a second durable container nor speculative keys.
+        std::array<std::uint64_t, 2> result{absent, absent};
+        visit_rows([&](std::uint64_t, const PlacementSnapshot& row) {
+            ++sequence_rows_;
+            if (row.source_id == id) {
+                result[0] = std::min(result[0], row.command_sequence);
+                if (row.from_entry == from)
+                    result[1] = std::min(result[1], row.command_sequence);
+            }
+            return false;
+        });
+        return result;
+    }
     const auto& index = sequence_index();
     return {index.minimum(0, id), index.minimum(1, id, from)};
 }
 
 std::array<std::uint64_t, 5> PlacementTable::sequence_work() const noexcept {
     if (!sequence_index_) return {sequence_queries_, sequence_rows_, 0, 0, 0};
-    const auto stats = sequence_index_->store.stats();
+    const auto stats = sequence_index_->store
+        ? sequence_index_->store->stats() : ::pineforge::detail::ScratchStoreStats{};
     return {sequence_queries_, sequence_rows_, sequence_index_->operations,
-            stats.page_reads + stats.page_writes + stats.syncs, stats.resident_bytes};
+            stats.page_reads + stats.page_writes + stats.syncs,
+            stats.resident_bytes + sizeof(SequenceIndex)};
 }
 
 bool PlacementTable::exit_sequences_certified() const noexcept {
@@ -30360,10 +30451,27 @@ bool PlacementTable::exit_sequences_certified() const noexcept {
 }
 
 void PlacementTable::begin_exit_sequence_certificate() {
-    sequence_index().clear_dependencies();
+    if ((!sequence_index_ || !sequence_index_->store) && size_ > kWindowReserve)
+        (void)sequence_index();
+    if (!sequence_index_) sequence_index_ = std::make_shared<SequenceIndex>();
+    sequence_index_->clear_dependencies();
 }
 
 void PlacementTable::watch_exit_sequence(const SourceId& id, const SourceId& from) {
+    if (!sequence_index_) begin_exit_sequence_certificate();
+    if (!sequence_index_->store) {
+        const auto retained = retained_sequences(id, from);
+        auto paired = retained[1];
+        if (const auto historical = erased_minima_.lookup(id, from))
+            paired = std::min(paired, *historical);
+        auto answer = paired;
+        if (paired == SequenceIndex::absent) {
+            answer = retained[0];
+            if (const auto historical = erased_minima_.lookup(id))
+                answer = std::min(answer, *historical);
+        }
+        if (!sequence_index_->store && sequence_index_->watch_inline(id, from, answer)) return;
+    }
     auto& index = sequence_index();
     const auto paired = index.combined_minimum(1, id, from, erased_minima_);
     const auto answer = paired != SequenceIndex::absent
