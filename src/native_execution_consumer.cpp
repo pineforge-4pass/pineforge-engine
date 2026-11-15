@@ -10856,11 +10856,42 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
     const auto* running = std::get_if<NativeRunning>(&state_);
     const bool tolerant_realtime = legacy_tolerant_slot_labels() && running
         && running->phase == NativeRunPhase::Realtime;
-    if (tolerant_realtime && last_accepted_input_) {
-        // FeedTolerant preserves arbitrary provider labels, but the
-        // realtime confirmed-bar API still advances on the caller's raw label
-        // grid (ab9714be pine_stream.cpp:167-205).  Validate that boundary
-        // before any driver, digest, aggregation, or callback mutation.
+    std::optional<std::int64_t> calendar_successor;
+    if (tolerant_realtime && last_accepted_input_
+        && (input_tf_.unit() == native_calendar::TimeframeUnit::Day
+            || input_tf_.unit() == native_calendar::TimeframeUnit::Week)) {
+        // A calendar-labelled predecessor advances by its declared unit and
+        // count, including closed days and UTC-offset changes. Raw partitions
+        // do not retain that successor, so resolve it from the accepted label.
+        const auto previous = native_calendar::interval_containing(
+            calendar_, input_tf_, last_accepted_input_->open_ms, calendar_memo_);
+        if (previous
+            && native_confirmed_bar_label_admitted(*previous, last_accepted_input_->open_ms)
+            && previous->last_traded_close_ms > previous->eligible_open_ms) {
+            calendar_successor = previous->next_input_open_ms;
+            std::optional<native_calendar::NativeInterval> candidate;
+            if (*calendar_successor > last_accepted_input_->open_ms
+                && bar.timestamp == *calendar_successor) {
+                candidate = native_calendar::interval_containing(
+                    calendar_, input_tf_, bar.timestamp, calendar_memo_);
+            }
+            if (!candidate
+                || !native_confirmed_bar_label_admitted(*candidate, bar.timestamp)
+                || candidate->open_ms <= previous->open_ms
+                || candidate->last_traded_close_ms <= candidate->eligible_open_ms) {
+                processing_input_ = false;
+                present_refusal(engine,
+                    "native confirmed bar timestamp is out of order or off the input grid",
+                    RunFailureCode::stream_input_rejected);
+                return false;
+            }
+        }
+    }
+    if (tolerant_realtime && last_accepted_input_ && !calendar_successor) {
+        // Other FeedTolerant provider labels keep the caller's raw grid
+        // (ab9714be pine_stream.cpp:167-205). Validate before any driver,
+        // digest, aggregation, or callback mutation; a calendar successor
+        // never falls back to this grid.
         std::int64_t unit_ms = 0;
         switch (input_tf_.unit()) {
         case native_calendar::TimeframeUnit::Second: unit_ms = 1000; break;
@@ -10938,7 +10969,8 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
             return false;
         }
         if (canonical_labels && realtime_labels) {
-            int64_t expected_label = last_accepted_input_->next_input_open_ms;
+            int64_t expected_label = calendar_successor.value_or(
+                last_accepted_input_->next_input_open_ms);
             if (expected_label <= last_accepted_input_->open_ms) {
                 int64_t unit_ms = 0;
                 switch (input_tf_.unit()) {
