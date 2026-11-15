@@ -129,10 +129,12 @@ NATIVE_X86_HELPER = 'scripts/ci_native_x86_release.py'
 GKE_JOB_LABELS = {
     'gke-pr.yml': {'preflight': HOSTED_X86_RUNNER, 'build': HOSTED_X86_RUNNER,
                    NATIVE_X86_JOB: HOSTED_X86_RUNNER,
+                   'build-tests': HOSTED_X86_RUNNER, 'build-tests-result': HOSTED_X86_RUNNER,
                    'build-debug': HOSTED_X86_RUNNER,
                    'corpus-parity-subset': HOSTED_X86_RUNNER},
     'ci-post.yml': {'preflight': HOSTED_X86_RUNNER,
                     NATIVE_X86_JOB: HOSTED_X86_RUNNER,
+                    'build-tests': HOSTED_X86_RUNNER, 'build-tests-result': HOSTED_X86_RUNNER,
                     'smoke': HOSTED_X86_RUNNER, 'smoke-arm': HOSTED_ARM_RUNNER,
                     'sanitizers': HOSTED_X86_RUNNER},
     'corpus-parity.yml': {'corpus-parity': HOSTED_X86_RUNNER,
@@ -275,6 +277,7 @@ NATIVE_EXCLUSION = "${{ matrix.profile == 'native' && inputs.exclude_slow && '--
 CORES = '"$(getconf _NPROCESSORS_ONLN)"'
 VERIFY, PARITY = 'ci_verify.py', 'check_corpus_parity.sh'
 NATIVE_X86_COMMAND = 'ci_native_x86_release.py'
+RELEASE_BUILD_COMMAND = 'ci_build_tests.py'
 NATIVE_X86_BUILD_DIR = 'build-x86-gcc133'
 NATIVE_X86_ARTIFACT_DIR = 'ci-native-x86-gcc133'
 NATIVE_X86_UPLOAD = 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
@@ -294,10 +297,12 @@ JOB_COMMANDS = {
     'ci.yml': {'authz': None},
     'gke-pr.yml': {'admit': None, 'preflight': None, 'build': None,
                    NATIVE_X86_JOB: NATIVE_X86_COMMAND,
+                   'build-tests': RELEASE_BUILD_COMMAND, 'build-tests-result': None,
                    'build-debug': None, 'corpus-parity-subset': PARITY,
                    'legs': None, 'result': None},
     'ci-post.yml': {'authz': None, 'changes': None, 'preflight': None,
                     NATIVE_X86_JOB: NATIVE_X86_COMMAND,
+                    'build-tests': RELEASE_BUILD_COMMAND, 'build-tests-result': None,
                     'smoke': None, 'smoke-arm': None, 'sanitizers': None,
                     'build-gate': None},
     'native-live.yml': {'authz': None, 'native-live': VERIFY, 'native-live-shards': VERIFY,
@@ -376,7 +381,9 @@ SMOKE_STRATEGY = ('    strategy:\n'
                   '      fail-fast: false\n'
                   '      matrix:\n'
                   '        build_type: [Release, Debug]\n')
-POST_ALWAYS_JOBS = {NATIVE_X86_JOB: 'X86_GCC133_RESULT'}
+POST_ALWAYS_JOBS = {NATIVE_X86_JOB: 'X86_GCC133_RESULT',
+                    'build-tests': 'BUILD_TESTS_RESULT',
+                    'build-tests-result': 'BUILD_TESTS_UNION_RESULT'}
 POST_PROOF_JOBS = {**PROOF_JOBS, **POST_ALWAYS_JOBS}
 PR_PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-debug': 'DEBUG_RESULT',
                  'corpus-parity-subset': 'PARITY_RESULT'}
@@ -498,6 +505,8 @@ GKE_RESULT_STEP = '''      - name: Require an independently consistent successfu
           ALLOWED: ${{ needs.admit.outputs.allowed }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
           X86_RESULT: ${{ needs.build-x86-gcc133.result }}
+          BUILD_TESTS_RESULT: ${{ needs.build-tests.result }}
+          BUILD_TESTS_UNION_RESULT: ${{ needs.build-tests-result.result }}
           LEGS_RESULT: ${{ needs.legs.result }}
           ADMIT_DOCS_ONLY: ${{ needs.admit.outputs.docs_only }}
           ADMIT_GITHUB_ONLY: ${{ needs.admit.outputs.github_only }}
@@ -511,6 +520,8 @@ GKE_RESULT_STEP = '''      - name: Require an independently consistent successfu
           test "$ALLOWED" = true || fail "admission did not allow the head"
           test "$PREFLIGHT_RESULT" = success || fail "preflight did not pass"
           test "$X86_RESULT" = success || fail "native x86 GNU 13.3.0 build did not pass"
+          test "$BUILD_TESTS_RESULT" = success || fail "Release test build did not pass"
+          test "$BUILD_TESTS_UNION_RESULT" = success || fail "Release target union did not pass"
           test "$SECOND_DOCS_ONLY" = "$ADMIT_DOCS_ONLY" || fail "docs-only classification changed"
           test "$SECOND_GITHUB_ONLY" = "$ADMIT_GITHUB_ONLY" || fail "github-only classification changed"
           test "$CODE_EXTENSION" != true || {
@@ -553,6 +564,8 @@ GKE_ARM_RESULT_STEP = '''      - name: Require an independently consistent succe
           ALLOWED: ${{ needs.admit.outputs.allowed }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
           X86_RESULT: ${{ needs.build-x86-gcc133.result }}
+          BUILD_TESTS_RESULT: ${{ needs.build-tests.result }}
+          BUILD_TESTS_UNION_RESULT: ${{ needs.build-tests-result.result }}
           LEGS_RESULT: ${{ needs.legs.result }}
           ADMIT_DOCS_ONLY: ${{ needs.admit.outputs.docs_only }}
           ADMIT_GITHUB_ONLY: ${{ needs.admit.outputs.github_only }}
@@ -568,6 +581,8 @@ GKE_ARM_RESULT_STEP = '''      - name: Require an independently consistent succe
           test "$ALLOWED" = true || fail "admission did not allow the head"
           test "$PREFLIGHT_RESULT" = success || fail "preflight did not pass"
           test "$X86_RESULT" = success || fail "native x86 GNU 13.3.0 build did not pass"
+          test "$BUILD_TESTS_RESULT" = success || fail "Release test build did not pass"
+          test "$BUILD_TESTS_UNION_RESULT" = success || fail "Release target union did not pass"
           test "$SECOND_DOCS_ONLY" = "$ADMIT_DOCS_ONLY" || fail "docs-only classification changed"
           test "$SECOND_GITHUB_ONLY" = "$ADMIT_GITHUB_ONLY" || fail "github-only classification changed"
           test "$SECOND_ARM_RELEVANT" = "$ADMIT_ARM_RELEVANT" || fail "arm relevance classification changed"
@@ -1046,6 +1061,8 @@ POST_GATE_STEP = r'''      - name: Require every verification lane to have passe
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
           X86_GCC133_RESULT: ${{ needs.build-x86-gcc133.result }}
+          BUILD_TESTS_RESULT: ${{ needs.build-tests.result }}
+          BUILD_TESTS_UNION_RESULT: ${{ needs.build-tests-result.result }}
           SMOKE_RESULT: ${{ needs.smoke.result }}
           ARM_SMOKE_RESULT: ${{ needs.smoke-arm.result }}
           SANITIZER_RESULT: ${{ needs.sanitizers.result }}
@@ -1053,6 +1070,7 @@ POST_GATE_STEP = r'''      - name: Require every verification lane to have passe
         run: |
           printf '%s\n' "authz: $AUTHZ_RESULT" "changes: $CHANGES_RESULT, docs only: ${DOCS_ONLY:-unanswered}" \
             "preflight: $PREFLIGHT_RESULT" "native x86 GNU 13.3.0: $X86_GCC133_RESULT" \
+            "Release test build: $BUILD_TESTS_RESULT" "Release target union: $BUILD_TESTS_UNION_RESULT" \
             "amd64 smoke: $SMOKE_RESULT" "arm64 smoke: $ARM_SMOKE_RESULT" \
             "sanitizers: $SANITIZER_RESULT" "corpus parity (subset): $PARITY_RESULT"
           # Every smoke leg and the subset parity must pass. Only a classified
@@ -1063,6 +1081,8 @@ POST_GATE_STEP = r'''      - name: Require every verification lane to have passe
           [[ "$AUTHZ_RESULT" == "success" && "$CHANGES_RESULT" == "success" ]] \
             && [[ "$PREFLIGHT_RESULT" == "success" ]] \
             && [[ "$X86_GCC133_RESULT" == "success" ]] \
+            && [[ "$BUILD_TESTS_RESULT" == "success" ]] \
+            && [[ "$BUILD_TESTS_UNION_RESULT" == "success" ]] \
             && passed "$SMOKE_RESULT" && passed "$ARM_SMOKE_RESULT" \
             && passed "$SANITIZER_RESULT" && passed "$PARITY_RESULT"
 '''
@@ -1081,6 +1101,7 @@ _ON_KEY = re.compile(r'^(?:on|"on"|\'on\')[ \t]*:[ \t]*([^#\n]*)', re.MULTILINE)
 _JOBS_FLAG = re.compile(r'(?<![\w-])--j(?:o|ob|obs)?(?=[\s=]|$)')
 _VERIFY_CALL = re.compile(r'\bci_verify\.py\b|-m\s+ci_verify\b')
 _NATIVE_X86_CALL = re.compile(r'\bci_native_x86_release\.py\b')
+_RELEASE_BUILD_CALL = re.compile(r'\bci_build_tests\.py\s+build\b')
 _LITERAL_CACHE_HASH = re.compile(
     r'''\$\{\{\s*hashFiles\(\s*(?:'[^'\n]*'|"[^"\n]*")'''
     r'''(?:\s*,\s*(?:'[^'\n]*'|"[^"\n]*"))*\s*\)\s*\}\}-''')
@@ -1801,9 +1822,11 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
     proofs = PR_ARM_PROOF_JOBS if arm_variant else PR_PROOF_JOBS
     legs_step = GKE_ARM_LEGS_STEP if arm_variant else GKE_LEGS_STEP
     result_template = GKE_ARM_RESULT_STEP if arm_variant else GKE_RESULT_STEP
-    required = {'admit', 'preflight', *proofs, NATIVE_X86_JOB, 'legs', 'result'}
-    result_needs = ['admit', 'preflight', NATIVE_X86_JOB, 'legs']
-    result_dependency = NATIVE_X86_JOB
+    required = {'admit', 'preflight', *proofs, NATIVE_X86_JOB,
+                'build-tests', 'build-tests-result', 'legs', 'result'}
+    result_needs = ['admit', 'preflight', NATIVE_X86_JOB,
+                    'build-tests', 'build-tests-result', 'legs']
+    result_dependency = NATIVE_X86_JOB + ', build-tests, build-tests-result'
     if corpus_variant:
         required.add('corpus-gitlink-result')
         result_needs.insert(-1, 'corpus-gitlink-result')
@@ -1949,6 +1972,7 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
         if _job_block(body, 'strategy') or _job_values(body, 'strategy'):
             findings.append(f'{name} {job} must remain one fixed proof job')
     findings += native_x86_job_findings(jobs.get(NATIVE_X86_JOB, ''), name, pr=True)
+    findings += release_build_workflow_findings(jobs, pr=True)
     preflight = steps.get('preflight', [])
     preflight_run = _step_named(preflight, '      - name: Run the class-specific preflight')
     if (_step_values(preflight_run, 'run') != [
@@ -2335,23 +2359,25 @@ def _sized(text: str, command: str | None) -> bool:
     """Whether a job's work runs at the runner's core count.
 
     Counted over the whole job, in order, so no line, block or chaining form
-    matters: every ci_verify call carries one core-count --jobs before the next
+    matters: every verifier or Release build call carries one core-count --jobs before the next
     call, no other --jobs spelling appears, and every JOBS and parity-script
     mention is part of the one parity command.
     """
     marks = sorted([(match.start(), 'C') for match in _VERIFY_CALL.finditer(text)]
                    + [(match.start(), 'N') for match in _NATIVE_X86_CALL.finditer(text)]
+                   + [(match.start(), 'B') for match in _RELEASE_BUILD_CALL.finditer(text)]
                    + [(match.start(), 'F' if text.startswith(
                        (f'--jobs {CORES}', f'--jobs={CORES}'), match.start()) else 'U')
                       for match in _JOBS_FLAG.finditer(text)])
     calls = ''.join(kind for _, kind in marks)
     parity = text.count(PARITY_COMMAND)
-    allowed_calls = ({VERIFY: r'(?:CF)*', NATIVE_X86_COMMAND: r'(?:NF)*'}
+    allowed_calls = ({VERIFY: r'(?:CF)*', NATIVE_X86_COMMAND: r'(?:NF)*',
+                      RELEASE_BUILD_COMMAND: r'(?:BF)*'}
                      .get(command, r''))
     return (re.fullmatch(allowed_calls, calls) is not None
             and len(re.findall(r'\bJOBS\s*[:=]', text)) == parity
             and text.count(PARITY) == parity
-            and (command not in (VERIFY, NATIVE_X86_COMMAND) or bool(calls))
+            and (command not in (VERIFY, NATIVE_X86_COMMAND, RELEASE_BUILD_COMMAND) or bool(calls))
             and (command != PARITY or parity > 0))
 
 
@@ -5259,6 +5285,104 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
     return findings
 
 
+def release_build_workflow_findings(jobs: dict[str, str], *, pr: bool = False) -> list[str]:
+    """Require the real Release build, complete shard union and compiler control."""
+    findings = []
+    build = jobs.get('build-tests', '')
+    union = jobs.get('build-tests-result', '')
+    admission = 'admit' if pr else 'authz'
+    condition = NATIVE_X86_PR_IF if pr else AUTHZ_SUCCESS
+    permissions = '{contents: read}' if pr else 'contents: read'
+    checkout_name = 'Checkout the admitted head' if pr else 'Checkout the exact workflow head'
+    checkout_ref = '${{ needs.admit.outputs.head_sha }}' if pr else '${{ github.sha }}'
+    expected_names = {
+        'build-tests': [checkout_name, 'Set up Python',
+                        'Install dependencies', 'Exercise the broken registered header control',
+                        'Build every Release test target',
+                        'Retain Release target inventories and build logs'],
+        'build-tests-result': ['Require every Release build shard to succeed',
+                               checkout_name,
+                               'Collect every Release target inventory',
+                               'Require the complete Release build'],
+    }
+    for name, body in (('build-tests', build), ('build-tests-result', union)):
+        steps = _steps(body)
+        if (not body or _job_values(body, 'if') != [condition]
+                or _needs(body) != ([admission] if name == 'build-tests'
+                                    else [admission, 'build-tests'])
+                or _job_values(body, 'runs-on') != [HOSTED_X86_RUNNER]
+                or _job_values(body, 'permissions') != [permissions]
+                or [_step_values(step, 'name') for step in steps]
+                != [[value] for value in expected_names[name]]
+                or any(_job_values(body, key) for key in (
+                    'continue-on-error', 'defaults', 'env', 'container', 'services', 'uses'))
+                or any(_step_values(step, key) for step in steps for key in (
+                    'continue-on-error', 'shell', 'working-directory'))):
+            findings.append(f'{name} must retain its exact admitted Release build steps')
+        checkout = _step_named(steps, '      - name: ' + checkout_name)
+        if (_step_values(checkout, 'uses') != [
+                'actions/checkout@11d5960a326750d5838078e36cf38b85af677262']
+                or _step_values(checkout, 'if')
+                or _step_block(checkout, 'with') != [
+                    '        with:', '          repository: ${{ github.repository }}',
+                    '          ref: ' + checkout_ref, '          fetch-depth: 0',
+                    '          persist-credentials: false']):
+            findings.append(f'{name} must check out the exact workflow head')
+    if _job_block(build, 'strategy') != [
+            '    strategy:', '      fail-fast: false', '      matrix:',
+            '        shard: [1, 2, 3, 4, 5, 6, 7, 8]']:
+        findings.append('build-tests must build every one of its eight parallel partitions')
+    if _job_block(union, 'strategy'):
+        findings.append('build-tests-result must be a single complete union')
+    steps = _steps(build)
+    compile_step = _step_named(steps, '      - name: Build every Release test target')
+    expected = ('| python3 scripts/ci_build_tests.py build --source . '
+                '--build-dir build-tests-${{ matrix.shard }} --artifact-dir ci-build-tests '
+                '--shard ${{ matrix.shard }}/8 --jobs ' + CORES)
+    if (_step_values(compile_step, 'run') != [expected]
+            or _step_values(compile_step, 'if') or _step_block(compile_step, 'env')):
+        findings.append('build-tests must run the actual full Release target build')
+    control = _step_named(steps, '      - name: Exercise the broken registered header control')
+    if (_step_values(control, 'run') != [
+            'python3 scripts/test_ci_build_tests.py WorkflowControl']
+            or _step_values(control, 'if') != ['${{ matrix.shard == 1 }}']):
+        findings.append('build-tests must execute its real broken-header workflow control')
+    install = _step_named(steps, '      - name: Install dependencies')
+    python = _step_named(steps, '      - name: Set up Python')
+    if (_step_values(install, 'run') != [SMOKE_INSTALL_RUN + ' ninja-build']
+            or _step_values(install, 'if')
+            or _step_values(python, 'if')
+            or _step_values(python, 'uses') != [
+                'actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065']
+            or _step_block(python, 'with') != [
+                '        with:', "          python-version: '3.12'"]):
+        findings.append('build-tests must preserve the hosted Python and compiler setup')
+    upload = _step_named(steps, '      - name: Retain Release target inventories and build logs')
+    if (_step_values(upload, 'if') != ['always()']
+            or _step_values(upload, 'uses') != [NATIVE_X86_UPLOAD]
+            or _step_block(upload, 'with') != [
+                '        with:', '          name: ci-release-build-${{ matrix.shard }}',
+                '          path: ci-build-tests/', '          if-no-files-found: error']):
+        findings.append('build-tests must retain every shard inventory and fail on absent artifacts')
+    steps = _steps(union)
+    status = _step_named(steps, '      - name: Require every Release build shard to succeed')
+    download = _step_named(steps, '      - name: Collect every Release target inventory')
+    merge = _step_named(steps, '      - name: Require the complete Release build')
+    if (_step_values(status, 'run') != ['test "$BUILD_TESTS_RESULT" = success']
+            or _step_block(status, 'env') != [
+                '        env:', '          BUILD_TESTS_RESULT: ${{ needs.build-tests.result }}']
+            or _step_values(download, 'uses') != [
+                'actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093']
+            or _step_block(download, 'with') != [
+                '        with:', '          pattern: ci-release-build-*',
+                '          path: ci-build-tests/', '          merge-multiple: true']
+            or _step_values(merge, 'run') != [
+                '| python3 scripts/ci_build_tests.py union --artifact-dir ci-build-tests --shards 8']
+            or any(_step_values(step, 'if') for step in steps)):
+        findings.append('build-tests-result must require successful builds and their exact inventory union')
+    return findings
+
+
 def post_smoke_workflow_findings(jobs: dict[str, str]) -> list[str]:
     """ci-post's smoke legs: the PR smoke target and the whole fast label, cold, on the named machine."""
     findings = []
@@ -5489,6 +5613,10 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
         findings.append('preflight must keep only checkout, linters, fast checks and diagnostics')
     for job in proofs.keys():
         body = jobs.get(job, '')
+        if not pr and job in ('build-tests', 'build-tests-result'):
+            # This second job follows compilation to compare the actual outputs.
+            # Both are mandatory even for documentation-only events.
+            continue
         always_job = not pr and job in POST_ALWAYS_JOBS
         expected_needs = ['authz'] if always_job else ['authz', 'changes']
         expected_if = AUTHZ_ALWAYS if always_job else (
@@ -5528,6 +5656,7 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
         findings.append('build-gate must keep the exact result policy: success or a classified docs-only skip')
     if not pr:
         findings += native_x86_job_findings(jobs.get(NATIVE_X86_JOB, ''), name, pr=False)
+        findings += release_build_workflow_findings(jobs)
         findings += post_smoke_workflow_findings(jobs)
     for job in (('build',) if pr else ()):
         build = jobs.get(job, '')
@@ -6049,6 +6178,8 @@ def check_commands(source: Path, output: Path | None = None,
                      parallel=True),
         ('native-x86-release-tests',
          [sys.executable, str(source / 'scripts/test_ci_native_x86_release.py')]),
+        ('release-build-population-tests',
+         [sys.executable, str(source / 'scripts/test_ci_build_tests.py'), 'PopulationContract']),
         ('kernel-residuals-tests',
          [sys.executable, str(source / 'scripts/test_check_kernel_residuals.py')]),
         ('corpus-parity-identity-tests',

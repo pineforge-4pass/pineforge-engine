@@ -103,9 +103,11 @@ EXPECTED_LIGHT_GKE_JOBS = {
 EXPECTED_GKE_JOBS = {
     'gke-pr.yml': {'preflight': HOSTED_X86, 'build': HOSTED_X86, 'build-debug': HOSTED_X86,
                    NATIVE_X86_JOB: HOSTED_X86,
+                   'build-tests': HOSTED_X86, 'build-tests-result': HOSTED_X86,
                    'build-arm': HOSTED_ARM,
                    'corpus-parity-subset': HOSTED_X86},
     'ci-post.yml': {'preflight': HOSTED_X86, NATIVE_X86_JOB: HOSTED_X86,
+                    'build-tests': HOSTED_X86, 'build-tests-result': HOSTED_X86,
                     'smoke': HOSTED_X86, 'smoke-arm': HOSTED_ARM, 'sanitizers': HOSTED_X86},
     'corpus-parity.yml': {'corpus-parity': HOSTED_X86, 'corpus-parity-subset': HOSTED_X86},
     'native-live.yml': {'native-live': NATIVE_RUNNER, 'native-live-shards': HOSTED_X86},
@@ -166,11 +168,13 @@ RELEASE_MATRIX_FINDING = ('release.yml prebuilt must use exactly the isolated Li
                           'and hosted ARM matrix')
 CI_JOB_IDS = ('authz',)
 GKE_PR_JOB_IDS = ('admit', 'preflight', NATIVE_X86_JOB, 'build', 'build-debug', 'build-arm',
+                  'build-tests', 'build-tests-result',
                   'corpus-parity-subset', 'legs', 'result')
 GKE_PROOF_IF = ("${{ needs.admit.outputs.allowed == 'true' && "
                 "needs.admit.outputs.docs_only != 'true' && "
                 "needs.admit.outputs.github_only != 'true' }}")
 POST_CI_JOB_IDS = ('authz', 'changes', 'preflight', NATIVE_X86_JOB, 'smoke', 'smoke-arm',
+                   'build-tests', 'build-tests-result',
                    'sanitizers', 'corpus-parity-subset', 'build-gate')
 NATIVE_HOSTED_RUNNERS = {'authz': HOSTED_X86, 'native-live': NATIVE_RUNNER,
                          'native-live-shards': HOSTED_X86,
@@ -179,7 +183,7 @@ FLEET_JOB_IDS = {
     'ci.yml': ('authz',),
     'gke-pr.yml': GKE_PR_JOB_IDS,
     'ci-post.yml': ('authz', 'changes', 'preflight', 'smoke', 'smoke-arm', NATIVE_X86_JOB,
-                    'sanitizers', 'build-gate'),
+                    'build-tests', 'build-tests-result', 'sanitizers', 'build-gate'),
     'native-live.yml': ('authz', 'native-live', 'native-live-shards', 'native-live-native', 'native-live-gate'),
     'corpus-parity.yml': ('authz', 'corpus-parity', 'corpus-parity-subset'),
     'docs.yml': ('authz', 'build'),
@@ -2997,6 +3001,8 @@ class GkeRunnerPolicy(unittest.TestCase):
                 'build': 'libeigen3-dev tzdata-legacy ccache',
                 'build-debug': 'libeigen3-dev tzdata-legacy ccache',
                 NATIVE_X86_JOB: None,
+                'build-tests': 'libeigen3-dev tzdata-legacy ccache ninja-build',
+                'build-tests-result': None,
                 # expectation corrected: 'libeigen3-dev tzdata-legacy ccache strace' ->
                 # 'libeigen3-dev tzdata-legacy ccache', because the arm64 leg runs the fast
                 # Debug smoke, which installs only the smoke dependencies.
@@ -3010,6 +3016,8 @@ class GkeRunnerPolicy(unittest.TestCase):
             'ci-post.yml': {
                 'preflight': 'shellcheck',
                 NATIVE_X86_JOB: None,
+                'build-tests': 'libeigen3-dev tzdata-legacy ccache ninja-build',
+                'build-tests-result': None,
                 'smoke': 'libeigen3-dev tzdata-legacy ccache',
                 'smoke-arm': 'libeigen3-dev tzdata-legacy ccache',
                 'sanitizers': 'libeigen3-dev tzdata-legacy ccache',
@@ -5185,7 +5193,8 @@ class RunnerGroupAllowlist(unittest.TestCase):
             'source-guard-cancellation', 'source-guard-cr150-source-bounds',
             'cr150-source-gate-tests', 'rng-draw-order-tests', 'rng-draw-order', 'verifier-tests',
             'preflight-tests', 'unittest-shards-tests', 'verifier-paths-tests',
-            'native-c-surface-tests', 'native-x86-release-tests', 'kernel-residuals-tests',
+            'native-c-surface-tests', 'native-x86-release-tests', 'release-build-population-tests',
+            'kernel-residuals-tests',
             'corpus-parity-identity-tests',
             'corpus-parity-subset-cover-tests', 'corpus-sha-validation-tests',
             'corpus-gitlink-result-tests', 'corpus-file-digest-tests',
@@ -5205,11 +5214,16 @@ class RunnerGroupAllowlist(unittest.TestCase):
             {entry[0]: entry[1] for entry in check_commands(ROOT, env={})}[
                 'native-x86-release-tests'],
             [sys.executable, str(ROOT / 'scripts/test_ci_native_x86_release.py')])
+        self.assertEqual(
+            dict(check_commands(ROOT, env={}))['release-build-population-tests'],
+            [sys.executable, str(ROOT / 'scripts/test_ci_build_tests.py'), 'PopulationContract'])
         with mock.patch.object(ci_preflight.sys, 'platform', 'linux'):
             self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})], expected)
             # main() prepends actionlint-version to all/fast/github-only.
-            self.assertEqual(len(expected) + 1, 71)
-            self.assertEqual(len(check_commands(ROOT, tier='fast')), 66)
+            # expectation corrected: all/fast 71/66 -> 72/67, because the
+            # Release population contract is a new fast preflight stage.
+            self.assertEqual(len(expected) + 1, 72)
+            self.assertEqual(len(check_commands(ROOT, tier='fast')), 67)
             self.assertEqual(len(check_commands(ROOT, tier='slow')), 4)
             self.assertEqual(len(check_commands(ROOT, tier='github-only')), 7)
         for platform in ('darwin', 'win32'):
@@ -5218,7 +5232,9 @@ class RunnerGroupAllowlist(unittest.TestCase):
                                      if name not in ('prebuilt-bookworm-tests', 'prebuilt-glibc-tests')]
                 self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})],
                                  expected_platform)
-                self.assertEqual(len(check_commands(ROOT, tier='fast')), 64)
+                # expectation corrected: 64 -> 65, because the same new
+                # population contract also runs on these source-check hosts.
+                self.assertEqual(len(check_commands(ROOT, tier='fast')), 65)
 
 
 class PrebuiltGlibcRegistration(unittest.TestCase):
@@ -5433,7 +5449,7 @@ class PreflightFailures(unittest.TestCase):
                                       ci_preflight.runner_findings({**workflows, name: changed}))
 
     def gcp_sites(self):
-        """Keep the 18 admitted sites, including the synthetic isolated release form."""
+        """Keep admitted sites, including the synthetic isolated release form."""
         workflows = self.workflow_sources(legacy_release=True)
         routes = ci_preflight.workflow_event_routes(workflows)
         for name, workflow in workflows.items():
@@ -7783,7 +7799,11 @@ exit "$lookup_exit"
         # expectation corrected: 21 -> 18, because ci-post's preflight-slow, build, build-debug,
         # build-arm, sanitizers and kernel-only rows became the smoke, smoke-arm and sanitizers
         # smoke jobs (every CI round fits 15 minutes; the full profiles run in the lab's verify)
-        self.assertEqual(len(sites), 18)
+        # expectation corrected: 18 -> 20, because the Release target build
+        # and its inventory union each add a pinned hosted verification job.
+        # expectation corrected: 20 -> 22, because PRs also require the
+        # Release target build and its inventory union on hosted runners.
+        self.assertEqual(len(sites), 22)
         self.assertCountEqual([(name, job) for name, job, *_ in sites],
                               [(name, job) for name, jobs in FLEET_JOB_IDS.items()
                                for job in jobs if job not in LIGHT_JOB_IDS.get(name, ())
@@ -8105,6 +8125,7 @@ exit "$lookup_exit"
                'CHANGES_RESULT': 'success', 'DOCS_ONLY': 'false',
                'PREFLIGHT_RESULT': 'success',
                'X86_GCC133_RESULT': 'success',
+               'BUILD_TESTS_RESULT': 'success', 'BUILD_TESTS_UNION_RESULT': 'success',
                **{variable: 'success' for variable in PROOF_JOBS.values()}}
         pr_script = job_script(self.gke(), 'legs', 'Require every proof leg')
         for variable in PR_ARM_PROOF_JOBS.values():
@@ -8121,6 +8142,8 @@ exit "$lookup_exit"
             script = job_script(self.ci_sources()[6], 'build-gate',
                                 'Require every verification lane to have passed')
             matrices = [('X86_GCC133_RESULT', 'native x86 GNU 13.3.0')]
+            matrices += [('BUILD_TESTS_RESULT', 'Release test build'),
+                         ('BUILD_TESTS_UNION_RESULT', 'Release target union')]
             matrices.append(('SMOKE_RESULT', 'amd64 smoke'))
             if event != 'pull_request':
                 matrices.append(('ARM_SMOKE_RESULT', 'arm64 smoke'))
@@ -8145,6 +8168,7 @@ exit "$lookup_exit"
         script.write_text(job_script(self.ci_sources()[6], 'build-gate',
                                      'Require every verification lane to have passed'))
         env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'AUTHZ_RESULT': 'success',
+               'BUILD_TESTS_RESULT': 'success', 'BUILD_TESTS_UNION_RESULT': 'success',
                'GITHUB_EVENT_NAME': 'push'}
         lanes = list(PROOF_JOBS.values())
         vectors = set()
@@ -8264,6 +8288,7 @@ finally:
                    'PATH_FILE': str(root / 'paths'), 'GH_TOKEN': 'fixture-token',
                    'ADMIT_RESULT': 'success', 'ALLOWED': 'true',
                    'PREFLIGHT_RESULT': 'success', 'X86_RESULT': 'success',
+                   'BUILD_TESTS_RESULT': 'success', 'BUILD_TESTS_UNION_RESULT': 'success',
                    'LEGS_RESULT': 'skipped',
                    **(results or {})}
             requests = []
@@ -8369,7 +8394,8 @@ finally:
         self.assertEqual(set(ci_preflight._needs(pr_gate)),
                          {'admit', NATIVE_X86_JOB, *PR_ARM_PROOF_JOBS})
         self.assertEqual(ci_preflight._needs(pr_jobs['result']),
-                         ['admit', 'preflight', NATIVE_X86_JOB, 'legs'])
+                         ['admit', 'preflight', NATIVE_X86_JOB,
+                          'build-tests', 'build-tests-result', 'legs'])
         self.assertIn('ARM_RESULT: ${{ needs.build-arm.result }}', pr_gate)
         self.assertIn('ARM_SMOKE_RESULT: ${{ needs.smoke-arm.result }}', post_gate)
         rows = [{'filename': '.github/workflows/ci.yml', 'status': 'modified'}]
@@ -8520,6 +8546,7 @@ finally:
         for class_name in ('docs', 'github', 'code'):
             base = {'ADMIT_RESULT': 'success', 'ALLOWED': 'true', 'PREFLIGHT_RESULT': 'success',
                     'X86_RESULT': 'success',
+                    'BUILD_TESTS_RESULT': 'success', 'BUILD_TESTS_UNION_RESULT': 'success',
                     'LEGS_RESULT': 'success' if class_name == 'code' else 'skipped',
                     'ADMIT_DOCS_ONLY': 'true' if class_name == 'docs' else 'false',
                     'SECOND_DOCS_ONLY': 'true' if class_name == 'docs' else 'false',
@@ -8529,10 +8556,13 @@ finally:
                     'SECOND_ARM_RELEVANT': 'true' if class_name == 'code' else 'false',
                     'CODE_EXTENSION': 'true' if class_name == 'code' else 'false'}
             for field in base:
-                for outcome in dict.fromkeys((base[field], 'success', 'skipped', 'failure', 'cancelled', '')):
+                for outcome in dict.fromkeys((base[field], 'success', 'skipped', 'failure',
+                                              'cancelled', 'malformed', '')):
                     values = {**base, field: outcome}
                     expected = (values['ADMIT_RESULT'] == values['PREFLIGHT_RESULT'] == 'success'
                                 and values['X86_RESULT'] == 'success'
+                                and values['BUILD_TESTS_RESULT'] == 'success'
+                                and values['BUILD_TESTS_UNION_RESULT'] == 'success'
                                 and values['ALLOWED'] == 'true'
                                 and values['ADMIT_DOCS_ONLY'] == values['SECOND_DOCS_ONLY']
                                 and values['ADMIT_GITHUB_ONLY'] == values['SECOND_GITHUB_ONLY']
@@ -8550,13 +8580,22 @@ finally:
                         env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'), **values},
                         capture_output=True, text=True)
                     self.assertEqual(result.returncode == 0, expected, result.stdout + result.stderr)
+            for field in ('BUILD_TESTS_RESULT', 'BUILD_TESTS_UNION_RESULT'):
+                values = {key: value for key, value in base.items() if key != field}
+                with self.subTest(class_name=class_name, missing=field):
+                    result = subprocess.run(
+                        ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', pr_script],
+                        env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'), **values},
+                        capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         for event in ('push', 'schedule', 'workflow_dispatch'):
             script = job_script(self.ci_sources()[6], 'build-gate',
                                 'Require every verification lane to have passed')
             # Every CI round fits 15 minutes: the slow preflight tier, the leg
             # aggregates, kernel-only, native-live and the full parity sweep left
             # ci-post for the lab's verify; the smoke legs and the subset parity remain.
-            required = {'AUTHZ_RESULT', 'CHANGES_RESULT', 'PREFLIGHT_RESULT', 'X86_GCC133_RESULT'}
+            required = {'AUTHZ_RESULT', 'CHANGES_RESULT', 'PREFLIGHT_RESULT', 'X86_GCC133_RESULT',
+                        'BUILD_TESTS_RESULT', 'BUILD_TESTS_UNION_RESULT'}
             proof = {'SMOKE_RESULT', 'ARM_SMOKE_RESULT', 'SANITIZER_RESULT', 'PARITY_RESULT'}
             for docs_only in ('false', 'true'):
                 base = {name: 'success' for name in required | proof}
@@ -8600,6 +8639,10 @@ finally:
              'build-gate must require corpus-parity-subset success or a docs-only skip'),
             ('&& [[ "$X86_GCC133_RESULT" == "success" ]]', '&& true',
              'build-gate must require build-x86-gcc133 success on every event'),
+            ('&& [[ "$BUILD_TESTS_RESULT" == "success" ]]', '&& true',
+             'build-gate must require build-tests success on every event'),
+            ('&& [[ "$BUILD_TESTS_UNION_RESULT" == "success" ]]', '&& true',
+             'build-gate must require build-tests-result success on every event'),
             ('          SMOKE_RESULT: ${{ needs.smoke.result }}\n', '',
              'build-gate must read the result of smoke'),
             ('PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}',
@@ -11824,6 +11867,7 @@ class GkePrArmProofTests(unittest.TestCase):
                        'Require an independently consistent successful result'),
             {'ADMIT_RESULT': 'success', 'ALLOWED': 'true', 'PREFLIGHT_RESULT': 'success',
              'X86_RESULT': native,
+             'BUILD_TESTS_RESULT': 'success', 'BUILD_TESTS_UNION_RESULT': 'success',
              'LEGS_RESULT': ('skipped' if classified
                              else 'success' if proof.returncode == 0 else 'failure'),
              'ADMIT_DOCS_ONLY': docs_only, 'ADMIT_GITHUB_ONLY': github_only,
@@ -12663,7 +12707,7 @@ class GkeAdmissionRuleTests(unittest.TestCase):
                 in_job(original, 'result', '    if: always()\n', '    if: success()\n'),
                 'gke-pr.yml result must run always')
         cases = (
-            ('    needs: [admit, preflight, build-x86-gcc133, legs]\n',
+            ('    needs: [admit, preflight, build-x86-gcc133, build-tests, build-tests-result, legs]\n',
              '    needs: [admit, preflight]\n',
              'gke-pr.yml result must require admission, preflight, native x86 and consistent proof results'),
             ('          ref: ${{ needs.admit.outputs.head_sha }}\n',
@@ -12890,12 +12934,35 @@ def legacy_gke_arm_smoke(legacy):
 
     The pinned fixture still carries #701's full Debug profile arm64 job, which the
     contract refuses since every CI round fits 15 minutes (owner, 2026-11-13). Swap
-    in the reviewed arm64 smoke job; the fixture bytes and their hash stay unchanged.
+    in the reviewed arm64 smoke job and mandatory Release build jobs; the fixture
+    bytes and their hash stay unchanged.
     """
     old = GkeArmAdmissionVariantTests.LEGACY_ARM_JOB
     if legacy.count(old) != 1:
         raise AssertionError('the legacy gke-pr.yml must hold the full-profile arm64 job once')
-    return legacy.replace(old, GkeArmAdmissionVariantTests.ARM_JOB, 1)
+    legacy = legacy.replace(old, GkeArmAdmissionVariantTests.ARM_JOB, 1)
+    workflow = ROOT / '.github/workflows/gke-pr.yml'
+    announce_compare_fixture_paths(workflow)
+    jobs = _jobs(workflow.read_text(encoding='utf-8'))
+    for job in ('build-tests', 'build-tests-result'):
+        if job in _jobs(legacy) or not jobs.get(job):
+            raise AssertionError('legacy fixture requires the real Release build job: ' + job)
+        legacy = legacy.rstrip('\n') + '\n\n  ' + job + ':' + jobs[job]
+    legacy = in_job(
+        legacy, 'result',
+        '    needs: [admit, preflight, build-x86-gcc133, legs]\n',
+        '    needs: [admit, preflight, build-x86-gcc133, build-tests, build-tests-result, legs]\n')
+    for anchor, addition in (
+            ('          X86_RESULT: ${{ needs.build-x86-gcc133.result }}\n',
+             '          BUILD_TESTS_RESULT: ${{ needs.build-tests.result }}\n'
+             '          BUILD_TESTS_UNION_RESULT: ${{ needs.build-tests-result.result }}\n'),
+            ('          test "$X86_RESULT" = success || fail "native x86 GNU 13.3.0 build did not pass"\n',
+             '          test "$BUILD_TESTS_RESULT" = success || fail "Release test build did not pass"\n'
+             '          test "$BUILD_TESTS_UNION_RESULT" = success || fail "Release target union did not pass"\n')):
+        legacy = in_step(
+            legacy, 'result', 'Require an independently consistent successful result',
+            anchor, anchor + addition)
+    return legacy
 
 
 class SplitHostedReleaseAdmission(unittest.TestCase):
