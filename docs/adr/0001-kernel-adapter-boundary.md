@@ -32,12 +32,12 @@ Three layers, two of them meant to be optional:
 1. **Generic kernel — Pine-agnostic (the reusable core).** The public host is
    `pineforge::NativeStrategyHost` (`native_host.hpp:865`), an abstract subclass of
    `BacktestEngine`. Kernel translation units are named, not inferred: they are the
-   forty-five members of `PINEFORGE_KERNEL_SOURCES` (`CMakeLists.txt:118`) — the `engine_*`,
+   forty-five members of `PINEFORGE_KERNEL_SOURCES` (`CMakeLists.txt:119`) — the `engine_*`,
    `native_*`, `ta_*`, `market_driver`, `magnifier`, `math`, `matrix`, `session_time`,
    `timeframe`, `timezone`, `str_utils`, `c_abi`, `native_c_host`, `reservation_expansion`
-   (`CMakeLists.txt:131`) and `pending_order_mirror` (`CMakeLists.txt:138`) units — plus the
+   (`CMakeLists.txt:132`) and `pending_order_mirror` (`CMakeLists.txt:139`) units — plus the
    headers directly under `include/pineforge/`. That list is what `add_library`
-   (`CMakeLists.txt:185`) compiles into `pineforge_kernel` / `PineForge::kernel`, and it and
+   (`CMakeLists.txt:186`) compiles into `pineforge_kernel` / `PineForge::kernel`, and it and
    `PINEFORGE_SOURCE_LAYER_SOURCES` are disjoint: no file is in both, and none is outside both.
    **Two stems exist twice; the kernel copy is the generic half** —
    `ReservationExpansion` (`src/reservation_expansion.cpp:10`) and
@@ -50,7 +50,7 @@ Three layers, two of them meant to be optional:
    translation unit ever consumed it), and `src/compat/pine/market_admission.cpp` holds the scope
    predicates over it, inside the source-layer set.
 2. **Source-adapter parity runtime — optional, TradingView parity.** The
-   `PINEFORGE_SOURCE_LAYER_SOURCES` set (`CMakeLists.txt:91`): the fourteen `src/source/` units and
+   `PINEFORGE_SOURCE_LAYER_SOURCES` set (`CMakeLists.txt:92`): the fourteen `src/source/` units and
    **all six** `src/compat/pine/` units, with headers under `include/pineforge/source/` and
    `include/pineforge/compat/pine/`. It maps Pine execution semantics onto the kernel.
    `-DPINEFORGE_BUILD_SOURCE_LAYER=OFF` compiles none of them.
@@ -370,7 +370,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
 ## Current state vs. target (read before relying on "without Pine")
 
 - **The kernel is a separately linkable artifact.** `add_library`
-  (`CMakeLists.txt:185`) builds `pineforge_kernel` / `PineForge::kernel` from
+  (`CMakeLists.txt:186`) builds `pineforge_kernel` / `PineForge::kernel` from
   `PINEFORGE_KERNEL_SOURCES` alone, with the same flags `pineforge` uses, in **both**
   configurations. `libpineforge.a` still carries the adapter beside the kernel by default;
   `-DPINEFORGE_BUILD_SOURCE_LAYER=OFF` (`CMakeLists.txt:43`) compiles no source-layer
@@ -380,7 +380,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   `scripts/check_native_include_independence.py --kernel-archive` proves the archive links
   standalone with `nm` over its defined and undefined symbols and no whitelisted symbol. Every
   `src/compat/pine/` unit — `market_admission.cpp` included — is inside
-  `PINEFORGE_SOURCE_LAYER_SOURCES` (`CMakeLists.txt:91`).
+  `PINEFORGE_SOURCE_LAYER_SOURCES` (`CMakeLists.txt:92`).
 - **Include independence already holds.** No kernel translation unit reaches a source header —
   `sha256:042df81acdce8114753e13712791fde4394928c83731b2c6457da111ce4f2a07` engine_aux_security.cpp:6-14, for instance, pulls only `engine_internal.hpp`, `cache_policy.hpp`, `run_failure.hpp`,
   `ta.hpp` and std headers. No kernel signature names an adapter type either: the rich begin
@@ -448,7 +448,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   `native_selected_strategy.cpp`), both of which include `native_host.hpp`. Each C host includes
   `<pineforge/pineforge.h>`, which includes `native_c_api.h`. Every one links `PineForge::kernel`
   and checks its own numbers before it prints its summary line. `PINEFORGE_BUILD_EXAMPLES`
-  (`CMakeLists.txt:37`, default OFF) builds them (`add_subdirectory` `CMakeLists.txt:470`) and
+  (`CMakeLists.txt:37`, default OFF) builds them (`add_subdirectory` `CMakeLists.txt:471`) and
   registers each as a CTest row that runs through `examples/native/run_example.cmake`, which
   fails on a nonzero exit, a signal **or** a missing summary line — so a row asserts
   both, which a bare `PASS_REGULAR_EXPRESSION` cannot. `scripts/test_example_runner.py` proves
