@@ -240,7 +240,7 @@ void source_na_membership() {
 
 void tv_clock_na_prefix() {
     // Exact field projection from the finite TradingView carrier packet.
-    // SHA256 23a90c316ae4f476b5d4662c2d51745f2fcd7677f3eb9423b02f00cef448ba9d.
+    // Values projected from a TradingView capture of this script.
     // Case clock_na_true; each row is values.source_at_call.floatHex (null
     // becomes NA), values.dense_length_at_call, values.dense_value.floatHex
     // (null becomes NA). Comments identify the original bar and time.
