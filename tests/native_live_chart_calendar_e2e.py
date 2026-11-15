@@ -154,6 +154,70 @@ def prove(root, runner, oracle, library, cell, probe):
     return receipts
 
 
+def confirmed_reporter_cells():
+    # The issue's two controls and four failures, all at 09:30 local.
+    yield "UTC daily control", "UTC", "1D", ("2026-03-05", "2026-03-06", "2026-03-09")
+    yield "NY daily winter control", "America/New_York", "1D", (
+        "2026-01-08", "2026-01-09", "2026-01-12")
+    yield "NY daily spring", "America/New_York", "1D", (
+        "2026-03-05", "2026-03-06", "2026-03-09")
+    yield "NY daily autumn", "America/New_York", "1D", (
+        "2026-10-29", "2026-10-30", "2026-11-02")
+    yield "NY weekly spring", "America/New_York", "1W", (
+        "2026-02-23", "2026-03-02", "2026-03-09")
+    yield "NY weekly autumn", "America/New_York", "1W", (
+        "2026-10-19", "2026-10-26", "2026-11-02")
+
+
+def prove_confirmed_reporter(root, oracle, library):
+    failures = []
+    for name, timezone, timeframe, dates in confirmed_reporter_cells():
+        target = root / ("confirmed-" + name.replace(" ", "-"))
+        target.mkdir(parents=True, exist_ok=True)
+        zone = ZoneInfo(timezone)
+        rows = [
+            dict(ts_open=int(datetime.fromisoformat(day + "T09:30:00").replace(
+                tzinfo=zone).timestamp() * 1000),
+                 o=100 + index, h=102 + index, l=99 + index, c=101 + index, v=1000)
+            for index, day in enumerate(dates)
+        ]
+        config = dict(symbol="TEST:EXAMPLE", script_tf=timeframe, timezone=timezone,
+                      chart_timezone=timezone, session="0930-1600:23456",
+                      syminfo=[], inputs=[], overrides=[])
+        config_path = target / "config.json"
+        config_path.write_text(json.dumps(config))
+        full, warmup, feed = target / "full.csv", target / "warmup.csv", target / "feed.jsonl"
+        write_csv(full, rows)
+        write_csv(warmup, rows[:2])
+        write_events(feed, [dict(type="bar", bar=rows[2])])
+        batch_path, stream_path = target / "batch-actions.jsonl", target / "stream-actions.jsonl"
+        # The existing oracle loads the unchanged runner/examples/strategy.cpp
+        # module and calls its C ABI. This is direct confirmed input, without a
+        # live-runner startup request or any tick/clock event.
+        common = ["--input-tf", timeframe, "--distribution", "3", "--config", config_path]
+        try:
+            batch = checked([oracle, library, full, timeframe, batch_path] + common)
+            streamed = checked([oracle, library, warmup, timeframe, stream_path]
+                               + common + ["--stream-feed", feed])
+            assert batch["input_bars_processed"] == streamed["input_bars_processed"] == 3, name
+            assert batch["script_bars_processed"] == streamed["script_bars_processed"] == 3, name
+            equal(batch, streamed, name + " confirmed batch/stream report")
+            expected_actions, actual_actions = actions(batch_path), actions(stream_path)
+            equal([action_key(row) for row in expected_actions],
+                  [action_key(row) for row in actual_actions], name + " confirmed physical actions")
+            assert len(actual_actions) == 1, (name, "pending warmup entry must fill")
+            fill = actual_actions[0]
+            assert fill["timestamp"] == rows[2]["ts_open"] and fill["bar_index"] == 2, (name, fill)
+            assert fill["order"]["id"] == "Long" and fill["order"]["leg"] == "entry", (name, fill)
+            assert fill["order"]["action"] == "buy" and not fill["order"]["reduce_only"], (name, fill)
+            assert fill["order"]["contracts"] == 1 and fill["order"]["price"] == 102, (name, fill)
+        except AssertionError as failure:
+            # Measure every reporter cell, including the controls, before the
+            # normal CTest row fails. A failed subprocess includes its raw error.
+            failures.append((name, str(failure)))
+    assert not failures, failures
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("runner")
@@ -171,6 +235,7 @@ def main():
         with ThreadPoolExecutor(max_workers=4) as workers:
             for result in workers.map(verify_cell, cells()):
                 receipts.extend(result)
+        prove_confirmed_reporter(root, args.oracle, args.library)
         (root / "matrix.json").write_text(json.dumps(receipts, indent=2))
     print("chart-calendar boundary probe complete" if args.probe else "chart-calendar contract PASS", flush=True)
 
