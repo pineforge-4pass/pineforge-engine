@@ -82,7 +82,8 @@ def _write_trades(
 
 def _analyze_tapes(
     run_root: Path, name: str,
-    tv_trades: list[ClosedTrade], engine_trades: list[ClosedTrade],
+    tv_trades: list, engine_trades: list,
+    *, write_trades=_write_trades,
 ):
     strategy = _checked_path(run_root / name)
     files = {
@@ -105,8 +106,8 @@ def _analyze_tapes(
         handle.write(TRAIL_STRATEGY)
     with files["inputs.json"].open("x", encoding="utf-8") as handle:
         json.dump({"tv_trades_csv_tz": "utc_plus_8"}, handle)
-    _write_trades(files["tv_trades.csv"], tv_trades, tv_timezone=True)
-    _write_trades(files["engine_trades.csv"], engine_trades, tv_timezone=False)
+    write_trades(files["tv_trades.csv"], tv_trades, tv_timezone=True)
+    write_trades(files["engine_trades.csv"], engine_trades, tv_timezone=False)
 
     result = analyze_strategy(strategy)
     row = result.report_row()
@@ -233,13 +234,13 @@ class ExactCountBehaviorTests(unittest.TestCase):
         self.assertEqual(result.qty_p100, 0.0)
         self.assertEqual((row["tv"], row["eng"], row["matched"]),
                          (result.tv_count, result.eng_count, result.matched_count))
-        # The input pool sizes define the legacy percentage independently of
-        # the analyzer's absolute unmatched count and its reported values.
-        legacy_count_delta = abs(tv_count - engine_count) / max(
+        # Count every unmatched trade on both sides, including substitutions
+        # that leave the two pool sizes equal.
+        gross_count_delta = (tv_count + engine_count - 2 * shared_count) / max(
             tv_count, engine_count, 1
         )
-        self.assertEqual(result.count_delta, legacy_count_delta)
-        self.assertEqual(row["count_delta"], legacy_count_delta)
+        self.assertEqual(result.count_delta, gross_count_delta)
+        self.assertEqual(row["count_delta"], gross_count_delta)
         self.assertEqual(row["count_abs_delta"], result.count_abs_delta)
         self.assertIs(row["distinct_entry_identity_ok"], True)
         self.assertEqual(row["distinct_entry_mismatches"], 0)
@@ -386,10 +387,9 @@ class ExactCountBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(balanced.gross_unmatched_count, 2)
         self.assertEqual(balanced_row["gross_unmatched_count"], 2)
-        # expectation corrected: 2 / 201 -> 0, because the legacy percentage
-        # compares the two input pool sizes, both 201; only the absolute
-        # unmatched count changes the excellent gate.
-        self.assertEqual(balanced.count_delta, 0.0)
+        # expectation corrected: 0 -> 2 / 201, because the percentage uses
+        # the same two gross unmatched trades as the absolute count.
+        self.assertEqual(balanced.count_delta, 2 / 201)
         self.assertLess(
             balanced.count_delta,
             balanced_row["grading_policy"]["thresholds"]["count"],
@@ -398,7 +398,7 @@ class ExactCountBehaviorTests(unittest.TestCase):
         self.assertNotEqual(balanced.tier, "excellent")
         self.assertEqual(balanced_cli["exit"], 0)
         self.assertRegex(
-            balanced_cli["stdout"], r"Count delta:\s+0\.0000%\s+\(X;"
+            balanced_cli["stdout"], r"Count delta:\s+0\.9950%\s+\(X;"
         )
         self.assertIn("abs=2", balanced_cli["stdout"])
         self.assertIn("net=0", balanced_cli["stdout"])
@@ -412,6 +412,51 @@ class ExactCountBehaviorTests(unittest.TestCase):
         self.assertEqual(control_row["gross_unmatched_count"], 0)
         self.assertEqual(control.net_count_abs_delta, 0)
         self.assertIn("abs=0", control_cli["stdout"])
+
+    def test_strong_rejects_balanced_unmatched_at_gross_limit(self):
+        start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        tv_trades = [
+            (start + timedelta(days=index),
+             start + timedelta(days=index, hours=1), f"entry-{index + 1}")
+            for index in range(100)
+        ]
+        results = []
+        for substitutions, expected_label in ((2, "strong"), (3, "moderate")):
+            moved = set((20, 40, 60)[:substitutions])
+            engine_trades = [
+                (entry + timedelta(hours=12),
+                 exit_time + timedelta(hours=12), identity + "-replacement")
+                if index in moved else (entry, exit_time, identity)
+                for index, (entry, exit_time, identity) in enumerate(tv_trades)
+            ]
+            self.assertEqual(engine_trades[0], tv_trades[0])
+            self.assertEqual(engine_trades[-1], tv_trades[-1])
+            result, row, cli = _analyze_tapes(
+                self.run_root, f"strong-{substitutions}", tv_trades, engine_trades
+            )
+            self.assertEqual((result.tv_gate_count, result.eng_gate_count), (100, 100))
+            self.assertEqual(result.gating_matched_count, 100 - substitutions)
+            self.assertEqual(result.count_abs_delta, 2 * substitutions)
+            self.assertEqual(result.net_count_abs_delta, 0)
+            self.assertEqual(result.coverage, (100 - substitutions) / 100)
+            self.assertGreaterEqual(result.coverage, 0.95)
+            self.assertFalse(result.coverage_ok)  # Excellent still requires 99%.
+            self.assertTrue(result.distinct_entry_identity_ok)
+            for metric in ("entry", "exit", "pnl"):
+                self.assertTrue(getattr(result, metric + "_ok"))
+                self.assertEqual(getattr(result, metric + "_p90"), 0.0)
+            # On the previous grader this is the first failing assertion:
+            # the 6% gross case incorrectly remains strong at 0% net.
+            self.assertEqual(
+                result.label, expected_label,
+                "strong must reject gross unmatched count at the 6% limit",
+            )
+            self.assertEqual(cli["exit"], 0 if expected_label == "strong" else 1)
+            results.append((result, row, substitutions))
+
+        for result, row, substitutions in results:
+            self.assertEqual(result.count_delta, 2 * substitutions / 100)
+            self.assertEqual(row["count_delta"], result.count_delta)
 
 
 if __name__ == "__main__":
