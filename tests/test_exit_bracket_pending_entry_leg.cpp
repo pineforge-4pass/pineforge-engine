@@ -45,10 +45,13 @@
  *      refuse at fill contributes no bracket leg). Assertions retain original inputs.
  */
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <limits>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <pineforge/engine.hpp>
@@ -62,6 +65,7 @@ using namespace pineforge;
 
 static int tests_passed = 0;
 static int tests_failed = 0;
+static int setup_failed = 0;
 
 #define CHECK(expr)                                                            \
     do {                                                                       \
@@ -70,6 +74,17 @@ static int tests_failed = 0;
             ++tests_failed;                                                    \
         } else {                                                               \
             ++tests_passed;                                                    \
+        }                                                                      \
+    } while (0)
+
+// Failed foundations are errors, never evidence for a reservation mismatch.
+#define CHECK_SETUP(expr)                                                       \
+    do {                                                                       \
+        const bool setup_ok = static_cast<bool>(expr);                          \
+        CHECK(setup_ok);                                                       \
+        if (!setup_ok) {                                                       \
+            std::printf("SETUP FAILURE %s:%d %s\n", __FILE__, __LINE__, #expr); \
+            ++setup_failed;                                                    \
         }                                                                      \
     } while (0)
 
@@ -302,13 +317,80 @@ static void test_rerun_reproduces_the_leg_census() {
     CHECK(near(eng.position_size(), 0.0));
 }
 
-int main() {
+namespace {
+
+class PartialReservationProbe : public source::PineStrategyHost {
+public:
+    struct Opening {
+        std::uint64_t origin;
+        std::string id;
+        int bar;
+        double units;
+    };
+    PartialReservationProbe(const source::PineStrategyConfig& config,
+                            double tick, double quantity_step) {
+        attach_pine_execution_adapter();
+        configure_pine_strategy(config);
+        set_syminfo_session("24x7");
+        set_syminfo_timezone("Etc/UTC");
+        set_syminfo_mintick(tick);
+        set_syminfo_metadata("qty_step", quantity_step);
+    }
+
+    using source::PineStrategyHost::native_state;
+    double position() const { return signed_position_size(); }
+    std::vector<Opening> openings;
+
+protected:
+    void on_native_applied_event(const native_order::ExecutionAppliedEvent& event,
+                                const NativeDecisionContext& context) override {
+        if (std::abs(event.opened_units) > 0.0) {
+            openings.push_back({event.handle().incarnation, event.request().label,
+                               static_cast<int>(context.coordinate.interval_index),
+                               std::abs(event.opened_units)});
+        }
+    }
+};
+
+static bool run_reservation(PartialReservationProbe& probe,
+                            const std::vector<Bar>& bars, const std::string& label) {
+    probe.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    CHECK_SETUP(probe.last_error().empty());
+    if (!probe.last_error().empty()) {
+        std::printf("SETUP FAILURE [%s]: %s\n", label.c_str(), probe.last_error().c_str());
+        return false;
+    }
+    return true;
+}
+
+#include "exit_retention_cases.hpp"
+
+} // namespace
+
+int main(int argc, char** argv) {
     std::printf("=== test_exit_bracket_pending_entry_leg ===\n");
 
-    test_reissue_over_pending_entry_arms_a_pair_per_instance();
-    test_consumed_leg_and_capped_entry();
-    test_rerun_reproduces_the_leg_census();
+    const std::string row = argc == 2 ? argv[1] : "";
+    if (argc > 2 || (!row.empty() && row != "controls"
+                    && row != "percentage-retention" && row != "retention-cycle"
+                    && row != "withdrawn-unfilled")) {
+        std::printf("unknown reservation row\n");
+        return 2;
+    }
+    if (row.empty() || row == "controls") {
+        test_reissue_over_pending_entry_arms_a_pair_per_instance();
+        test_consumed_leg_and_capped_entry();
+        test_rerun_reproduces_the_leg_census();
+    }
+    if (row.empty() || row == "percentage-retention")
+        test_percentage_facts_survive_family_withdrawal();
+    if (row.empty() || row == "retention-cycle")
+        test_fact_only_family_expires_before_erasure();
+    if (row.empty() || row == "withdrawn-unfilled")
+        test_withdrawn_unfilled_origins_remain_eligible();
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
+    std::printf("setup failures: %d\n", setup_failed);
+    if (setup_failed > 0) return 2;
     return (tests_failed > 0) ? 1 : 0;
 }

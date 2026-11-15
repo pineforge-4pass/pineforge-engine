@@ -340,15 +340,15 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 | --- | --- | --- |
 | Equity writer / selected hold-back / SpillCurve | 24*E | `pf_equity_point_t` size assertion `include/pineforge/metrics_stream.hpp:16`; `src/report_scratch.cpp:238` |
 | Position tail | (30+L)*T | `src/source/pine_position_tail.hpp:20`; footer packing at `src/source/pine_position_tail.cpp:94` |
-| Cohort AVL and five-word summary | (96+L)*D + 1[D>0] | `Links` at `include/pineforge/detail/disk_id_table.hpp:165-182`, `end_` at `:352`; `CohortFacts::Record` at `include/pineforge/source/pine_adapter.hpp:2060-2063` |
-| Entry-rank AVL | (60+L)*J + 1[J>0] | `exit_rank_keys_` at `src/source/pine_adapter.cpp:6888-6889`; `Links` at `include/pineforge/detail/disk_id_table.hpp:165-182`, `end_` at `:352` |
-| Erased minima data | (40+L)*D + (40+2*L)*Q | `erased_minima_` at `include/pineforge/source/pine_adapter.hpp:961`; 40-byte header at `include/pineforge/detail/id_pair_store.hpp:69` |
+| Cohort AVL and five-word summary | (96+L)*D + 1[D>0] | `Links` at `include/pineforge/detail/disk_id_table.hpp:165-182`, `end_` at `:352`; `CohortFacts::Record` at `include/pineforge/source/pine_adapter.hpp:2077-2080` |
+| Entry-rank AVL | (60+L)*J + 1[J>0] | `exit_rank_keys_` at `src/source/pine_adapter.cpp:6965-6966`; `Links` at `include/pineforge/detail/disk_id_table.hpp:165-182`, `end_` at `:352` |
+| Erased minima data | (40+L)*D + (40+2*L)*Q | `erased_minima_` at `include/pineforge/source/pine_adapter.hpp:964`; 40-byte header at `include/pineforge/detail/id_pair_store.hpp:69` |
 | Erased minima index | indexPeak(D+Q) | 16-byte slot at `include/pineforge/detail/id_pair_store.hpp:69`; replacement at `:642` |
-| Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2847`; joined key at `src/source/pine_adapter.cpp:25832` |
+| Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2875`; joined key at `src/source/pine_adapter.cpp:26190` |
 | Consumed partial-cycle index | indexPeak(Q) | `include/pineforge/detail/id_pair_store.hpp:642` |
 | Ordered consumed-cycle fold | 136*leaves + 2088*branches + 2096*savedPath | `include/pineforge/detail/id_pair_ordered_fold.hpp:161`, `:165`, `:172`, size assertion for `Leaf`, `Branch` and `Snapshot` at `:183` |
 | Successor-root rows | 16*R | `src/native_order.cpp:8220`, row assertion for `Row` at `:8281`, 64-row tail bound `kTailRows` at `:8286` |
-| Frozen external openings | **0 in this certified profile** | Stock source builds owned `BindOpenings` vectors at `src/source/pine_adapter.cpp:7173`, `:7166`, `:9880-9896`; generic external owners are excluded below |
+| Frozen external openings | **0 in this certified profile** | Stock source builds owned `BindOpenings` vectors at `src/source/pine_adapter.cpp:7250`, `:7243`, `:9957-9973`; generic external owners are excluded below |
 
 The AVL node is seven uint64 words = 56 bytes, then its value and exact key
 bytes. CohortFacts::Record is handle, cycle, origin_count, origin_digest and
@@ -381,7 +381,7 @@ root only when a newly issued definition has one. The 64-row RAM tail makes
 charging every issued row conservative. Partial closes create one trade
 row per affected lot: `src/engine_execution.cpp:1241`. Bracket definitions
 have limit, stop and trailing families; per-entry expansion is visible at
-`src/source/pine_adapter.cpp:14919`. A closed-trade count cannot bound
+`src/source/pine_adapter.cpp:15246`. A closed-trade count cannot bound
 unfilled placement history or the replacement-root history.
 
 The ordered fold retains distinct-ever keys, including erased keys.
@@ -875,6 +875,14 @@ so the largest non-command b is M-3*268435455=3489660930.
 For b=3489660930 the minimum is M exactly. For b=3489660931,
 q=268435456 and n=4294967299=M+4; it must return PLATFORM_RANGE
 although b alone still fits the chunk table.
+
+Exit-family consumption is retained independently of member history,
+including percentage exits with NaN requested quantity. Per-origin
+reservation totals use call-scoped `ExitScratchIndex` storage. The existing
+materialized reservation lists still need their allocation bounds reviewed;
+preserving economic rows and using scratch storage do not establish a bound
+on those lists. Both scratch codecs serialize the fresh-origin placement
+flag, and the adapter hash includes it.
 
 ## Lab verification and remaining integration
 

@@ -283,6 +283,9 @@ struct PlacementSnapshot {
     // their submission.  A pending parent rejected at a later candidate can
     // then retire only its own deferred legs.
     native_order::RequestHandle bracket_origin{};
+    // This placement required the fresh-origin exception at exit admission.
+    // Copies retain the fact; an ordinary or full reissue recomputes it.
+    bool fresh_origin_bypass = false;
     std::uint64_t source_sequence = 0;
     std::uint64_t command_ordinal = 0;
     std::uint64_t placement_open_epoch = 0;
@@ -1194,7 +1197,9 @@ public:
     // The members whose rows the table still holds, in roster order, from the
     // first one onward (erased members between them are parked separately).
     const std::vector<native_order::RequestHandle>& working_tail() const noexcept { return hot_; }
-    bool empty() const noexcept { return settled_count_ == 0 && parked_.empty() && hot_.empty(); }
+    bool empty() const noexcept {
+        return settled_count_ == 0 && parked_.empty() && hot_.empty() && consumed_.empty();
+    }
     std::size_t size() const noexcept { return settled_count_ + parked_count_ + hot_.size(); }
     const_iterator begin() const { return const_iterator(this, false); }
     const_iterator end() const { return const_iterator(this, true); }
@@ -1294,6 +1299,18 @@ public:
     }
     const std::vector<std::pair<std::uint8_t, std::uint64_t>>& consumed_facts() const noexcept {
         return consumed_;
+    }
+    // A bracket cancellation removes membership and its historical outcomes,
+    // but an opening whose leg already filled keeps its consumed facts.
+    void cancel_members() noexcept {
+        hot_.clear();
+        parked_.clear();
+        counts_.clear();
+        run_ = {};
+        settled_last_ = 0;
+        settled_count_ = 0;
+        settled_digest_ = kDigestBasis;
+        parked_count_ = 0;
     }
     // The settled prefix as the v4 extension fold reads it: its count, and
     // its running digest -- with every parked run's place, count and digest
@@ -1498,7 +1515,7 @@ private:
     // Derived member multiplicity per incarnation over the working tail's
     // handles (never next-decision state).
     std::unordered_map<std::uint64_t, std::size_t> counts_;
-    // (leg kind, origin) of the erased consumed members.
+    // (leg kind, opening incarnation), retained while the origin is askable.
     std::vector<std::pair<std::uint8_t, std::uint64_t>> consumed_;
 };
 
@@ -2174,6 +2191,9 @@ private:
         // entry order was working, which TradingView voids
         // (PlacementSnapshot::void_global_issue): no entry's fill arms it.
         bool void_global = false;
+        // The unresolved definition keeps its place until the parent's fill
+        // supplies prices and materializes the same reservation.
+        std::uint64_t reservation_sequence = 0;
     };
 
     // One relative leg of a queued strategy.exit, spelled as the
@@ -2309,13 +2329,21 @@ private:
     double quantize_close_units(double basis, double percent) const noexcept;
     double quantize_percent_exit_units(double requested,
                                        double available) const noexcept;
+    void exit_with_reservation_sequence(
+        const SourceId& exit_id, const SourceId& from_entry,
+        double limit_price, double stop_price, double trail_points,
+        double trail_offset, double trail_price, double qty_percent,
+        const std::string& comment, double qty, const std::string& oca_name,
+        double profit_ticks, double loss_ticks, std::uint64_t reservation_sequence);
     bool compute_exit_reservation(const SourceId& exit_id,
                                   const SourceId& from_entry,
                                   double requested_qty,
                                   double& qty_percent,
                                   double live_basis,
                                   double percentage_basis,
-                                  double& reserved_qty) const;
+                                  double& reserved_qty,
+                                  std::uint64_t& reservation_sequence,
+                                  std::uint64_t origin = 0) const;
     void reconcile_deferred_exit_reservations(const SourceId& from_entry,
                                                double live_basis);
     void reconcile_exit_reservations_after_margin();
@@ -2514,8 +2542,8 @@ private:
     // Whether any origin the cohort ever accepted is an opening on that side.
     bool cohort_opened_on_side(const CohortFacts&, bool is_long) const noexcept;
     // Whether a leg of that kind the (exit id, from_entry) family placed for
-    // that origin was consumed: a member of the family neither working nor
-    // suspended.
+    // that origin was consumed: a retained fact or a member of the family
+    // neither working, dormant nor withdrawn.
     bool origin_leg_consumed(std::uint64_t family_key, PineOrderFamily,
                              const native_order::RequestHandle& origin) const noexcept;
     // Whether an immediate strategy.close was placed on that bar.

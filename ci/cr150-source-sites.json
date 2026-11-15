@@ -32708,11 +32708,11 @@
    "symbol": "origins",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "bool PineExecutionAdapter :: compute_exit_reservation ( const SourceId & exit_id , const SourceId & from_entry , double requested_qty , double & qty_percent , double live_basis , double percentage_basis , double & reserved_qty ) const #1",
+    "bool PineExecutionAdapter :: compute_exit_reservation ( const SourceId & exit_id , const SourceId & from_entry , double requested_qty , double & qty_percent , double live_basis , double percentage_basis , double & reserved_qty , std :: uint64_t & reservation_sequence , std :: uint64_t origin ) const #1",
     "struct Reservation #1"
    ],
    "cls": "decl",
-   "spelling": "std :: vector < std :: uint64_t >",
+   "spelling": "std :: vector < std :: pair < std :: uint64_t , double > >",
    "ordinal": 1
   },
   {
@@ -32720,7 +32720,7 @@
    "symbol": "reservations",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "bool PineExecutionAdapter :: compute_exit_reservation ( const SourceId & exit_id , const SourceId & from_entry , double requested_qty , double & qty_percent , double live_basis , double percentage_basis , double & reserved_qty ) const #1"
+    "bool PineExecutionAdapter :: compute_exit_reservation ( const SourceId & exit_id , const SourceId & from_entry , double requested_qty , double & qty_percent , double live_basis , double percentage_basis , double & reserved_qty , std :: uint64_t & reservation_sequence , std :: uint64_t origin ) const #1"
    ],
    "cls": "decl",
    "spelling": "std :: vector < Reservation >",
@@ -32731,12 +32731,12 @@
    "symbol": "origins",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "bool PineExecutionAdapter :: compute_exit_reservation ( const SourceId & exit_id , const SourceId & from_entry , double requested_qty , double & qty_percent , double live_basis , double percentage_basis , double & reserved_qty ) const #1",
+    "bool PineExecutionAdapter :: compute_exit_reservation ( const SourceId & exit_id , const SourceId & from_entry , double requested_qty , double & qty_percent , double live_basis , double percentage_basis , double & reserved_qty , std :: uint64_t & reservation_sequence , std :: uint64_t origin ) const #1",
     "auto observe = [ & ] ( const PlacementSnapshot & snapshot ) #1",
     "if ( row = = reservations . end ( ) ) #1"
    ],
    "cls": "grow",
-   "spelling": "origins . push_back ( . . . )",
+   "spelling": "origins . emplace_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -32744,7 +32744,7 @@
    "symbol": "reservations",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "bool PineExecutionAdapter :: compute_exit_reservation ( const SourceId & exit_id , const SourceId & from_entry , double requested_qty , double & qty_percent , double live_basis , double percentage_basis , double & reserved_qty ) const #1",
+    "bool PineExecutionAdapter :: compute_exit_reservation ( const SourceId & exit_id , const SourceId & from_entry , double requested_qty , double & qty_percent , double live_basis , double percentage_basis , double & reserved_qty , std :: uint64_t & reservation_sequence , std :: uint64_t origin ) const #1",
     "auto observe = [ & ] ( const PlacementSnapshot & snapshot ) #1",
     "if ( row = = reservations . end ( ) ) #1"
    ],
@@ -32757,13 +32757,25 @@
    "symbol": "origins",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "bool PineExecutionAdapter :: compute_exit_reservation ( const SourceId & exit_id , const SourceId & from_entry , double requested_qty , double & qty_percent , double live_basis , double percentage_basis , double & reserved_qty ) const #1",
+    "bool PineExecutionAdapter :: compute_exit_reservation ( const SourceId & exit_id , const SourceId & from_entry , double requested_qty , double & qty_percent , double live_basis , double percentage_basis , double & reserved_qty , std :: uint64_t & reservation_sequence , std :: uint64_t origin ) const #1",
     "auto observe = [ & ] ( const PlacementSnapshot & snapshot ) #1",
     "else #1",
-    "if ( explicit_units && row -> explicit_units && std :: find ( row -> origins . begin ( ) , row -> origins . end ( ) , origin ) = = row -> origins . end ( ) ) #1"
+    "if ( origin_share ) #1"
    ],
    "cls": "grow",
-   "spelling": "origins . push_back ( . . . )",
+   "spelling": "origins . emplace_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "from_entry",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "bool PineExecutionAdapter :: compute_exit_reservation ( const SourceId & exit_id , const SourceId & from_entry , double requested_qty , double & qty_percent , double live_basis , double percentage_basis , double & reserved_qty , std :: uint64_t & reservation_sequence , std :: uint64_t origin ) const #1",
+    "for ( const auto & pending : pending_relative_exits_ ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "from_entry = . . .",
    "ordinal": 1
   },
   {
@@ -35582,7 +35594,7 @@
    "symbol": "partial_exit_key",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1"
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1"
    ],
    "cls": "decl",
    "spelling": "SourceId",
@@ -35593,7 +35605,7 @@
    "symbol": "exit_id",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "if ( unresolved_relative && ! void_issue ) #1"
    ],
    "cls": "assign",
@@ -35605,7 +35617,7 @@
    "symbol": "from_entry",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "if ( unresolved_relative && ! void_issue ) #1"
    ],
    "cls": "assign",
@@ -35617,7 +35629,7 @@
    "symbol": "pending_relative_exits_",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "if ( unresolved_relative && ! void_issue ) #1",
     "if ( existing = = pending_relative_exits_ . end ( ) ) #1"
    ],
@@ -35630,7 +35642,7 @@
    "symbol": "from_entry",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "if ( unresolved_relative ) #1",
     "else #1"
    ],
@@ -35643,7 +35655,7 @@
    "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "if ( unresolved_relative ) #1",
     "else #1"
    ],
@@ -35656,7 +35668,7 @@
    "symbol": "replacement_key",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "const auto unchanged_dynamic_leg = [ & ] ( PineOrderFamily family , double level ) #1"
    ],
    "cls": "decl",
@@ -35668,7 +35680,7 @@
    "symbol": "std::to_string",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "const auto unchanged_dynamic_leg = [ & ] ( PineOrderFamily family , double level ) #1"
    ],
    "cls": "temp",
@@ -35680,7 +35692,7 @@
    "symbol": "std::to_string",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "if ( plain_dynamic_bracket && ( ! finite_positive ( limit_price ) || unchanged_dynamic_leg ( PineOrderFamily :: ExitLimit , limit_price ) ) && ( ! finite_positive ( stop_price ) || unchanged_dynamic_leg ( PineOrderFamily :: ExitStop , stop_price ) ) ) #1",
     ") #1"
    ],
@@ -35693,7 +35705,7 @@
    "symbol": "dynamic_group_name",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1"
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1"
    ],
    "cls": "decl",
    "spelling": "SourceId",
@@ -35704,7 +35716,7 @@
    "symbol": "<temp:SourceId>",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1"
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1"
    ],
    "cls": "temp",
    "spelling": "SourceId",
@@ -35715,7 +35727,7 @@
    "symbol": "dynamic_key_prefix",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1"
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1"
    ],
    "cls": "decl",
    "spelling": "SourceId",
@@ -35726,7 +35738,7 @@
    "symbol": "<temp:SourceId>",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1"
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1"
    ],
    "cls": "temp",
    "spelling": "SourceId",
@@ -35737,7 +35749,7 @@
    "symbol": "position_tail_summary_",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "if ( std :: isnan ( qty ) && std :: isfinite ( requested_qty_percent ) && requested_qty_percent < 100 . 0 && physical . signed_units ! = 0 . 0 && position_open_script_bar_ ! = std :: numeric_limits < std :: int64_t > :: min ( ) ) #1"
    ],
    "cls": "alloc",
@@ -35749,7 +35761,7 @@
    "symbol": "marketable",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     "if ( coof_recalc_active_ && ! coof_first_open_ && historical_cascade && coof_script_bar_valid_ ) #1",
     "if ( ordinary_path && point && finite_positive ( point -> price ) ) #1",
@@ -35764,7 +35776,7 @@
    "symbol": "marketable",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     "if ( coof_recalc_active_ && ! coof_first_open_ && historical_cascade && coof_script_bar_valid_ ) #1",
     "if ( ordinary_path && point && finite_positive ( point -> price ) ) #1",
@@ -35779,7 +35791,7 @@
    "symbol": "from_entry",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1"
    ],
@@ -35792,10 +35804,10 @@
    "symbol": "reserved_by_exit",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1",
-    "else if ( ! binds_pending_reversal_entry && host_sized && ! std :: isfinite ( snapshot . requested_qty ) && source_position > 0 . 0 ) #1",
+    "else if ( ! percent_by_origin && ! binds_pending_reversal_entry && host_sized && ! std :: isfinite ( snapshot . requested_qty ) && source_position > 0 . 0 ) #1",
     "if ( ! from_entry . empty ( ) ) #1"
    ],
    "cls": "decl",
@@ -35807,10 +35819,10 @@
    "symbol": "reserved_by_exit",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1",
-    "else if ( ! binds_pending_reversal_entry && host_sized && ! std :: isfinite ( snapshot . requested_qty ) && source_position > 0 . 0 ) #1",
+    "else if ( ! percent_by_origin && ! binds_pending_reversal_entry && host_sized && ! std :: isfinite ( snapshot . requested_qty ) && source_position > 0 . 0 ) #1",
     "if ( ! from_entry . empty ( ) ) #1",
     "for ( const auto & handle : live_handles_ ) #1"
    ],
@@ -35823,7 +35835,7 @@
    "symbol": "delayed_market_orders_",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1",
     "if ( defer_marketable_coof_stop ) #1"
@@ -35837,7 +35849,7 @@
    "symbol": "delayed_market_orders_",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1",
     "if ( coof_recalc_active_ && physical . signed_units ! = 0 . 0 ) #1",
@@ -35852,7 +35864,7 @@
    "symbol": "queued",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1",
     "if ( stage_chart_tick_scope ) #1"
@@ -35866,7 +35878,7 @@
    "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1",
     "if ( stage_chart_tick_scope ) #1"
@@ -35880,7 +35892,7 @@
    "symbol": "queued",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1"
    ],
@@ -35893,7 +35905,7 @@
    "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1",
     "if ( defer_coof_tail ( ) && ! finite_positive ( coof_stop_waypoint_price ) ) #1"
@@ -35907,7 +35919,7 @@
    "symbol": "queued",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1",
     "if ( snapshot . reservation_deferred_to_pending_entry && physical . signed_units = = 0 . 0 && ! ( cohort_exposure_for ( snapshot . from_entry ) > 0 . 0 ) ) #1"
@@ -35921,7 +35933,7 @@
    "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1",
     "if ( snapshot . reservation_deferred_to_pending_entry && physical . signed_units = = 0 . 0 && ! ( cohort_exposure_for ( snapshot . from_entry ) > 0 . 0 ) ) #1"
@@ -35935,7 +35947,7 @@
    "symbol": "queued",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1",
     "if ( defer_for_same_bar_priority || defer_for_live_parent ) #1"
@@ -35949,7 +35961,7 @@
    "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1",
     "if ( defer_for_same_bar_priority || defer_for_live_parent ) #1"
@@ -35963,7 +35975,7 @@
    "symbol": "queued",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1",
     "if ( defer_new_instance && live_by_source_key_ . find ( checked_live_key ( replacement_key ) ) = = live_by_source_key_ . end ( ) ) #1"
@@ -35977,7 +35989,7 @@
    "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1",
     "if ( defer_new_instance && live_by_source_key_ . find ( checked_live_key ( replacement_key ) ) = = live_by_source_key_ . end ( ) ) #1"
@@ -35991,7 +36003,7 @@
    "symbol": "stale",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1"
    ],
@@ -36004,7 +36016,7 @@
    "symbol": "stale",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1",
     ") #1"
@@ -36018,7 +36030,7 @@
    "symbol": "family",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1",
     "if ( accepted ) #1",
@@ -36033,9 +36045,9 @@
    "symbol": "std::to_string",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
-    "if ( dynamic ) #1"
+    "if ( dynamic && ! percent_by_origin ) #1"
    ],
    "cls": "temp",
    "spelling": "std :: to_string ( . . . )",
@@ -36046,7 +36058,7 @@
    "symbol": "group_name",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     "if ( from_entry . empty ( ) ) #1"
    ],
@@ -36059,7 +36071,7 @@
    "symbol": "std::to_string",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     "if ( from_entry . empty ( ) ) #1"
    ],
@@ -36072,7 +36084,7 @@
    "symbol": "origins",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1"
    ],
    "cls": "decl",
@@ -36084,7 +36096,7 @@
    "symbol": "positions",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     "if ( found ! = cohorts_by_id_ . end ( ) ) #1"
    ],
@@ -36097,7 +36109,7 @@
    "symbol": "positions",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     "if ( found ! = cohorts_by_id_ . end ( ) ) #1"
    ],
@@ -36110,7 +36122,7 @@
    "symbol": "origins",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     "if ( found ! = cohorts_by_id_ . end ( ) ) #1"
    ],
@@ -36123,7 +36135,7 @@
    "symbol": "origins",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1"
    ],
    "cls": "grow",
@@ -36135,7 +36147,7 @@
    "symbol": "origin_key",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     "for ( const auto & origin : origins ) #1"
    ],
@@ -36148,7 +36160,7 @@
    "symbol": "std::to_string",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     "for ( const auto & origin : origins ) #1"
    ],
@@ -36161,7 +36173,7 @@
    "symbol": "replacement_key",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     "for ( const auto & origin : origins ) #1"
    ],
@@ -36174,7 +36186,7 @@
    "symbol": "std::to_string",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     "for ( const auto & origin : origins ) #1"
    ],
@@ -36187,7 +36199,7 @@
    "symbol": "group_name",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     "for ( const auto & origin : origins ) #1"
    ],
@@ -36200,7 +36212,7 @@
    "symbol": "withdrawn",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "if ( placed_absolute_leg && ! has_trail_request ) #1",
     "if ( drop_limit || drop_stop ) #1"
    ],
@@ -36213,7 +36225,7 @@
    "symbol": "withdrawn",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "if ( placed_absolute_leg && ! has_trail_request ) #1",
     "if ( drop_limit || drop_stop ) #1",
     "for ( const auto & handle : live_handles_ ) #1"
@@ -36227,7 +36239,7 @@
    "symbol": "result",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "if ( placed_absolute_leg && ! has_trail_request ) #1",
     "if ( drop_limit || drop_stop ) #1",
     "for ( const auto & handle : withdrawn ) #1"
@@ -36241,7 +36253,7 @@
    "symbol": "selected",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "if ( pooc_short_tick_scope && source_point ) #2",
     "if ( ! competing_entry ) #1"
    ],
@@ -36254,7 +36266,7 @@
    "symbol": "replacement_key",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "if ( pooc_short_tick_scope && source_point ) #2",
     "if ( ! competing_entry ) #1",
     "if ( selected ! = PineOrderFamily :: Entry ) #1"
@@ -36268,7 +36280,7 @@
    "symbol": "std::to_string",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "if ( pooc_short_tick_scope && source_point ) #2",
     "if ( ! competing_entry ) #1",
     "if ( selected ! = PineOrderFamily :: Entry ) #1"
@@ -36282,7 +36294,7 @@
    "symbol": "view",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "if ( pooc_short_tick_scope && source_point ) #2",
     "if ( ! competing_entry ) #1",
     "if ( selected ! = PineOrderFamily :: Entry ) #1",
@@ -36299,7 +36311,7 @@
    "symbol": "from_entry",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "if ( ! placed_absolute_leg && ! ( has_trail_request && finite_positive ( trail_price ) ) ) #1"
    ],
    "cls": "assign",
@@ -36311,7 +36323,7 @@
    "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
     "if ( ! placed_absolute_leg && ! ( has_trail_request && finite_positive ( trail_price ) ) ) #1"
    ],
    "cls": "grow",
@@ -36501,7 +36513,7 @@
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: flush_pending_bracket_legs ( native_order :: RequestHandle just_applied , bool post_calculation , bool pre_script_drain ) #1",
     "for ( auto & leg : queued ) #1",
-    "if ( leg . snapshot . bracket_origin . incarnation = = 0 && config_ . pyramiding = = 2 && std :: isfinite ( leg . snapshot . requested_qty ) && ! leg . snapshot . from_entry . empty ( ) ) #1",
+    "if ( leg . snapshot . bracket_origin . incarnation = = 0 && ( std :: isfinite ( leg . snapshot . requested_qty ) || named_percent_leg ) && ! leg . snapshot . from_entry . empty ( ) ) #1",
     "if ( cohort ! = cohorts_by_id_ . end ( ) && cohort -> second . opened . empty ( ) ) #1",
     "for ( const auto & origin : cohort -> second . origins ) #1"
    ],
@@ -36516,7 +36528,7 @@
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: flush_pending_bracket_legs ( native_order :: RequestHandle just_applied , bool post_calculation , bool pre_script_drain ) #1",
     "for ( auto & leg : queued ) #1",
-    "if ( leg . snapshot . bracket_origin . incarnation = = 0 && config_ . pyramiding = = 2 && std :: isfinite ( leg . snapshot . requested_qty ) && ! leg . snapshot . from_entry . empty ( ) ) #1",
+    "if ( leg . snapshot . bracket_origin . incarnation = = 0 && ( std :: isfinite ( leg . snapshot . requested_qty ) || named_percent_leg ) && ! leg . snapshot . from_entry . empty ( ) ) #1",
     "if ( cohort ! = cohorts_by_id_ . end ( ) && cohort -> second . opened . empty ( ) ) #1",
     "for ( const auto & origin : cohort -> second . origins ) #1"
    ],
@@ -36531,7 +36543,7 @@
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: flush_pending_bracket_legs ( native_order :: RequestHandle just_applied , bool post_calculation , bool pre_script_drain ) #1",
     "for ( auto & leg : queued ) #1",
-    "if ( leg . snapshot . bracket_origin . incarnation = = 0 && config_ . pyramiding = = 2 && std :: isfinite ( leg . snapshot . requested_qty ) && ! leg . snapshot . from_entry . empty ( ) ) #1",
+    "if ( leg . snapshot . bracket_origin . incarnation = = 0 && ( std :: isfinite ( leg . snapshot . requested_qty ) || named_percent_leg ) && ! leg . snapshot . from_entry . empty ( ) ) #1",
     "if ( cohort ! = cohorts_by_id_ . end ( ) && cohort -> second . opened . empty ( ) ) #1",
     "for ( const auto & origin : cohort -> second . origins ) #1"
    ],
@@ -36546,7 +36558,7 @@
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: flush_pending_bracket_legs ( native_order :: RequestHandle just_applied , bool post_calculation , bool pre_script_drain ) #1",
     "for ( auto & leg : queued ) #1",
-    "if ( leg . snapshot . bracket_origin . incarnation = = 0 && config_ . pyramiding = = 2 && std :: isfinite ( leg . snapshot . requested_qty ) && ! leg . snapshot . from_entry . empty ( ) ) #1",
+    "if ( leg . snapshot . bracket_origin . incarnation = = 0 && ( std :: isfinite ( leg . snapshot . requested_qty ) || named_percent_leg ) && ! leg . snapshot . from_entry . empty ( ) ) #1",
     "if ( cohort ! = cohorts_by_id_ . end ( ) && cohort -> second . opened . empty ( ) ) #1",
     "for ( const auto & origin : cohort -> second . origins ) #1"
    ],
@@ -36561,7 +36573,7 @@
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: flush_pending_bracket_legs ( native_order :: RequestHandle just_applied , bool post_calculation , bool pre_script_drain ) #1",
     "for ( auto & leg : queued ) #1",
-    "if ( leg . snapshot . bracket_origin . incarnation = = 0 && config_ . pyramiding = = 2 && std :: isfinite ( leg . snapshot . requested_qty ) && ! leg . snapshot . from_entry . empty ( ) ) #1",
+    "if ( leg . snapshot . bracket_origin . incarnation = = 0 && ( std :: isfinite ( leg . snapshot . requested_qty ) || named_percent_leg ) && ! leg . snapshot . from_entry . empty ( ) ) #1",
     "if ( cohort ! = cohorts_by_id_ . end ( ) && cohort -> second . opened . empty ( ) ) #1",
     "for ( const auto & origin : cohort -> second . origins ) #1"
    ],
@@ -36576,7 +36588,7 @@
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: flush_pending_bracket_legs ( native_order :: RequestHandle just_applied , bool post_calculation , bool pre_script_drain ) #1",
     "for ( auto & leg : queued ) #1",
-    "if ( leg . snapshot . bracket_origin . incarnation = = 0 && config_ . pyramiding = = 2 && std :: isfinite ( leg . snapshot . requested_qty ) && ! leg . snapshot . from_entry . empty ( ) ) #1",
+    "if ( leg . snapshot . bracket_origin . incarnation = = 0 && ( std :: isfinite ( leg . snapshot . requested_qty ) || named_percent_leg ) && ! leg . snapshot . from_entry . empty ( ) ) #1",
     "if ( cohort ! = cohorts_by_id_ . end ( ) && cohort -> second . opened . empty ( ) ) #1",
     "for ( const auto & origin : cohort -> second . origins ) #1"
    ],
@@ -36591,7 +36603,7 @@
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: flush_pending_bracket_legs ( native_order :: RequestHandle just_applied , bool post_calculation , bool pre_script_drain ) #1",
     "for ( auto & leg : queued ) #1",
-    "if ( leg . snapshot . bracket_origin . incarnation = = 0 && config_ . pyramiding = = 2 && std :: isfinite ( leg . snapshot . requested_qty ) && ! leg . snapshot . from_entry . empty ( ) ) #1",
+    "if ( leg . snapshot . bracket_origin . incarnation = = 0 && ( std :: isfinite ( leg . snapshot . requested_qty ) || named_percent_leg ) && ! leg . snapshot . from_entry . empty ( ) ) #1",
     "if ( parent_held ) #1"
    ],
    "cls": "grow",
@@ -39285,7 +39297,7 @@
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "detail :: ExitScratchRows < native_order :: RequestHandle > PineExecutionAdapter :: per_entry_child_legs ( const SourceId & exit_id , std :: uint64_t origin ) const #1",
     "for ( const auto & handle : live_handles_ ) #1",
-    "if ( row ! = placement_ . end ( ) && row -> second . per_entry_origin ! = 0 && row -> second . source_id = = exit_id && ( origin = = 0 || row -> second . per_entry_origin = = origin ) ) #1"
+    "if ( row ! = placement_ . end ( ) && row -> second . per_entry_origin ! = 0 && row -> second . from_entry . empty ( ) && row -> second . source_id = = exit_id && ( origin = = 0 || row -> second . per_entry_origin = = origin ) ) #1"
    ],
    "cls": "grow",
    "spelling": "legs . push_back ( . . . )",
@@ -40614,7 +40626,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: on_applied ( const native_order :: ExecutionAppliedEvent & event , const NativeDecisionContext & context ) #1",
-    "if ( placement_snapshot && event . closed_units > 0 . 0 && ( placement_snapshot -> family = = PineOrderFamily :: ExitLimit || placement_snapshot -> family = = PineOrderFamily :: ExitStop || placement_snapshot -> family = = PineOrderFamily :: ExitTrail ) && ! placement_snapshot -> from_entry . empty ( ) && detail :: run_position ( require_host ( ) ) . signed_units ! = 0 . 0 && current_position_cycle_ > 0 ) #1",
+    "if ( placement_snapshot && event . closed_units > 0 . 0 && ( placement_snapshot -> family = = PineOrderFamily :: ExitLimit || placement_snapshot -> family = = PineOrderFamily :: ExitStop || placement_snapshot -> family = = PineOrderFamily :: ExitTrail ) && ! placement_snapshot -> from_entry . empty ( ) && placement_snapshot -> per_entry_origin = = 0 && detail :: run_position ( require_host ( ) ) . signed_units ! = 0 . 0 && current_position_cycle_ > 0 ) #1",
     "if ( pine && cohort ! = cohorts_by_id_ . end ( ) ) #1",
     "for ( const auto & lot : pine -> pyramid_entries_ ) #1"
    ],
@@ -40628,9 +40640,9 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: on_applied ( const native_order :: ExecutionAppliedEvent & event , const NativeDecisionContext & context ) #1",
-    "if ( placement_snapshot && event . closed_units > 0 . 0 && ( placement_snapshot -> family = = PineOrderFamily :: ExitLimit || placement_snapshot -> family = = PineOrderFamily :: ExitStop || placement_snapshot -> family = = PineOrderFamily :: ExitTrail ) && ! placement_snapshot -> from_entry . empty ( ) && detail :: run_position ( require_host ( ) ) . signed_units ! = 0 . 0 && current_position_cycle_ > 0 ) #1",
+    "if ( placement_snapshot && event . closed_units > 0 . 0 && ( placement_snapshot -> family = = PineOrderFamily :: ExitLimit || placement_snapshot -> family = = PineOrderFamily :: ExitStop || placement_snapshot -> family = = PineOrderFamily :: ExitTrail ) && ! placement_snapshot -> from_entry . empty ( ) && placement_snapshot -> per_entry_origin = = 0 && detail :: run_position ( require_host ( ) ) . signed_units ! = 0 . 0 && current_position_cycle_ > 0 ) #1",
     "if ( pine && cohort ! = cohorts_by_id_ . end ( ) ) #1",
-    "if ( ! adds . empty ( ) && units > 0 . 0 && drained_older ) #1",
+    "if ( ! adds . empty ( ) && units > 0 . 0 && drained_older && ! ( own_add_leg && placement_snapshot -> fresh_origin_bypass ) ) #1",
     "request . owner = detail :: exit_scratch_versions ( adds . context ( ) ) . freeze_openings ( adds . context ( ) . run , current_position_cycle_ , adds . size ( ) , & adds , [ ] ( void * opaque , std :: uint64_t index , native_order :: RequestHandle & result ) #1"
    ],
    "cls": "assign",
@@ -40643,9 +40655,9 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: on_applied ( const native_order :: ExecutionAppliedEvent & event , const NativeDecisionContext & context ) #1",
-    "if ( placement_snapshot && event . closed_units > 0 . 0 && ( placement_snapshot -> family = = PineOrderFamily :: ExitLimit || placement_snapshot -> family = = PineOrderFamily :: ExitStop || placement_snapshot -> family = = PineOrderFamily :: ExitTrail ) && ! placement_snapshot -> from_entry . empty ( ) && detail :: run_position ( require_host ( ) ) . signed_units ! = 0 . 0 && current_position_cycle_ > 0 ) #1",
+    "if ( placement_snapshot && event . closed_units > 0 . 0 && ( placement_snapshot -> family = = PineOrderFamily :: ExitLimit || placement_snapshot -> family = = PineOrderFamily :: ExitStop || placement_snapshot -> family = = PineOrderFamily :: ExitTrail ) && ! placement_snapshot -> from_entry . empty ( ) && placement_snapshot -> per_entry_origin = = 0 && detail :: run_position ( require_host ( ) ) . signed_units ! = 0 . 0 && current_position_cycle_ > 0 ) #1",
     "if ( pine && cohort ! = cohorts_by_id_ . end ( ) ) #1",
-    "if ( ! adds . empty ( ) && units > 0 . 0 && drained_older ) #1",
+    "if ( ! adds . empty ( ) && units > 0 . 0 && drained_older && ! ( own_add_leg && placement_snapshot -> fresh_origin_bypass ) ) #1",
     "request . owner = detail :: exit_scratch_versions ( adds . context ( ) ) . freeze_openings ( adds . context ( ) . run , current_position_cycle_ , adds . size ( ) , & adds , [ ] ( void * opaque , std :: uint64_t index , native_order :: RequestHandle & result ) #1",
     "try #1"
    ],
@@ -41424,6 +41436,29 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "store",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "struct PlacementTable :: SequenceIndex #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "remaining",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "struct PlacementTable :: SequenceIndex #1",
+    "bool watch_inline ( std :: string_view id , std :: string_view from , std :: uint64_t answer ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "remaining = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "result",
    "scope": [
     "namespace pineforge :: source #7",
@@ -41519,6 +41554,17 @@
    ],
    "cls": "grow",
    "spelling": "index . insert ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "sequence_index_",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "void PlacementTable :: begin_exit_sequence_certificate ( ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
    "ordinal": 1
   },
   {
@@ -48142,40 +48188,6 @@
    ],
    "cls": "decl",
    "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "store",
-   "scope": [
-    "namespace pineforge :: source #7",
-    "struct PlacementTable :: SequenceIndex #1"
-   ],
-   "cls": "alloc",
-   "spelling": "make_unique",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "remaining",
-   "scope": [
-    "namespace pineforge :: source #7",
-    "struct PlacementTable :: SequenceIndex #1",
-    "bool watch_inline ( std :: string_view id , std :: string_view from , std :: uint64_t answer ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "remaining = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "sequence_index_",
-   "scope": [
-    "namespace pineforge :: source #7",
-    "void PlacementTable :: begin_exit_sequence_certificate ( ) #1"
-   ],
-   "cls": "alloc",
-   "spelling": "make_shared",
    "ordinal": 1
   }
  ]

@@ -141,6 +141,8 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.i(value.preserved_close_all_bar);
     hash_source_run_identity(f, value.bracket_origin.run);
     f.u(value.bracket_origin.incarnation);
+    // An ordinary placement retains its existing fold.
+    if (value.fresh_origin_bypass) f.u(0x66726573686f7267ULL);
     f.u(value.source_sequence);
     f.u(value.command_ordinal); f.u(value.placement_open_epoch);
     f.u(value.command_sequence);
@@ -393,7 +395,8 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     std::sort(bracket_keys.begin(), bracket_keys.end()); f.u(bracket_keys.size());
     for (const auto key : bracket_keys) {
         // v4: the settled prefix as its count and running digest, the
-        // working tail in full, and the consumed legs of erased members.
+        // working tail in full, and consumed-origin facts, including a
+        // fact-only family whose members were cancelled.
         const auto& family = bracket_families_.at(key);
         PINEFORGE_TAIL_WORK("hash_families", 1);
         f.u(key); f.u(family.settled_count()); f.u(family.settled_digest());
@@ -466,6 +469,9 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         f.s(exit.oca_name); f.d(exit.profit_ticks); f.d(exit.loss_ticks);
         // Folded only when set, like PlacementSnapshot::void_global_issue.
         if (exit.void_global) f.u(0x766f6964676cULL);
+        if (exit.reservation_sequence != 0) {
+            f.s("relative-exit-reservation/v1"); f.u(exit.reservation_sequence);
+        }
     }
     // The anchored-leg integration: folded only while a leg is anchored, so every run that
     // anchors none keeps its established hash.

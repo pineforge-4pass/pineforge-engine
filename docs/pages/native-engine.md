@@ -1040,6 +1040,17 @@ request rather than replacing it, so `ReplaceOptions{retain_trigger_state}`
 has no adapter consumer. See `docs/design/native-feature-parity.md` §1.2 B3
 and A.6.
 
+The adapter also owns source-family lifetime: an already-filled opening
+cannot receive a fresh partial bracket merely because the caller changes
+its percentage or cancels its members. Named partial percentages under
+pyramiding above one retain per-opening consumption even though explicit
+requested quantity is NaN. Unfilled withdrawals remain replaceable. The
+family keeps consumed facts separately from members
+(`record_consumed`, `include/pineforge/source/pine_adapter.hpp:1285`), refuses
+to archive a fact-only family, and drops its facts at the opening's lifetime
+boundary. This policy uses native opening/fill provenance; native hosts
+continue to choose their own bracket policy.
+
 ### From strategy.exit to submit_bracket
 
 `include/pineforge/native_toolkit.hpp` is header-only, Pine-free and additive:
@@ -1496,7 +1507,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:18665-18698`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:18999-19032`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and

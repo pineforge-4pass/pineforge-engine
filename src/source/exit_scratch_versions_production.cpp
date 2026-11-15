@@ -21,7 +21,9 @@ namespace {
 // All scalars are LE64, doubles preserve their bits, and variable values have
 // lengths/tags. Output borrows the caller only during put; input constructs the
 // returned value using a fixed byte window. Neither is retained by the provider.
-constexpr std::uint64_t payload_schema = 1;
+// Version 2 adds the placement admission fact. Use fresh per-run scratch;
+// earlier positional records are rejected before their fields are decoded.
+constexpr std::uint64_t payload_schema = 2;
 enum : std::uint64_t {
     sequence_kind = 2, placement_kind = 3, request_kind = 4, pending_kind = 5
 };
@@ -315,7 +317,7 @@ template<class Archive, class T> void payload_fields(Archive& a, T& v) {
           v.replacement_predecessor_market, v.terms_priced_reverse, v.frozen_reversal_transaction,
           v.placement_cycle, v.sequential_group, v.sequential_rank, v.has_full_entry_bracket,
           v.paired_reversal_parent, v.preserved_by_close_all, v.preserved_close_all_bar,
-          v.bracket_origin, v.source_sequence, v.command_ordinal, v.placement_open_epoch,
+          v.bracket_origin, v.fresh_origin_bypass, v.source_sequence, v.command_ordinal, v.placement_open_epoch,
           v.command_sequence, v.close_callsite_token, v.close_batch_calls, v.close_first_id,
           v.close_first_target, v.close_first_ledger_consumed, v.close_first_carry_valid,
           v.close_first_carry_qty, v.close_retire_ledger_whole, v.close_pending_later_qty,
