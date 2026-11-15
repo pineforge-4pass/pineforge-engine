@@ -91,8 +91,11 @@ PY="${PYTHON:-python3}"
 # expectation corrected: excellent=311, strong=0 -> excellent=301, strong=10,
 # because the excellent-only rule requires zero gross unmatched TV + engine
 # trades; all 312 pinned strategy trade outputs still match the baseline hashes.
+# expectation corrected: excellent=301, strong=10, moderate=0 ->
+# excellent=301, strong=9, moderate=1, because the gross count percentage exposes
+# an unchanged trade mismatch (#836/#883; measured 2026-11-16).
 # scripts/verify_corpus.py prints this line verbatim.
-EXPECTED_VERIFY="${EXPECTED_VERIFY:-Verified 312 strategies — excellent=301, strong=10, moderate=0, weak=0, minimal=0, anomaly=1, engine_only=0, missing=0}"
+EXPECTED_VERIFY="${EXPECTED_VERIFY:-Verified 312 strategies — excellent=301, strong=9, moderate=1, weak=0, minimal=0, anomaly=1, engine_only=0, missing=0}"
 
 log()  { printf '\033[1;34m[corpus-parity]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[corpus-parity]\033[0m %s\n' "$*" >&2; }

@@ -21,8 +21,11 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+import verify_corpus
 from verify_corpus import MATCH_WINDOW_SECONDS, analyze_strategy, main
-from test_verify_corpus_trail_profile import TRADE_COLUMNS, TRAIL_STRATEGY
+from test_verify_corpus_trail_profile import (
+    STRICT_STRATEGY, TRADE_COLUMNS, TRAIL_STRATEGY,
+)
 
 
 def _checked_path(path: Path) -> Path:
@@ -47,6 +50,23 @@ def _checked_path(path: Path) -> Path:
 
 
 ClosedTrade = tuple[datetime, datetime, str]
+REFERENCE_STRATEGY_ID = "validation/mtf-triple-tf-macd-hist-confluence-01"
+
+
+def _reference_floor_tapes(replacements=(10,)):
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    tv_trades = [
+        (start + timedelta(days=index),
+         start + timedelta(days=index, hours=1), f"entry-{index + 1}")
+        for index in range(24)
+    ]
+    engine_trades = [
+        (entry + timedelta(hours=12), exit_time + timedelta(hours=12),
+         identity + "-replacement")
+        if index in replacements else (entry, exit_time, identity)
+        for index, (entry, exit_time, identity) in enumerate(tv_trades)
+    ]
+    return tv_trades, engine_trades
 
 
 def _write_trades(
@@ -84,6 +104,8 @@ def _analyze_tapes(
     run_root: Path, name: str,
     tv_trades: list, engine_trades: list,
     *, write_trades=_write_trades,
+    strategy_source=TRAIL_STRATEGY, aggregate=False,
+    omit_tv=False, omit_engine=False,
 ):
     strategy = _checked_path(run_root / name)
     files = {
@@ -101,22 +123,25 @@ def _analyze_tapes(
         print(str(_checked_path(Path(__file__).with_name(filename))), flush=True)
     # The real analyzer probes these OHLCV candidates. They are deliberately
     # absent in the fresh fixture directory; no trim implementation is replaced.
-    strategy.mkdir()
+    strategy.mkdir(parents=True)
     with files["strategy.pine"].open("x", encoding="utf-8") as handle:
-        handle.write(TRAIL_STRATEGY)
+        handle.write(strategy_source)
     with files["inputs.json"].open("x", encoding="utf-8") as handle:
         json.dump({"tv_trades_csv_tz": "utc_plus_8"}, handle)
-    write_trades(files["tv_trades.csv"], tv_trades, tv_timezone=True)
-    write_trades(files["engine_trades.csv"], engine_trades, tv_timezone=False)
+    if not omit_tv:
+        write_trades(files["tv_trades.csv"], tv_trades, tv_timezone=True)
+    if not omit_engine:
+        write_trades(files["engine_trades.csv"], engine_trades, tv_timezone=False)
 
     result = analyze_strategy(strategy)
     row = result.report_row()
     cli_output = StringIO()
+    corpus_root = run_root if aggregate else strategy
     cli_argv = [
-        "verify_corpus.py", str(strategy),
-        "--corpus-root", str(strategy),
-        "--derived-workspace", str(strategy),
-        "--harness-dir", str(strategy),
+        "verify_corpus.py", "--all" if aggregate else str(strategy),
+        "--corpus-root", str(corpus_root),
+        "--derived-workspace", str(corpus_root),
+        "--harness-dir", str(corpus_root),
     ]
     with patch.object(sys, "argv", cli_argv), redirect_stdout(cli_output):
         cli_exit = main()
@@ -457,6 +482,103 @@ class ExactCountBehaviorTests(unittest.TestCase):
         for result, row, substitutions in results:
             self.assertEqual(result.count_delta, 2 * substitutions / 100)
             self.assertEqual(row["count_delta"], result.count_delta)
+
+    def _assert_reference_moderate(self, result, row):
+        self.assertEqual(result.label, "moderate")
+        self.assertEqual(row["tier"], "moderate")
+        self.assertEqual(result.profile, "strict")
+        self.assertEqual((result.tv_raw_count, result.eng_raw_count), (24, 24))
+        self.assertEqual((result.tv_gate_count, result.eng_gate_count), (24, 24))
+        self.assertEqual(result.gating_matched_count, 23)
+        self.assertEqual(result.count_abs_delta, 2)
+        self.assertEqual(result.net_count_abs_delta, 0)
+        self.assertEqual(result.count_delta, 2 / 24)
+        self.assertEqual(result.coverage, 23 / 24)
+        for metric in ("entry", "exit", "pnl"):
+            self.assertEqual(getattr(result, metric + "_p90"), 0.0)
+
+    def test_dated_reference_floor_accepts_measured_moderate(self):
+        """#836/#883: aggregate acceptance preserves the measured Moderate tier."""
+        result, row, cli = _analyze_tapes(
+            self.run_root, REFERENCE_STRATEGY_ID, *_reference_floor_tapes(),
+            strategy_source=STRICT_STRATEGY, aggregate=True,
+        )
+        self._assert_reference_moderate(result, row)
+        self.assertIn("-> moderate", cli["stdout"])
+        self.assertIn(
+            "Verified 1 strategies — excellent=0, strong=0, moderate=1, "
+            "weak=0, minimal=0, anomaly=0, engine_only=0, missing=0",
+            cli["stdout"],
+        )
+        self.assertEqual(
+            cli["exit"], 0,
+            "dated reference floor must accept the measured Moderate state (#836/#883)",
+        )
+        self.assertNotIn("Below strong tier:", cli["stdout"])
+
+    def test_reference_floor_rejects_other_moderate_ids(self):
+        """#836/#883: every other full id retains the Strong aggregate floor."""
+        basename = REFERENCE_STRATEGY_ID.split("/", 1)[1]
+        for strategy_id in (
+            "validation/other-moderate", f"validation/{basename}-variant",
+            f"validation/prefix-{basename}", f"basic/{basename}",
+            f"community/{basename}",
+        ):
+            with self.subTest(strategy_id=strategy_id):
+                result, row, cli = _analyze_tapes(
+                    self.run_root / strategy_id.replace("/", "-"),
+                    strategy_id, *_reference_floor_tapes(),
+                    strategy_source=STRICT_STRATEGY, aggregate=True,
+                )
+                self._assert_reference_moderate(result, row)
+                self.assertEqual(cli["exit"], 1)
+                self.assertIn("moderate=1", cli["stdout"])
+                self.assertIn(f"Below strong tier:\n  {strategy_id}", cli["stdout"])
+
+    def test_reference_floor_rejects_moderate_when_exception_removed(self):
+        """#836/#883: removing only the floor policy restores aggregate exit 1."""
+        with patch.dict(verify_corpus.REFERENCE_FLOOR_EXCEPTIONS, clear=True):
+            result, row, cli = _analyze_tapes(
+                self.run_root, REFERENCE_STRATEGY_ID, *_reference_floor_tapes(),
+                strategy_source=STRICT_STRATEGY, aggregate=True,
+            )
+        self._assert_reference_moderate(result, row)
+        self.assertEqual(cli["exit"], 1)
+        self.assertIn("moderate=1", cli["stdout"])
+        self.assertIn(f"Below strong tier:\n  {REFERENCE_STRATEGY_ID}", cli["stdout"])
+
+    def test_reference_floor_rejects_missing_or_lower_tiers(self):
+        """#836/#883: the exact id still fails with missing input or a lower tier."""
+        for name, replacements, omit_tv, omit_engine, expected_tier in (
+            ("weak", (3, 7, 12, 18), False, False, "weak"),
+            ("minimal", tuple(range(24)), False, False, "minimal"),
+            ("missing-tv", (10,), True, False, "missing"),
+            ("missing-engine", (10,), False, True, "missing"),
+        ):
+            with self.subTest(name=name):
+                result, row, cli = _analyze_tapes(
+                    self.run_root / name, REFERENCE_STRATEGY_ID,
+                    *_reference_floor_tapes(replacements),
+                    strategy_source=STRICT_STRATEGY, aggregate=True,
+                    omit_tv=omit_tv, omit_engine=omit_engine,
+                )
+                self.assertEqual(result.label, expected_tier)
+                self.assertEqual(row["tier"], expected_tier)
+                self.assertEqual(cli["exit"], 1)
+                self.assertIn(f"{expected_tier}=1", cli["stdout"])
+                self.assertIn(
+                    f"Below strong tier:\n  {REFERENCE_STRATEGY_ID}", cli["stdout"]
+                )
+
+    def test_reference_floor_does_not_change_single_strategy_exit(self):
+        """#836/#883: the dated allowance applies only to aggregate verification."""
+        result, row, cli = _analyze_tapes(
+            self.run_root, REFERENCE_STRATEGY_ID, *_reference_floor_tapes(),
+            strategy_source=STRICT_STRATEGY,
+        )
+        self._assert_reference_moderate(result, row)
+        self.assertEqual(cli["exit"], 1)
+        self.assertIn("-> moderate", cli["stdout"])
 
 
 if __name__ == "__main__":
