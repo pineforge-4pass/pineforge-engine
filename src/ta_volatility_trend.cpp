@@ -130,7 +130,9 @@ double ATR::recompute(double high, double low, double close, double prev_chart_c
 // --- StdDev (Standard Deviation) ---
 
 StdDev::StdDev(int length, bool biased)
-    : length_(length), biased_(biased), sum_x_(length), sum_xx_(length), bar_count_(0) {}
+    : length_(length), biased_(biased), sum_x_(length), sum_xx_(length), bar_count_(0) {
+    if (!biased_) buffer_.emplace();
+}
 
 // The biased (default) value from the two sliding sums: TradingView's
 // sqrt(Sxx / n - m * m) with m = Sx / n (see the class note in ta.hpp). The
@@ -144,11 +146,12 @@ double StdDev::biased_value() const {
 }
 
 double StdDev::held_stdev() const {
+    const auto& buffer = *buffer_;
     double sum = 0.0;
-    for (double v : buffer_) sum += v;
+    for (double v : buffer) sum += v;
     const double mean = sum / length_;
     double sq_sum = 0.0;
-    for (double v : buffer_) {
+    for (double v : buffer) {
         const double diff = v - mean;
         sq_sum += diff * diff;
     }
@@ -171,6 +174,7 @@ double StdDev::compute(double src) {
         if (bar_count_ < length_) return na<double>();
         return biased_value();
     }
+    auto& buffer = *buffer_;
     if (is_na(src)) {
         // Pine ta.stdev, like ta.sma: an na input never enters the
         // compact last-N-valid window; once `length` valid values have been
@@ -179,28 +183,28 @@ double StdDev::compute(double src) {
         // Pinned 2026-09-04 on OANDA:XAUUSD 15 (ta.stdev(z2, 20) with z2 na
         // on every 5th bar: 310/310 with hold + population, 248/310 without
         // the hold; ta.sma(z2, 20) 310/310 likewise).
-        if ((int)buffer_.size() < length_) return na<double>();
+        if ((int)buffer.size() < length_) return na<double>();
         return held_stdev();
     }
 
-    buffer_.push_back(src);
-    while ((int)buffer_.size() > length_) {
-        buffer_.pop_front();
+    buffer.push_back(src);
+    while ((int)buffer.size() > length_) {
+        buffer.pop_front();
     }
 
-    if ((int)buffer_.size() < length_) {
+    if ((int)buffer.size() < length_) {
         return na<double>();
     }
 
     // Population standard deviation
     double sum = 0.0;
-    for (double v : buffer_) {
+    for (double v : buffer) {
         sum += v;
     }
     double mean = sum / length_;
 
     double sq_sum = 0.0;
-    for (double v : buffer_) {
+    for (double v : buffer) {
         double diff = v - mean;
         sq_sum += diff * diff;
     }
@@ -730,18 +734,19 @@ double StdDev::recompute(double src) {
         if (bar_count_ < length_) return na<double>();
         return biased_value();
     }
-    if (buffer_.empty()) return compute(src);
-    buffer_.back() = src;
+    auto& buffer = *buffer_;
+    if (buffer.empty()) return compute(src);
+    buffer.back() = src;
 
     if (is_na(src)) return na<double>();
-    if ((int)buffer_.size() < length_) return na<double>();
+    if ((int)buffer.size() < length_) return na<double>();
 
     double sum = 0.0;
-    for (double v : buffer_) sum += v;
+    for (double v : buffer) sum += v;
     double mean = sum / length_;
 
     double sq_sum = 0.0;
-    for (double v : buffer_) {
+    for (double v : buffer) {
         double diff = v - mean;
         sq_sum += diff * diff;
     }

@@ -1248,7 +1248,14 @@ class RealTree(unittest.TestCase):
         # host's argument text): 66 + 10 = 76.
         # expectation corrected: 1616 -> 1618, because U1854/U1855 add two
         # unreviewed SequenceIndex allocation groups. Both remain OPEN.
-        self.assertEqual(c['OPEN'], 1356 + 76 + 184 + 2)
+        # expectation corrected: 1618 -> 1616. #809 removes six stale
+        # deque groups and adds four current groups; every new group is OPEN.
+        # The combined tree adds two #858 cache-id site identities inside
+        # existing U0307/U0871 OPEN groups. No new group: the union stays1616.
+        # expectation corrected: 1616 -> 1618, because per-origin exit sizing
+        # adds origin_shares/U1860 and reserved_by_origin/U1861, both OPEN.
+        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2
+        self.assertEqual(c['OPEN'], expected_open)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
         strict = run_gate(ROOT, '--strict')

@@ -1,6 +1,8 @@
 #pragma once
 #include "na.hpp"
 #include "series.hpp"
+#include <cstddef>
+#include <vector>
 
 namespace pineforge {
 
@@ -22,8 +24,17 @@ namespace pineforge {
 //
 // Both users divide S by `length` themselves (ta.sma) or emit S (math.sum).
 class KahanWindowSum {
-    OwnedDeque<double> values_;    // window sources, front = newest
-    OwnedDeque<double> addends_;   // the compensated addends, front = newest
+    struct Entry {
+        double value;
+        double addend;
+        void observe_owned_storage(OwnedStorage&) const noexcept {} // inline scalars
+    };
+    // A checkpoint owns one deep-copy buffer. Pair each source with its
+    // compensated addend so growth cannot publish only half a window.
+    // Active slots are newest first from head_; unused slots are capacity.
+    std::vector<Entry> window_;
+    std::size_t head_ = 0;
+    std::size_t size_ = 0;
     int length_;
     int count_;          // valid sources pushed so far
     double sum_;         // S
@@ -39,11 +50,24 @@ class KahanWindowSum {
     double saved_evicted_addend_;
     bool saved_pushed_;
 
+    std::size_t index(std::size_t offset) const noexcept {
+        const auto position = head_ + offset;
+        return position < window_.size() ? position : position - window_.size();
+    }
+    void ensure_room();
+    void pop_front() noexcept {
+        head_ = head_ + 1 == window_.size() ? 0 : head_ + 1;
+        --size_;
+    }
     void kahan_add(double v);
     void enter(double src, double comp_before);
 
 public:
+    // As for the original deque window, callers supply a positive length.
     explicit KahanWindowSum(int length);
+    // Rvalue copies also preserve the source's storage/index relationship.
+    KahanWindowSum(const KahanWindowSum&) = default;
+    KahanWindowSum& operator=(const KahanWindowSum&) = default;
 
     // A valid source enters the window; returns S. Never pass na: both users
     // hold their seeded value on na input and call note_no_push() instead.
@@ -63,7 +87,7 @@ public:
     bool seeded() const { return count_ >= length_; }
     double sum() const { return sum_; }
     void observe_owned_storage(OwnedStorage& out) const noexcept {
-        observe_owned_members(out, values_, addends_);
+        observe_owned_members(out, window_);
     }
 };
 

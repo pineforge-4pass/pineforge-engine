@@ -210,7 +210,7 @@ other `strategy_create_failed` lines omit it.
 | `engine_invariant` | `engine_fault` | no | `reason` (vocab, 1 values, optional) | An engine invariant failed: a PineForge bug. |
 | `engine_unclassified_error` | `engine_fault` | no | none | An error no coded site reported: a PineForge bug. |
 | `harness_internal_error` | `engine_fault` | no | none | The run harness failed: a PineForge bug. |
-| `lot_grid_rejected` | `symbol_metadata` | yes | none | The symbol's lot size (syminfo.mincontract, the quantity grid) is not a value the engine accepts. |
+| `lot_grid_rejected` | `symbol_metadata` | yes | none | The symbol's quantity step (syminfo.qty_step) or minimum contract size (syminfo.mincontract) is not a value the engine accepts. |
 | `no_data_request` | `no_data` | no | `call` (pine_source), `function` (vocab, 9 values), `line` (integer) | The script read a request whose data PineForge does not pin for this run. |
 | `other_symbol_feed_missing` | `no_data` | no | `timeframe` (timeframe, optional) | No feed is installed for another symbol's request at its timeframe. |
 | `other_symbol_request` | `no_data` | no | `call` (pine_source), `function` (vocab, 2 values), `line` (integer), `symbol` (symbol, optional) | The script read another symbol's request and no bars of that symbol were installed. |

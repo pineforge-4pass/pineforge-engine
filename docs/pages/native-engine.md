@@ -644,7 +644,7 @@ segment, and discrete points, keep the ordinary birth gate above.
 `on_native_bar_open` fires at the modeled opening, before that point's matching
 pass (`native_execution_consumer.cpp:8757`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
-`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:8610`), the
+`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:8749`), the
 complete bar unless the spec asks for `NativeOpenBarView::OpenOnly` — so its
 high, low and close are the finished bar's, not what is known at the open. A
 host that must decide on open-only information reads
@@ -1496,7 +1496,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:18665-18698`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:18855-18888`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
@@ -3697,7 +3697,7 @@ The Pine adapter emits `Sized` for the default-quantity entries above and no
 Pine/generated hosts derive from `pineforge::source::PineStrategyHost`, which
 derives from `NativeStrategyHost`; handwritten native hosts also derive from
 `NativeStrategyHost`. The source adapter/scheduler hash domain is
-`kSourceAdapterDomain` `pine_adapter.hpp:59`
+`kSourceAdapterDomain` `pine_adapter.hpp:60`
 (`"pineforge-source-adapter/v4"`), while the public C ABI remains version 4.
 
 The ownership switch is complete: the compatibility loop and the source
@@ -4551,10 +4551,10 @@ to `source::PineStrategyHost` (`pine_strategy_host.hpp:335-338`), and the cap
 type itself lives in the adapter (`IntradayCap` `intraday_cap.hpp:84`).
 
 Nor is there a build-level one. The two source sets are disjoint:
-`PINEFORGE_SOURCE_LAYER_SOURCES` (`CMakeLists.txt:91`) holds all six
+`PINEFORGE_SOURCE_LAYER_SOURCES` (`CMakeLists.txt:92`) holds all six
 `src/compat/pine/` units and all fourteen `src/source/` ones, and
-`PINEFORGE_KERNEL_SOURCES` (`CMakeLists.txt:118`) holds the kernel's own
-forty-five, which are what `add_library` (`CMakeLists.txt:185`) compiles into
+`PINEFORGE_KERNEL_SOURCES` (`CMakeLists.txt:119`) holds the kernel's own
+forty-five, which are what `add_library` (`CMakeLists.txt:186`) compiles into
 `pineforge_kernel`. `libpineforge.a` still carries both sets when
 `PINEFORGE_BUILD_SOURCE_LAYER` is ON, which is the default; the kernel archive
 exists either way. The installed-header closure is clean too, which the
