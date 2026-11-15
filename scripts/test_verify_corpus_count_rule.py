@@ -15,10 +15,13 @@ import json
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
-from verify_corpus import MATCH_WINDOW_SECONDS, analyze_strategy
+from verify_corpus import MATCH_WINDOW_SECONDS, analyze_strategy, main
 from test_verify_corpus_trail_profile import TRADE_COLUMNS, TRAIL_STRATEGY
 
 
@@ -93,6 +96,8 @@ def _analyze_tapes(
     print(f"Count-rule fixture files to follow ({name}):", flush=True)
     for path in files.values():
         print(str(path), flush=True)
+    for filename in ("verify_corpus.py", "parity_paths.py"):
+        print(str(_checked_path(Path(__file__).with_name(filename))), flush=True)
     # The real analyzer probes these OHLCV candidates. They are deliberately
     # absent in the fresh fixture directory; no trim implementation is replaced.
     strategy.mkdir()
@@ -105,9 +110,25 @@ def _analyze_tapes(
 
     result = analyze_strategy(strategy)
     row = result.report_row()
+    cli_output = StringIO()
+    cli_argv = [
+        "verify_corpus.py", str(strategy),
+        "--corpus-root", str(strategy),
+        "--derived-workspace", str(strategy),
+        "--harness-dir", str(strategy),
+    ]
+    with patch.object(sys, "argv", cli_argv), redirect_stdout(cli_output):
+        cli_exit = main()
+    cli = {
+        "execution": "in_process_main",
+        "argv": cli_argv,
+        "exit": cli_exit,
+        "stdout": cli_output.getvalue(),
+    }
     # Retain actual observations before assertions, including on a failure.
     observations = {
         "report_row": row,
+        "cli": cli,
         "result_fields": {
             field: getattr(result, field)
             for field in (
@@ -128,6 +149,10 @@ def _analyze_tapes(
                 "tv_signal": tv.entry_signal,
                 "engine_identity": eng.entry_identity,
                 "tv_exit_time": tv.exit_time, "engine_exit_time": eng.exit_time,
+                "tv_entry_price": tv.entry_price, "engine_entry_price": eng.entry_price,
+                "tv_exit_price": tv.exit_price, "engine_exit_price": eng.exit_price,
+                "tv_qty": tv.qty, "engine_qty": eng.qty,
+                "tv_pnl": tv.pnl, "engine_pnl": eng.pnl,
             }
             for tv, eng in result.matched
         ],
@@ -136,7 +161,7 @@ def _analyze_tapes(
         json.dump(observations, handle, indent=2, sort_keys=True)
         handle.write("\n")
     print(json.dumps(row, sort_keys=True), flush=True)
-    return result, row
+    return result, row, cli
 
 
 class ExactCountBehaviorTests(unittest.TestCase):
@@ -156,28 +181,35 @@ class ExactCountBehaviorTests(unittest.TestCase):
             )))
             print(f"Count-rule retained run directory: {self.run_root}", flush=True)
 
-    def _assert_other_gates(self, result, row, shared, engine_count):
+    def _assert_other_gates(
+        self, result, row, shared, engine_count, *, tv_count=None
+    ):
+        shared_count = len(shared)
+        if tv_count is None:
+            tv_count = shared_count
         self.assertTrue(result.tv_exists)
         self.assertTrue(result.eng_exists)
         self.assertFalse(result.no_aligned_trades)
         self.assertEqual(result.profile, "production")
         self.assertEqual(
-            (result.tv_raw_count, result.eng_raw_count), (200, engine_count)
+            (result.tv_raw_count, result.eng_raw_count), (tv_count, engine_count)
         )
-        self.assertEqual((result.tv_count, result.eng_count), (200, engine_count))
+        self.assertEqual((result.tv_count, result.eng_count), (tv_count, engine_count))
         self.assertEqual(
-            (result.tv_gate_count, result.eng_gate_count), (200, engine_count)
+            (result.tv_gate_count, result.eng_gate_count), (tv_count, engine_count)
         )
         self.assertEqual((result.matched_count, result.gating_matched_count),
-                         (200, 200))
-        self.assertEqual(len(result.matched), 200)
+                         (shared_count, shared_count))
+        self.assertEqual(len(result.matched), shared_count)
         self.assertEqual((result.trim_bars, result.warmup_bars), (0, 0))
         self.assertIsNone(result.bounds)
         self.assertEqual(result.open_mark_pairs, 0)
-        self.assertEqual(result.coverage_tv_count, 200)
-        self.assertEqual(result.coverage, 1.0)
-        self.assertEqual(result.unmatched_total, 0)
-        self.assertEqual(result.unmatched_in_window, engine_count - 200)
+        self.assertEqual(result.coverage_tv_count, tv_count)
+        self.assertEqual(result.coverage, shared_count / tv_count)
+        self.assertEqual(result.unmatched_total, tv_count - shared_count)
+        self.assertEqual(
+            result.unmatched_in_window, max(tv_count, engine_count) - shared_count
+        )
         for field in (
             "entry_ok", "exit_ok", "pnl_ok", "coverage_ok",
             "distinct_entry_identity_ok",
@@ -185,14 +217,15 @@ class ExactCountBehaviorTests(unittest.TestCase):
             self.assertIs(getattr(result, field), True, field)
         self.assertEqual(result.distinct_entry_mismatches, 0)
         self.assertEqual(
-            row["metric_observations"], {"entry": 200, "exit": 200, "pnl": 200}
+            row["metric_observations"],
+            {"entry": shared_count, "exit": shared_count, "pnl": shared_count},
         )
         policy = row["grading_policy"]
         self.assertEqual(policy["count_rule"], "exact")
         self.assertEqual(policy["profile"], result.profile)
         self.assertGreater(policy["thresholds"]["count"], 0.0)
         for metric in ("entry", "exit", "pnl"):
-            self.assertEqual(len(getattr(result, metric + "_deltas")), 200)
+            self.assertEqual(len(getattr(result, metric + "_deltas")), shared_count)
             self.assertEqual(getattr(result, metric + "_p90"), 0.0)
             self.assertEqual(getattr(result, metric + "_p100"), 0.0)
             self.assertEqual(row[metric + "_p90"], getattr(result, metric + "_p90"))
@@ -200,7 +233,13 @@ class ExactCountBehaviorTests(unittest.TestCase):
         self.assertEqual(result.qty_p100, 0.0)
         self.assertEqual((row["tv"], row["eng"], row["matched"]),
                          (result.tv_count, result.eng_count, result.matched_count))
-        self.assertEqual(row["count_delta"], result.count_delta)
+        # The input pool sizes define the legacy percentage independently of
+        # the analyzer's absolute unmatched count and its reported values.
+        legacy_count_delta = abs(tv_count - engine_count) / max(
+            tv_count, engine_count, 1
+        )
+        self.assertEqual(result.count_delta, legacy_count_delta)
+        self.assertEqual(row["count_delta"], legacy_count_delta)
         self.assertEqual(row["count_abs_delta"], result.count_abs_delta)
         self.assertIs(row["distinct_entry_identity_ok"], True)
         self.assertEqual(row["distinct_entry_mismatches"], 0)
@@ -247,15 +286,22 @@ class ExactCountBehaviorTests(unittest.TestCase):
         self.assertEqual(len({entry for entry, _, _ in engine_extra}), 201)
 
         run_root = self.run_root
-        control, control_row = _analyze_tapes(run_root, "equal", shared, shared)
+        control, control_row, control_cli = _analyze_tapes(
+            run_root, "equal", shared, shared
+        )
         self._assert_other_gates(control, control_row, shared, 200)
         self.assertEqual(control.count_abs_delta, 0)
         self.assertEqual(control.count_delta, 0.0)
         self.assertIs(control.count_ok, True)
         self.assertEqual(control.tier, "excellent")
+        self.assertEqual(control_cli["exit"], 0)
+        self.assertRegex(
+            control_cli["stdout"], r"Count delta:\s+0\.0000%\s+\(OK;"
+        )
+        self.assertIn("-> excellent", control_cli["stdout"])
 
         # A failed equal-count control stops this method before unequal analysis.
-        unequal, unequal_row = _analyze_tapes(
+        unequal, unequal_row, unequal_cli = _analyze_tapes(
             run_root, "interior-extra", shared, engine_extra
         )
         self._assert_other_gates(unequal, unequal_row, shared, 201)
@@ -269,6 +315,103 @@ class ExactCountBehaviorTests(unittest.TestCase):
         # A nominal-fraction count gate must fail this real analyzer assertion.
         self.assertIs(unequal.count_ok, False)
         self.assertEqual(unequal.tier, "strong")
+        self.assertEqual(unequal_cli["exit"], 0)
+        self.assertIn("abs=1", unequal_cli["stdout"])
+        self.assertIn("-> strong", unequal_cli["stdout"])
+
+    def test_balanced_unmatched_trades_do_not_cancel(self):
+        start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        shared = [
+            (start + timedelta(days=index),
+             start + timedelta(days=index, hours=1), f"entry-{index + 1}")
+            for index in range(200)
+        ]
+        engine_entry = shared[49][0] + timedelta(hours=12)
+        tv_entry = shared[149][0] + timedelta(hours=12)
+        for entry in (engine_entry, tv_entry):
+            for shared_entry, _, _ in shared:
+                self.assertGreater(
+                    abs((entry - shared_entry).total_seconds()),
+                    MATCH_WINDOW_SECONDS,
+                )
+        self.assertGreater(
+            (tv_entry - engine_entry).total_seconds(), MATCH_WINDOW_SECONDS
+        )
+        engine_only = (
+            engine_entry, engine_entry + timedelta(hours=1), "engine-only"
+        )
+        tv_only = (tv_entry, tv_entry + timedelta(hours=1), "tv-only")
+        tv_trades = sorted([*shared, tv_only])
+        engine_trades = sorted([*shared, engine_only])
+        for trades in (tv_trades, engine_trades):
+            self.assertEqual((trades[0], trades[-1]), (shared[0], shared[-1]))
+            self.assertEqual(len({entry for entry, _, _ in trades}), 201)
+
+        # Same row counts as the regression, but all 201 entries really match.
+        # Moving the engine-only input to the TV-only entry must restore Excellent.
+        control, control_row, control_cli = _analyze_tapes(
+            self.run_root, "balanced-matched-control", tv_trades, tv_trades
+        )
+        self._assert_other_gates(control, control_row, tv_trades, 201)
+        self.assertEqual(control.count_abs_delta, 0)
+        self.assertEqual(control.count_delta, 0.0)
+        self.assertIs(control.count_ok, True)
+        self.assertEqual(control.tier, "excellent")
+        self.assertEqual(control_cli["exit"], 0)
+        self.assertRegex(
+            control_cli["stdout"], r"Count delta:\s+0\.0000%\s+\(OK;"
+        )
+        self.assertIn("-> excellent", control_cli["stdout"])
+
+        balanced, balanced_row, balanced_cli = _analyze_tapes(
+            self.run_root, "balanced-unmatched", tv_trades, engine_trades
+        )
+        self._assert_other_gates(
+            balanced, balanced_row, shared, 201, tv_count=201
+        )
+        # expectation corrected: 0 -> 2, because each unmatched TV/engine
+        # entry contributes one to the canonical absolute mismatch count.
+        # This assertion must fail on both the net grader and a grader that
+        # keeps net counting here while exposing a separate gross field.
+        self.assertEqual(
+            balanced.count_abs_delta, 2,
+            "count_abs_delta must count one unmatched TV trade plus one "
+            "unmatched engine trade",
+        )
+        self.assertEqual(balanced_row["count_abs_delta"], 2)
+        self.assertIs(
+            balanced.count_ok, False,
+            f"balanced unmatched trades cancelled: "
+            f"delta={balanced.count_delta}, tier={balanced.tier}",
+        )
+        self.assertEqual(balanced.gross_unmatched_count, 2)
+        self.assertEqual(balanced_row["gross_unmatched_count"], 2)
+        # expectation corrected: 2 / 201 -> 0, because the legacy percentage
+        # compares the two input pool sizes, both 201; only the absolute
+        # unmatched count changes the excellent gate.
+        self.assertEqual(balanced.count_delta, 0.0)
+        self.assertLess(
+            balanced.count_delta,
+            balanced_row["grading_policy"]["thresholds"]["count"],
+        )
+        self.assertEqual(balanced.tier, "strong")
+        self.assertNotEqual(balanced.tier, "excellent")
+        self.assertEqual(balanced_cli["exit"], 0)
+        self.assertRegex(
+            balanced_cli["stdout"], r"Count delta:\s+0\.0000%\s+\(X;"
+        )
+        self.assertIn("abs=2", balanced_cli["stdout"])
+        self.assertIn("net=0", balanced_cli["stdout"])
+        self.assertIn("-> strong", balanced_cli["stdout"])
+        self.assertEqual(balanced.net_count_abs_delta, 0)
+        self.assertEqual(balanced_row["net_count_abs_delta"], 0)
+        self.assertEqual(
+            balanced_row["grading_policy"]["count_basis"], "unmatched_both_sides"
+        )
+        self.assertEqual(control.gross_unmatched_count, 0)
+        self.assertEqual(control_row["gross_unmatched_count"], 0)
+        self.assertEqual(control.net_count_abs_delta, 0)
+        self.assertIn("abs=0", control_cli["stdout"])
 
 
 if __name__ == "__main__":

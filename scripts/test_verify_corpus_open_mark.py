@@ -105,6 +105,7 @@ class OpenMarkPairTests(unittest.TestCase):
         self.assertEqual((r.tv_gate_count, r.eng_gate_count, r.gating_matched_count), (2, 2, 2))
         self.assertTrue(r.count_ok)
         self.assertEqual(r.count_abs_delta, 0)
+        self.assertEqual(r.net_count_abs_delta, 0)
         self.assertTrue(r.entry_ok)
         self.assertTrue(r.exit_ok)            # the mark's 0.029% is not gated
         self.assertEqual(r.exit_p90, 0.0)
@@ -215,6 +216,7 @@ class OpenMarkPairTests(unittest.TestCase):
         self.assertEqual(r.matched_count, 2)
         self.assertEqual((r.tv_gate_count, r.eng_gate_count), (2, 3))
         self.assertEqual(r.count_abs_delta, 1)
+        self.assertEqual(r.net_count_abs_delta, 1)
         self.assertFalse(r.count_ok)
 
     def test_a_tape_of_one_open_lot_is_one_matched_trade(self) -> None:
@@ -230,6 +232,8 @@ class OpenMarkPairTests(unittest.TestCase):
         self.assertFalse(r.no_aligned_trades)
         self.assertEqual(r.open_mark_pairs, 1)
         self.assertEqual(r.matched_count, 1)
+        self.assertEqual(r.count_abs_delta, 0)
+        self.assertTrue(r.count_ok)
         self.assertEqual(r.coverage, 1.0)
         self.assertEqual(r.label, "excellent")
 
