@@ -48143,6 +48143,29 @@
    "cls": "decl",
    "spelling": "std :: string",
    "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "id",
+   "scope": [
+    "namespace pineforge :: source #2",
+    "class PineExecutionAdapter #1",
+    "struct CohortHandleCacheEntry #1"
+   ],
+   "cls": "decl",
+   "spelling": "SourceId",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "id",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: remember_cohort_handle ( const SourceId & id , native_order :: CohortHandle handle ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "id = . . .",
+   "ordinal": 1
   }
  ]
 }

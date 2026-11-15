@@ -3111,8 +3111,6 @@ private:
         SourceId id;
         native_order::CohortHandle handle{};
     };
-    mutable std::array<CohortHandleCacheEntry, 8> cohort_handle_cache_{};
-    mutable std::size_t cohort_handle_cache_next_ = 0;
     // Diagnostic work counter: written from const methods, never read by a
     // decision, deliberately outside source state and the broker hash.
     mutable PendingScanWork pending_scan_work_{};
@@ -3378,6 +3376,9 @@ private:
         std::int64_t broker_expiry = std::numeric_limits<std::int64_t>::max();
     };
     RetirementGate retirement_gate_;
+    // Append derived cache storage so existing member offsets remain stable.
+    mutable std::array<CohortHandleCacheEntry, 8> cohort_handle_cache_{};
+    mutable std::size_t cohort_handle_cache_next_ = 0;
     void invalidate_retirement() noexcept { retirement_gate_.certified = false; }
     bool capture_retirement_inputs(RetirementInputs&) const;
     void observe_retirement_expiry(const PlacementSnapshot&, std::int64_t interval) noexcept;
