@@ -13813,26 +13813,38 @@ class HeadlineWindowNativeTests(unittest.TestCase):
 
     def verdict(self, *, fetch_source=None):
         self.event_path.write_text(json.dumps(self.event))
+        self.diagnostics = io.StringIO()
         actual = ci_preflight._headline_window_git
         def transport(repo, *args):
             if args[0] == 'fetch':
-                self.assertIn('https://github.com/pineforge-4pass/pineforge-engine.git', args)
-                self.assertEqual(args[-2:], (self.event['pull_request']['base']['sha'],
+                self.assertEqual(args[:3], ('fetch', '--no-tags', '--no-write-fetch-head'))
+                self.assertEqual(args[-3], 'https://github.com/pineforge-4pass/pineforge-engine.git')
+                self.assertEqual(args[-2:], (self.environment['GITHUB_SHA'],
                                             self.event['pull_request']['head']['sha']))
-                if fetch_source is not None:
-                    self.assertIn('--unshallow', args)
-                    local = [fetch_source.as_uri() if arg ==
-                             'https://github.com/pineforge-4pass/pineforge-engine.git'
-                             else arg for arg in args]
-                    return actual(repo, *local)
-                return b''
+                source = self.repo if fetch_source is None else fetch_source
+                local = [source.as_uri() if arg ==
+                         'https://github.com/pineforge-4pass/pineforge-engine.git'
+                         else arg for arg in args]
+                return actual(repo, *local)
             return actual(repo, *args)
         with mock.patch.dict(os.environ, self.environment, clear=True), \
-                mock.patch.object(ci_preflight, '_headline_window_git', side_effect=transport):
+                mock.patch.object(ci_preflight, '_headline_window_git', side_effect=transport), \
+                contextlib.redirect_stderr(self.diagnostics):
             return ci_preflight.headline_window_findings(self.repo, self.fetched)
 
-    def test_unchanged_old_contract_has_an_actual_git_control(self):
+    def test_equal_payload_and_executing_checkout_has_an_actual_git_control(self):
         self.assertEqual(self.verdict(), [])
+
+    def test_stale_payload_base_allows_later_executing_checkout(self):
+        executing = self.snapshot(self.base, extra={'main-only.md': b'base advancement\n'})
+        self.git('update-ref', 'HEAD', executing)
+        self.environment['GITHUB_SHA'] = executing
+        # The valid PR payload predates the workflow's actual main checkout.
+        self.assertNotEqual(self.event['pull_request']['base']['sha'], executing)
+        self.assertEqual(self.verdict(), [])
+        self.assertEqual(self.diagnostics.getvalue(),
+                         f'native admission base: executing_sha={executing} '
+                         f'payload_base_sha={self.base} (informational)\n')
 
     def test_old_window_compares_merge_base_and_complete_head(self):
         changed = self.snapshot(self.base, extra={
@@ -13870,6 +13882,27 @@ class HeadlineWindowNativeTests(unittest.TestCase):
                     self.assertEqual(self.verdict(), [
                         self.PREFIX + 'OLD result contract cannot change EXPECTED_VERIFY'])
 
+    def test_stale_new_payload_cannot_defer_actual_old_base_changed_pin(self):
+        fixtures = HeadlineResultBridgeTests()
+        fixtures.setUp()
+        for arm in (False, True):
+            for corpus in (False, True):
+                old = fixtures.fixture(arm=arm, corpus=corpus)
+                new = fixtures.fixture(arm=arm, corpus=corpus, new=True)
+                payload = self.snapshot(self.base, extra={
+                    '.github/workflows/gke-pr.yml': new.encode()})
+                # Main has reverted to OLD since the payload was recorded.
+                executing = self.snapshot(payload, extra={
+                    '.github/workflows/gke-pr.yml': old.encode()})
+                head = self.snapshot(payload, extra={
+                    '.github/workflows/gke-pr.yml': new.encode(),
+                    'scripts/check_corpus_parity.sh': b'EXPECTED_VERIFY="${EXPECTED_VERIFY:-new}"\n'})
+                self.bind_pr(executing, head, new)
+                self.event['pull_request']['base']['sha'] = payload
+                with self.subTest(arm=arm, corpus=corpus):
+                    self.assertEqual(self.verdict(), [
+                        self.PREFIX + 'OLD result contract cannot change EXPECTED_VERIFY'])
+
     def test_actual_new_base_and_new_head_defer_changed_pin_to_their_checker(self):
         fixtures = HeadlineResultBridgeTests()
         fixtures.setUp()
@@ -13879,13 +13912,15 @@ class HeadlineWindowNativeTests(unittest.TestCase):
                 base = self.snapshot(self.base, extra={
                     '.github/workflows/gke-pr.yml': new.encode()})
                 # Both branches adopt NEW after an OLD merge-base. Only the
-                # actual event base determines which workflow executes.
+                # actual executing base determines which workflow executes.
                 head = self.snapshot(self.base, extra={
                     '.github/workflows/gke-pr.yml': new.encode(),
                     'scripts/check_corpus_parity.sh': b'EXPECTED_VERIFY="${EXPECTED_VERIFY:-new}"\n'})
-                self.bind_pr(base, head, new)
-                with self.subTest(arm=arm, corpus=corpus):
-                    self.assertEqual(self.verdict(), [])
+                for payload in (base, self.base):
+                    self.bind_pr(base, head, new)
+                    self.event['pull_request']['base']['sha'] = payload
+                    with self.subTest(arm=arm, corpus=corpus, payload=payload):
+                        self.assertEqual(self.verdict(), [])
 
     def test_missing_actual_base_workflow_fails_closed(self):
         fixtures = HeadlineResultBridgeTests()
@@ -13915,11 +13950,11 @@ class HeadlineWindowNativeTests(unittest.TestCase):
     def test_event_identity_and_native_entry_cannot_be_omitted(self):
         for key, value in (
                 ('GITHUB_ACTIONS', ''), ('GITHUB_EVENT_NAME', 'pull_request'),
-                ('GITHUB_REPOSITORY', 'elsewhere/repo'), ('GITHUB_SHA', self.head),
+                ('GITHUB_REPOSITORY', 'elsewhere/repo'),
                 ('GITHUB_REF', 'refs/heads/feature'), ('GITHUB_WORKFLOW_REF', 'elsewhere')):
             with self.subTest(key=key), mock.patch.dict(self.environment, {key: value}):
                 self.assertEqual(self.verdict(), [self.PREFIX + 'untrusted native admission context'])
-        for kind in ('draft', 'fork', 'base-ref', 'number', 'sha'):
+        for kind in ('draft', 'fork', 'base-ref', 'number', 'base-sha', 'sha'):
             original = json.loads(json.dumps(self.event))
             if kind == 'draft':
                 self.event['pull_request']['draft'] = True
@@ -13930,23 +13965,45 @@ class HeadlineWindowNativeTests(unittest.TestCase):
                 self.event['pull_request']['base']['ref'] = 'feature'
             elif kind == 'number':
                 self.event['number'] = True
+            elif kind == 'base-sha':
+                self.event['pull_request']['base']['sha'] = 'HEAD'
             else:
                 self.event['pull_request']['head']['sha'] = 'HEAD'
             with self.subTest(kind=kind):
                 self.assertEqual(self.verdict(), [self.PREFIX + 'invalid immutable PR identity'])
             self.event = original
 
+    def test_missing_or_malformed_executing_sha_fails_closed(self):
+        for value in (None, '', 'HEAD', self.base[:-1], 'A' * 40):
+            with self.subTest(value=value), mock.patch.dict(self.environment):
+                if value is None:
+                    self.environment.pop('GITHUB_SHA')
+                else:
+                    self.environment['GITHUB_SHA'] = value
+                self.assertEqual(self.verdict(), [
+                    self.PREFIX + 'untrusted native admission context'])
+
     def test_fetched_marker_or_new_job_cannot_replace_head_bytes(self):
         self.target.write_text(self.workflow + '\n# headline marker\n')
         self.assertEqual(self.verdict(), [self.PREFIX + 'fetched admission workflow differs from event head'])
 
-    def test_checker_checkout_must_match_the_event_base(self):
-        self.git('update-ref', 'HEAD', self.head)
-        self.assertEqual(self.verdict(), [self.PREFIX + 'checker checkout differs from event base'])
+    def test_checker_checkout_must_match_executing_sha(self):
+        for checkout, executing in ((self.head, self.base), (self.base, self.head)):
+            self.git('update-ref', 'HEAD', checkout)
+            self.environment['GITHUB_SHA'] = executing
+            with self.subTest(checkout=checkout, executing=executing):
+                self.assertEqual(self.verdict(), [
+                    self.PREFIX + 'checker checkout differs from executing SHA'])
 
-    def test_missing_event_head_object_fails_closed(self):
-        self.event['pull_request']['head']['sha'] = '0' * 40
-        self.assertEqual(self.verdict(), [self.PREFIX + 'Git history unavailable'])
+    def test_event_head_must_be_an_available_exact_commit(self):
+        self.git('tag', '-a', '-m', 'not a commit identity', 'event-head', self.head)
+        tag = self.git('rev-parse', 'refs/tags/event-head')
+        for revision, reason in (
+                ('0' * 40, 'Git history unavailable'),
+                (tag, 'event revision is not an available commit')):
+            self.event['pull_request']['head']['sha'] = revision
+            with self.subTest(revision=revision):
+                self.assertEqual(self.verdict(), [self.PREFIX + reason])
 
     def test_fetch_failure_cannot_claim_complete_history(self):
         actual = ci_preflight._headline_window_git
@@ -13963,12 +14020,16 @@ class HeadlineWindowNativeTests(unittest.TestCase):
     def test_shallow_history_must_actually_be_completed_before_comparison(self):
         mirror = self.repo
         self.git('update-ref', 'refs/heads/candidate', self.head)
+        shallow_mirror = self.directory / 'shallow-mirror'
+        subprocess.run(['git', 'clone', '-q', '--bare', '--depth', '1', '--no-single-branch',
+                        mirror.as_uri(), str(shallow_mirror)], check=True, capture_output=True)
         shallow = self.directory / 'shallow'
         subprocess.run(['git', 'clone', '-q', '--depth', '1', '--no-checkout',
-                        mirror.as_uri(), str(shallow)], check=True, capture_output=True)
+                        shallow_mirror.as_uri(), str(shallow)], check=True, capture_output=True)
         self.repo = shallow
         self.assertEqual(self.git('rev-parse', '--is-shallow-repository'), 'true')
-        self.assertEqual(self.verdict(), [self.PREFIX + 'incomplete Git history'])
+        self.assertEqual(self.verdict(fetch_source=shallow_mirror), [
+            self.PREFIX + 'incomplete Git history'])
         # Only the transport is redirected to a private fixture. The real
         # unshallow, merge-base and blob reads must now succeed.
         self.assertEqual(self.verdict(fetch_source=mirror), [])

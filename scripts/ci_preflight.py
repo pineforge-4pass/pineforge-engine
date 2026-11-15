@@ -2377,7 +2377,8 @@ def headline_window_findings(source: Path, workflows_dir: Path) -> list[str]:
         event = evidence.json_object(Path(os.environ['GITHUB_EVENT_PATH']).read_bytes())
         pr = event.get('pull_request', {})
         base, head = pr.get('base', {}), pr.get('head', {})
-        base_sha, head_sha = base.get('sha'), head.get('sha')
+        payload_base_sha, head_sha = base.get('sha'), head.get('sha')
+        executing_sha = os.environ.get('GITHUB_SHA')
         require(event.get('repository', {}).get('full_name') == repository
                 and type(event.get('number')) is int and event['number'] > 0
                 and type(pr.get('number')) is int and pr['number'] == event['number']
@@ -2385,12 +2386,17 @@ def headline_window_findings(source: Path, workflows_dir: Path) -> list[str]:
                 and base.get('repo', {}).get('full_name') == repository
                 and head.get('repo', {}).get('full_name') == repository
                 and head.get('repo', {}).get('fork') is False
-                and isinstance(base_sha, str) and evidence.SHA.fullmatch(base_sha) is not None
+                and isinstance(payload_base_sha, str)
+                and evidence.SHA.fullmatch(payload_base_sha) is not None
                 and isinstance(head_sha, str) and evidence.SHA.fullmatch(head_sha) is not None,
                 'invalid immutable PR identity')
-        require(os.environ.get('GITHUB_SHA') == base_sha, 'untrusted native admission context')
+        require(isinstance(executing_sha, str)
+                and evidence.SHA.fullmatch(executing_sha) is not None,
+                'untrusted native admission context')
         require(_headline_window_git(source, 'rev-parse', '--verify', 'HEAD').strip()
-                == base_sha.encode(), 'checker checkout differs from event base')
+                == executing_sha.encode(), 'checker checkout differs from executing SHA')
+        print(f'native admission base: executing_sha={executing_sha} '
+              f'payload_base_sha={payload_base_sha} (informational)', file=sys.stderr)
         shallow = _headline_window_git(source, 'rev-parse', '--is-shallow-repository').strip()
         require(shallow in (b'true', b'false'), 'unreadable Git history depth')
         fetch = ['fetch', '--no-tags', '--no-write-fetch-head']
@@ -2399,10 +2405,10 @@ def headline_window_findings(source: Path, workflows_dir: Path) -> list[str]:
         # The existing trusted checkout is depth 1 with credentials disabled.
         # Fetch the public canonical repository, never a head-controlled URL/ref.
         _headline_window_git(source, *fetch,
-                             'https://github.com/' + repository + '.git', base_sha, head_sha)
+                             'https://github.com/' + repository + '.git', executing_sha, head_sha)
         require(_headline_window_git(source, 'rev-parse', '--is-shallow-repository').strip()
                 == b'false', 'incomplete Git history')
-        for revision in (base_sha, head_sha):
+        for revision in (executing_sha, head_sha):
             require(_headline_window_git(source, 'rev-parse', '--verify',
                                          revision + '^{commit}').strip() == revision.encode(),
                     'event revision is not an available commit')
@@ -2411,12 +2417,12 @@ def headline_window_findings(source: Path, workflows_dir: Path) -> list[str]:
                 'fetched admission workflow differs from event head')
         head_version = gke_result_contract_version(fetched.decode('utf-8'))
         require(head_version is not None, GKE_RESULT_CONTRACT_FINDING)
-        # pull_request_target executes the event base workflow, independently
-        # of the PR head's workflow and the merge-base used for the pin diff.
-        base_workflow = evidence.blob(source, base_sha, workflow_path).decode('utf-8')
+        # GITHUB_SHA and checkout HEAD bind the executing base workflow. The
+        # payload base is informational; the pin diff still uses the merge-base.
+        base_workflow = evidence.blob(source, executing_sha, workflow_path).decode('utf-8')
         base_version = gke_result_contract_version(base_workflow)
         require(base_version is not None, GKE_RESULT_CONTRACT_FINDING)
-        _, old, new = evidence.compared(source, base_sha, head_sha)
+        _, old, new = evidence.compared(source, executing_sha, head_sha)
         require((base_version == 'NEW' and head_version == 'NEW') or old == new,
                 'OLD result contract cannot change EXPECTED_VERIFY')
         return []
