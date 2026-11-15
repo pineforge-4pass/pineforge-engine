@@ -381,4 +381,3 @@ int main() {
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;
 }
-
