@@ -7115,11 +7115,14 @@ exit "$lookup_exit"
         rows = ci_preflight.fast_rows(cmake)
         # expectation corrected: 11 -> 12, because PR smoke now builds and
         # selects the existing ABI layout probe alongside every prior row.
+        # expectation corrected: 12 -> 14, because the #694 re-apply adds
+        # test_exit_refire_after_own_fill and test_issue694_reported_exits.
         self.assertEqual(rows, [
             'test_ringbuffer', 'test_timeframe', 'test_path_at', 'test_na_runtime',
             'test_math_sum', 'test_str_utils', 'test_ta', 'test_matrix',
             'test_native_run_spec', 'test_native_bare_host_contracts',
-            'test_native_kernel_edge', 'test_abi_layout_probe'])
+            'test_native_kernel_edge', 'test_abi_layout_probe',
+            'test_exit_refire_after_own_fill', 'test_issue694_reported_exits'])
         mutations = [
             ('    test_ringbuffer\n', ''),
             ('    test_ringbuffer\n', '    test_ringbuffer\n    test_ringbuffer\n'),
