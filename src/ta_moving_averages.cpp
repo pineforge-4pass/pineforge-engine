@@ -38,6 +38,24 @@ namespace pineforge {
 // compensation is applied exactly, so the Kahan steps below keep S - c equal
 // to the exact sum of the window's sources and S is its rounding.
 //
+// The compensation is the EXACT rounding error of each step (pinned on the
+// #731 pulse capture, CAP-731-PULSE, tv_trades.csv sha256
+// 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28:
+// ta.sma(x, 3) over x = 0.1, 0.3, 0, 0, ... exported on bars 2..45). The
+// textbook term (T - S) - y is that error only while T - S is exact, which
+// |S| >= |y| guarantees and a small S meeting a larger y does not. On bar 1 of
+// the capture S = 0.1 meets y = 0.3: the exact sum is 0.4 - 2^-55, a tie that
+// rounds up to T = 0.4, and T - S = 0.3 + 2^-55 is a tie as well and rounds up
+// to 0.3 + 2^-54, so the textbook term reads 2^-54, twice the error made.
+// S - c then sits 2^-55 below the window's sum, and on bar 3, where 0.1
+// leaves, S comes out as 0.3 - 2^-54 and the average one unit in the last
+// place below TradingView's, which is 0.3 / 3 (the tape's code 50000000 on
+// that bar). With the error recovered exactly (two-sum, kahan_add below)
+// c = 2^-55 on bar 1, 0.1 leaves as -(0.1 + 2^-55), itself a double, and
+// S = 0.3 with c = 0; the all-zero windows of bars 5..39 read exactly 0, as
+// the tape does. Wherever T - S is exact the two forms are the same double, so
+// the price tape above is replayed unchanged.
+//
 // The rule this replaces let the COMPENSATED addend y = x - c leave instead
 // (fitted 2026-09-05, round 7). Whenever c had been applied exactly, c then
 // stayed behind in S for good: on the tape above the average read one unit in
@@ -93,8 +111,10 @@ namespace pineforge {
 //     lengths 3 and 5).
 //
 // The counts in the round-7, 9 and 10 bullets above were measured with the
-// compensated addend leaving the window; none of them has been measured again
-// with the source leaving.
+// compensated addend leaving the window and the textbook compensation term;
+// none of them has been measured again with the source leaving, nor with the
+// exact term (on a step where the textbook term was not the step's error, the
+// carried c that the re-sum rule tests is now a different double).
 //
 // The stochRSI consequence as measured in September (round-7 family D, probe
 // A): k = sma(stoch, 3) and d = sma(k, 3) sit on ALGEBRAIC ties whenever stoch
@@ -105,9 +125,12 @@ namespace pineforge {
 // leaving the window that residue is no longer carried.
 //
 // Reference (Python, after r7/sma/sma-model.py):
+//   def step(v):          # c becomes T - (S + y), exactly
+//       y = v - c; T = S + y; ys = T - S
+//       c = (ys - y) + ((T - ys) - S); S = T
 //   c_pre = c
-//   if t >= n: y = -x[n] - c; T = S + y; c = (T - S) - y; S = T
-//   y = x - c; T = S + y; c = (T - S) - y; S = T
+//   if t >= n: step(-x[n])
+//   step(x)
 //   if c_pre != 0 and |fl(x + |c_pre|) - x| < |c_pre|:
 //       S = (x + x[1]) + ... + x[n-1]; c = 0
 //   sma = S / n
@@ -132,10 +155,19 @@ void KahanWindowSum::ensure_room() {
     head_ = 0;
 }
 
+// One Kahan step, for a source entering (v = x) and for one leaving (v = -x):
+// v joins S under the carried compensation, and c becomes the rounding error
+// of that addition, T - (S + y), recovered exactly from what T says y was and
+// what it then says S was (two-sum). While T - S is exact -- every |S| >= |y|
+// -- the second difference is zero and c is the textbook (T - S) - y, the same
+// double; when a small S meets a larger y, T - S itself rounds and the
+// textbook term is not the error of the step (the #731 pulse pin above).
 void KahanWindowSum::kahan_add(double v) {
-    double y = v - comp_;
-    double t = sum_ + y;
-    comp_ = (t - sum_) - y;
+    const double y = v - comp_;
+    const double t = sum_ + y;
+    const double y_seen = t - sum_;
+    const double s_seen = t - y_seen;
+    comp_ = (y_seen - y) + (s_seen - sum_);
     sum_ = t;
 }
 
@@ -145,10 +177,7 @@ void KahanWindowSum::kahan_add(double v) {
 // the eviction (pinned: the block-63 re-sum happens although the eviction of
 // a zero addend had just folded c to 0).
 void KahanWindowSum::enter(double src, double comp_before) {
-    double y = src - comp_;
-    double t = sum_ + y;
-    comp_ = (t - sum_) - y;
-    sum_ = t;
+    kahan_add(src);
     head_ = head_ ? head_ - 1 : window_.size() - 1;
     // The compensation corrects S as the source enters and is not remembered
     // with it: what this slot hands back when it leaves the window is the
