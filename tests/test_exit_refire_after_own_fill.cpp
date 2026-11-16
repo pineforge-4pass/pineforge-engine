@@ -275,11 +275,13 @@ bool run_row(const Row& row) {
     return true;
 }
 
-// Extrapolation, not measured: the zero-capacity reissue must remove its
-// queued predecessor (pine_adapter.cpp, exit()'s clear_existing_exit_order
-// contract and exit_cancel_bracket()'s pending_bracket_legs_ erase).
-// Checking only working requests leaks this queued stop. The four rows above
-// separately check that a consumed exit never refires against the same opening.
+// TradingView refire decider (decoded.json 938b430f, checks.json 4e5b07f0,
+// qualified cells 0/1/2) and cause-C r2 qualified cells c00
+// (k11104), c02, c17, c19 and short c36: after a partial Limit fill, a
+// re-issued same-id Stop on that opening does not fill; c25 is the positive
+// control where the Stop fills without an earlier fill. This engine gives
+// the no-fill outcome as no staged or native Stop. Cross its level below
+// and check the remaining two units and complete trade list independently.
 constexpr const char* kQueuedRow = "R-queued-predecessor";
 constexpr const char* kQueuedEntry = "queued-entry";
 constexpr const char* kHolderExit = "holder";
@@ -378,7 +380,6 @@ public:
             expect("partial fill count before sequence", trade_count(), 1);
             expect("position before sequence", signed_position_size(), 2.0);
             std::int64_t cycle = 0;
-            native_order::RunIdentity filled_run{};
             int openings = 0, partials = 0;
             for (const auto& row : native_events(0)) {
                 if (!row.command) continue;
@@ -396,7 +397,6 @@ public:
                     expect("native partial is limit",
                            std::holds_alternative<native_order::Limit>(
                                fill->request().trigger), true);
-                    filled_run = fill->handle().run;
                 }
             }
             expect("native opening count", openings, 1);
@@ -413,45 +413,24 @@ public:
             observe("shrunk holder", kHolderExit, false, 1.0, 1.0,
                     source::PineOrderFamily::ExitStop, kHolderStop);
             stop();
-            const auto queued = observe("queued stop", kConsumedExit, true, 2.0, 1.0,
-                                        source::PineOrderFamily::ExitStop, kQueuedStop);
-            expect("queued stop has no predecessor",
-                   queued.snapshot.projection_predecessor, 0);
-            expect("queued stop has no queue rank", queued.snapshot.chain_origin_sequence, 0);
-            expect("queued stop has no source sequence", queued.snapshot.source_sequence, 0);
-            expect("queued stop is not native", working(kConsumedExit), 0);
+            expect("consumed stop reissue is not pending", pending(kConsumedExit), 0);
+            expect("consumed stop reissue is not native", working(kConsumedExit), 0);
             holder(2.0);
             const auto expanded = observe("expanded holder", kHolderExit, false, 2.0, 2.0,
                                           source::PineOrderFamily::ExitStop, kHolderStop);
-            expect("holder retains an earlier queue rank",
+            expect("holder retains its reservation rank",
                    expanded.snapshot.chain_origin_sequence > 0, true);
             expect("expanded holder is native", working(kHolderExit), 1);
-            observe("stop still queued before refusal", kConsumedExit, true, 2.0, 1.0,
-                    source::PineOrderFamily::ExitStop, kQueuedStop);
-            expect("position unchanged before refusal", signed_position_size(), 2.0);
+            expect("consumed stop remains absent after holder resize",
+                   pending(kConsumedExit), 0);
+            expect("consumed stop remains non-native after holder resize",
+                   working(kConsumedExit), 0);
+            expect("position unchanged after reissue", signed_position_size(), 2.0);
 
-            std::uint64_t cursor = 0;
-            for (const auto& row : native_events(0))
-                if (row.ordinal > cursor) cursor = row.ordinal;
             stop();
-            // First cancellation assertion: the live-only partial leaves one.
-            expect("queued stop after failed reservation", pending(kConsumedExit), 0);
-            expect("failed replacement is not native", working(kConsumedExit), 0);
-            int cancelled_members = 0;
-            for (const auto& row : native_events(cursor)) {
-                if (!row.command) continue;
-                if (const auto* event =
-                        std::get_if<native_order::NotWorkingEvent>(&*row.command)) {
-                    ++cancelled_members;
-                    expect("cancel retains filled member run",
-                           event->target.run == filled_run, true);
-                    expect("cancel targets non-working sentinel",
-                           event->target.incarnation
-                               == std::numeric_limits<std::uint64_t>::max(), true);
-                }
-            }
-            expect("filled family cancellation outcome", cancelled_members, 1);
-            observe("holder after refusal", kHolderExit, false, 2.0, 2.0,
+            expect("repeated consumed stop is not pending", pending(kConsumedExit), 0);
+            expect("repeated consumed stop is not native", working(kConsumedExit), 0);
+            observe("holder after repeated reissue", kHolderExit, false, 2.0, 2.0,
                     source::PineOrderFamily::ExitStop, kHolderStop);
             sequence_seen = true;
         }
@@ -459,6 +438,8 @@ public:
             stop_touch_seen = bar.low < kQueuedStop && bar.high > kQueuedStop
                 && bar.low > kHolderStop;
             expect("later bar crosses only consumed stop", stop_touch_seen, true);
+            expect("consumed stop absent when crossed", pending(kConsumedExit), 0);
+            expect("consumed stop non-native when crossed", working(kConsumedExit), 0);
             expect("remaining units after stop touch", signed_position_size(), 2.0);
         }
         if (index == 5) strategy_close_all();
@@ -485,8 +466,8 @@ bool run_queued_predecessor() {
         {100, 101, 99, 100, 1000, kStart},                    // 0: entry call
         {100, 101, 99, 100, 1000, kStart + kInterval},        // 1: entry, exits
         {100, 109, 99, 108, 1000, kStart + 2 * kInterval},    // 2: limit fills 2
-        {105, 106, 104, 105, 1000, kStart + 3 * kInterval},   // 3: queue sequence
-        {100, 101, 89, 95, 1000, kStart + 4 * kInterval},     // 4: leaked stop
+        {105, 106, 104, 105, 1000, kStart + 3 * kInterval},   // 3: same-id Stop reissues
+        {100, 101, 89, 95, 1000, kStart + 4 * kInterval},     // 4: cross consumed Stop
         {100, 102, 98, 100, 1000, kStart + 5 * kInterval},    // 5: final close call
         {101, 103, 99, 102, 1000, kStart + 6 * kInterval},    // 6: final close
         {102, 103, 100, 101, 1000, kStart + 7 * kInterval},   // 7: trailing bar
@@ -494,7 +475,7 @@ bool run_queued_predecessor() {
     probe.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false);
     probe.expect("run succeeded", probe.last_error().empty(), true);
     probe.expect("opening setup observed", probe.opening_seen, true);
-    probe.expect("coexistence sequence observed", probe.sequence_seen, true);
+    probe.expect("same-id reissue sequence observed", probe.sequence_seen, true);
     probe.expect("later stop touch observed", probe.stop_touch_seen, true);
     int stops_accepted = 0, stops_filled = 0;
     for (const auto& row : probe.native_events(0)) {
