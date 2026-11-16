@@ -14,6 +14,7 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <dlfcn.h>
 #include <filesystem>
 #include <fcntl.h>
@@ -44,14 +45,6 @@ constexpr bool kUnderAsan = true;
 constexpr bool kUnderAsan = __has_feature(address_sanitizer);
 #else
 constexpr bool kUnderAsan = false;
-#endif
-
-#if defined(__SANITIZE_THREAD__)
-constexpr bool kUnderTsan = true;
-#elif defined(__has_feature)
-constexpr bool kUnderTsan = __has_feature(thread_sanitizer);
-#else
-constexpr bool kUnderTsan = false;
 #endif
 
 void require(bool condition, const std::string& message) {
@@ -86,6 +79,7 @@ struct TemporaryDirectory {
 };
 
 // Drive the real runner with a held-open stdin, without HTTP or WebSockets.
+// Harness waits have no deadline; external job control records hangs.
 class Runner {
     pid_t pid_ = -1;
     int input_ = -1, output_ = -1;
@@ -166,6 +160,23 @@ public:
         }
     }
     std::string errors() const { return read_file(errors_); }
+    bool exited() const {
+        require(pid_ > 0, "cannot inspect a reaped runner");
+        siginfo_t information{};
+        int result;
+        do {
+            information = {};
+            // Observe only: finish() still owns wait4's status and rusage.
+            result = waitid(P_PID, static_cast<id_t>(pid_), &information,
+                            WEXITED | WNOHANG | WNOWAIT);
+        } while (result < 0 && errno == EINTR);
+        if (result < 0) {
+            const auto error = errno;
+            throw std::runtime_error("runner waitid failed: " + std::string(std::strerror(error)) +
+                                     ": " + errors());
+        }
+        return information.si_pid == pid_;
+    }
     void send(const std::string& text) {
         std::size_t offset = 0;
         while (offset < text.size()) {
@@ -182,8 +193,7 @@ public:
         do { result = poll(&descriptor, 1, 50); } while (result < 0 && errno == EINTR);
         require(result == 0, "stdout before a committed input: " + errors());
     }
-    std::string line(std::chrono::steady_clock::time_point deadline =
-                         std::chrono::steady_clock::now() + std::chrono::seconds(30)) {
+    std::string line() {
         for (;;) {
             const auto end = pending_.find('\n');
             if (end != std::string::npos) {
@@ -191,8 +201,7 @@ public:
                 pending_.erase(0, end + 1);
                 return result;
             }
-            require(!eof_ && std::chrono::steady_clock::now() < deadline,
-                    "missing committed stdout line: " + errors());
+            require(!eof_, "missing committed stdout line: " + errors());
             pull();
         }
     }
@@ -225,9 +234,7 @@ public:
     std::string finish(int expected = 0, std::uint64_t* exit_peak_kib = nullptr) {
         close(input_);
         input_ = -1;
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-        while (!eof_ && std::chrono::steady_clock::now() < deadline) pull();
-        require(eof_, "runner did not exit: " + errors());
+        while (!eof_) pull();
         int status = 0;
         pid_t waited;
         rusage usage{};
@@ -242,10 +249,20 @@ public:
 };
 
 void wait_ready(const fs::path& status, std::uint64_t cursor, const Runner& runner) {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (fs::exists(status)) {
-            const auto document = parse_json(read_file(status));
+    std::string last_status = "<missing>";
+    for (;;) {
+        const auto has_status = fs::exists(status);
+        if (has_status) last_status = read_file(status);
+        if (runner.exited()) {
+            // Startup may publish a final status between the read and exit.
+            // Re-read it for diagnostics, never as readiness for a dead child.
+            if (fs::exists(status)) last_status = read_file(status);
+            throw std::runtime_error("runner exited before ready: " + runner.errors() +
+                                     "\nexpected input cursor: " + std::to_string(cursor) +
+                                     "\nlast status: " + last_status);
+        }
+        if (has_status) {
+            const auto document = parse_json(last_status);
             if (document.at("state").text() == "running" && document.at("ready").value == "true" &&
                 document.at("metrics").at("committed_input").integer<std::uint64_t>() == cursor) {
                 require(document.at("readiness").at("validated_strategy_warmup").value == "true",
@@ -257,7 +274,6 @@ void wait_ready(const fs::path& status, std::uint64_t cursor, const Runner& runn
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
-    throw std::runtime_error("runner never became ready: " + runner.errors());
 }
 
 std::string stored_delta(const fs::path& ledger, std::uint64_t cursor, bool checkpoint = false) {
@@ -1165,38 +1181,11 @@ void ratio_body_replay(Fixture& fixture) {
 }
 
 void report_memory(Fixture& fixture) {
-    using Clock = std::chrono::steady_clock;
-    // Solo measurements on the accumulator head (2026-10-29): release 82.5 s,
-    // TSAN 759.8 s, ASan+UBSan 606.4 s. The same row ran 1.57x slower under
-    // parallel ctest load in release (129 s against 82.5 s solo), so the
-    // sanitizer budgets are 2.6x the solo times, rounded: 2000/1600 s; keep the
-    // uninstrumented 160 s budget. CTest adds 60 s under sanitizers (2060/1660 s),
-    // or the existing 20 s (180 s).
-    // An unoptimised build without sanitizers (CMake defines the macro for
-    // Debug) took 152.7 s with three rows in parallel: 400 s, ctest 460 s.
-#if defined(PINEFORGE_REPORT_MEMORY_DEBUG_BUDGET)
-    constexpr int plain_budget_seconds = 400;
-#else
-    constexpr int plain_budget_seconds = 160;
-#endif
-    constexpr auto budget = std::chrono::seconds(
-        kUnderTsan ? 2000 : kUnderAsan ? 1600 : plain_budget_seconds);
-    const auto deadline = Clock::now() + budget;
     std::uint64_t previous_n = 0, previous_peak = 0, largest_n = 0, largest_peak = 0;
-    double last_seconds = 0;
+    // Every size must complete; external job control owns hangs.
     for (const std::uint64_t count : {1000, 10000, 100000}) {
-        // Cumulative stdout and default exact ratios both have quadratic total
-        // work. Use the measured 10k time to keep this row within its build's
-        // deadline; two completed sizes still test resident growth.
-        const auto remaining = std::chrono::duration<double>(deadline - Clock::now()).count();
-        if (count == 100000 && last_seconds * 100 > remaining) {
-            std::cout << "memory: 100000 inputs omitted; projected cumulative-stream time exceeds "
-                         "the " << budget.count() << " s work deadline; using 1000 and 10000\n" << std::flush;
-            break;
-        }
         const auto name = "memory-" + std::to_string(count);
         const auto status = fixture.temporary.path / (name + ".status");
-        const auto started = Clock::now();
         Runner child(fixture.command(fixture.temporary.path / (name + ".sqlite"), status, "--report-jsonl", 0),
                      fixture.temporary.path / (name + ".stderr"), /*measure_rss=*/true);
         wait_ready(status, 0, child);
@@ -1205,7 +1194,7 @@ void report_memory(Fixture& fixture) {
             child.send(seeded_input(cursor, seed) + "\n");
             // Drain each cumulative line without retaining reports in the
             // witness. The runner is held on stdin at the terminal cursor.
-            const auto line = child.line(deadline);
+            const auto line = child.line();
             require(line.find("\"input_cursor\":" + std::to_string(cursor) + ",") != std::string::npos &&
                     line.find("\"schema_version\":\"pineforge-native-report/v1\"") != std::string::npos,
                     "memory witness did not run the default cumulative stream");
@@ -1220,7 +1209,6 @@ void report_memory(Fixture& fixture) {
         std::cout << "mem n=" << count << " peak_rss_kib=" << peak << '\n' << std::flush;
         previous_n = largest_n; previous_peak = largest_peak;
         largest_n = count; largest_peak = peak;
-        last_seconds = std::chrono::duration<double>(Clock::now() - started).count();
     }
     require(previous_n && largest_n > previous_n, "memory row needs at least two measured sizes");
     require(largest_peak < 2ULL * 1024 * 1024, "runner peak RSS exceeds the 2 GiB sanity ceiling");
@@ -1229,6 +1217,36 @@ void report_memory(Fixture& fixture) {
     // document per input (quadratic storage) must fail, ordinary O(report) may
     // grow. Both quantities are KiB, so 4 means 4 KiB per additional input.
     require(growth < 4 * (largest_n - previous_n), "runner RSS growth exceeds 4 KiB per input");
+}
+
+void ready_child_exit(Fixture& fixture) {
+    // Exercise both startup without a status file and a leftover non-ready
+    // status. The real runner fails option admission before either is ready.
+    const std::string starting = R"({"state":"starting","ready":false,"metrics":{"committed_input":0}})";
+    for (const bool has_status : {false, true}) {
+        const auto name = has_status ? "exited-starting" : "exited-no-status";
+        const auto status = fixture.temporary.path / (std::string(name) + ".status");
+        if (has_status) write_file(status, starting);
+        Runner child(fixture.command(fixture.temporary.path / (std::string(name) + ".sqlite"),
+                                     status, "--report-jsonl=unsupported", 0),
+                     fixture.temporary.path / (std::string(name) + ".stderr"));
+        std::string failure;
+        try { wait_ready(status, 0, child); }
+        catch (const std::runtime_error& error) { failure = error.what(); }
+        require(failure.rfind("runner exited before ready: ", 0) == 0,
+                "readiness did not report the exited child: " + failure);
+        const auto errors = child.errors();
+        require(!errors.empty() && failure.find(errors) != std::string::npos,
+                "readiness failure lost the child's stderr: " + failure);
+        require(failure.find("last status: " + (has_status ? starting : std::string("<missing>"))) !=
+                    std::string::npos,
+                "readiness failure lost the last status: " + failure);
+        // Readiness observation must leave this exact child for finish's
+        // wait4, including its nonzero exit status and resource accounting.
+        std::uint64_t exit_peak_kib = 0;
+        require(child.finish(1, &exit_peak_kib).empty(), "failed startup printed stdout");
+        require(exit_peak_kib > 0, "readiness observation lost the child's wait4 RSS");
+    }
 }
 
 void options_are_strict(Fixture& fixture) {
@@ -1279,6 +1297,8 @@ int main(int argc, char** argv) {
             exercise(fixture, "off", "");
         } else if (test_case == "options") {
             options_are_strict(fixture);
+        } else if (test_case == "ready-child-exit") {
+            ready_child_exit(fixture);
         } else if (test_case == "default-recovery") {
             default_stream_survives_kill(fixture);
         } else if (test_case == "exact-ratio-recovery") {

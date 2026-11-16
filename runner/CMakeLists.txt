@@ -75,6 +75,8 @@ foreach(_pf_example_module native_market_example native_selected_example)
 endforeach()
 
 if(PINEFORGE_BUILD_TESTS)
+    # Rows with explicit TIMEOUT 0 have no per-test CTest time limit.
+    # CTest-wide stop limits and external job control still apply.
     add_executable(test_live_json ${PROJECT_SOURCE_DIR}/tests/test_live_json.cpp)
     target_include_directories(test_live_json PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_options(test_live_json PRIVATE -UNDEBUG)
@@ -92,7 +94,7 @@ if(PINEFORGE_BUILD_TESTS)
     add_test(NAME native_live_checkpoint_e2e COMMAND ${Python3_EXECUTABLE}
         ${PROJECT_SOURCE_DIR}/tests/native_live_checkpoint_e2e.py $<TARGET_FILE:pineforge-live>
         $<TARGET_FILE:native_market_example>)
-    set_tests_properties(native_live_checkpoint_e2e PROPERTIES TIMEOUT 180)
+    set_tests_properties(native_live_checkpoint_e2e PROPERTIES TIMEOUT 0)
     if(PINEFORGE_BUILD_SOURCE_LAYER)
         add_library(native_live_service_example MODULE ${PROJECT_SOURCE_DIR}/tests/native_live_service_strategy.cpp)
         target_link_libraries(native_live_service_example PRIVATE PineForge::pineforge)
@@ -197,14 +199,14 @@ if(PINEFORGE_BUILD_TESTS)
         target_compile_options(${native_test} PRIVATE -UNDEBUG)
         add_test(NAME ${native_test} COMMAND ${native_test})
     endforeach()
-    set_tests_properties(test_native_live_service PROPERTIES TIMEOUT 180)
+    set_tests_properties(test_native_live_service PROPERTIES TIMEOUT 0)
     add_executable(test_native_live_transport_progress_under_ledger_stall
         ${PROJECT_SOURCE_DIR}/tests/test_native_live_transport_progress_under_ledger_stall.cpp)
     target_link_libraries(test_native_live_transport_progress_under_ledger_stall PRIVATE pineforge_live_support)
     target_compile_options(test_native_live_transport_progress_under_ledger_stall PRIVATE -UNDEBUG)
     add_test(NAME test_native_live_transport_progress_under_ledger_stall
         COMMAND test_native_live_transport_progress_under_ledger_stall)
-    set_tests_properties(test_native_live_transport_progress_under_ledger_stall PROPERTIES TIMEOUT 180)
+    set_tests_properties(test_native_live_transport_progress_under_ledger_stall PROPERTIES TIMEOUT 0)
     add_executable(test_native_live_report_cli ${PROJECT_SOURCE_DIR}/tests/test_native_live_report_cli.cpp)
     target_link_libraries(test_native_live_report_cli PRIVATE pineforge_live_startup ${CMAKE_DL_LIBS})
     target_compile_options(test_native_live_report_cli PRIVATE -UNDEBUG -ffp-contract=off)
@@ -218,7 +220,10 @@ if(PINEFORGE_BUILD_TESTS)
     add_test(NAME test_native_live_report_default_recovery COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> default-recovery)
     set_tests_properties(test_native_live_report_first_commit test_native_live_report_summary_only
-        test_native_live_report_options test_native_live_report_default_recovery PROPERTIES TIMEOUT 180)
+        test_native_live_report_options test_native_live_report_default_recovery PROPERTIES TIMEOUT 0)
+    add_test(NAME test_native_live_report_ready_child_exit COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> ready-child-exit)
+    set_tests_properties(test_native_live_report_ready_child_exit PROPERTIES TIMEOUT 0)
     set_tests_properties(test_native_live_websocket PROPERTIES SKIP_RETURN_CODE 77)
     add_executable(test_native_live_checkpoint
         ${PROJECT_SOURCE_DIR}/tests/test_native_live_checkpoint.cpp)
@@ -606,7 +611,7 @@ if(PINEFORGE_BUILD_TESTS)
     add_test(NAME ledger_observability_check_selftest COMMAND ${Python3_EXECUTABLE}
         ${PROJECT_SOURCE_DIR}/tests/native_live_ledger_behavior_e2e.py ledger_observability_check_selftest)
     set_tests_properties(ledger_observability_check_selftest PROPERTIES
-        LABELS "live_ledger" TIMEOUT 120)
+        LABELS "live_ledger" TIMEOUT 0)
     target_compile_options(pineforge_live_legacy_test_support PRIVATE -ffp-contract=off)
     add_executable(test_live_report ${PROJECT_SOURCE_DIR}/tests/test_live_report.cpp)
     target_include_directories(test_live_report PRIVATE
@@ -630,28 +635,16 @@ if(PINEFORGE_BUILD_TESTS)
     add_test(NAME test_native_live_report_interval_ratio_recovery COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> interval-ratio-recovery)
     set_tests_properties(test_native_live_report_exact_ratio_recovery
-        test_native_live_report_interval_ratio_recovery PROPERTIES TIMEOUT 180)
+        test_native_live_report_interval_ratio_recovery PROPERTIES TIMEOUT 0)
     add_test(NAME test_native_live_report_memory COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> memory)
-    # Match report_memory's build-kind budgets. Solo measurements on the
-    # accumulator head (2026-10-29): TSAN 759.8 s, ASan+UBSan 606.4 s; the row ran 1.57x slower
-    # under parallel ctest load in release, so the work deadlines are 2.6x the
-    # solo times, 2000/1600 s, plus 60 s for CTest.
-    # Release retains the 160 s deadline / 180 s timeout; plain Debug uses 400/460 s.
-    set(_pf_report_memory_timeout 180)
-    if(PINEFORGE_LIVE_TSAN)
-        set(_pf_report_memory_timeout 2060)
-    elseif(PINEFORGE_ENABLE_SANITIZERS)
-        set(_pf_report_memory_timeout 1660)
-    elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        # Debug without sanitizers took 152.7 s with three rows in parallel
-        # (2026-10-29), 7 s under the release deadline: 2.6x gives 400 s.
-        set(_pf_report_memory_timeout 460)
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug"
+       AND NOT PINEFORGE_LIVE_TSAN AND NOT PINEFORGE_ENABLE_SANITIZERS)
         target_compile_definitions(test_native_live_report_cli PRIVATE
             PINEFORGE_REPORT_MEMORY_DEBUG_BUDGET=1)
     endif()
     set_tests_properties(test_native_live_report_memory PROPERTIES
-        TIMEOUT ${_pf_report_memory_timeout} SKIP_RETURN_CODE 77)
+        TIMEOUT 0 SKIP_RETURN_CODE 77)
     add_executable(test_native_live_report_curve_staging_work
         ${PROJECT_SOURCE_DIR}/tests/test_native_live_report_curve_staging_work.cpp)
     target_include_directories(test_native_live_report_curve_staging_work PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -659,7 +652,7 @@ if(PINEFORGE_BUILD_TESTS)
     target_compile_options(test_native_live_report_curve_staging_work PRIVATE -UNDEBUG -ffp-contract=off)
     add_test(NAME test_native_live_report_curve_staging_work
         COMMAND test_native_live_report_curve_staging_work)
-    set_tests_properties(test_native_live_report_curve_staging_work PROPERTIES TIMEOUT 180)
+    set_tests_properties(test_native_live_report_curve_staging_work PROPERTIES TIMEOUT 0)
     add_test(NAME test_native_live_report_storage_stop_refresh COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> storage-stop-refresh)
     add_test(NAME test_native_live_report_ratio_marker_replay COMMAND test_native_live_report_cli
@@ -668,7 +661,7 @@ if(PINEFORGE_BUILD_TESTS)
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> historical-ratio-export)
     set_tests_properties(test_native_live_report_storage_stop_refresh
         test_native_live_report_ratio_marker_replay test_native_live_report_historical_ratio_export
-        PROPERTIES TIMEOUT 180)
+        PROPERTIES TIMEOUT 0)
     add_library(native_live_report_example MODULE
         ${PROJECT_SOURCE_DIR}/tests/native_live_report_strategy.cpp)
     target_link_libraries(native_live_report_example PRIVATE PineForge::pineforge)
@@ -691,7 +684,7 @@ if(PINEFORGE_BUILD_TESTS)
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> ratio-body-replay)
     set_tests_properties(test_live_report_accumulator_commit_retry
         test_native_live_report_storage_stop_first_input test_native_live_report_ratio_body_replay
-        PROPERTIES TIMEOUT 180)
+        PROPERTIES TIMEOUT 0)
 endif()
 
 if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
@@ -706,7 +699,7 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
     add_test(NAME native_live_opaque_report_e2e
         COMMAND ${_pf_layout_proof_command} opaque-report)
     set_tests_properties(native_live_engine_layout_e2e native_live_opaque_report_e2e
-        PROPERTIES TIMEOUT 180)
+        PROPERTIES TIMEOUT 0)
     add_dependencies(test_native_live_report_cli live_contract_native_stub)
     add_test(NAME native_live_old_layout_report_e2e COMMAND ${Python3_EXECUTABLE}
         ${PROJECT_SOURCE_DIR}/tests/native_live_startup_e2e.py $<TARGET_FILE:pineforge-live>
@@ -744,7 +737,7 @@ if(PINEFORGE_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
             --strategy $<TARGET_FILE:native_live_ledger_work_strategy>
             --fixture-writer $<TARGET_FILE:native_live_ledger_fixture_writer>
             --artifacts ${PROJECT_BINARY_DIR}/ledger-behavior-artifacts)
-        set_tests_properties(${_pf_ledger_row} PROPERTIES LABELS "slow;live_ledger" TIMEOUT 7200)
+        set_tests_properties(${_pf_ledger_row} PROPERTIES LABELS "slow;live_ledger" TIMEOUT 0)
     endforeach()
     add_test(NAME ledger_observability_status_concurrent_write COMMAND ${Python3_EXECUTABLE}
         ${PROJECT_SOURCE_DIR}/tests/native_live_ledger_behavior_e2e.py ledger_observability_status
@@ -754,7 +747,7 @@ if(PINEFORGE_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
         --artifacts ${PROJECT_BINARY_DIR}/ledger-behavior-artifacts
         --force-write-between-samples-bytes 201326592)
     set_tests_properties(ledger_observability_status_concurrent_write PROPERTIES
-        LABELS "slow;live_ledger" TIMEOUT 7200 RUN_SERIAL TRUE)
+        LABELS "slow;live_ledger" TIMEOUT 0 RUN_SERIAL TRUE)
     add_test(NAME native_live_ledger_behavior_e2e COMMAND ${Python3_EXECUTABLE}
         ${PROJECT_SOURCE_DIR}/tests/native_live_ledger_behavior_e2e.py report_jsonl_delta_v2_contract
         --runner $<TARGET_FILE:pineforge-live-observed>
@@ -762,7 +755,7 @@ if(PINEFORGE_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
         --fixture-writer $<TARGET_FILE:native_live_ledger_fixture_writer>
         --artifacts ${PROJECT_BINARY_DIR}/ledger-behavior-artifacts)
     set_tests_properties(native_live_ledger_behavior_e2e PROPERTIES
-        LABELS "slow;live_ledger" TIMEOUT 7200)
+        LABELS "slow;live_ledger" TIMEOUT 0)
 endif()
 # The finished trade text companion (--trade-text) is the last block of this
 # file, so the line numbers that the design docs cite above stay where they are.

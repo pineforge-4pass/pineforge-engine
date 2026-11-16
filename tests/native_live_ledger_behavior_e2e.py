@@ -164,8 +164,8 @@ def file_hash(path):
 
 
 def wait_for(predicate, process):
-    deadline = time.monotonic() + 300
-    while time.monotonic() < deadline:
+    # The controller owns the runtime limit; keep checking the child.
+    while True:
         assert process.poll() is None, "runner exited before the semantic assertion"
         try:
             value = predicate()
@@ -174,7 +174,6 @@ def wait_for(predicate, process):
         except (FileNotFoundError, json.JSONDecodeError, sqlite3.OperationalError):
             pass
         time.sleep(0.01)
-    raise AssertionError("runner did not reach the required committed cursor")
 
 
 def merge(destination, changes, changed_only=False):

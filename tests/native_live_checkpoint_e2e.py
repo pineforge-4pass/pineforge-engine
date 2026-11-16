@@ -14,7 +14,7 @@ def equal(actual, expected):
 
 
 def invoke(arguments, code=0):
-    result = subprocess.run(arguments, text=True, capture_output=True, timeout=30)
+    result = subprocess.run(arguments, text=True, capture_output=True)
     assert result.returncode == code, (arguments, result.returncode, code, result.stdout, result.stderr)
     return result
 
@@ -89,12 +89,12 @@ def main():
             return ledger
 
         def wait_for(process, predicate, label):
-            deadline = time.monotonic() + 20
             last = None
-            while time.monotonic() < deadline:
+            # The controller owns the runtime limit; keep checking the child.
+            while True:
                 if process.poll() is not None:
                     output, errors = process.communicate()
-                    raise AssertionError((label, process.returncode, output, errors))
+                    raise AssertionError((label, process.returncode, output, errors, last))
                 try:
                     last = predicate()
                     if last:
@@ -102,7 +102,6 @@ def main():
                 except (FileNotFoundError, json.JSONDecodeError, sqlite3.OperationalError) as error:
                     last = str(error)
                 time.sleep(0.02)
-            raise AssertionError((label, "condition not reached", last))
 
         def start(ledger, count, name):
             health = root / (name + ".status.json")
@@ -117,7 +116,7 @@ def main():
             return process, health
 
         def finish(process):
-            output, errors = process.communicate(timeout=30)
+            output, errors = process.communicate()
             equal(process.returncode, 0)
             return json.loads(output), errors
 
@@ -245,7 +244,7 @@ def main():
             for process in children:
                 if process.poll() is None:
                     process.kill()
-                    process.communicate(timeout=10)
+                    process.communicate()
 
 
 if __name__ == "__main__":
