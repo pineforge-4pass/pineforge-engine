@@ -1242,6 +1242,31 @@ candidates read only newly placed rows. Resolved candidates keep their pinned
 witness. Anchored legs adopted below the high water are explicitly compared
 against old candidates too; a wholesale row rewrite invalidates the memo.
 The memo is reconstructible from the table and cleared at run begin.
+
+Exit-family consumption is separate from member history. A family whose
+members were cancelled can have size zero and remain nonempty: its
+`(leg kind, opening incarnation)` facts still prevent a filled opening from
+receiving another leg. NaN requested quantity is intentional for named
+percentage exits, so neither retention nor lookup requires a finite quantity.
+A never-filled withdrawn leg contributes no fact. True bound partial fills
+record Limit, Stop and Trail consumption together, and cancellation preserves
+that result (`record_consumed` and `cancel_members`,
+`include/pineforge/source/pine_adapter.hpp:1285`,
+`include/pineforge/source/pine_adapter.hpp:1305`).
+
+Facts are pruned before emptiness is tested at flat or reversal. While any
+fact remains, `wholly_settled` refuses archival
+(`include/pineforge/source/pine_adapter.hpp:1340`): the archive has no fact
+payload. Named partial percentages use each opening's own reservation and
+keep explicit requested quantity NaN. FIFO may book that share against an
+older lot; ANY binds its opening. A per-origin percentage already owns an
+add's share, while an ordinary explicit full reissue retains same-id cover
+after draining an older lot. Only the latter's fresh-origin admission
+exception suppresses cover of its own add. Both scratch codecs serialize
+the exception, and the adapter hash includes it. Unresolved relative exits
+retain and hash their source reservation rank until parent-fill
+materialization.
+
 Wholly settled bracket families with no consumed-origin facts leave the active
 family table, keeping their exact prefix record in an archive. Appending
 restores that record; bracket cancellation still emits its settled count of

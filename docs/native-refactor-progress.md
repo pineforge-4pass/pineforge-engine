@@ -254,6 +254,9 @@ Mac's 489 and 412 and 1003 of 1249, and no Mac output moved.
   vtable of every generated script. It goes at the next `engine_script_run`
   epoch (ADR-0001, the row "`source_stream_entry_comment`").
 
+The pending-close projection assertion also fails on main and is tracked
+separately. The exit-family lifetime change keeps that assertion unchanged.
+
 ## Publication and acceptance
 
 Publish reviewed increments in an evolving draft PR so implementation and

@@ -645,11 +645,13 @@ ADR_RULED_TEXTS_MIN = 59
 # RELEASE_MIN_TESTS in each, counted the same way.
 # An excluded run must still discover at least this many rows before -LE.
 EXCLUDED_REGISTERED_MIN = {
+    # One ordinary repeated-exit unit adds a source-enabled registration;
+    # the kernel-only filter excludes it, so the kernel floor is unchanged.
     # +28 rows in every engine profile: verifier 8 + preflight 8 + command-after 8 + report 4.
     # Each is slices + cover - parent; native adds equivalence: 964 + 28 + 8 = 1000.
     # Three public Linux scratch-attribution cases in both fixture worlds.
     # 904/895/1000 + 3 = 907/898/1003; release/kernel 923/365 + 3 = 926/368.
-    'debug': 907, 'sanitizers': 898, 'native': 1003,
+    'debug': 908, 'sanitizers': 899, 'native': 1004,
     # D1, run 39221717231 of the PR TSV, historical REGISTERED counts
     # (selected + 29 then; the current slow pin covers 60): Debug 938 - 876 = 62 and
     # sanitizers 929 - 867 = 62 below their registry; Release and kernel-only
@@ -660,7 +662,7 @@ EXCLUDED_REGISTERED_MIN = {
     # Basis of the offset: the existing keys count rows registered BEFORE -LE,
     # so a selected count (909, 900) is never compared with a key (876, 867).
     # See docs/ci.md, "PR tier versus MAIN/RELEASE", and COVERAGE-FLOORS.
-    'release': 926, 'kernel': 368,
+    'release': 927, 'kernel': 368,
 }
 # test_native_live_websocket exits 77 wherever the linked libcurl has no
 # WebSocket support (a system libcurl); main's kernel floor counted that skip
@@ -804,7 +806,7 @@ PRIVATE_FIXTURE_SKIP_LITERAL = 'SKIP private fixtures not present: '
 # +28 public rows: verifier 8 + preflight 8 + command-after 8 + report 4; 910 + 28 = 938, 337 + 28 = 365.
 # Scratch attribution: aggregate stays one row; nine individual cases become twelve (+3).
 # Both fixture worlds gain three public Linux rows; pinned populations stay fixed.
-RELEASE_MIN_TESTS = 941
+RELEASE_MIN_TESTS = 942
 KERNEL_MIN_TESTS = 368
 PRIVATE_FIXTURE_PROFILE_FLOORS = {
     'release': (RELEASE_MIN_TESTS, 307),

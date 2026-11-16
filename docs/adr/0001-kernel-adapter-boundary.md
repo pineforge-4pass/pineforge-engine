@@ -359,6 +359,19 @@ kernel and own these quirks, each at its site:
   also a Pine policy over the session flags: its batch's final bar reads the kernel's
   open-ended close.
 
+The lifetime of a source exit family also belongs here. A named partial
+percentage under pyramiding above one reserves each opening's own share;
+its requested quantity remains NaN. A real partial fill consumes all three
+price-leg kinds for that opening. Cancellation removes the family's members
+but retains those facts while the opening is askable. Withdrawing an unfilled
+leg creates no fact. These are adapter decisions over native opening and
+fill provenance (`BracketRoster::record_consumed`,
+`include/pineforge/source/pine_adapter.hpp:1285`), with no kernel or public C
+surface change. Ordinary same-id add coverage remains eligible when an older
+lot was drained; an admission that needed a fresh opening carries its own
+exception (`fresh_origin_bypass`,
+`include/pineforge/source/pine_adapter.hpp:288`).
+
 Each rule matches a specific TradingView behavior and is cited in source as `ab9714be FILE:LINE`.
 `ab9714be` is a commit **of this repository** (#253, the parent of the adapter-lowering slice) —
 the last tree holding the retired legacy Pine loop, so a citation is read with

@@ -876,6 +876,14 @@ For b=3489660930 the minimum is M exactly. For b=3489660931,
 q=268435456 and n=4294967299=M+4; it must return PLATFORM_RANGE
 although b alone still fits the chunk table.
 
+Exit-family consumption is retained independently of member history,
+including percentage exits with NaN requested quantity. Per-origin
+reservation totals use call-scoped `ExitScratchIndex` storage. The existing
+materialized reservation lists still need their allocation bounds reviewed;
+preserving economic rows and using scratch storage do not establish a bound
+on those lists. Both scratch codecs serialize the fresh-origin placement
+flag, and the adapter hash includes it.
+
 ## Lab verification and remaining integration
 
 The lab harness links the bridge and generated code into the same module

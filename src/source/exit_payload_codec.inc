@@ -266,7 +266,7 @@ PAYLOAD_MEMBERS(PlacementSnapshot,
     M(reverse_to) M(replaced_opening) M(replacement_predecessor_market) M(terms_priced_reverse)
     M(frozen_reversal_transaction) M(placement_cycle) M(sequential_group) M(sequential_rank)
     M(has_full_entry_bracket) M(paired_reversal_parent) M(preserved_by_close_all)
-    M(preserved_close_all_bar) M(bracket_origin) M(source_sequence) M(command_ordinal)
+    M(preserved_close_all_bar) M(bracket_origin) M(fresh_origin_bypass) M(source_sequence) M(command_ordinal)
     M(placement_open_epoch) M(command_sequence) M(close_callsite_token) M(close_batch_calls)
     M(close_first_id) M(close_first_target) M(close_first_ledger_consumed)
     M(close_first_carry_valid) M(close_first_carry_qty) M(close_retire_ledger_whole)
