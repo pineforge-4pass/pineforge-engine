@@ -3888,22 +3888,24 @@ bool carry_reissue_bindings() noexcept {
 std::uint64_t retired_rows_erased() noexcept { return rows_erased.load(std::memory_order_relaxed); }
 } // namespace detail
 
-// Audit mirror of K1's cycle and oldest dormant-representative pins.
+// Audit mirror of K1's unwithdrawn cycle and dormant-representative pins.
 // A named id's momentary exposure does not shorten the cycle pin.
 bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) const noexcept {
-    if (row.legs.target().incarnation == 0 || filled_limit_without_revival(row)) return false;
+    if (row.legs.target().incarnation == 0 || withdrawn(row.legs)
+        || filled_limit_without_revival(row)) return false;
     const std::uint64_t origin = row.bracket_origin.incarnation;
     bool askable = false;
     for (const auto& handle : live_handles_) if (handle.incarnation == origin) askable = true;
     for (const auto& cohort : cohorts_by_id_.held_rows())
         for (const auto& opening : cohort.second.opened) if (opening.incarnation == origin) askable = true;
-    if ((row.placement_cycle >= current_position_cycle_ && !withdrawn(row.legs))
+    if (row.placement_cycle >= current_position_cycle_
         || (askable && !row.legs.dormant())) return true;
     if (!askable || !row.legs.dormant() || (row.family != PineOrderFamily::ExitLimit
         && row.family != PineOrderFamily::ExitStop && row.family != PineOrderFamily::ExitTrail)) return false;
     for (auto peer : placement_) {
         const auto& pin = peer.second;
-        if (!pin.legs.dormant() || pin.legs.target().incarnation == 0 || pin.family != row.family
+        if (!pin.legs.dormant() || withdrawn(pin.legs)
+            || pin.legs.target().incarnation == 0 || pin.family != row.family
             || pin.bracket_origin != row.bracket_origin || pin.source_id != row.source_id
             || pin.from_entry != row.from_entry) continue;
         return &pin == &row;
@@ -3942,8 +3944,9 @@ bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) cons
 // Pins, one per scan that reads rows of requests that are no longer live:
 //   K1 an unwithdrawn lifecycle for the whole current cycle, including global
 //      legs and named ids whose exposure may return; askable origins also keep
-//      non-dormant rows and one dormant representative per family. Margin revival,
-//      reversal suspension and pair hold read lifecycles; exit() asks whether
+//      unwithdrawn non-dormant rows and one unwithdrawn dormant representative
+//      per family. Margin revival, reversal suspension and pair hold read
+//      lifecycles; exit() asks whether
 //      an opened origin's leg was consumed;
 //   K2 a current-cycle row naming a revival candidate as its predecessor,
 //   K3 the first later-bar current-cycle exit of the same family, source id
@@ -3978,12 +3981,12 @@ bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) cons
 //
 // The cancelled-origin retirement: nor a leg the script withdrew (every leg retired, by
 // strategy.cancel or strategy.cancel_all whether it was live or dormant:
-// retire_cancelled_exits), whatever its cycle, unless it is bound to an
-// askable origin as its family's one representative. A withdrawn leg is no candidate
-// and K2/K3 keep nothing for it; the suspension and the pair hold only
-// rewrite its own lifecycle, which only origin_leg_consumed reads, and only
-// for an origin that is live or opened. A cycle that cancels and re-places an
-// exit every bar at the same level -- no re-issue at another stop supersedes
+// retire_cancelled_exits), whatever its cycle or origin. A withdrawn leg
+// cannot revive or answer origin_leg_consumed, even after a suspension or
+// pair hold. It needs no lifecycle pin; roots and K2/K3 still keep its row
+// if another request needs its identity or supersession evidence.
+// A cycle that cancels and re-places an exit every bar at the same level
+// -- no re-issue at another stop supersedes
 // it -- no longer holds a row per bar either.
 //
 // O1W: a terminally filled named origin-free limit without any stop/loss/trail
@@ -4030,12 +4033,13 @@ void PineExecutionAdapter::sweep_retired_rows(const NativeDecisionContext& conte
     std::sort(askable_origins.begin(), askable_origins.end());
     askable_origins.erase(std::unique(askable_origins.begin(), askable_origins.end()),
                           askable_origins.end());
-    // One dormant origin pin per (origin, exit id, from-entry, family), in oldest
-    // incarnation order. Keep its lifecycle so suspension/cancellation still
-    // changes the consumed-leg answer; do not replace it with a sticky bit.
+    // One unwithdrawn dormant origin pin per (origin, exit id, from-entry,
+    // family), in oldest incarnation order. Keep its lifecycle so restoration
+    // or cancellation still changes the consumed-leg answer. A withdrawn
+    // lifecycle cannot answer consumed or revive and needs no origin pin.
     auto& origin_pins = sweep.origin_pins;
     placement_.visit_rows([&](std::uint64_t, const PlacementSnapshot& value) { ++work.row_visits; ++work.pin_rows; observe_retirement_expiry(value, interval);
-        if (!exit_family(value.family) || !value.legs.dormant()
+        if (!exit_family(value.family) || !value.legs.dormant() || withdrawn(value.legs)
             || value.legs.target().incarnation == 0
             || !contains(askable_origins, value.bracket_origin.incarnation)) return false;
         const bool represented = std::any_of(origin_pins.begin(), origin_pins.end(),
@@ -4052,8 +4056,9 @@ void PineExecutionAdapter::sweep_retired_rows(const NativeDecisionContext& conte
         // Exposure at this sweep cannot decide what a later margin call reads.
         // Supersession below still releases legs the revival can no longer use.
         const bool askable = contains(askable_origins, value.bracket_origin.incarnation);
-        if (value.legs.target().incarnation != 0 && !filled_limit_without_revival(value)
-            && ((value.placement_cycle >= cycle && !withdrawn(value.legs))
+        if (value.legs.target().incarnation != 0 && !withdrawn(value.legs)
+            && !filled_limit_without_revival(value)
+            && (value.placement_cycle >= cycle
                 || (askable && !value.legs.dormant())
                 || std::find_if(origin_pins.begin(), origin_pins.end(), [&](const auto* pin) { ++work.pin_comparisons; return pin == &value; }) != origin_pins.end())) return true;
         // K4
