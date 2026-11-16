@@ -51,6 +51,27 @@ namespace pineforge {
 // tapes. This file follows the later one; the rows of the September tapes
 // that encode a compensated addend leaving are not reproduced by it.
 //
+// The compensation is the step's EXACT rounding error (pinned 2026-11-16, a
+// second capture): with T = fl(S + y), c is T - (S + y) itself, whatever the
+// magnitudes of S and y. The textbook form (T - S) - y is that number only
+// while T - S is exact, which needs S at least as large as y in exponent.
+// When a larger source enters a smaller sum that subtraction rounds and the
+// textbook c is off by what it lost: 0.1 then 0.3 gives 2^-54 where the sum
+// 0.4 is 2^-55 above 0.1 + 0.3. The capture is the start of the round-7 pulse
+// series taken again, as a strategy on a 15-minute chart (script sha256
+// 276834fe7b2c2f7c18888e7bf69469fe6aa8bcfe85a7961e0b2d419543b26443, trade
+// list sha256
+// 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28): 44 closed
+// trades carry ta.sma(x, 3) on bars 2..45 of 0.1, 0.3, 0, zeros to bar 39,
+// then 0.2, 0.3, 0, zeros. Bar 3, whose window is (0.3, 0, 0), reads exactly
+// 0.3 / 3 -- the sum left when 0.1 leaves is 0.3 itself -- and every all-zero
+// window the capture exports at full scale (bars 5..39 and 45) reads exactly
+// 0; on bars 5..39 the September tape kept 2^-54 and then 2^-55. With the
+// textbook c the zero of bar 2 folds 2^-54 into S and bar 3 lands one unit in
+// the last place of S below 0.3 (0.09999999999999998 for the average, which
+// is what this file computed and what the September tape read there).
+// tests/test_ta_sma_exact_compensation.cpp replays the 44 rows.
+//
 // The other pieces are the fits of 2026-09-05 and 2026-09-06 (round-7
 // synthetic pins, scratchpad r7/pins/sma-pulse-*, sma-ident-*: OANDA:EURUSD
 // 15, pulse series of known doubles, lengths 3 and 20, three range starts;
@@ -93,8 +114,10 @@ namespace pineforge {
 //     lengths 3 and 5).
 //
 // The counts in the round-7, 9 and 10 bullets above were measured with the
-// compensated addend leaving the window; none of them has been measured again
-// with the source leaving.
+// compensated addend leaving the window and with the textbook compensation;
+// none of them has been measured again with the source leaving or with the
+// exact compensation. The pulse capture of 2026-11-16 has no bar on which the
+// re-sum fires, so it neither confirms nor contradicts that rule.
 //
 // The stochRSI consequence as measured in September (round-7 family D, probe
 // A): k = sma(stoch, 3) and d = sma(k, 3) sit on ALGEBRAIC ties whenever stoch
@@ -104,13 +127,27 @@ namespace pineforge {
 // never fire; a plain running sum fired on the wrong half. With the source
 // leaving the window that residue is no longer carried.
 //
-// Reference (Python, after r7/sma/sma-model.py):
+// Reference (Python, after r7/sma/sma-model.py; err(S, y, T) is T - (S + y)
+// in exact arithmetic):
 //   c_pre = c
-//   if t >= n: y = -x[n] - c; T = S + y; c = (T - S) - y; S = T
-//   y = x - c; T = S + y; c = (T - S) - y; S = T
+//   if t >= n: y = -x[n] - c; T = S + y; c = err(S, y, T); S = T
+//   y = x - c; T = S + y; c = err(S, y, T); S = T
 //   if c_pre != 0 and |fl(x + |c_pre|) - x| < |c_pre|:
 //       S = (x + x[1]) + ... + x[n-1]; c = 0
 //   sma = S / n
+
+// t - (a + b) for t = fl(a + b): the rounding error of one addition, exactly,
+// for any two finite doubles whose sum does not overflow (Knuth's two-sum, in
+// the sign Kahan's compensation carries; no branch on the magnitudes). While
+// t - a is exact the first term is zero and the second is the textbook
+// (t - a) - b, so every step that form got right keeps its bits, the sign of
+// a zero included; the first term is what that form loses when a larger b
+// enters a smaller a.
+static double rounding_error(double a, double b, double t) noexcept {
+    const double b_part = t - a;        // what t holds of b
+    const double a_part = t - b_part;   // what t holds of a
+    return (a_part - a) + (b_part - b);
+}
 
 KahanWindowSum::KahanWindowSum(int length)
     : length_(length), count_(0), sum_(0.0), comp_(0.0),
@@ -135,7 +172,7 @@ void KahanWindowSum::ensure_room() {
 void KahanWindowSum::kahan_add(double v) {
     double y = v - comp_;
     double t = sum_ + y;
-    comp_ = (t - sum_) - y;
+    comp_ = rounding_error(sum_, y, t);
     sum_ = t;
 }
 
@@ -147,7 +184,7 @@ void KahanWindowSum::kahan_add(double v) {
 void KahanWindowSum::enter(double src, double comp_before) {
     double y = src - comp_;
     double t = sum_ + y;
-    comp_ = (t - sum_) - y;
+    comp_ = rounding_error(sum_, y, t);
     sum_ = t;
     head_ = head_ ? head_ - 1 : window_.size() - 1;
     // The compensation corrects S as the source enters and is not remembered

@@ -10,11 +10,14 @@ namespace pineforge {
 // math.sum (see the note above its implementation in
 // src/ta_moving_averages.cpp for the tapes that pin each piece):
 //
-//   * a Kahan-compensated running sum S with compensation c;
+//   * a Kahan-compensated running sum S whose compensation c is the exact
+//     rounding error of each step, fl(S + y) - (S + y), whatever the
+//     magnitudes of S and y (the 2026-11-16 pulse pin);
 //   * each source enters as y = x - c and, `length` bars later, the SOURCE x
 //     leaves through the same Kahan step -- sub before add. The compensation
 //     is not remembered with the source, so S - c stays the sum of the
-//     window's sources whenever c was applied exactly (the 2026-11-16 pin);
+//     window's sources whenever c was applied exactly (the 2026-11-16 price
+//     pin);
 //   * on the bar whose incoming source UNDER-applies the MAGNITUDE of the
 //     carried compensation when it is ADDED (c != 0 and, with z = fl(x + |c|),
 //     |z - x| < |c|: fully swallowed or rounded toward x -- the round-10

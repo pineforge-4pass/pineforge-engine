@@ -94,7 +94,9 @@ static void test_zero_window_carries_residue() {
     sma.compute(0.3);
     std::vector<double> z;
     for (int i = 0; i < 38; ++i) z.push_back(sma.compute(0.0));   // bars 2..39
-    // bar 2: (0.1 + 0.3 + 0) with the zero addend folding c: 0.4 - 2^-54 -> /3
+    // bar 2: 0.1 + 0.3 rounds to 0.4 and the zero cannot move it: 0.4 / 3
+    // (0.4 - 2^-54, the sum the textbook compensation left, divides to the
+    // same double).
     CHECK_EXACT(z[0], 0.13333333333333333, "bar 2");
     // expectation corrected: 0.09999999999999998 -> 0.3 / 3; current TV b3 code is 50000000.
     // CAP-731-PULSE tv_trades.csv sha256 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28.
