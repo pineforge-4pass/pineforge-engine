@@ -1012,7 +1012,7 @@ POST_GATE_NEEDS = ('needs: [authz, changes, preflight, build-x86-gcc133, smoke, 
 # never be excused for the PR-only exclusion: no job was created for that cell.
 # Pin the whole step so a widened passed(), a later override or a missing-result
 # fallback cannot keep the required snippets while accepting a failed proof.
-GATE_STEP = r'''      - name: Require every verification lane to have passed
+GATE_STEP = r'''      - name: Require every verification job to have passed
         shell: bash
         env:
           AUTHZ_RESULT: ${{ needs.authz.result }}
@@ -1038,7 +1038,7 @@ GATE_STEP = r'''      - name: Require every verification lane to have passed
             && [[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
             && passed "$PARITY_RESULT"
 '''
-POST_GATE_STEP = r'''      - name: Require every verification lane to have passed
+POST_GATE_STEP = r'''      - name: Require every verification job to have passed
         shell: bash
         env:
           AUTHZ_RESULT: ${{ needs.authz.result }}

@@ -778,7 +778,7 @@ def case_api(workflow, *rows):
         job.update(id=job_id, name=name, conclusion='failure',
                    check_run_url=f'https://api.github.com/repos/{REPO}'
                                  f'/check-runs/{job_id}')
-        step = {'loss': 'Compile', 'own': 'Test', 'gate': 'Require every lane passed',
+        step = {'loss': 'Compile', 'own': 'Test', 'gate': 'Require every job to have passed',
                 'needs': 'Summarize', 'ok': 'Compile'}[kind]
         job['steps'] = [{'name': step, 'conclusion': 'failure'}]
         if kind == 'ok':

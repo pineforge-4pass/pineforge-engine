@@ -1632,7 +1632,7 @@ added outside CMake must list its file in `PROOF_READS` by hand. The SEO
 postprocessor remains listed after its self-test moved to `docs.yml`. The
 `ci-workflow-contract` stage pins the wiring, the classification step
 verbatim, and `scripts/test_ci_preflight.py` runs that step's own shell and
-the aggregate's own shell, the latter over every outcome of every lane.
+the aggregate's own shell, the latter over every outcome of every proof job.
 
 ### CI-LITE timing estimate
 
