@@ -669,6 +669,8 @@ struct KCResult {
 // close is) or, with use_true_range = false, high - low. Omitting the flag is
 // the true range, value for value.
 class KC {
+    friend class KCW;
+
     double mult_;
     bool use_true_range_;
     EMA ema_;
@@ -676,6 +678,7 @@ class KC {
     double prev_close_ = na<double>();
     double saved_prev_close_ = na<double>();
 
+    void check_multiplier(const char* function) const;
     double range_of(double high, double low) const;
 
 public:

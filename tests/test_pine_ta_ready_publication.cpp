@@ -163,7 +163,8 @@ void families() {
     }
     for (int length : {20, 1, 2, 3}) {
         for (bool true_range : {false, true}) {
-            for (double multiplier : {1.5, 0.0}) {
+            // expectation corrected: mult 0.0 -> 0.25, because Keltner calls require mult > 0.
+            for (double multiplier : {1.5, 0.25}) {
                 run_case([=] { return source::PineKc(length, multiplier, true_range); },
                          [=] { return ta::KC(length, multiplier, true_range); }, channel, length);
                 run_case([=] { return source::PineKcw(length, multiplier, true_range); },

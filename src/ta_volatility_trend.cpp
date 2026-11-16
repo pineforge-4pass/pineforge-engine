@@ -10,10 +10,13 @@
 #include <pineforge/ta.hpp>
 #include <pineforge/ta_compare_band.hpp>
 #include <pineforge/na.hpp>
+#include <pineforge/run_failure.hpp>
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <numeric>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -529,6 +532,23 @@ BBResult BB::compute(double src) {
 KC::KC(int length, double mult, bool use_true_range)
     : mult_(mult), use_true_range_(use_true_range), ema_(length), range_ema_(length) {}
 
+void KC::check_multiplier(const char* function) const {
+    if (mult_ <= 0.0) {
+        char value[64];
+        const auto formatted = std::to_chars(value, value + sizeof value, mult_,
+                                             std::chars_format::general);
+        const BarContext& context = bar_context();
+        const std::string prefix = context.installed
+            ? "Error on bar " + std::to_string(context.bar_index) + ": " : std::string();
+        throw coded<std::runtime_error>(
+            RunFailureCode::pine_invalid_argument,
+            {{"function", function}, {"argument", "mult"}, {"rule", "must_be_positive"}},
+            prefix + "Invalid value of the 'mult' argument (" +
+                std::string(value, formatted.ptr) + ") in the '" + function +
+                "' function. It must be > 0.");
+    }
+}
+
 // The range of the current bar: the true range against the previous bar's
 // close, na when that close is (ta.tr with handle_na = false) -- the current
 // close is not an input -- or high - low without the true range.
@@ -540,6 +560,7 @@ double KC::range_of(double high, double low) const {
 }
 
 KCResult KC::compute(double src, double high, double low, double close) {
+    check_multiplier("kc");
     KCResult result;
     result.middle = na<double>();
     result.upper = na<double>();
@@ -621,6 +642,7 @@ double BBW::compute(double src) {
 KCW::KCW(int length, double mult, bool use_true_range) : kc_(length, mult, use_true_range) {}
 
 double KCW::compute(double src, double high, double low, double close) {
+    kc_.check_multiplier("kcw");
     auto r = kc_.compute(src, high, low, close);
     // na wherever the bands are (the middle band alone has a value on the
     // first bar), and where the middle is 0.
@@ -817,6 +839,7 @@ BBResult BB::recompute(double src) {
 
 // --- KC ---
 KCResult KC::recompute(double src, double high, double low, double close) {
+    check_multiplier("kc");
     KCResult result;
     result.middle = na<double>();
     result.upper = na<double>();
@@ -869,6 +892,7 @@ double BBW::recompute(double src) {
 
 // --- KCW ---
 double KCW::recompute(double src, double high, double low, double close) {
+    kc_.check_multiplier("kcw");
     auto r = kc_.recompute(src, high, low, close);
     if (is_na(r.middle) || is_na(r.upper) || r.middle == 0) return na<double>();
     return (r.upper - r.lower) / r.middle;

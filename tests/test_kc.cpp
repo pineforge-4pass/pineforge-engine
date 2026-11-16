@@ -1,7 +1,11 @@
 #include <pineforge/ta.hpp>
+#include <pineforge/run_failure.hpp>
 
 #include <cmath>
 #include <cstdio>
+#include <exception>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 using namespace pineforge;
@@ -41,6 +45,71 @@ static double true_range_with_prev_close(double high, double low, double prev_cl
     if (is_na(prev_close)) return na<double>();
     return std::max(high - low,
                     std::max(std::abs(high - prev_close), std::abs(low - prev_close)));
+}
+
+template <class Call>
+static void expect_multiplier_stop(Call&& call, const char* function, const char* value,
+                                   const char* prefix = "") {
+    bool caught = false;
+    try {
+        call();
+    } catch (const std::runtime_error& error) {
+        caught = true;
+        const auto* info = dynamic_cast<const RunFailureInfo*>(&error);
+        CHECK(info != nullptr, "multiplier stop must carry RunFailureInfo");
+        if (info) {
+            CHECK(info->run_failure_code() == RunFailureCode::pine_invalid_argument,
+                  "multiplier stop code");
+            const std::string args = std::string("{\"argument\":\"mult\",\"function\":\"")
+                + function + "\",\"rule\":\"must_be_positive\"}";
+            CHECK(info->run_failure().args != nullptr, "multiplier stop arguments");
+            if (info->run_failure().args)
+                CHECK(*info->run_failure().args == args, "multiplier stop argument contract");
+        }
+        const std::string message = std::string(prefix)
+            + "Invalid value of the 'mult' argument (" + value
+            + ") in the '" + function + "' function. It must be > 0.";
+        CHECK(std::string(error.what()) == message, "multiplier stop text and context");
+    } catch (const std::exception&) {
+        caught = true;
+        CHECK(false, "multiplier stop must be a coded runtime_error");
+    }
+    CHECK(caught, "nonpositive multiplier must stop at execution");
+}
+
+static void test_nonpositive_multipliers() {
+    const struct { double multiplier; const char* value; } cases[] = {
+        {0.0, "0"}, {-0.0, "-0"}, {-0.25, "-0.25"}, {-1.75, "-1.75"}
+    };
+    for (const auto& bad : cases) {
+        for (bool true_range : {false, true}) {
+            for (bool replace : {false, true}) {
+                for (double src : {na<double>(), 101.5}) {
+                    // Construction is separate from the reached execution.
+                    ta::KC kc(1, bad.multiplier, true_range);
+                    ta::KCW kcw(1, bad.multiplier, true_range);
+                    const auto call = [&](auto& object) {
+                        if (replace) (void)object.recompute(src, 104.0, 99.0, 102.0);
+                        else (void)object.compute(src, 104.0, 99.0, 102.0);
+                    };
+                    for (int repeat = 0; repeat < 2; ++repeat) {
+                        expect_multiplier_stop([&] { call(kc); }, "kc", bad.value);
+                        expect_multiplier_stop([&] { call(kcw); }, "kcw", bad.value);
+                        CHECK(!kc.basis_ready() && !kc.range_ready(),
+                              "rejected KC call must not advance smoothing state");
+                        CHECK(!kcw.ready(), "rejected KCW call must not advance smoothing state");
+                    }
+                    auto kc_checkpoint = kc;
+                    auto kcw_checkpoint = kcw;
+                    ta::BarContextScope context(7, 9'000);
+                    expect_multiplier_stop([&] { call(kc_checkpoint); }, "kc", bad.value,
+                                           "Error on bar 7: ");
+                    expect_multiplier_stop([&] { call(kcw_checkpoint); }, "kcw", bad.value,
+                                           "Error on bar 7: ");
+                }
+            }
+        }
+    }
 }
 
 static void test_kc_uses_ema_of_true_range() {
@@ -125,6 +194,7 @@ static void test_kc_recompute_matches_fresh_compute() {
 }
 
 int main() {
+    test_nonpositive_multipliers();
     test_kc_uses_ema_of_true_range();
     test_kc_recompute_matches_fresh_compute();
 

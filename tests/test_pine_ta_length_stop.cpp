@@ -1,10 +1,11 @@
 // Every EMA-family call validates its fixed length at execution, including
-// NA sources, first-use recompute, and stages with no input yet.
+// NA sources, first-use recompute, and stages with no input yet. Keltner
+// calls also reject nonpositive floating multipliers after checking length.
 //
 // This is a unit test of the adapter's existing simple_ta_length contract.
-// Only the EMA text below has retained TV provenance (tv/edge, documented in
-// pine_ta_length.hpp). The other families' text and multi-invalid-argument
-// precedence still need their own TV stops; neither is asserted here.
+// Length-message provenance is documented in pine_ta_length.hpp; the KC zero
+// message is retained below. Other Keltner multiplier cases check the generic
+// argument contract, without claiming independent TradingView measurements.
 // Numerical startup/value expectations belong to the parity population.
 #include <pineforge/na.hpp>
 #include <pineforge/run_failure.hpp>
@@ -129,11 +130,85 @@ void invalid_lengths() {
     }
 }
 
+template <class Call>
+void expect_multiplier_stop(Call&& call, const char* function,
+                            const std::string& message) {
+    bool caught = false;
+    try {
+        call();
+    } catch (const std::runtime_error& error) {
+        caught = true;
+        const auto* info = dynamic_cast<const RunFailureInfo*>(&error);
+        CHECK(info != nullptr);
+        if (info) {
+            CHECK(info->run_failure_code() == RunFailureCode::pine_invalid_argument);
+            const std::string args = std::string("{\"argument\":\"mult\",\"function\":\"")
+                + function + "\",\"rule\":\"must_be_positive\"}";
+            CHECK(info->run_failure().args != nullptr);
+            if (info->run_failure().args) CHECK(*info->run_failure().args == args);
+        }
+        CHECK(std::string(error.what()) == message);
+    } catch (const std::exception&) {
+        caught = true;
+        CHECK(false);
+    }
+    CHECK(caught);
+}
+
+template <class Make>
+void every_multiplier_execution(Make make, const char* function, const char* value) {
+    const std::string message = std::string("Invalid value of the 'mult' argument (")
+        + value + ") in the '" + function + "' function. It must be > 0.";
+    for (bool replace : {false, true}) {
+        for (double src : {na<double>(), 101.5}) {
+            // Keep construction outside the expected runtime stop.
+            auto object = make();
+            const auto call = [&](auto& target) {
+                if (replace) (void)target.recompute(src, 104.0, 99.0, 102.0);
+                else (void)target.compute(src, 104.0, 99.0, 102.0);
+            };
+            for (int repeat = 0; repeat < 2; ++repeat)
+                expect_multiplier_stop([&] { call(object); }, function, message);
+            auto checkpoint = object;
+            ta::BarContextScope context(7, 9'000);
+            expect_multiplier_stop([&] { call(checkpoint); }, function,
+                                   "Error on bar 7: " + message);
+        }
+    }
+}
+
+void invalid_multipliers() {
+    // Retained TradingView error.json SHA256:
+    // 8b608da07a0b860638a408884dc6df744b6b8e800634c35130c88edab7a59764
+    {
+        source::PineKc kc(20, 0.0, true);
+        ta::BarContextScope context(0, 0);
+        expect_multiplier_stop([&] { (void)kc.compute(101.5, 104.0, 99.0, 102.0); },
+            "kc", "Error on bar 0: Invalid value of the 'mult' argument (0) "
+                  "in the 'kc' function. It must be > 0.");
+    }
+
+    const struct { double multiplier; const char* value; } cases[] = {
+        {0.0, "0"}, {-0.0, "-0"}, {-0.25, "-0.25"}, {-1.75, "-1.75"}
+    };
+    for (const auto& bad : cases) {
+        for (bool true_range : {false, true}) {
+            every_multiplier_execution(
+                [=] { return source::PineKc(20, bad.multiplier, true_range); },
+                "kc", bad.value);
+            every_multiplier_execution(
+                [=] { return source::PineKcw(20, bad.multiplier, true_range); },
+                "kcw", bad.value);
+        }
+    }
+}
+
 void positive_lengths() {
     for (int length : {1, 2, 14, 200}) {
         source::PineEma ema(length);
         source::PineTsi tsi(length, length);
-        source::PineKc kc(length, 0.0);
+        // expectation corrected: mult 0.0 -> 0.25, because KC requires mult > 0.
+        source::PineKc kc(length, 0.25);
         source::PineKcw kcw(length, 1.5, false);
         source::PineMacd macd(length, length, length);
         bool stopped = false;
@@ -160,6 +235,7 @@ void positive_lengths() {
 } // namespace
 
 int main() {
+    invalid_multipliers();
     invalid_lengths();
     positive_lengths();
     return failures == 0 && checks > 0 ? 0 : 1;
