@@ -43,7 +43,15 @@ void hash_source_series(BrokerStateHashSink& f, const Series<double>& series) {
 }
 
 void hash_request_delivery(BrokerStateHashSink& f,
-                           const source::PineRequestDelivery& delivery) {
+                           const source::PineRequestDelivery& delivery,
+                           const char* domain) {
+    // Default deliveries add no bytes; the domain distinguishes last from selected.
+    if (!delivery.caller_valid && !delivery.eligible && !delivery.actual_complete
+        && !delivery.publication_present && !delivery.publication
+        && delivery.caller == 0 && delivery.requested_slot == -1
+        && !delivery.replay && delivery.replay_caller == 0 && delivery.replay_slot == -1)
+        return;
+    f.s(domain);
     f.b(delivery.caller_valid);
     f.b(delivery.eligible);
     f.b(delivery.actual_complete);
@@ -59,16 +67,19 @@ void hash_request_delivery(BrokerStateHashSink& f,
 } // namespace
 
 void source::PineRuntimeSecurityCursor::hash_request_state(BrokerStateHashSink& f) const {
-    f.s(kSourceSecurityDomain);
-    f.s("pineforge-source-runtime-request/v1");
-    f.u(request_instance);
-    f.u(caller);
-    f.u(chart_caller);
-    f.u(parent_caller);
-    f.b(request_selection_enabled);
-    f.b(selected_request_available);
-    hash_request_delivery(f, last_request_delivery);
-    hash_request_delivery(f, selected_request_delivery);
+    if (request_instance != 0 || caller != 0 || chart_caller != 0 || parent_caller != 0
+        || request_selection_enabled || selected_request_available) {
+        f.s(kSourceSecurityDomain);
+        f.s("pineforge-source-runtime-request/v1");
+        f.u(request_instance);
+        f.u(caller);
+        f.u(chart_caller);
+        f.u(parent_caller);
+        f.b(request_selection_enabled);
+        f.b(selected_request_available);
+    }
+    hash_request_delivery(f, last_request_delivery, "runtime-last-request/v1");
+    hash_request_delivery(f, selected_request_delivery, "runtime-selected-request/v1");
     // request_owner_ and request_run_ only reject foreign/stale bindings.
     // Neither the host's address nor its monotonic run generation is state
     // identity. The source instance number is reset with the real run.
@@ -1036,9 +1047,15 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     f.b(deferred_boundary_input_.calling_bar_complete);
     f.b(deferred_boundary_input_.all_security_states);
     f.b(deferred_boundary_input_.active);
-    f.u(deferred_boundary_input_.input_caller);
-    f.u(deferred_boundary_input_.release_after_body);
-    f.u(deferred_boundary_input_.chart_caller);
+    // Folded only when set, so unused request state keeps its prior digest.
+    if (deferred_boundary_input_.input_caller != 0
+        || deferred_boundary_input_.release_after_body != 0
+        || deferred_boundary_input_.chart_caller != 0) {
+        f.s("deferred-boundary-request/v1");
+        f.u(deferred_boundary_input_.input_caller);
+        f.u(deferred_boundary_input_.release_after_body);
+        f.u(deferred_boundary_input_.chart_caller);
+    }
 }
 
 namespace {
@@ -1270,14 +1287,21 @@ void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const
                 f.d(held.bar.close); f.d(held.bar.volume); f.i(held.bar.timestamp);
                 f.i(held.next_input_ms);
                 f.b(held.calling_bar_complete);
-                f.u(held.input_caller);
-                f.u(held.release_after_body);
-                f.u(held.chart_caller);
+                if (held.input_caller != 0 || held.release_after_body != 0
+                    || held.chart_caller != 0) {
+                    f.s("deferred-aux-request/v1");
+                    f.u(held.input_caller);
+                    f.u(held.release_after_body);
+                    f.u(held.chart_caller);
+                }
             }
-            f.b(pine.request_selection_enabled);
-            f.b(pine.selected_request_available);
-            hash_request_delivery(f, pine.last_request_delivery);
-            hash_request_delivery(f, pine.selected_request_delivery);
+            if (pine.request_selection_enabled || pine.selected_request_available) {
+                f.s("security-request-selection/v1");
+                f.b(pine.request_selection_enabled);
+                f.b(pine.selected_request_available);
+            }
+            hash_request_delivery(f, pine.last_request_delivery, "security-last-request/v1");
+            hash_request_delivery(f, pine.selected_request_delivery, "security-selected-request/v1");
         }
     }
     if (!request_caller_ids_.empty() || !request_chart_callers_.empty()
