@@ -1261,7 +1261,10 @@ class RealTree(unittest.TestCase):
         # and request delivery stack (each a declaration and its insertions)
         # and the caller key's text, and #810's per-origin completed units of
         # one percentage exit's sizing query. All remain OPEN.
-        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8
+        # expectation corrected: 1626 -> 1627, because U1870 adds one
+        # unreviewed group: #694's withdrawn legs of a named per-entry exit
+        # reissue. It remains OPEN.
+        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 + 1
         self.assertEqual(c['OPEN'], expected_open)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
