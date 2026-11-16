@@ -20,37 +20,6 @@
 
 namespace pineforge {
 
-// --- KahanWindowSum (window_sum.hpp): ta.sma / math.sum arithmetic ---
-// TradingView's sliding-window sum (ta.sma, math.sum): a Kahan-compensated
-// RUNNING sum S with compensation c. On a bar the oldest source leaves and
-// then the new source enters, each through one Kahan step; ta.sma divides S
-// by `length`.
-//
-// What leaves the window is the SOURCE (pinned 2026-11-16). The tape is a
-// deep backtest of BINANCE:BTCUSDT 60 over 2024-01-01..2024-03-01 whose
-// ta.sma(close, 3) starts on the first bar of the range and is exported as
-// its exact double for 958 bars (the first of them na). On every bar checked
-// -- the 39 averages of bars 2..59, which tests/test_ta_sma_price_tape.cpp
-// replays, and eight more around bars 356, 899 and 1436 -- the average is the
-// correctly rounded exact sum of the three sources divided by 3, also on the
-// bars where that is one unit in the last place away from the correctly
-// rounded mean (bar 4 is the first). With every source in one binade each
-// compensation is applied exactly, so the Kahan steps below keep S - c equal
-// to the exact sum of the window's sources and S is its rounding.
-//
-// The rule this replaces let the COMPENSATED addend y = x - c leave instead
-// (fitted 2026-09-05, round 7). Whenever c had been applied exactly, c then
-// stayed behind in S for good: on the tape above the average read one unit in
-// the last place above TradingView's on bars 7 and 8 (the first bar is bar 0)
-// and again on bar 53, where the order quantity sized from it was cut one lot
-// step above TradingView's (45.20609 for 45.20608). The round-7 pulse tapes
-// (OANDA:EURUSD 15; tests/test_ta_sma_window_residual.cpp) read the opposite
-// on the same step: after a pulse an all-zero window keeps 2^-54 and then
-// 2^-55 for 34 bars, and a 0.3 that entered under c = -2^-54 leaves three
-// bars later as 0.30000000000000004. One arithmetic cannot produce both
-// tapes. This file follows the later one; the rows of the September tapes
-// that encode a compensated addend leaving are not reproduced by it.
-//
 // The compensation is the step's EXACT rounding error (pinned 2026-11-16, a
 // second capture): with T = fl(S + y), c is T - (S + y) itself, whatever the
 // magnitudes of S and y. The textbook form (T - S) - y is that number only
@@ -73,70 +42,6 @@ namespace pineforge {
 // is what this file computed before and what the September tape read there).
 // tests/test_ta_sma_exact_compensation.cpp replays the 44 rows.
 //
-// The other pieces are the fits of 2026-09-05 and 2026-09-06 (round-7
-// synthetic pins, scratchpad r7/pins/sma-pulse-*, sma-ident-*: OANDA:EURUSD
-// 15, pulse series of known doubles, lengths 3 and 20, three range starts;
-// division by `length` confirmed against multiplication by its reciprocal,
-// which misses ~3% of those decisions):
-//
-//   * the sub runs before the add on a bar (an add-then-sub ring misses from
-//     bar 5), and a zero source still folds the compensation (y = -c);
-//   * on the bar whose incoming value swallows the carried compensation
-//     (c != 0 and fl(x - c) == x -- the compensation is below half an ulp of
-//     x), the emitted sum is the newest-first direct re-sum of the window
-//     with c reset (block 63 of both tapes drops an 18-unit / 182-unit
-//     residue to exactly 1.1 there; block 69 reads (0.7 + 0.3) + 0.7000000000000001
-//     = 1.7000000000000002, the oldest-first order gives 1.7);
-//   * round 9 (family W, stochRSI probe A on six charts) generalised that
-//     trigger on a full-coverage NYSE:F@15 oracle (pineforge-workflow
-//     famw-f15-kdhi-*: 7,035 bars of math.sum(stoch, 3), k, math.sum(k, 3),
-//     d, every value exported as its exact double): the re-sum fires whenever
-//     the compensation is UNDER-applied to the incoming source, i.e. with
-//     y0 = fl(x - c), |y0 - x| < |c| -- fully swallowed (round 7) or rounded
-//     toward x (c = 1.25 ulp(x) applied as 1 ulp; a 1.5-ulp tie resolved
-//     toward x). An exact subtraction or one rounded away from x continues.
-//     Bit-exact 7,018/7,018 on math.sum(stoch, 3) (round-7 trigger 6,849) and
-//     every k vs d sign / ta.crossover event on the lane (round 7: 24 signs,
-//     12 events wrong). c is 0 after the re-sum;
-//   * round 10 (family W, stage 2: stochRSI probe B on NYSE:F@15, whose
-//     d = sma(k, 3) sits on residue-only plateaus |k| ~ 1e-15 ~ |c|) closed
-//     that pin: the quantity TradingView tests is src + |c|, the compensation's
-//     MAGNITUDE added to the source -- fire iff |fl(x + |c|) - x| < |c|. On
-//     ordinary sources (|c| << |x|) x - c and x + |c| round alike, so the
-//     round-9 form was exact there; on residue-only sources, on sources within
-//     |c| of a power of two, and on negative sources the two forms differ and
-//     TradingView follows x + |c| (its decision flips under negation of the
-//     series because x + |c| is not odd in x). Pinned on 21,509 labelled
-//     decisions: the two NYSE:F@15 stochRSI oracles (probe A's ta.stoch and
-//     probe B's literal stoch: math.sum(stoch, 3) 7,018/7,018 and math.sum(k, 3)
-//     7,016/7,016 each, bit-exact), the stdev sums 7,029/7,029 x2, and 1,003
-//     literal-replay decisions (pineforge-workflow r9-famW-5, lab tv w5-scan*:
-//     dense +-40 ulp neighbourhoods, sign mirrors, binade straddles, window
-//     lengths 3 and 5).
-//
-// The counts in the round-7, 9 and 10 bullets above were measured with the
-// compensated addend leaving the window and with the textbook compensation;
-// none of them has been measured again with the source leaving or with the
-// exact compensation. The pulse capture of 2026-11-16 has no bar on which the
-// re-sum fires, so it neither confirms nor contradicts that rule.
-//
-// The stochRSI consequence as measured in September (round-7 family D, probe
-// A): k = sma(stoch, 3) and d = sma(k, 3) sit on ALGEBRAIC ties whenever stoch
-// plateaus; TradingView resolved each tie by the residue the compensated
-// addends had left in S, and ta.crossover fired on its exact sign. The earlier
-// exact-order window re-sum (round 6) kept every such tie exact and could
-// never fire; a plain running sum fired on the wrong half. With the source
-// leaving the window that residue is no longer carried.
-//
-// Reference (Python, after r7/sma/sma-model.py; err(S, y, T) is T - (S + y)
-// in exact arithmetic):
-//   c_pre = c
-//   if t >= n: y = -x[n] - c; T = S + y; c = err(S, y, T); S = T
-//   y = x - c; T = S + y; c = err(S, y, T); S = T
-//   if c_pre != 0 and |fl(x + |c_pre|) - x| < |c_pre|:
-//       S = (x + x[1]) + ... + x[n-1]; c = 0
-//   sma = S / n
-
 // t - (a + b) for t = fl(a + b): the rounding error of one addition, exactly,
 // for any two finite doubles whose sum does not overflow (Knuth's two-sum, in
 // the sign Kahan's compensation carries; no branch on the magnitudes). While
@@ -190,10 +95,66 @@ void KahanWindowSum::enter(double src, double comp_before) {
     head_ = head_ ? head_ - 1 : window_.size() - 1;
     // The compensation corrects S as the source enters and is not remembered
     // with it: what this slot hands back when it leaves the window is the
-    // source itself (the 2026-11-16 pin above), so S - c stays the sum of the
+    // source itself (the 2026-11-16 source-eviction pin), so S - c stays the sum of the
     // window's sources whenever the compensation was applied exactly.
+    //
+    // The stochRSI consequence as measured in September (round-7 family D, probe
+    // A): k = sma(stoch, 3) and d = sma(k, 3) sit on ALGEBRAIC ties whenever stoch
+    // plateaus; TradingView resolved each tie by the residue the compensated
+    // addends had left in S, and ta.crossover fired on its exact sign. The earlier
+    // exact-order window re-sum (round 6) kept every such tie exact and could
+    // never fire; a plain running sum fired on the wrong half. With the source
+    // leaving the window that residue is no longer carried.
+    //
     window_[head_] = {src, src};
     ++size_;
+    // The other pieces are the fits of 2026-09-05 and 2026-09-06 (round-7
+    // synthetic pins, scratchpad r7/pins/sma-pulse-*, sma-ident-*: OANDA:EURUSD
+    // 15, pulse series of known doubles, lengths 3 and 20, three range starts;
+    // division by `length` confirmed against multiplication by its reciprocal,
+    // which misses ~3% of those decisions):
+    //
+    //   * the sub runs before the add on a bar (an add-then-sub ring misses from
+    //     bar 5), and a zero source still folds the compensation (y = -c);
+    //   * on the bar whose incoming value swallows the carried compensation
+    //     (c != 0 and fl(x - c) == x -- the compensation is below half an ulp of
+    //     x), the emitted sum is the newest-first direct re-sum of the window
+    //     with c reset (block 63 of both tapes drops an 18-unit / 182-unit
+    //     residue to exactly 1.1 there; block 69 reads (0.7 + 0.3) + 0.7000000000000001
+    //     = 1.7000000000000002, the oldest-first order gives 1.7);
+    //   * round 9 (family W, stochRSI probe A on six charts) generalised that
+    //     trigger on a full-coverage NYSE:F@15 oracle (pineforge-workflow
+    //     famw-f15-kdhi-*: 7,035 bars of math.sum(stoch, 3), k, math.sum(k, 3),
+    //     d, every value exported as its exact double): the re-sum fires whenever
+    //     the compensation is UNDER-applied to the incoming source, i.e. with
+    //     y0 = fl(x - c), |y0 - x| < |c| -- fully swallowed (round 7) or rounded
+    //     toward x (c = 1.25 ulp(x) applied as 1 ulp; a 1.5-ulp tie resolved
+    //     toward x). An exact subtraction or one rounded away from x continues.
+    //     Bit-exact 7,018/7,018 on math.sum(stoch, 3) (round-7 trigger 6,849) and
+    //     every k vs d sign / ta.crossover event on the lane (round 7: 24 signs,
+    //     12 events wrong). c is 0 after the re-sum;
+    //   * round 10 (family W, stage 2: stochRSI probe B on NYSE:F@15, whose
+    //     d = sma(k, 3) sits on residue-only plateaus |k| ~ 1e-15 ~ |c|) closed
+    //     that pin: the quantity TradingView tests is src + |c|, the compensation's
+    //     MAGNITUDE added to the source -- fire iff |fl(x + |c|) - x| < |c|. On
+    //     ordinary sources (|c| << |x|) x - c and x + |c| round alike, so the
+    //     round-9 form was exact there; on residue-only sources, on sources within
+    //     |c| of a power of two, and on negative sources the two forms differ and
+    //     TradingView follows x + |c| (its decision flips under negation of the
+    //     series because x + |c| is not odd in x). Pinned on 21,509 labelled
+    //     decisions: the two NYSE:F@15 stochRSI oracles (probe A's ta.stoch and
+    //     probe B's literal stoch: math.sum(stoch, 3) 7,018/7,018 and math.sum(k, 3)
+    //     7,016/7,016 each, bit-exact), the stdev sums 7,029/7,029 x2, and 1,003
+    //     literal-replay decisions (pineforge-workflow r9-famW-5, lab tv w5-scan*:
+    //     dense +-40 ulp neighbourhoods, sign mirrors, binade straddles, window
+    //     lengths 3 and 5).
+    //
+    // The counts in the round-7, 9 and 10 bullets above were measured with the
+    // compensated addend leaving the window and with the textbook compensation;
+    // none of them has been measured again with the source leaving or with the
+    // exact compensation. The pulse capture of 2026-11-16 has no bar on which the
+    // re-sum fires, so it neither confirms nor contradicts that rule.
+    //
     if (comp_before != 0.0) {
         // Round-10 pin (family W, stage 2): the re-sum fires whenever the
         // MAGNITUDE of the carried compensation, ADDED to the incoming source,
@@ -218,6 +179,45 @@ void KahanWindowSum::enter(double src, double comp_before) {
     }
 }
 
+// --- KahanWindowSum (window_sum.hpp): ta.sma / math.sum arithmetic ---
+// TradingView's sliding-window sum (ta.sma, math.sum): a Kahan-compensated
+// RUNNING sum S with compensation c. On a bar the oldest source leaves and
+// then the new source enters, each through one Kahan step; ta.sma divides S
+// by `length`.
+//
+// What leaves the window is the SOURCE (pinned 2026-11-16). The tape is a
+// deep backtest of BINANCE:BTCUSDT 60 over 2024-01-01..2024-03-01 whose
+// ta.sma(close, 3) starts on the first bar of the range and is exported as
+// its exact double for 958 bars (the first of them na). On every bar checked
+// -- the 39 averages of bars 2..59, which tests/test_ta_sma_price_tape.cpp
+// replays, and eight more around bars 356, 899 and 1436 -- the average is the
+// correctly rounded exact sum of the three sources divided by 3, also on the
+// bars where that is one unit in the last place away from the correctly
+// rounded mean (bar 4 is the first). With every source in one binade each
+// compensation is applied exactly, so the Kahan steps below keep S - c equal
+// to the exact sum of the window's sources and S is its rounding.
+//
+// The rule this replaces let the COMPENSATED addend y = x - c leave instead
+// (fitted 2026-09-05, round 7). Whenever c had been applied exactly, c then
+// stayed behind in S for good: on the tape above the average read one unit in
+// the last place above TradingView's on bars 7 and 8 (the first bar is bar 0)
+// and again on bar 53, where the order quantity sized from it was cut one lot
+// step above TradingView's (45.20609 for 45.20608). The round-7 pulse tapes
+// (OANDA:EURUSD 15; tests/test_ta_sma_window_residual.cpp) read the opposite
+// on the same step: after a pulse an all-zero window keeps 2^-54 and then
+// 2^-55 for 34 bars, and a 0.3 that entered under c = -2^-54 leaves three
+// bars later as 0.30000000000000004. One arithmetic cannot produce both
+// tapes. This file follows the later one; the rows of the September tapes
+// that encode a compensated addend leaving are not reproduced by it.
+//
+// Reference (Python, after r7/sma/sma-model.py; err(S, y, T) is T - (S + y)
+// in exact arithmetic):
+//   c_pre = c
+//   if t >= n: y = -x[n] - c; T = S + y; c = err(S, y, T); S = T
+//   y = x - c; T = S + y; c = err(S, y, T); S = T
+//   if c_pre != 0 and |fl(x + |c_pre|) - x| < |c_pre|:
+//       S = (x + x[1]) + ... + x[n-1]; c = 0
+//   sma = S / n
 double KahanWindowSum::push(double src) {
     // Growth is the only throwing step; finish it before changing either
     // the numerical state or the previous bar's rewind record.
