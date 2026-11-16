@@ -334,6 +334,47 @@ private:
     State saved_state_;
 };
 
+// Series-length SMA for one written site with one ordinary update per call.
+// Validate current_length before updating: na/nonfinite, a nonpositive
+// truncated length, or a length above kMaxBarsBack + 1 stops via family errors.
+// A valid call records only non-na sources and selects its current length
+// from the last kMaxBarsBack + 1 non-na observations. Warm-up returns na.
+// Finite fractions truncate toward zero; changing length preserves the ring.
+// recompute replaces the most recent logical update: restore its pre-update
+// head/count and any evicted oldest value, then record only a non-na source.
+// Repeated recompute uses that same checkpoint; unused instances start there.
+// Cache capacity controls residency only. Sum oldest first, with Neumaier
+// double compensation. Finite TV clock/source-na evidence supports sample
+// membership only; numerical order/domains, runtime overrides, whole-history
+// TV parity and repeated/requested-context Pine clocks/rollback are unqualified.
+// Copy/assignment preserve the ring and complete pre-update checkpoint;
+// storage detaches on mutation.
+class SeriesSma {
+public:
+    SeriesSma() : SeriesSma(window_cache_capacity()) {}
+    explicit SeriesSma(WindowCacheCapacity cache) : history_(cache) {}
+    double compute(double source, double current_length);
+    double recompute(double source, double current_length);
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        history_.observe_owned_storage(out);
+    }
+
+private:
+    static constexpr std::size_t kCapacity =
+        static_cast<std::size_t>(SeriesWindowExtreme::kMaxBarsBack) + 1;
+    static std::size_t checked_length(double current_length);
+    void ensure_capacity();
+    double mean(std::size_t length) const;
+
+    ::pineforge::detail::WindowValues<double> history_;
+    std::size_t head_ = 0; // next slot to write; the oldest when full
+    std::size_t count_ = 0;
+    std::size_t pre_update_head_ = 0;
+    std::size_t pre_update_count_ = 0;
+    double pre_update_evicted_ = na<double>();
+    bool current_pushed_ = false;
+};
+
 }  // namespace source
 }  // namespace pineforge
 
