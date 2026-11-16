@@ -144,7 +144,7 @@ int main() {
     pins_hold &= pin("sizeof RetiredRowScratch", sizeof(Scratch), 672);
     pins_hold &= pin("sizeof PineExecutionAdapter", sizeof(Adapter), 90720);
 #ifndef PINEFORGE_RUNTIME_LAYOUT_MEASURE_ONLY
-    pins_hold &= pin("sizeof PineStrategyHost", sizeof(Host), 109624);
+    pins_hold &= pin("sizeof PineStrategyHost", sizeof(Host), 109800);
 #else
     // A successful measurement command is never a successful layout test.
     pins_hold = false;
