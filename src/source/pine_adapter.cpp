@@ -203,6 +203,24 @@ bool finite_positive(double value) noexcept {
     return std::isfinite(value) && value > 0.0;
 }
 
+// With process_orders_on_close, an explicit market entry placed after a
+// same-bar FIFO close of the opposite position keeps that position's size in
+// its own quantity. Default/priced entries, fill recalculation and ANY retain
+// their own rules.
+bool pooc_explicit_close_reversal(const PineStrategyConfig& config,
+                                 const PlacementSnapshot& snapshot) noexcept {
+    return config.process_orders_on_close && !config.calc_on_order_fills
+        && !config.close_entries_rule_any
+        && snapshot.opening && snapshot.family == PineOrderFamily::Entry
+        && snapshot.reverse_to
+        && snapshot.close_first_entry
+        && finite_positive(snapshot.requested_qty)
+        && (snapshot.qty_type < 0
+            || snapshot.qty_type == static_cast<int>(QtyType::FIXED))
+        && std::isnan(snapshot.exit_levels.limit)
+        && std::isnan(snapshot.exit_levels.stop);
+}
+
 bool finite_non_negative(double value) noexcept {
     return std::isfinite(value) && value >= 0.0;
 }
@@ -4861,7 +4879,11 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         || (coof_recalc_active_ && coof_context_.is_terminal_sub_bar);
     snapshot.projection_coof_mid_bar = snapshot.projection_coof_mid_bar
         || (coof_recalc_active_ && !coof_context_.is_terminal_sub_bar);
-    snapshot.projection_tv_carry_qty = opening
+    const bool keep_close_first_carry = opening
+        && pooc_explicit_close_reversal(config_, snapshot)
+        && physical.signed_units != 0.0
+        && ((physical.signed_units > 0.0) != snapshot.is_long);
+    snapshot.projection_tv_carry_qty = opening && !keep_close_first_carry
         ? std::max(0.0, std::abs(physical.signed_units)
                            - pending_same_bar_close_qty_)
         : std::abs(physical.signed_units);
@@ -8802,6 +8824,10 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
     snapshot.reverse_to = reverses || paired_all_in_reentry;
     snapshot.projection_after_close = close_precedes_entry;
     snapshot.close_first_entry = close_first_fact;
+    // cancel() rebuilds its pending total from the transaction queue, which
+    // omits batched FIFO closes. The full opposite-close fact still holds.
+    if (pooc_explicit_close_reversal(config_, snapshot))
+        snapshot.projection_after_close = true;
     snapshot.signal_price_refused = signal_price_refused;
     snapshot.sizing = sizing_snapshot();
     if (finite_positive(coof_market_fill)) {
@@ -12519,6 +12545,7 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
     }
     double reserved_exit_qty = kNaN;
     double pending_parent_units = 0.0;
+    bool pooc_close_reversal_parent = false;
     const auto reservation_point = detail::callback_point(require_host());
     const auto observe_pending_parent = [&](const PlacementSnapshot& parent) {
         if (!reservation_point || !parent.opening
@@ -12529,8 +12556,16 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
             || parent.projection_over_pyramiding) {
             return;
         }
-        const double units = finite_positive(parent.requested_qty)
+        double units = finite_positive(parent.requested_qty)
             ? std::abs(parent.requested_qty) : parent.frozen_market_own_units;
+        if (pooc_explicit_close_reversal(config_, parent)
+            && physical.signed_units != 0.0
+            && ((physical.signed_units > 0.0) != parent.is_long)) {
+            // Reserve against the full opening, including its retained carry,
+            // before a percentage exit freezes its pending-parent claim.
+            units += std::abs(physical.signed_units);
+            pooc_close_reversal_parent = true;
+        }
         if (finite_positive(units)) pending_parent_units += units;
     };
     for (const auto& handle : live_handles_) {
@@ -12739,6 +12774,9 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         compat::pine::historical_cascade_reach(exit_birth_reach);
     const bool pooc_short_tick_scope = source_point
         && config_.process_orders_on_close && !config_.calc_on_order_fills
+        // This bracket closes its new parent, not the opposite short that
+        // remains physical until the earlier FIFO close settles.
+        && !(pooc_close_reversal_parent && parent_long)
         && modeled_input() && source_point->decision.sub_count <= 1
         && physical.signed_units < 0.0 && physical.lot_count == 1
         && position_open_script_bar_ < source_point->decision.script_bar_open_ms
@@ -17676,13 +17714,15 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         && ((source.projection_position_side
                 == static_cast<std::int32_t>(PositionSide::LONG)) != source.is_long)
         && (finite_positive(source.exit_levels.stop)
-            || finite_positive(source.exit_levels.limit))
+            || finite_positive(source.exit_levels.limit)
+            || pooc_explicit_close_reversal(config_, source))
         && finite_positive(source.projection_tv_carry_qty)
         && result.units && finite_positive(*result.units);
     if (deferred_flip_from_flat) {
         // ab9714be pine_orders.cpp:676-696: an opposite priced entry
         // which outlives the position it was placed against opens its own
-        // units plus the captured carried side.
+        // units plus the captured carried side. The POOC explicit market
+        // close-first case retains that same addend.
         result.units = *result.units + source.projection_tv_carry_qty;
         result.shape = native_order::OpeningShape::Transact;
     }

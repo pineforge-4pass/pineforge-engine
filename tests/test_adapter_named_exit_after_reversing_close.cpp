@@ -1,6 +1,7 @@
 // A pending close must not consume a new entry's exit-sizing basis.
-// Expected quantities come from the order inputs. Each reversal has a
-// no-close control; the old trade proves that the close was executed.
+// With process_orders_on_close, an explicit close-first reversal opens the
+// requested + held quantity. Each reversal keeps its no-close control at the
+// requested size; the old trade proves that the close was executed.
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -73,6 +74,15 @@ struct Scenario {
         return process_orders_on_close ? bar.close : bar.open;
     }
 };
+
+double expected_open_qty(const Scenario& spec, bool with_close) {
+    // expectation corrected: requested -> requested + held for the explicit
+    // POOC close-first variant (TradingView sizes the reversal when placed).
+    // Every case keeps calc_on_order_fills=false from PineStrategyConfig.
+    const bool carry = with_close && spec.process_orders_on_close
+        && !spec.default_quantity;
+    return spec.new_qty + (carry ? std::abs(spec.old_qty) : 0.0);
+}
 
 std::vector<Bar> feed(bool new_is_long, bool process_orders_on_close) {
     // Prices are binary-exact multiples of 0.25 on the 0.01 price grid.
@@ -274,12 +284,18 @@ void check_old_close(const Scenario& spec, const std::vector<Bar>& bars,
     CHECK(old_rows == 1);
 }
 
-void check_exits(const Scenario& spec, const std::vector<Bar>& bars, const Observed& got) {
+void check_exits(const Scenario& spec, const std::vector<Bar>& bars,
+                 const Observed& got, bool with_close) {
     CHECK(got.error.empty());
     CHECK(got.units_at_signal == (spec.old_is_long() ? 1.0 : -1.0) * spec.old_qty);
+    //only the scoped variant adds held size.
+    const double expected_qty = expected_open_qty(spec, with_close);
+    //percentage exits use the full opening.
     const double expected_tp = std::isfinite(spec.absolute_tp_qty)
-        ? spec.absolute_tp_qty : spec.new_qty * kTpPercent / 100.0;
-    const double remaining = spec.new_qty - expected_tp;
+        ? spec.absolute_tp_qty : expected_qty * kTpPercent / 100.0;
+    //the residual includes retained carry.
+    const double remaining = expected_qty - expected_tp;
+    //a full SL covers that residual.
     const double expected_sl = spec.limit_only ? 0.0 : remaining;
     const double entry_price = spec.fill_price(bars, kSignalBar);
     if (!spec.process_orders_on_close) {
@@ -317,11 +333,16 @@ void check_exits(const Scenario& spec, const std::vector<Bar>& bars, const Obser
     }
     CHECK(tp_rows == 1);
     CHECK(sl_rows == (spec.limit_only ? 0 : 1));
+    //TP quantity follows the new full basis.
     CHECK(tp_qty == expected_tp);
+    //SL covers the enlarged residual.
     CHECK(sl_qty == expected_sl);
     if (spec.limit_only) {
-        CHECK(tp_qty + remaining == spec.new_qty);
+        //closed + open = requested + held.
+        CHECK(tp_qty + remaining == expected_qty);
+        //retain the enlarged signed residual.
         CHECK(got.units_after_stop == spec.direction() * remaining);
+        //the same residual remains at the end.
         CHECK(got.final_units == spec.direction() * remaining);
         CHECK(got.rows.size() == got.closed_trades.size() + 1);
         int open_rows = 0;
@@ -332,14 +353,17 @@ void check_exits(const Scenario& spec, const std::vector<Bar>& bars, const Obser
             CHECK(row.entry_time == bars[spec.fill_bar(kSignalBar)].timestamp);
             CHECK(row.entry_price == entry_price);
             CHECK(row.is_long == spec.new_is_long);
+            //the open row owns the residual.
             CHECK(row.qty == remaining);
             CHECK(row.exit_time == bars.back().timestamp);
             CHECK(row.exit_price == bars.back().close);
+            //mark PnL on the enlarged residual.
             CHECK(row.pnl == spec.direction() * (bars.back().close - entry_price) * remaining);
         }
         CHECK(open_rows == 1);
     } else {
-        CHECK(tp_qty + sl_qty == spec.new_qty);
+        //exits cover requested + held.
+        CHECK(tp_qty + sl_qty == expected_qty);
         CHECK(got.units_after_stop == 0.0);
         CHECK(got.final_units == 0.0);
         CHECK(got.rows.size() == got.closed_trades.size());
@@ -347,21 +371,36 @@ void check_exits(const Scenario& spec, const std::vector<Bar>& bars, const Obser
     }
 }
 
-void compare(const Observed& with_close, const Observed& control) {
+void compare(const Scenario& spec, const std::vector<Bar>& bars,
+             const Observed& with_close, const Observed& control) {
     CHECK(with_close.rows.size() == control.rows.size());
     const std::size_t n = with_close.rows.size() < control.rows.size()
         ? with_close.rows.size() : control.rows.size();
     // Compare the same report projection as the bracket regression tests.
     // Physical entry incarnation numbering can differ between the streams.
+    //controls retain their original size.
+    const double carried = expected_open_qty(spec, true) - expected_open_qty(spec, false);
     for (std::size_t i = 0; i < n; ++i) {
         const Row& left = with_close.rows[i];
         const Row& right = control.rows[i];
+        double quantity_delta = 0.0;
+        if (right.entry_time == bars[spec.fill_bar(kSignalBar)].timestamp) {
+            //split carry by the exit inputs.
+            const double tp_delta = std::isfinite(spec.absolute_tp_qty)
+                ? 0.0 : carried * kTpPercent / 100.0;
+            quantity_delta = right.exit_time == bars[spec.tp_bar()].timestamp
+                ? tp_delta : carried - tp_delta;
+        }
         CHECK(left.entry_time == right.entry_time);
         CHECK(left.exit_time == right.exit_time);
         CHECK(left.entry_price == right.entry_price);
         CHECK(left.exit_price == right.exit_price);
-        CHECK(left.qty == right.qty);
-        CHECK(left.pnl == right.pnl);
+        //only the close-first explicit
+        // POOC variant adds the independently derived carry to control size.
+        CHECK(left.qty == right.qty + quantity_delta);
+        //the extra units earn the same move.
+        CHECK(left.pnl == right.pnl
+            + spec.direction() * (right.exit_price - right.entry_price) * quantity_delta);
         CHECK(left.is_long == right.is_long);
         CHECK(left.open_at_end == right.open_at_end);
     }
@@ -399,17 +438,17 @@ void run_case(const Scenario& spec) {
     const auto control = observe(spec, bars, false);
     variant = "control";
     const int control_before = failures;
-    check_exits(spec, bars, control);
+    check_exits(spec, bars, control, false);
     check_old_close(spec, bars, control, false);
     if (failures > control_before) dump(variant, control);
     const auto with_close = observe(spec, bars, true);
     variant = "with-close";
     const int with_close_before = failures;
-    check_exits(spec, bars, with_close);
+    check_exits(spec, bars, with_close, true);
     check_old_close(spec, bars, with_close, true);
     if (failures > with_close_before) dump(variant, with_close);
     variant = "differential";
-    compare(with_close, control);
+    compare(spec, bars, with_close, control);
 }
 
 }  // namespace

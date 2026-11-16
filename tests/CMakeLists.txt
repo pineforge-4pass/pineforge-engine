@@ -8678,3 +8678,8 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     pineforge_add_unit_test(test_named_percent_trail_ownership)
     pineforge_add_unit_test(test_named_relative_exit_controls)
 endif()
+
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_pooc_explicit_close_reversal_qty)
+    pineforge_add_unit_test(test_pooc_explicit_close_reversal_qty)
+endif()
