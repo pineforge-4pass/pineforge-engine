@@ -2179,6 +2179,10 @@ private:
     struct PendingRelativeExit {
         SourceId exit_id;
         SourceId from_entry;
+        double limit_price = std::numeric_limits<double>::quiet_NaN();
+        double stop_price = std::numeric_limits<double>::quiet_NaN();
+        // Named exits retain the source-call cutoff across delayed fills.
+        std::uint64_t command_sequence = 0;
         double trail_points = std::numeric_limits<double>::quiet_NaN();
         double trail_offset = std::numeric_limits<double>::quiet_NaN();
         double trail_price = std::numeric_limits<double>::quiet_NaN();
@@ -2224,10 +2228,9 @@ private:
         double installed_level = std::numeric_limits<double>::quiet_NaN();
     };
 
-    // A from_entry "" exit with relative legs that covers the position entry
-    // by entry (ExitBindingRuleSwitches::global_exit_per_entry_levels): kept
-    // from the moment the position it stands on holds a second entry until the
-    // book goes flat. `children` are the entries in fill order, each with the
+    // Relative brackets over the selected entries. Global exits join this
+    // representation when a second entry opens; named exits also retain
+    // their selector and source-call cutoff. `children` are in fill order, with the
     // fill price its bracket's levels come from and the quantity it closes;
     // `consumed` once a leg of its bracket filled (TradingView never gives that
     // entry another one).
@@ -2239,6 +2242,8 @@ private:
     };
     struct PerEntryExit {
         SourceId exit_id;
+        SourceId from_entry;
+        std::uint64_t command_sequence = 0;
         std::int64_t cycle = 0;
         bool long_side = true;
         double profit_ticks = std::numeric_limits<double>::quiet_NaN();
@@ -2744,12 +2749,12 @@ private:
     // A from_entry "" exit without a quantity that is the book's only exit:
     // it closes its percentage of the position it fills against.
     bool fill_time_global_exit(const PlacementSnapshot&) const;
-    // A held global exit with relative legs, entry by entry
-    // (ExitBindingRuleSwitches::global_exit_per_entry_levels).
+    // Relative brackets over selected entries in the ordinary FIFO path.
     bool per_entry_exit_scope() const;
-    detail::ExitScratchRows<PerEntryExitChild> per_entry_open_entries(bool long_side) const;
+    detail::ExitScratchRows<PerEntryExitChild> per_entry_open_entries(
+        bool long_side, const SourceId& from_entry) const;
     detail::ExitScratchRows<native_order::RequestHandle> per_entry_child_legs(
-        const SourceId& exit_id, std::uint64_t origin) const;
+        const SourceId& exit_id, std::uint64_t origin, const SourceId& from_entry) const;
     bool per_entry_exit_call(const SourceId& exit_id, const SourceId& from_entry, double limit,
                              double stop, double trail_points, double trail_offset,
                              double trail_price, double qty_percent, const std::string& comment,
