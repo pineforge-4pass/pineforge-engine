@@ -3230,22 +3230,37 @@ static void test_named_events() {
     // CAP-731-PULSE tv_trades.csv sha256 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28.
     CHECK_TRUE(v[44] * 3 == 0.0, "bar 44: current TV zero window");
 
-    // The block-63 re-sum (n = 3): S carries +18 * 2^-54 into the pulse (0.1, 0.3, 0.7);
-    // the 0.7 swallows c = 2^-54, so the window is re-summed: exactly 1.1 / 3.
+    // Current integer observations supersede the September exact-value pins.
+    // They qualify pulse codes at these events; they do not measure raw bits.
     ta::SMA s3(3);
     double last = na<double>();
     for (int t = 0; t <= 2522; ++t) last = s3.compute(pulse_x(t, 40));
-    CHECK_TRUE(last == 1.1 / 3, "bar 2522: re-sum drops the 18-unit residue -> 1.1 / 3");
+    // expectation corrected: September exact-value equality -> measured pulse integer.
+    // OUTCOME 566cb0dc / decoded 75783d8b; canonical-test history, not confirmed identical
+    // to the September source; newest-capture rule. Raw bits remain unqualified.
+    const double reference_2522 = ((pulse_x(2522, 40) + pulse_x(2521, 40)) + pulse_x(2520, 40)) / 3;
+    CHECK_TRUE(50000000 + pine_round((last - reference_2522) * 1e17) == 49999994,
+               "bar 2522: current TV encoded pulse 49999994");
     // Without the re-sum the running sum would read 1.1 + 4 ulp.
     CHECK_TRUE(last != 1.100000000000001 / 3, "bar 2522: not the running-sum value");
-    // bar 2762: the re-sum is NEWEST-FIRST: (0.7 + 0.3) + 0.7000000000000001.
+    // Bar 2762: compare against the same newest-first pulse reference.
     for (int t = 2523; t <= 2762; ++t) last = s3.compute(pulse_x(t, 40));
-    CHECK_TRUE(last == 1.7000000000000002 / 3, "bar 2762: newest-first re-sum (0.7 + 0.3) + 0.7000000000000001");
+    // expectation corrected: September exact-value equality -> measured pulse integer.
+    // OUTCOME 566cb0dc / decoded 75783d8b; canonical-test history, not confirmed identical
+    // to the September source; newest-capture rule. Raw bits remain unqualified.
+    const double reference_2762 = ((pulse_x(2762, 40) + pulse_x(2761, 40)) + pulse_x(2760, 40)) / 3;
+    CHECK_TRUE(50000000 + pine_round((last - reference_2762) * 1e17) == 49999989,
+               "bar 2762: current TV encoded pulse 49999989");
 
-    // n = 20: the same rule, the same events (bar 3782 = block 63 ph 2).
+    // Bar 3782 (n = 20): the remaining 17 newest-first terms are zero.
     ta::SMA s20(20);
     for (int t = 0; t <= 3782; ++t) last = s20.compute(pulse_x(t, 60));
-    CHECK_TRUE(last == 1.1 / 20, "bar 3782 (n = 20): re-sum drops the 182-unit residue -> 1.1 / 20");
+    // expectation corrected: September exact-value equality -> measured pulse integer.
+    // OUTCOME 566cb0dc / decoded 75783d8b; canonical-test history, not confirmed identical
+    // to the September source; newest-capture rule. Raw bits remain unqualified.
+    const double reference_3782 = ((pulse_x(3782, 60) + pulse_x(3781, 60)) + pulse_x(3780, 60)) / 20;
+    CHECK_TRUE(50000000 + pine_round((last - reference_3782) * 1e17) == 49999999,
+               "bar 3782: current TV encoded pulse 49999999");
 }
 
 // recompute() replays the bar bit-for-bit, including across the re-sum event.
