@@ -14,52 +14,36 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <limits>
 #include <numeric>
 #include <string>
 #include <vector>
 
 namespace pineforge {
 
-// The compensation is the step's EXACT rounding error (pinned 2026-11-16, a
-// second capture): with T = fl(S + y), c is T - (S + y) itself, whatever the
-// magnitudes of S and y. The textbook form (T - S) - y is that number only
-// while T - S is exact, which is assured only when S is at least as large as
-// y in exponent. When a larger source enters a smaller sum that subtraction
-// can round, and the textbook c is then off by what it lost: 0.1 then 0.3
-// gives 2^-54 where the sum 0.4 is 2^-55 above 0.1 + 0.3. The capture is the
-// start of the round-7 pulse series taken again on the chart of the September
-// tapes, OANDA:EURUSD 15 from 2025-04-01 (script sha256
-// 276834fe7b2c2f7c18888e7bf69469fe6aa8bcfe85a7961e0b2d419543b26443, trade
-// list sha256
-// 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28): 44 closed
-// trades carry ta.sma(x, 3) on bars 2..45 of 0.1, 0.3, 0, zeros to bar 39,
-// then 0.2, 0.3, 0, zeros. Bar 3, whose window is (0.3, 0, 0), reads exactly
-// 0.3 / 3 -- the sum left when 0.1 leaves is 0.3 itself -- and every all-zero
-// window the capture exports at full scale (bars 5..39 and 45) reads exactly
-// 0; on bars 5..39 the September tape kept 2^-54 and then 2^-55. With the
-// textbook c the zero of bar 2 folds 2^-54 into S and bar 3 lands one unit in
-// the last place of S below 0.3 (0.09999999999999998 for the average, which
-// is what this file computed before and what the September tape read there).
-// tests/test_ta_sma_exact_compensation.cpp replays the 44 rows.
-//
-// t - (a + b) for t = fl(a + b): the rounding error of one addition, exactly,
-// for any two finite doubles whose sum does not overflow (Knuth's two-sum, in
-// the sign Kahan's compensation carries; no branch on the magnitudes). While
-// t - a is exact the first term is zero and the second is the textbook
-// (t - a) - b, so every step that form got right keeps its bits, the sign of
-// a zero included; the first term is what that form loses when a larger b
-// enters a smaller a.
-static double rounding_error(double a, double b, double t) noexcept {
-    const double b_part = t - a;        // what t holds of b
-    const double a_part = t - b_part;   // what t holds of a
-    return (a_part - a) + (b_part - b);
+// The index of the highest set bit of a non-zero word.
+static int highest_bit(std::uint64_t word) noexcept {
+    int bit = 0;
+    for (int step = 32; step != 0; step /= 2) {
+        if ((word >> step) != 0) {
+            word >>= step;
+            bit += step;
+        }
+    }
+    return bit;
 }
 
 KahanWindowSum::KahanWindowSum(int length)
-    : length_(length), count_(0), sum_(0.0), comp_(0.0),
-      saved_sum_(0.0), saved_comp_(0.0), saved_count_(0),
-      saved_evicted_value_(na<double>()), saved_evicted_addend_(na<double>()),
-      saved_pushed_(false) {}
+    : length_(length), count_(0), sum_(0.0),
+      saved_sum_(0.0), saved_count_(0), saved_evicted_value_(0.0),
+      saved_evicted_(false), saved_pushed_(false) {
+    static_assert(std::numeric_limits<double>::is_iec559
+                      && std::numeric_limits<double>::digits == 53
+                      && sizeof(double) == sizeof(std::uint64_t),
+                  "the window sum reads the fields of an IEEE binary64");
+}
 
 void KahanWindowSum::ensure_room() {
     const auto limit = static_cast<std::size_t>(length_);
@@ -75,172 +59,144 @@ void KahanWindowSum::ensure_room() {
     head_ = 0;
 }
 
-void KahanWindowSum::kahan_add(double v) {
-    double y = v - comp_;
-    double t = sum_ + y;
-    comp_ = rounding_error(sum_, y, t);
-    sum_ = t;
-}
-
-// The source enters the sum (its evicted predecessor already left), then the
-// swallowed-compensation re-sum. `comp_before` is c as the bar found it --
-// the rule reads the compensation carried INTO the bar, not the one left by
-// the eviction (pinned: the block-63 re-sum happens although the eviction of
-// a zero addend had just folded c to 0).
-void KahanWindowSum::enter(double src, double comp_before) {
-    double y = src - comp_;
-    double t = sum_ + y;
-    comp_ = rounding_error(sum_, y, t);
-    sum_ = t;
-    head_ = head_ ? head_ - 1 : window_.size() - 1;
-    // The compensation corrects S as the source enters and is not remembered
-    // with it: what this slot hands back when it leaves the window is the
-    // source itself (the 2026-11-16 source-eviction pin), so S - c stays the sum of the
-    // window's sources whenever the compensation was applied exactly.
-    //
-    // The stochRSI consequence as measured in September (round-7 family D, probe
-    // A): k = sma(stoch, 3) and d = sma(k, 3) sit on ALGEBRAIC ties whenever stoch
-    // plateaus; TradingView resolved each tie by the residue the compensated
-    // addends had left in S, and ta.crossover fired on its exact sign. The earlier
-    // exact-order window re-sum (round 6) kept every such tie exact and could
-    // never fire; a plain running sum fired on the wrong half. With the source
-    // leaving the window that residue is no longer carried.
-    //
-    window_[head_] = {src, src};
-    ++size_;
-    // The other pieces are the fits of 2026-09-05 and 2026-09-06 (round-7
-    // synthetic pins, scratchpad r7/pins/sma-pulse-*, sma-ident-*: OANDA:EURUSD
-    // 15, pulse series of known doubles, lengths 3 and 20, three range starts;
-    // division by `length` confirmed against multiplication by its reciprocal,
-    // which misses ~3% of those decisions):
-    //
-    //   * the sub runs before the add on a bar (an add-then-sub ring misses from
-    //     bar 5), and a zero source still folds the compensation (y = -c);
-    //   * on the bar whose incoming value swallows the carried compensation
-    //     (c != 0 and fl(x - c) == x -- the compensation is below half an ulp of
-    //     x), the emitted sum is the newest-first direct re-sum of the window
-    //     with c reset (block 63 of both tapes drops an 18-unit / 182-unit
-    //     residue to exactly 1.1 there; block 69 reads (0.7 + 0.3) + 0.7000000000000001
-    //     = 1.7000000000000002, the oldest-first order gives 1.7);
-    //   * round 9 (family W, stochRSI probe A on six charts) generalised that
-    //     trigger on a full-coverage NYSE:F@15 oracle (pineforge-workflow
-    //     famw-f15-kdhi-*: 7,035 bars of math.sum(stoch, 3), k, math.sum(k, 3),
-    //     d, every value exported as its exact double): the re-sum fires whenever
-    //     the compensation is UNDER-applied to the incoming source, i.e. with
-    //     y0 = fl(x - c), |y0 - x| < |c| -- fully swallowed (round 7) or rounded
-    //     toward x (c = 1.25 ulp(x) applied as 1 ulp; a 1.5-ulp tie resolved
-    //     toward x). An exact subtraction or one rounded away from x continues.
-    //     Bit-exact 7,018/7,018 on math.sum(stoch, 3) (round-7 trigger 6,849) and
-    //     every k vs d sign / ta.crossover event on the lane (round 7: 24 signs,
-    //     12 events wrong). c is 0 after the re-sum;
-    //   * round 10 (family W, stage 2: stochRSI probe B on NYSE:F@15, whose
-    //     d = sma(k, 3) sits on residue-only plateaus |k| ~ 1e-15 ~ |c|) closed
-    //     that pin: the quantity TradingView tests is src + |c|, the compensation's
-    //     MAGNITUDE added to the source -- fire iff |fl(x + |c|) - x| < |c|. On
-    //     ordinary sources (|c| << |x|) x - c and x + |c| round alike, so the
-    //     round-9 form was exact there; on residue-only sources, on sources within
-    //     |c| of a power of two, and on negative sources the two forms differ and
-    //     TradingView follows x + |c| (its decision flips under negation of the
-    //     series because x + |c| is not odd in x). Pinned on 21,509 labelled
-    //     decisions: the two NYSE:F@15 stochRSI oracles (probe A's ta.stoch and
-    //     probe B's literal stoch: math.sum(stoch, 3) 7,018/7,018 and math.sum(k, 3)
-    //     7,016/7,016 each, bit-exact), the stdev sums 7,029/7,029 x2, and 1,003
-    //     literal-replay decisions (pineforge-workflow r9-famW-5, lab tv w5-scan*:
-    //     dense +-40 ulp neighbourhoods, sign mirrors, binade straddles, window
-    //     lengths 3 and 5).
-    //
-    // The counts in the round-7, 9 and 10 bullets above were measured with the
-    // compensated addend leaving the window and with the textbook compensation;
-    // none of them has been measured again with the source leaving or with the
-    // exact compensation. The pulse capture of 2026-11-16 has no bar on which the
-    // re-sum fires, so it neither confirms nor contradicts that rule.
-    //
-    if (comp_before != 0.0) {
-        // Round-10 pin (family W, stage 2): the re-sum fires whenever the
-        // MAGNITUDE of the carried compensation, ADDED to the incoming source,
-        // is under-applied -- fl(src + |c|) landed closer to src than the exact
-        // src + |c| would have (fully swallowed, the round-7 case; rounded
-        // toward src, the round-9 case; or, on residue-only sources, the
-        // rounding of src + |c| that the src - c form does not see). An exact
-        // add, or one that rounds away from src, continues. Note the sign:
-        // TradingView tests |c| added to src, whatever the sign of c, while the
-        // arithmetic itself subtracts c -- the two agree except when src - c
-        // and src + |c| round differently (residue-only sources, sources within
-        // |c| of a power of two, negative sources).
-        const double z = src + std::fabs(comp_before);
-        if (std::fabs(z - src) < std::fabs(comp_before)) {
-            double total = 0.0;
-            for (std::size_t i = 0; i < size_; ++i) {   // newest first
-                total += window_[index(i)].value;
-            }
-            sum_ = total;
-            comp_ = 0.0;
+// Adds `word` to the exact sum at `limb`, or subtracts it, and lets the carry
+// or borrow run into the higher limbs. The integer is two's complement, so
+// what leaves the top limb is dropped.
+void KahanWindowSum::carry(std::size_t limb, std::uint64_t word, bool subtract) noexcept {
+    for (; word != 0 && limb < limbs; ++limb) {
+        const std::uint64_t before = exact_[limb];
+        if (subtract) {
+            exact_[limb] = before - word;
+            word = before < word ? 1 : 0;
+        } else {
+            exact_[limb] = before + word;
+            word = exact_[limb] < before ? 1 : 0;
         }
     }
 }
 
-// --- KahanWindowSum (window_sum.hpp): ta.sma / math.sum arithmetic ---
-// TradingView's sliding-window sum (ta.sma, math.sum): a Kahan-compensated
-// RUNNING sum S with compensation c. On a bar the oldest source leaves and
-// then the new source enters, each through one Kahan step; ta.sma divides S
-// by `length`.
+// A source enters the exact sum, or leaves it (`leaving`). A finite double is
+// its 53-bit significand times 2^(shift - 1074), where shift is its biased
+// exponent less one (zero for a subnormal), so it covers at most two limbs
+// from bit `shift` up. Leaving is the exact inverse of entering: the sum does
+// not depend on the order in which the window was filled or rewound.
+void KahanWindowSum::account(double src, bool leaving) noexcept {
+    std::uint64_t bits = 0;
+    std::memcpy(&bits, &src, sizeof bits);
+    const bool negative = (bits >> 63) != 0;
+    const unsigned exponent = static_cast<unsigned>((bits >> 52) & 0x7ffu);
+    std::uint64_t significand = bits & ((std::uint64_t{1} << 52) - 1);
+    if (exponent == 0x7ffu) {
+        int& held = significand != 0 ? nans_
+            : negative ? negative_infinities_ : positive_infinities_;
+        held += leaving ? -1 : 1;
+        return;
+    }
+    if (exponent != 0) significand |= std::uint64_t{1} << 52;
+    const unsigned shift = exponent == 0 ? 0 : exponent - 1;
+    const std::size_t limb = shift / 64;
+    const unsigned offset = shift % 64;
+    // A negative source entering takes its magnitude out of the sum.
+    const bool subtract = negative != leaving;
+    carry(limb, significand << offset, subtract);
+    if (offset != 0) carry(limb + 1, significand >> (64 - offset), subtract);
+}
+
+// The window's exact sum as a double: one rounding to nearest, ties to even,
+// overflowing to an infinity as an IEEE addition does. A NaN in the window,
+// or infinities of both signs, make the sum NaN; infinities of one sign make
+// it that infinity. An exact zero is +0.
+double KahanWindowSum::rounded() const noexcept {
+    if (nans_ != 0 || (positive_infinities_ != 0 && negative_infinities_ != 0)) {
+        return na<double>();
+    }
+    const double infinity = std::numeric_limits<double>::infinity();
+    if (positive_infinities_ != 0) return infinity;
+    if (negative_infinities_ != 0) return -infinity;
+
+    const bool negative = (exact_[limbs - 1] >> 63) != 0;
+    std::array<std::uint64_t, limbs> magnitude = exact_;
+    if (negative) {
+        // Two's-complement negation: invert every limb and add one.
+        std::uint64_t carry_in = 1;
+        for (std::uint64_t& limb : magnitude) {
+            limb = ~limb + carry_in;
+            carry_in = (carry_in != 0 && limb == 0) ? 1 : 0;
+        }
+    }
+    std::size_t top = limbs;
+    while (top != 0 && magnitude[top - 1] == 0) --top;
+    if (top == 0) return 0.0;
+
+    // Bit k of the magnitude is worth 2^(k - 1074). Below 2^53 units the bit
+    // pattern of the double is the integer itself: a subnormal, or the first
+    // normal binade, whose exponent field is bit 52.
+    int highest = static_cast<int>((top - 1) * 64) + highest_bit(magnitude[top - 1]);
+    std::uint64_t bits = magnitude[0];
+    if (highest > 52) {
+        // The 53 bits from the highest set bit down are the significand; the
+        // `dropped` bits below them round it, a half going to the even side.
+        const int dropped = highest - 52;
+        const std::size_t limb = static_cast<std::size_t>(dropped) / 64;
+        const unsigned offset = static_cast<unsigned>(dropped) % 64;
+        std::uint64_t significand = magnitude[limb] >> offset;
+        if (offset != 0 && limb + 1 < limbs) {
+            significand |= magnitude[limb + 1] << (64 - offset);
+        }
+        const std::size_t half_limb = static_cast<std::size_t>(dropped - 1) / 64;
+        const unsigned half_offset = static_cast<unsigned>(dropped - 1) % 64;
+        const bool half = ((magnitude[half_limb] >> half_offset) & 1) != 0;
+        bool below_half =
+            (magnitude[half_limb] & ((std::uint64_t{1} << half_offset) - 1)) != 0;
+        for (std::size_t i = 0; i < half_limb && !below_half; ++i) {
+            below_half = magnitude[i] != 0;
+        }
+        if (half && (below_half || (significand & 1) != 0)) ++significand;
+        if (significand == (std::uint64_t{1} << 53)) {
+            significand >>= 1;
+            ++highest;
+        }
+        // A double whose biased exponent is E has its highest bit at E + 51.
+        const int exponent = highest - 51;
+        if (exponent >= 0x7ff) return negative ? -infinity : infinity;
+        bits = (static_cast<std::uint64_t>(exponent) << 52)
+            | (significand & ((std::uint64_t{1} << 52) - 1));
+    }
+    if (negative) bits |= std::uint64_t{1} << 63;
+    double result = 0.0;
+    std::memcpy(&result, &bits, sizeof result);
+    return result;
+}
+
+// One bar of ta.sma / math.sum: once the window is full its oldest source
+// leaves, the new source enters, and the exact sum is rounded once.
 //
-// What leaves the window is the SOURCE (pinned 2026-11-16). The tape is a
-// deep backtest of BINANCE:BTCUSDT 60 over 2024-01-01..2024-03-01 whose
-// ta.sma(close, 3) starts on the first bar of the range and is exported as
-// its exact double for 958 bars (the first of them na). On every bar checked
-// -- the 39 averages of bars 2..59, which tests/test_ta_sma_price_tape.cpp
-// replays, and eight more around bars 356, 899 and 1436 -- the average is the
-// correctly rounded exact sum of the three sources divided by 3, also on the
-// bars where that is one unit in the last place away from the correctly
-// rounded mean (bar 4 is the first). With every source in one binade each
-// compensation is applied exactly, so the Kahan steps below keep S - c equal
-// to the exact sum of the window's sources and S is its rounding.
-//
-// The rule this replaces let the COMPENSATED addend y = x - c leave instead
-// (fitted 2026-09-05, round 7). Whenever c had been applied exactly, c then
-// stayed behind in S for good: on the tape above the average read one unit in
-// the last place above TradingView's on bars 7 and 8 (the first bar is bar 0)
-// and again on bar 53, where the order quantity sized from it was cut one lot
-// step above TradingView's (45.20609 for 45.20608). The round-7 pulse tapes
-// (OANDA:EURUSD 15; tests/test_ta_sma_window_residual.cpp) read the opposite
-// on the same step: after a pulse an all-zero window keeps 2^-54 and then
-// 2^-55 for 34 bars, and a 0.3 that entered under c = -2^-54 leaves three
-// bars later as 0.30000000000000004. One arithmetic cannot produce both
-// tapes. This file follows the later one; the rows of the September tapes
-// that encode a compensated addend leaving are not reproduced by it.
-//
-// Reference (Python, after r7/sma/sma-model.py; err(S, y, T) is T - (S + y)
-// in exact arithmetic):
-//   c_pre = c
-//   if t >= n: y = -x[n] - c; T = S + y; c = err(S, y, T); S = T
-//   y = x - c; T = S + y; c = err(S, y, T); S = T
-//   if c_pre != 0 and |fl(x + |c_pre|) - x| < |c_pre|:
-//       S = (x + x[1]) + ... + x[n-1]; c = 0
-//   sma = S / n
+// Why an exact sum and not a compensated running one: a running sum keeps a
+// compensation for the next term to absorb, and a term that cannot hold it
+// leaves it in every later sum. After 0.5 and 0.3 the compensation is 2^-54,
+// which neither the zero that follows nor the departing 0.5 can take, so a
+// running sum reads 0.3 + 2^-54 and then 2^-54 where TradingView reads 0.3
+// and then exactly 0 (fold capture of 2026-11-16, ta.sma and math.sum alike;
+// tests/test_ta_sma_exact_compensation.cpp holds its rows).
 double KahanWindowSum::push(double src) {
     // Growth is the only throwing step; finish it before changing either
-    // the numerical state or the previous bar's rewind record.
+    // the window or the previous bar's rewind record.
     ensure_room();
     saved_sum_ = sum_;
-    saved_comp_ = comp_;
     saved_count_ = count_;
     saved_pushed_ = true;
-    const double comp_before = comp_;
-    if (count_ >= length_) {
-        // The window is full: the oldest source leaves before the new source
-        // enters (sub-then-add order, pinned).
-        const auto& evicted = window_[index(size_ - 1)];
-        saved_evicted_value_ = evicted.value;
-        saved_evicted_addend_ = evicted.addend;
+    saved_evicted_ = count_ >= length_;
+    if (saved_evicted_) {
+        saved_evicted_value_ = window_[index(size_ - 1)].value;
         --size_;
-        kahan_add(-saved_evicted_addend_);
-    } else {
-        saved_evicted_value_ = na<double>();
-        saved_evicted_addend_ = na<double>();
+        account(saved_evicted_value_, true);
     }
-    enter(src, comp_before);
+    head_ = head_ ? head_ - 1 : window_.size() - 1;
+    window_[head_] = {src};
+    ++size_;
+    account(src, false);
     count_++;
+    sum_ = rounded();
     return sum_;
 }
 
@@ -250,13 +206,14 @@ void KahanWindowSum::note_no_push() {
 
 void KahanWindowSum::unpush() {
     if (!saved_pushed_) return;
+    account(window_[head_].value, true);
     pop_front();
-    if (!is_na(saved_evicted_addend_)) {
-        window_[index(size_)] = {saved_evicted_value_, saved_evicted_addend_};
+    if (saved_evicted_) {
+        window_[index(size_)] = {saved_evicted_value_};
         ++size_;
+        account(saved_evicted_value_, false);
     }
     sum_ = saved_sum_;
-    comp_ = saved_comp_;
     count_ = saved_count_;
     saved_pushed_ = false;
 }
@@ -265,19 +222,12 @@ double KahanWindowSum::repush(double src) {
     if (!saved_pushed_) {
         return push(src);
     }
-    // Rewind to the pre-bar (S, c) and replay the bar with the new source
-    // against the same evicted addend; the ring fronts are overwritten in
-    // place so the window shape is untouched.
-    pop_front();
-    sum_ = saved_sum_;
-    comp_ = saved_comp_;
-    count_ = saved_count_;
-    const double comp_before = comp_;
-    if (!is_na(saved_evicted_addend_)) {
-        kahan_add(-saved_evicted_addend_);
-    }
-    enter(src, comp_before);
-    count_++;
+    // The bar's source is replaced where it sits: the window keeps its shape
+    // and what the bar evicted stays out.
+    account(window_[head_].value, true);
+    window_[head_] = {src};
+    account(src, false);
+    sum_ = rounded();
     return sum_;
 }
 
@@ -631,9 +581,9 @@ double SMA::recompute(double src) {
         return compute(src);
     }
 
-    // Replay the bar with the new source: the same evicted addend, the same
-    // pre-bar (sum, compensation), so a recompute()d bar and a freshly
-    // computed one with an identical window agree bit-for-bit.
+    // Replay the bar with the new source in place of the provisional one.
+    // The sum is a function of the window, so a recompute()d bar and a
+    // freshly computed one with an identical window agree bit-for-bit.
     double sum = window_.repush(src);
 
     if (bar_count < length) {
