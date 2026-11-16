@@ -583,10 +583,9 @@ double TSI::compute(double src) {
     if (is_na(prev_src_)) { prev_src_ = src; return na<double>(); }
     double pc = src - prev_src_;
     prev_src_ = src;
-    // Each short stage consumes its long stage's value exactly as before;
-    // only its availability clock is told whether that value was ready, so
-    // the numbers are unchanged and ready() names the first bar on which
-    // both chains have their observations.
+    // Keep feeding every numerical value, including provisional long-stage
+    // values. Only the short stages' observation clocks use upstream
+    // readiness, as with other composed EMA stages.
     const double long_pc = ema_long_.compute(pc);
     double ds = ema_short_.compute(long_pc, ema_long_.ready());
     const double long_abs_pc = ema_abs_long_.compute(std::abs(pc));
