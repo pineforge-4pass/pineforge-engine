@@ -467,10 +467,90 @@ void calendar_confirmed_reports_and_recovery() {
     }
 }
 
+void lord_howe_confirmed_daily_successors() {
+    // Lord Howe ends DST on 2026-04-05 (+11:00 -> +10:30), and starts
+    // it on 2026-10-04 (+10:30 -> +11:00). Friday -> Monday at 09:30
+    // therefore takes 72.5 / 71.5 hours, independent of engine output.
+    const struct {
+        int month;
+        int days[3];
+        int utc_offset_minutes[3];
+        int weekend_minutes;
+    } cases[] = {
+        {4, {2, 3, 6}, {660, 660, 630}, 4350},
+        {10, {1, 2, 5}, {630, 630, 660}, 4290},
+    };
+    const CalendarCase cell{"Lord Howe daily", "Australia/Lord_Howe", "1D", {}, {}};
+    for (const auto& fixture : cases) {
+        pineforge::Bar bars[3];
+        std::int64_t closes[3];
+        for (int index = 0; index < 3; ++index) {
+            const CalendarDate date{fixture.month, fixture.days[index], 0};
+            const auto offset = fixture.utc_offset_minutes[index] * 60000LL;
+            bars[index] = {100.0 + index, 102.0 + index, 99.0 + index,
+                           101.0 + index, 1000.0, calendar_stamp(date, 9, 30) - offset};
+            closes[index] = calendar_stamp(date, 16, 0) - offset;
+        }
+        CHECK(bars[2].timestamp - bars[1].timestamp == fixture.weekend_minutes * 60000LL);
+        CalendarReportStrategy batch(cell), stream(cell);
+        batch.run(bars, 3, cell.timeframe, cell.timeframe, false);
+        CHECK(batch.last_error().empty());
+        const bool began = stream.stream_begin(bars, 2, cell.timeframe, cell.timeframe);
+        CHECK(began);
+        if (!began) continue;
+        const auto before = stream.stream_state_hash();
+        for (const auto shift : {60000LL,
+             (fixture.utc_offset_minutes[2] - fixture.utc_offset_minutes[1]) * 60000LL}) {
+            auto wrong = bars[2];
+            wrong.timestamp += shift; // 09:31, or an opening carried at the old UTC offset.
+            CHECK(!stream.stream_push_bar(wrong));
+            CHECK(stream.stream_state_hash() == before);
+            CHECK(stream.consumed.size() == 2 && stream.close_times.size() == 2);
+            CHECK(stream.stream_order_actions_len() == 0);
+        }
+        const bool accepted = stream.stream_push_bar(bars[2]);
+        CHECK(accepted);
+        if (!accepted) continue;
+        CHECK(stream.consumed.size() == 3 && stream.close_times.size() == 3);
+        for (int index = 0; index < 3
+             && index < static_cast<int>(stream.consumed.size())
+             && index < static_cast<int>(stream.close_times.size()); ++index) {
+            const auto& actual = stream.consumed[index];
+            CHECK(actual.timestamp == bars[index].timestamp);
+            CHECK(bits(actual.open) == bits(bars[index].open));
+            CHECK(bits(actual.high) == bits(bars[index].high));
+            CHECK(bits(actual.low) == bits(bars[index].low));
+            CHECK(bits(actual.close) == bits(bars[index].close));
+            CHECK(bits(actual.volume) == bits(bars[index].volume));
+            CHECK(stream.close_times[index] == closes[index]);
+        }
+        CHECK(stream.trade_count() == 1 && stream.live_position_size() == 0.0);
+        if (stream.trade_count() == 1) {
+            const auto& trade = stream.get_trade(0);
+            CHECK(trade.entry_time == bars[1].timestamp && trade.exit_time == bars[2].timestamp);
+            CHECK(trade.entry_price == 101.0 && trade.exit_price == 102.0 && trade.qty == 1.0);
+        }
+        CHECK(stream.stream_order_actions_len() == 1);
+        if (stream.stream_order_actions_len() == 1) {
+            const auto& fill = stream.stream_order_action_at(0);
+            CHECK(fill.timestamp_ms == bars[2].timestamp && fill.bar_index == 2);
+            CHECK(!fill.is_entry && fill.is_long && fill.quantity == 1.0 && fill.price == 102.0);
+        }
+        pineforge::ReportC expected{}, actual{};
+        batch.fill_report(&expected);
+        stream.fill_report(&actual);
+        compare_reports(expected, actual);
+        pineforge::BacktestEngine::free_report(&expected);
+        pineforge::BacktestEngine::free_report(&actual);
+        CHECK(stream.stream_end(false));
+    }
+}
+
 }
 
 int main() {
     calendar_confirmed_reports_and_recovery();
+    lord_howe_confirmed_daily_successors();
     for (int split : {15, 22, 29}) cumulative_reports_do_not_change_continuation(split);
     for (int timeframe : {1, 5, 15, 60})
         for (int entry_kind : {0, 1, 2})
