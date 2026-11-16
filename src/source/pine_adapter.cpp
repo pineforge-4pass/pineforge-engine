@@ -3888,26 +3888,40 @@ bool carry_reissue_bindings() noexcept {
 std::uint64_t retired_rows_erased() noexcept { return rows_erased.load(std::memory_order_relaxed); }
 } // namespace detail
 
-// Audit mirror of K1's unwithdrawn cycle and dormant-representative pins.
+// Audit mirror of K1's cycle, askable-origin and dormant-representative pins.
 // A named id's momentary exposure does not shorten the cycle pin.
 bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) const noexcept {
-    if (row.legs.target().incarnation == 0 || withdrawn(row.legs)
-        || filled_limit_without_revival(row)) return false;
+    if (row.legs.target().incarnation == 0 || filled_limit_without_revival(row)) return false;
     const std::uint64_t origin = row.bracket_origin.incarnation;
     bool askable = false;
     for (const auto& handle : live_handles_) if (handle.incarnation == origin) askable = true;
     for (const auto& cohort : cohorts_by_id_.held_rows())
         for (const auto& opening : cohort.second.opened) if (opening.incarnation == origin) askable = true;
-    if (row.placement_cycle >= current_position_cycle_
-        || (askable && !row.legs.dormant())) return true;
-    if (!askable || !row.legs.dormant() || (row.family != PineOrderFamily::ExitLimit
-        && row.family != PineOrderFamily::ExitStop && row.family != PineOrderFamily::ExitTrail)) return false;
+    if (row.placement_cycle >= current_position_cycle_ && !withdrawn(row.legs)) return true;
+    if (!askable) return false;
+    // One binding: the legs an origin holds for one (exit id, from-entry,
+    // family).
+    const auto same_binding = [&](const PlacementSnapshot& peer) {
+        return peer.legs.target().incarnation != 0 && peer.family == row.family
+            && peer.bracket_origin == row.bracket_origin && peer.source_id == row.source_id
+            && peer.from_entry == row.from_entry;
+    };
+    if (!row.legs.dormant()) {
+        if (!withdrawn(row.legs)) return true;
+        // A withdrawn leg stands for its binding only while it is the newest
+        // lifecycle of it (sweep_retired_rows, superseded_withdrawal).
+        bool after_row = false;
+        for (auto peer : placement_) {
+            if (&peer.second == &row) { after_row = true; continue; }
+            if (after_row && same_binding(peer.second)) return false;
+        }
+        return true;
+    }
+    if (row.family != PineOrderFamily::ExitLimit
+        && row.family != PineOrderFamily::ExitStop && row.family != PineOrderFamily::ExitTrail) return false;
     for (auto peer : placement_) {
         const auto& pin = peer.second;
-        if (!pin.legs.dormant() || withdrawn(pin.legs)
-            || pin.legs.target().incarnation == 0 || pin.family != row.family
-            || pin.bracket_origin != row.bracket_origin || pin.source_id != row.source_id
-            || pin.from_entry != row.from_entry) continue;
+        if (!pin.legs.dormant() || !same_binding(pin)) continue;
         return &pin == &row;
     }
     return false;
@@ -3944,9 +3958,8 @@ bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) cons
 // Pins, one per scan that reads rows of requests that are no longer live:
 //   K1 an unwithdrawn lifecycle for the whole current cycle, including global
 //      legs and named ids whose exposure may return; askable origins also keep
-//      unwithdrawn non-dormant rows and one unwithdrawn dormant representative
-//      per family. Margin revival, reversal suspension and pair hold read
-//      lifecycles; exit() asks whether
+//      non-dormant rows and one dormant representative per family. Margin revival,
+//      reversal suspension and pair hold read lifecycles; exit() asks whether
 //      an opened origin's leg was consumed;
 //   K2 a current-cycle row naming a revival candidate as its predecessor,
 //   K3 the first later-bar current-cycle exit of the same family, source id
@@ -3981,13 +3994,18 @@ bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) cons
 //
 // The cancelled-origin retirement: nor a leg the script withdrew (every leg retired, by
 // strategy.cancel or strategy.cancel_all whether it was live or dormant:
-// retire_cancelled_exits), whatever its cycle or origin. A withdrawn leg
-// cannot revive or answer origin_leg_consumed, even after a suspension or
-// pair hold. It needs no lifecycle pin; roots and K2/K3 still keep its row
-// if another request needs its identity or supersession evidence.
-// A cycle that cancels and re-places an exit every bar at the same level
-// -- no re-issue at another stop supersedes
-// it -- no longer holds a row per bar either.
+// retire_cancelled_exits), whatever its cycle, unless it is bound to an
+// askable origin as its family's one representative. A withdrawn leg is no candidate
+// and K2/K3 keep nothing for it; it answers no consumed-leg question either
+// (origin_leg_consumed), so the script may place the exit again for the same
+// origin. Among the non-dormant rows of a binding -- origin, exit id,
+// from-entry and family -- the representative is therefore the newest
+// withdrawn lifecycle, which a later leg of that binding supersedes; among
+// its dormant rows it is the oldest (the origin pin). An origin so holds a
+// bounded number of withdrawn rows however often its exit is cancelled and
+// re-placed. A cycle that cancels and re-places an exit every bar at the same
+// level -- no re-issue at another stop supersedes it -- no longer holds a row
+// per bar either.
 //
 // O1W: a terminally filled named origin-free limit without any stop/loss/trail
 // or inherited replacement definition is not a revival candidate. K2, K3 and
@@ -4033,13 +4051,13 @@ void PineExecutionAdapter::sweep_retired_rows(const NativeDecisionContext& conte
     std::sort(askable_origins.begin(), askable_origins.end());
     askable_origins.erase(std::unique(askable_origins.begin(), askable_origins.end()),
                           askable_origins.end());
-    // One unwithdrawn dormant origin pin per (origin, exit id, from-entry,
-    // family), in oldest incarnation order. Keep its lifecycle so restoration
-    // or cancellation still changes the consumed-leg answer. A withdrawn
-    // lifecycle cannot answer consumed or revive and needs no origin pin.
+    // One dormant origin pin per (origin, exit id, from-entry, family), in
+    // oldest incarnation order, withdrawn or not: the leg a declined pair
+    // held stays the origin's record of that binding while the origin is
+    // askable. Keep its lifecycle; do not replace it with a sticky bit.
     auto& origin_pins = sweep.origin_pins;
     placement_.visit_rows([&](std::uint64_t, const PlacementSnapshot& value) { ++work.row_visits; ++work.pin_rows; observe_retirement_expiry(value, interval);
-        if (!exit_family(value.family) || !value.legs.dormant() || withdrawn(value.legs)
+        if (!exit_family(value.family) || !value.legs.dormant()
             || value.legs.target().incarnation == 0
             || !contains(askable_origins, value.bracket_origin.incarnation)) return false;
         const bool represented = std::any_of(origin_pins.begin(), origin_pins.end(),
@@ -4050,16 +4068,31 @@ void PineExecutionAdapter::sweep_retired_rows(const NativeDecisionContext& conte
         if (!represented) origin_pins.push_back(&value);
         return false;
     });
-    const auto pinned_by_itself = [&](const PlacementSnapshot& value) {
+    // A withdrawn leg answers no consumed-leg question and is never revived,
+    // so a later leg of its binding -- the same origin, exit id, from-entry
+    // and family -- leaves nothing to ask it: the origin keeps the newest
+    // withdrawn lifecycle of a binding, not one per cancel.
+    const auto superseded_withdrawal = [&](std::uint64_t incarnation,
+                                           const PlacementSnapshot& value) {
+        const PlacementTable& rows = placement_;
+        for (auto it = rows.upper_bound(incarnation); it != rows.end(); ++it) {
+            const PlacementSnapshot& peer = it->second; ++work.row_visits; ++work.peer_visits;
+            if (peer.legs.target().incarnation != 0 && peer.family == value.family
+                && peer.bracket_origin == value.bracket_origin
+                && peer.source_id == value.source_id && peer.from_entry == value.from_entry) return true;
+        }
+        return false;
+    };
+    const auto pinned_by_itself = [&](std::uint64_t incarnation, const PlacementSnapshot& value) {
         // K1: preserve unwithdrawn lifecycle rows for their entire cycle.
         // Global legs need no named exposure; an empty named cohort may reopen.
         // Exposure at this sweep cannot decide what a later margin call reads.
         // Supersession below still releases legs the revival can no longer use.
         const bool askable = contains(askable_origins, value.bracket_origin.incarnation);
-        if (value.legs.target().incarnation != 0 && !withdrawn(value.legs)
-            && !filled_limit_without_revival(value)
-            && (value.placement_cycle >= cycle
-                || (askable && !value.legs.dormant())
+        if (value.legs.target().incarnation != 0 && !filled_limit_without_revival(value)
+            && ((value.placement_cycle >= cycle && !withdrawn(value.legs))
+                || (askable && !value.legs.dormant()
+                    && (!withdrawn(value.legs) || !superseded_withdrawal(incarnation, value)))
                 || std::find_if(origin_pins.begin(), origin_pins.end(), [&](const auto* pin) { ++work.pin_comparisons; return pin == &value; }) != origin_pins.end())) return true;
         // K4
         if (value.family == PineOrderFamily::Close && value.immediately
@@ -4074,8 +4107,8 @@ void PineExecutionAdapter::sweep_retired_rows(const NativeDecisionContext& conte
     // v1.6.3's K1 pinned it: releasing a dormant one let the sweep erase its
     // supersessor while K3 kept the released leg as a witness, and the margin
     // revival then restored the superseded leg.
-    const auto held_by_cycle = [&](const PlacementSnapshot& value) {
-        return pinned_by_itself(value) && value.placement_cycle == cycle
+    const auto held_by_cycle = [&](std::uint64_t incarnation, const PlacementSnapshot& value) {
+        return pinned_by_itself(incarnation, value) && value.placement_cycle == cycle
             && exit_family(value.family) && !value.from_entry.empty()
             && !withdrawn(value.legs)
             && !contains(askable_origins, value.bracket_origin.incarnation);
@@ -4086,8 +4119,8 @@ void PineExecutionAdapter::sweep_retired_rows(const NativeDecisionContext& conte
     // only the current and previous script bars keep their retired commands.
     auto askable_cursor = askable_origins.begin();
     placement_.visit_rows([&](std::uint64_t incarnation, const PlacementSnapshot& value) { ++work.row_visits; ++work.gate_rows;
-        const bool cycle_held = held_by_cycle(value);
-        if (!cycle_held && pinned_by_itself(value)) return false;
+        const bool cycle_held = held_by_cycle(incarnation, value);
+        if (!cycle_held && pinned_by_itself(incarnation, value)) return false;
         while (askable_cursor != askable_origins.end() && *askable_cursor < incarnation)
             ++askable_cursor;
         if (askable_cursor != askable_origins.end() && *askable_cursor == incarnation)
@@ -4400,7 +4433,8 @@ void PineExecutionAdapter::sweep_retired_rows(const NativeDecisionContext& conte
     placement_.visit_rows([&](std::uint64_t incarnation, const PlacementSnapshot& value) { ++work.row_visits; ++work.final_rows;
         // K1 (but for the legs it releases), K4, K5; then the roots. A row
         // either keeps is kept, so the cheaper test comes first.
-        if (pinned_by_itself(value) && (released.empty() || !contains(released, incarnation)))
+        if (pinned_by_itself(incarnation, value)
+            && (released.empty() || !contains(released, incarnation)))
             return false;
         while (root_cursor != roots.end() && *root_cursor < incarnation) ++root_cursor;
         if (root_cursor != roots.end() && *root_cursor == incarnation) return false;
@@ -5423,6 +5457,16 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         && std::isfinite(snapshot.requested_qty)) {
         snapshot.projection_remaining_qty = snapshot.requested_qty;
     }
+    // Only a leg that was never placed can hold a reserved exit-queue slot
+    // (exit()). Every other snapshot that reaches here with a chain origin is
+    // a copy of a placed row, or a staged replacement that kept its
+    // predecessor's sequence: the origin it carries is that row's, and
+    // remember() derives it again unless the predecessor it names is erased.
+    if (snapshot.source_sequence != 0
+        && (snapshot.projection_predecessor == 0
+            || placement_.contains(snapshot.projection_predecessor))) {
+        snapshot.chain_origin_sequence = 0;
+    }
     const auto next_source_sequence = ++source_sequence_;
     const bool staged_replacement_sequence = snapshot.projection_predecessor != 0
         && snapshot.source_sequence != 0;
@@ -5874,9 +5918,9 @@ bool PineExecutionAdapter::compute_exit_reservation(
     for (const auto& pending : pending_bracket_legs_) observe(pending.snapshot);
     for (const auto& pending : pending_coof_requests_) observe(pending.snapshot);
     for (const auto& delayed : delayed_market_orders_) observe(delayed.snapshot);
-    // An unresolved level still owns a place and a share in the source queue.
-    // Its definition survives the transient shadow projection and becomes the
-    // same reservation when the parent's fill supplies the level.
+    // An unresolved level still owns a share in the source queue, and a place
+    // when a slot was reserved for it. Its definition survives the transient
+    // shadow projection until the parent's fill supplies the level.
     for (const auto& pending : pending_relative_exits_) {
         if (pending.from_entry != from_entry || pending.void_global) continue;
         const auto family = key_for(pending.exit_id, pending.from_entry);
@@ -11933,14 +11977,13 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
                                          "Pine source command sequence exhausted");
     }
     const std::uint64_t command_sequence = ++source_command_sequence_;
-    const auto capture_reservation_sequence = [&] {
-        if (reservation_sequence != 0) return;
+    const auto next_queue_sequence = [&] {
         if (source_sequence_ >= static_cast<std::uint64_t>(
                 std::numeric_limits<std::int64_t>::max())) {
             throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
                                              "Pine exit queue sequence exhausted");
         }
-        reservation_sequence = ++source_sequence_;
+        return ++source_sequence_;
     };
     // Trail point and offset operands are source tick counts, whereas the
     // generic native Trail carries prices.  Preserve the source operands in
@@ -12224,12 +12267,17 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
             [&](const PendingRelativeExit& value) {
                 return value.exit_id == exit_id && value.from_entry == from_entry;
         });
+        // The definition takes no source sequence of its own: declaring it
+        // submits nothing, so the sequences of every later request stay where
+        // they were. Its legs queue where they are submitted once the parent's
+        // fill resolves them; until then compute_exit_reservation holds its
+        // share. A slot the caller hands in is kept; no caller reserves one.
         if (existing == pending_relative_exits_.end()) {
-            capture_reservation_sequence();
             pending.reservation_sequence = reservation_sequence;
             pending_relative_exits_.push_back(std::move(pending));
         } else {
-            reservation_sequence = existing->reservation_sequence;
+            if (existing->reservation_sequence != 0)
+                reservation_sequence = existing->reservation_sequence;
             pending.reservation_sequence = reservation_sequence;
             const auto same = [](double left, double right) {
                 return same_double_bits(left, right) || (std::isnan(left) && std::isnan(right));
@@ -12276,7 +12324,9 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         shadow.requested_qty = qty;
         shadow.qty_percent = qty_percent;
         shadow.command_sequence = command_sequence;
-        shadow.source_sequence = reservation_sequence;
+        // Each call's projection takes the next source sequence, as the
+        // request a resolved call submits does; a reserved slot rides beside it.
+        shadow.source_sequence = next_queue_sequence();
         shadow.chain_origin_sequence = reservation_sequence;
         shadow.projection_position_side = static_cast<std::int32_t>(PositionSide::FLAT);
         shadow.exit_levels = {limit_price, stop_price, source_trail_points,
@@ -12542,6 +12592,11 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
     const double percentage_basis = ancestry_sized_target
         ? book_basis + completed_entry_units + pending_parent_units
         : live_reservation_basis;
+    // The slot reserved for this call's own definition, if its caller holds
+    // one. compute_exit_reservation widens reservation_sequence to the rank
+    // the family's standing rows already have; a fresh leg does not carry
+    // that rank, because remember() derives it from the leg's predecessor.
+    const std::uint64_t reserved_slot = reservation_sequence;
     const bool reservation_ok = compute_exit_reservation(exit_id, from_entry, qty, qty_percent,
         live_reservation_basis, percentage_basis, reserved_exit_qty, reservation_sequence);
     if (!reservation_ok) {
@@ -12591,9 +12646,9 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         }
         return;
     }
-    const bool has_retained_reservation = reservation_sequence != 0;
-    // Resolved legs receive their source sequence when submitted. Only an
-    // unresolved relative definition needs a slot before it has a request;
+    // Resolved legs receive their source sequence when submitted, and
+    // remember() ranks each by it or by the predecessor it replaces. Only a
+    // slot reserved for the call's own definition travels with them;
     // allocating one here would advance ordinary exits twice.
     const auto source_point = detail::callback_point(require_host());
     const OrderBirth exit_birth = capture_order_birth();
@@ -12895,7 +12950,7 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
             snapshot.pending_bound_exit = pending_bound_exit;
             snapshot.is_long = false;
             snapshot.command_sequence = command_sequence;
-            snapshot.chain_origin_sequence = reservation_sequence;
+            snapshot.chain_origin_sequence = reserved_slot;
             snapshot.bracket_origin = std::move(bracket_origin);
             snapshot.fresh_origin_bypass = requires_fresh_origin;
             snapshot.exit_levels = {limit_price, stop_price, source_trail_points,
@@ -13263,10 +13318,9 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
             }
             if (defer_new_instance && live_by_source_key_.find(checked_live_key(replacement_key))
                 == live_by_source_key_.end()) {
-                // A new queued leg has no issued queue slot. Keep an inherited
-                // reservation, including a pending relative definition; otherwise
+                // A new queued leg has no issued queue slot: it carries only a
+                // slot reserved for its own definition (reserved_slot), and
                 // remember() assigns the rank when the leg is submitted.
-                if (!has_retained_reservation) snapshot.chain_origin_sequence = 0;
                 auto queued = std::find_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
                     [&](const PendingBracketLeg& row) { return row.replacement_key == replacement_key; });
                 PendingBracketLeg staged{std::move(request), std::move(snapshot), replacement_key, family_key};
