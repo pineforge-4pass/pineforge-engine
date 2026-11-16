@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import importlib
 import json
 import os
 from pathlib import Path
@@ -100,6 +101,15 @@ try:
         observed["failure"] = result.failure_text
         observed["csv_paths"] = result.csv_paths
         observed["output_exists"] = (script.parent / "unpublished").exists()
+    elif probe == "corpus-helper":
+        release = importlib.import_module("pf_release_run")
+        destination = Path(config["parameters"]["destination"])
+        destination.mkdir()
+        helper, request = release._stage_corpus_helper(
+            destination, {"notes": "literal or annotation"})
+        observed["helper"] = str(helper)
+        observed["request"] = json.loads(request.read_bytes())
+        observed["staged"] = sorted(path.name for path in destination.iterdir())
     else:
         runpy.run_path(str(script), run_name="__main__")
 finally:
@@ -151,6 +161,24 @@ class BundleDeclarationTests(unittest.TestCase):
                 destinations.append(row["destination"])
         self.assertEqual(len(destinations), len(set(destinations)))
         self.assertEqual(len(destinations), len(expected_files))
+
+
+def load_tests(loader, tests, pattern):
+    """Keep the binding module's tests in this existing, unconditional row."""
+    path = ROOT / "tests/report_channel/test_corpus_input_binding.py"
+    previous = sys.path[:]
+    try:
+        # Shards reimport IDs from the repository root, with scripts/ on
+        # PYTHONPATH. Use this file's real namespace, rather than a private
+        # spec name that exists only in the discovery process.
+        sys.path.insert(0, str(ROOT))
+        module = importlib.import_module("tests.report_channel.test_corpus_input_binding")
+    finally:
+        sys.path[:] = previous
+    if Path(module.__file__).resolve() != path.resolve():
+        raise AssertionError(f"binding tests must come from {path}")
+    tests.addTests(loader.loadTestsFromModule(module))
+    return tests
 
 
 class PackagedPathsTests(unittest.TestCase):
@@ -408,6 +436,27 @@ class PackagedPathsTests(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn("harness", result.stderr.lower())
                     self.assertIn(str(harness), result.stderr)
+
+    def test_packaged_corpus_helper_needs_no_host_entrypoint_or_sibling_guess(self) -> None:
+        self.assertFalse((self.harness / "entrypoint.sh").exists())
+        for label, environment in (
+                ("configured", {ENV_NAMES["harness_dir"]: str(self.harness)}),
+                ("unconfigured", {}),
+                ("missing", {ENV_NAMES["harness_dir"]: str(self.work / "absent-harness")})):
+            with self.subTest(selection=label):
+                result, observed = self.child(
+                    "pf_release_run.py", probe="corpus-helper", env=environment,
+                    parameters={"destination": str(self.work / label)})
+                self.assert_pass(result)
+                self.assertEqual(observed["request"], {"notes": "literal or annotation"})
+                self.assertEqual(observed["staged"], [
+                    "corpus-params.json", "derive_corpus_feeds.py",
+                    "parity_paths.py", "pf_release_run.py", "run_strategy.py"])
+                self.assertEqual(Path(observed["modules"]["pf_release_run"]),
+                                 self.installed / "pf_release_run.py")
+                self.assertNotIn(str(self.harness / "entrypoint.sh"), observed["opened"])
+                self.assertNotIn(str(self.installed.parent / "docker" / "entrypoint.sh"),
+                                 observed["opened"])
 
     def test_unwritable_workspace_refuses_with_positive_control(self) -> None:
         self.work.chmod(0o755)
