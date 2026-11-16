@@ -101,8 +101,9 @@ enum class RunFailureCode : std::uint16_t {
     selected_script_bars_limit_exceeded = 86,
     selected_source_rows_limit_exceeded = 87,
     pine_timezone_error = 88,
+    currency_conversion_rate_unavailable = 89,
 };
 
-inline constexpr std::uint16_t kRunFailureCodeCount = 89;
+inline constexpr std::uint16_t kRunFailureCodeCount = 90;
 
 }  // namespace pineforge
