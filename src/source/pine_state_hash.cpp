@@ -1358,27 +1358,6 @@ void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const
             f.i(entry.second.close_ms);
         }
     }
-    // Folded only when set: default request scopes add no bytes.
-    if (request_active_caller_ != 0) {
-        f.s("request-active-caller/v1");
-        f.u(request_active_caller_);
-    }
-    if (request_active_chart_caller_ != 0) {
-        f.s("request-active-chart-caller/v1");
-        f.u(request_active_chart_caller_);
-    }
-    if (!request_delivery_stack_.empty()) {
-        f.s("request-delivery-stack/v1");
-        f.u(request_delivery_stack_.size());
-        for (const auto& frame : request_delivery_stack_) {
-            f.i(frame.sec_id);
-            // Fold the logical runtime instance, never the borrowed address.
-            f.u(frame.runtime_cursor ? frame.runtime_cursor->request_instance : 0);
-            f.u(frame.body_caller);
-            f.i(frame.body_open_ms);
-            hash_request_delivery(f, frame.delivery, "request-frame-delivery/v1");
-        }
-    }
     // Lane XSYM-D: the request sites of other symbols -- registration and
     // per-run cursors -- and the request data the run was handed (the feeds'
     // keys and sizes, the facts and the recorded series, through the digest
