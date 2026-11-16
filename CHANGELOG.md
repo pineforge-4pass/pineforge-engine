@@ -7,7 +7,6 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
-- Adjust sliding-window eviction and decimal lot representation for SMA-sized explicit orders (#731).
 - The live runner now admits confirmed count-1 daily and weekly charts on daylight-saving calendars; other counts and tick/clock delivery on those calendars remain refused (#819).
 - Checkpoints for `ta.sma`, biased `ta.stdev`, `ta.bb`, `math.sum` and `ta.change` now copy contiguous owning window buffers and reuse them on restore, preserving the arithmetic and rewind rules (#809).
 - Explicit `strategy.order()` quantities now floor executable units at declared decimal quantity steps while preserving the source quantity; the boundary control is not measured against TradingView (#716 item 2).

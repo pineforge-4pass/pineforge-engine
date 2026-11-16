@@ -69,10 +69,12 @@ static void test_series_is_the_state() {
     for (double v : series) {
         CHECK_EXACT(a.compute(v), b.compute(v), "SMA(3): identical histories agree bit-for-bit");
     }
-    // Current CAP-731-PULSE contradicts the September nonzero prefix-residue pin.
+    // A different prefix leaves a different residue on the SAME final window
+    // (pinned: sma-pulse-n3 bar 40 reads (0.2 + 2^-55) / 3 because block 0's
+    // residue 2^-55 rides into block 1's pulse).
     ta::SMA fresh(3), after_pulse(3);
     double vf = na<double>(), vp = na<double>();
-    const double prefix[] = {0.1, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0};
+    const double prefix[] = {0.1, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0};   // leaves S = 2^-55
     for (double v : prefix) after_pulse.compute(v);
     const double win[3] = {0.2, 0.0, 0.0};
     // the fresh instance sees only the window's newest value after two zeros
@@ -80,13 +82,12 @@ static void test_series_is_the_state() {
     vf = fresh.compute(0.2);
     for (double v : win) vp = after_pulse.compute(v);
     CHECK_EXACT(vf, 0.2 / 3, "fresh SMA(3) of {0, 0, 0.2} = 0.2 / 3");
-    // expectation corrected: 0.20000000000000004 / 3 -> 0.2 / 3; current TV b5..39 residue is zero and b40 agrees.
-    // CAP-731-PULSE tv_trades.csv sha256 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28.
-    CHECK_EXACT(vp, 0.2 / 3, "current TV pulse prefix leaves no residue in this window");
+    CHECK_EXACT(vp, 0.20000000000000004 / 3, "after a pulse the same window carries the residue: (0.2 + 2^-55) / 3");
 }
 
 // ---------------------------------------------------------------------------
-// 2. The current capture contradicts the September nonzero zero-window residue.
+// 2. An all-zero window reads the carried residue (tape sma-pulse-n3, block 0:
+//    bars 6..39 encode qty 10000009 = round(s * 1e18) with s = 2^-55 / 3).
 // ---------------------------------------------------------------------------
 static void test_zero_window_carries_residue() {
     ta::SMA sma(3);
@@ -96,17 +97,11 @@ static void test_zero_window_carries_residue() {
     for (int i = 0; i < 38; ++i) z.push_back(sma.compute(0.0));   // bars 2..39
     // bar 2: (0.1 + 0.3 + 0) with the zero addend folding c: 0.4 - 2^-54 -> /3
     CHECK_EXACT(z[0], 0.13333333333333333, "bar 2");
-    // expectation corrected: 0.09999999999999998 -> 0.3 / 3; current TV b3 code is 50000000.
-    // CAP-731-PULSE tv_trades.csv sha256 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28.
-    CHECK_EXACT(z[1], 0.3 / 3, "bar 3: current TV newest-first reference");
+    CHECK_EXACT(z[1], 0.09999999999999998, "bar 3: 0.29999999999999993 / 3");
     CHECK_EXACT(z[2], 0.0, "bar 4: exact 0");
-    // expectation corrected: 2^-54 -> 0; current TV b5 code is 10000000.
-    // CAP-731-PULSE tv_trades.csv sha256 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28.
-    CHECK_EXACT(z[3] * 3, 0.0, "bar 5: current TV zero residue");
+    CHECK_EXACT(z[3] * 3, std::ldexp(1.0, -54), "bar 5: 2^-54");
     for (int i = 4; i < 38; ++i) {
-        // expectation corrected: 2^-55 -> 0; current TV b6..39 codes are 10000000.
-        // CAP-731-PULSE tv_trades.csv sha256 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28.
-        CHECK_EXACT(z[(std::size_t)i] * 3, 0.0, "bars 6..39: current TV zero residue");
+        CHECK_EXACT(z[(std::size_t)i] * 3, std::ldexp(1.0, -55), "bars 6..39: 2^-55, not 0");
     }
 }
 
