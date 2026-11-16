@@ -407,7 +407,7 @@ jobs:
     with:
       mode: subset
 
-  # Advisory aggregate context covering every GitHub Actions lane. The merge
+  # Advisory aggregate context covering every GitHub Actions job. The merge
   # ruleset requires pineforge/verify and pineforge/parity, posted by the
   # maintainers, rather than this build context.
   build-gate:

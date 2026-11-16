@@ -8027,7 +8027,7 @@ exit "$lookup_exit"
             (6, 'changes', '    steps:\n',
              "    if: github.event_name != 'pull_request'\n    steps:\n",
              'changes must start after authz'),
-            # A lane that continues on error reports success however it ended.
+            # A job that continues on error reports success however it ended.
             (6, 'sanitizers', '    steps:\n', '    continue-on-error: true\n    steps:\n',
              'ci-post.yml job sanitizers must not continue on error'),
             (6, 'build-gate', '        shell: bash\n', '        shell: bash\n        continue-on-error: true\n',
@@ -8075,6 +8075,7 @@ exit "$lookup_exit"
         passed = ('          passed() { [[ "$1" == "success" || '
                   '( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }\n')
         mutations = (
+            # The whole step is pinned, name included; the previous name fails the exact gate pin.
             ('      - name: Require every verification job to have passed\n',
              '      - name: Require every verification lane to have passed\n'),
             # (e) Neither an empty result nor a skipped smoke matrix on push is the
@@ -8128,7 +8129,7 @@ exit "$lookup_exit"
                 matrices.append(('ARM_SMOKE_RESULT', 'arm64 smoke'))
             for variable, label in matrices:
                 for outcome in ('success', 'failure', 'cancelled', 'skipped', ''):
-                    with self.subTest(event=event, lane=variable, matrix=outcome):
+                    with self.subTest(event=event, job=variable, matrix=outcome):
                         result = subprocess.run(
                             ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
                             env={**env, 'GITHUB_EVENT_NAME': event, variable: outcome},
@@ -8138,8 +8139,8 @@ exit "$lookup_exit"
                         self.assertIn(f'{label}: {outcome}\n', result.stdout)
 
     def test_the_build_aggregate_passes_a_docs_only_skip_and_nothing_else(self):
-        """Run the aggregate's own shell over every outcome of every lane: a
-        proof lane passes by succeeding, or by being skipped after changes
+        """Run the aggregate's own shell over every outcome of every job: a
+        proof job passes by succeeding, or by being skipped after changes
         succeeded and answered docs-only; preflight always has to succeed."""
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -8148,12 +8149,12 @@ exit "$lookup_exit"
                                      'Require every verification job to have passed'))
         env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'AUTHZ_RESULT': 'success',
                'GITHUB_EVENT_NAME': 'push'}
-        lanes = list(PROOF_JOBS.values())
+        jobs = list(PROOF_JOBS.values())
         vectors = set()
         for common in ('success', 'skipped'):
-            for odd in range(len(lanes)):
+            for odd in range(len(jobs)):
                 for outcome in ('success', 'skipped', 'failure', 'cancelled'):
-                    results = [common] * len(lanes)
+                    results = [common] * len(jobs)
                     results[odd] = outcome
                     vectors.add(tuple(results))
         cases = [(changes, docs_only, preflight, *results, 'success')
@@ -8162,7 +8163,7 @@ exit "$lookup_exit"
                  for docs_only in ('true', 'false', '') for results in sorted(vectors)]
         # One bash reads every case; each runs the step in a subshell with the
         # options GitHub gives a bash step (-e, pipefail).
-        names = ['CHANGES_RESULT', 'DOCS_ONLY', 'PREFLIGHT_RESULT', *lanes,
+        names = ['CHANGES_RESULT', 'DOCS_ONLY', 'PREFLIGHT_RESULT', *jobs,
                  'X86_GCC133_RESULT']
         # The harness's own variables share no name with the step's.
         columns = [f'case_{name.lower()}' for name in names]
@@ -8188,7 +8189,7 @@ exit "$lookup_exit"
             with self.subTest(case=dict(zip(names, case))):
                 self.assertEqual(answer == '0', expected, answer)
         # And as the runner starts it: the docs-only pass, and a skip that is not.
-        docs_only = dict(zip(names, ('success', 'true', 'success', *['skipped'] * len(lanes),
+        docs_only = dict(zip(names, ('success', 'true', 'success', *['skipped'] * len(jobs),
                                      'success')))
         for override, code in (({}, 0), ({'DOCS_ONLY': 'false'}, 1), ({'CHANGES_RESULT': 'failure'}, 1),
                                *[({'AUTHZ_RESULT': result}, 1)
@@ -8573,7 +8574,7 @@ finally:
                             or (results[key] == 'skipped'
                                 and docs_only == 'true')
                             for key in proof)
-                        with self.subTest(event=event, docs_only=docs_only, lane=name, result=outcome):
+                        with self.subTest(event=event, docs_only=docs_only, job=name, result=outcome):
                             result = subprocess.run(
                                 ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
                                 env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'),

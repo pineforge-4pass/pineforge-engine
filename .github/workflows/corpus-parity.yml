@@ -1,6 +1,6 @@
 name: Corpus parity
 
-# The TradingView parity gate. Every other CI lane configures
+# The TradingView parity gate. Every other CI job configures
 # -DPINEFORGE_BUILD_CORPUS_STRATEGIES=OFF (scripts/ci_verify.py,
 # cmake_cache_definitions), so until this workflow existed the engine's parity
 # with TradingView -- the property the whole corpus exists to prove -- was
