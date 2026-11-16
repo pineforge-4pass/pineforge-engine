@@ -631,6 +631,21 @@ void PineScheduler::input(
     if (retained_input) {
         calling_bar_complete = flags.complete != 0U;
         boundary = flags.boundary != 0U;
+        // A boundary completion names the script bar of the previous input.
+        // The kernel can have calculated that bar ahead of this callback: a
+        // lazy seal ordered before the input, or a seal on that bar's own
+        // last input. Its callback does not come again, so there is nothing
+        // to wait for and nothing to hold back. This input is the first of
+        // its own script bar and reaches every request.security state now;
+        // bar() made the completed bar's boundary publication when it
+        // calculated it.
+        if (boundary && calling_bar_complete && !retained_.bar_magnifier
+            && prior_input_script_open_ms_ != std::numeric_limits<std::int64_t>::min()
+            && current_script_bar_valid_
+            && current_script_bar_.timestamp >= prior_input_script_open_ms_) {
+            calling_bar_complete = false;
+            boundary = false;
+        }
     } else if (retained_.is_stream && context.input_index >= 0) {
         calling_bar_complete = confirmed_script_interval_complete(context);
         boundary = false;
@@ -763,6 +778,24 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
     current_script_bar_valid_ = true;
     const bool completes_awaiting_legacy_script = awaiting_legacy_script_open_ms_
         == context.script_bar_open_ms;
+    // This callback runs ahead of the bar's legacy completion when no input
+    // of a later script bar has been seen, nothing is awaited, and the
+    // retained cursor completes the bar only on the next input, as a
+    // boundary. The cursor is stepped onto that input here; input() reads the
+    // same flags from it when the input arrives.
+    bool boundary_completion_ahead = false;
+    if (!retained_.bar_magnifier && !uses_aux_security_feed_ && input_script_cursor
+        && awaiting_legacy_script_open_ms_ == std::numeric_limits<std::int64_t>::min()
+        && prior_input_script_open_ms_ == context.script_bar_open_ms
+        && !host.security_sites_kernel_routed()) {
+        auto& cursor = *input_script_cursor;
+        const InputView retained = retained_input();
+        const std::size_t next = cursor.position();
+        if (next > 0 && next < input_script_size_ && next < retained.size()) {
+            const auto ahead = cursor.next(retained[next]);
+            boundary_completion_ahead = ahead.complete != 0U && ahead.boundary != 0U;
+        }
+    }
     if (deferred_boundary_input_.active
         && !deferred_boundary_input_.all_security_states
         && deferred_boundary_input_.prior_script_open_ms == context.script_bar_open_ms) {
@@ -771,6 +804,11 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
         // callback boundary.  The ordinary batch loop does replay it.
         if (!retained_.bar_magnifier)
             host.scheduler_publish_security_boundary();
+    } else if (boundary_completion_ahead) {
+        // The same replay, for a bar the kernel calculates before the input
+        // that reports its completion: that input is not held back for this
+        // callback, it has not been seen yet.
+        host.scheduler_publish_security_boundary();
     }
     const int chart_index = context.coordinate.input_interval_index;
     // A calc_on_order_fills recalculation of this bar before this callback

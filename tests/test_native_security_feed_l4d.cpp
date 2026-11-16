@@ -980,6 +980,360 @@ void test_native_divisible_period_early_close_is_kept() {
         check_exchange_day_tape({30, 5, 0, 60, early_close, "stock", true, false});
     }
 }
+
+// ── inputs after a chart bar that is calculated ahead of its completion ─────
+//
+// Native engine controls over supplied bars: no TradingView price, na or time
+// is asserted here, and no expectation is read back from the engine.
+//
+// A chart bar its own inputs do not complete (its session-day closes early,
+// or the supplied bars over its last slots are missing) is calculated when
+// the first input of a later chart bar is accepted, before that input reaches
+// any request.security site. The source scheduler hears of the completion
+// from that same input. Every input from there on must still reach every site
+// exactly once and in order, and the chart bar calculated ahead must read
+// nothing a later input supplied.
+//
+// One host, three sites, so that a fully supplied native tape cannot stand in
+// for the inputs:
+//   0  the requested fixed period, with native rows. The second period of
+//      every session-day has no row: it is the aggregate of the inputs
+//      observed into it, or it is never evaluated at all;
+//   1  "D" with no feed of its own: built from the inputs alone;
+//   2  a finer lookahead_on request: evaluated on every input and published
+//      once per chart bar, before that chart bar's body.
+class LaterInputProbe final : public pineforge::source::PineStrategyHost {
+public:
+    struct Read {
+        Bar bar{};
+        bool present = false;
+    };
+    struct FineEvaluation {
+        double close = 0.0;
+        bool publication = false;
+        bool replay = false;
+    };
+    std::string requested = "75";
+    std::string fine = "15";
+    bool gaps = false;
+    Read latest_period;
+    Read latest_day;
+    std::vector<Read> period_reads;              // site 0, at each chart bar
+    std::vector<Read> day_reads;                 // site 1, at each chart bar
+    std::vector<std::size_t> fine_before_chart;  // site 2 evaluations before each chart bar
+    std::vector<Bar> charts;
+    std::vector<Bar> period_evaluated;           // every evaluation, in order
+    std::vector<Bar> day_evaluated;
+    std::vector<FineEvaluation> fine_evaluated;
+    void configure_security_evaluators() override {
+        latest_period = {}; latest_day = {};
+        period_reads.clear(); day_reads.clear(); fine_before_chart.clear(); charts.clear();
+        period_evaluated.clear(); day_evaluated.clear(); fine_evaluated.clear();
+        security_eval_states_.clear();
+        register_security_eval(0, requested, input_tf_, false, gaps);
+        register_security_eval(1, "D", input_tf_, false, false);
+        register_security_eval(2, fine, input_tf_, true, false);
+    }
+    void evaluate_security(int sec_id, const Bar& bar, bool publication) override {
+        if (sec_id == 0) {
+            period_evaluated.push_back(bar);
+            latest_period = {bar, true};
+        } else if (sec_id == 1) {
+            day_evaluated.push_back(bar);
+            latest_day = {bar, true};
+        } else if (sec_id == 2) {
+            fine_evaluated.push_back(
+                {bar.close, publication, current_request_delivery(2).replay});
+        }
+    }
+    void clear_security(int sec_id) override {
+        if (sec_id == 0) latest_period = {};
+    }
+    void on_source_bar(const Bar& bar) override {
+        period_reads.push_back(latest_period);
+        day_reads.push_back(latest_day);
+        fine_before_chart.push_back(fine_evaluated.size());
+        charts.push_back(bar);
+    }
+};
+
+struct LaterInputForm {
+    const char* name;
+    std::vector<int> closes;  // the minute each supplied session-day stops at
+    int hole_day;             // a session-day with supplied bars missing; -1: none
+    int hole_from;            // the first missing minute of that day
+    int hole_to;              // the first minute supplied again
+};
+
+#define LATER_INPUT_CHECK(condition) do { if (!(condition)) { \
+    ++fixed_failures; std::fprintf(stderr, \
+        "later-input line %d: %s [%s%s at %d]\n", \
+        __LINE__, #condition, form.name, gaps ? " gaps" : "", at); } } while (false)
+
+void check_later_input_tape(const LaterInputForm& form, bool gaps) {
+    namespace day = native_fixed_period_fixture::exchange;
+    constexpr int kStep = 5;        // the primary input, minutes
+    constexpr int kChart = 60;      // the chart, minutes
+    constexpr int kRequested = 75;  // site 0, minutes
+    constexpr int kFine = 15;       // site 2, minutes
+    const std::int64_t minute_ms = tv_fixed_period_75_fact::kMinuteMs;
+    const int days = static_cast<int>(form.closes.size());
+    int at = -1;
+
+    // The supplied primary bars: every kStep minutes of each session-day up to
+    // the minute it stops at, without the hole. Every close is distinct, so a
+    // close names its bar.
+    std::vector<Bar> bars;
+    for (int d = 0; d < days; ++d) {
+        for (int minute = day::kOpenMinute; minute < form.closes[static_cast<std::size_t>(d)];
+             minute += kStep) {
+            if (d == form.hole_day && minute >= form.hole_from && minute < form.hole_to) continue;
+            const double value = 100.25 + d * 50 + (minute - day::kOpenMinute) * 0.125;
+            bars.push_back({value - 0.5, value + 1, value - 1, value, 3.0, day::at(d, minute)});
+        }
+    }
+    const std::int64_t feed_end = day::bar_close(bars.back(), kStep);
+    // The aggregate of the supplied bars that open in [from, to): first open,
+    // extreme high and low, last close, summed volume. False: none opens there.
+    const auto supplied = [&bars](std::int64_t from, std::int64_t to, Bar& out) {
+        bool any = false;
+        for (const Bar& bar : bars) {
+            if (bar.timestamp < from || bar.timestamp >= to) continue;
+            if (!any) {
+                out = bar;
+                any = true;
+                continue;
+            }
+            out.high = std::max(out.high, bar.high);
+            out.low = std::min(out.low, bar.low);
+            out.close = bar.close;
+            out.volume += bar.volume;
+        }
+        return any;
+    };
+
+    // Site 0. `rows` is what the host is given: one sentinel row per requested
+    // period that opened before its session-day stopped, except the second
+    // period of each session-day. `series` is what the site must evaluate, in
+    // order: the row where there is one, else the aggregate of the supplied
+    // bars of that period, labelled with the period's open; a period with
+    // neither is absent.
+    std::vector<Bar> rows;
+    std::vector<Bar> series;
+    for (int d = 0; d < days; ++d) {
+        int ordinal = 0;
+        for (int minute = day::kOpenMinute; minute < day::kCloseMinute;
+             minute += kRequested, ++ordinal) {
+            const std::int64_t open = day::at(d, minute);
+            if (minute < form.closes[static_cast<std::size_t>(d)] && ordinal != 1) {
+                const double value = 5000.5 + d * 1000 + (minute - day::kOpenMinute);
+                rows.push_back({value - 2, value + 4, value - 5, value,
+                                7000.5 + static_cast<double>(rows.size()), open});
+                series.push_back(rows.back());
+                continue;
+            }
+            const std::int64_t end = std::min(open + kRequested * minute_ms,
+                                              day::at(d, day::kCloseMinute));
+            Bar aggregate{};
+            if (!supplied(open, end, aggregate)) continue;
+            aggregate.timestamp = open;
+            series.push_back(aggregate);
+        }
+    }
+    // When each of them is complete: the fixture's exchange-calendar rule.
+    const auto closes = day::row_closes(series, kRequested, bars, kStep, true);
+
+    // The chart bars the supplied bars form. A chart bar closes at its own
+    // end on the session grid, clipped by the session close, whether or not
+    // its supplied bars reach that far.
+    struct ChartBar {
+        std::int64_t open_ms;
+        std::int64_t accepted_ms;  // the close of its last supplied bar
+        std::int64_t close_ms;
+        std::size_t first;         // its supplied bars: [first, last]
+        std::size_t last;
+    };
+    std::vector<ChartBar> charts;
+    for (std::size_t i = 0; i < bars.size(); ++i) {
+        const int d = day::day_of(bars[i].timestamp);
+        const int minute = static_cast<int>((bars[i].timestamp - day::at(d, 0)) / minute_ms);
+        const std::int64_t open =
+            day::at(d, day::kOpenMinute + (minute - day::kOpenMinute) / kChart * kChart);
+        if (charts.empty() || charts.back().open_ms != open) {
+            charts.push_back({open, 0, std::min(open + kChart * minute_ms,
+                                                 day::at(d, day::kCloseMinute)), i, i});
+        }
+        charts.back().accepted_ms = day::bar_close(bars[i], kStep);
+        charts.back().last = i;
+    }
+
+    // Site 2, every evaluation in order. One per supplied bar, carrying that
+    // bar's close. A chart bar its supplied bars complete publishes on the
+    // last of them. A chart bar they do not complete is calculated when a
+    // later supplied bar is accepted: its last value is published again, once,
+    // ahead of its body and ahead of that later bar. With no later supplied
+    // bar the run's last chart bar is never calculated.
+    std::vector<LaterInputProbe::FineEvaluation> fine;
+    std::vector<std::size_t> fine_before_chart;
+    std::size_t calculated = 0;
+    for (std::size_t c = 0; c < charts.size(); ++c) {
+        const ChartBar& chart = charts[c];
+        const bool completes = chart.accepted_ms >= chart.close_ms;
+        for (std::size_t i = chart.first; i <= chart.last; ++i)
+            fine.push_back({bars[i].close, completes && i == chart.last, false});
+        if (!completes) {
+            if (c + 1 == charts.size()) break;
+            fine.push_back({bars[chart.last].close, true, true});
+        }
+        fine_before_chart.push_back(fine.size());
+        ++calculated;
+    }
+
+    // Site 1: the whole session-days. A session-day is complete on its last
+    // supplied bar when that bar reaches the session close, or when a later
+    // session-day follows it (an exchange's early close).
+    struct DayBar {
+        Bar bar;
+        int session_day;
+        std::int64_t close_ms;  // the close of its last supplied bar
+    };
+    std::vector<DayBar> day_bars;
+    const int last_day = day::day_of(bars.back().timestamp);
+    for (int d = 0; d < days; ++d) {
+        Bar aggregate{};
+        if (!supplied(day::at(d, 0), day::at(d + 1, 0), aggregate)) continue;
+        std::int64_t close = 0;
+        for (const Bar& bar : bars) {
+            if (day::day_of(bar.timestamp) == d) close = day::bar_close(bar, kStep);
+        }
+        if (close < day::at(d, day::kCloseMinute) && d >= last_day) continue;
+        day_bars.push_back({aggregate, d, close});
+    }
+
+    LaterInputProbe host;
+    host.requested = std::to_string(kRequested);
+    host.fine = std::to_string(kFine);
+    host.gaps = gaps;
+    host.set_syminfo_timezone(day::kTimezone);
+    host.set_syminfo_session(day::kSession);
+    host.set_syminfo_type("stock");
+    LATER_INPUT_CHECK(strategy_set_native_security_feed(
+        static_cast<pf_strategy_t>(&host), host.requested.c_str(),
+        reinterpret_cast<const pf_bar_t*>(rows.data()),
+        static_cast<int>(rows.size())) == 0);
+    host.run(bars.data(), static_cast<int>(bars.size()), std::to_string(kStep),
+             std::to_string(kChart), false, 4, MagnifierDistribution::ENDPOINTS);
+    LATER_INPUT_CHECK(host.last_error().empty());
+
+    LATER_INPUT_CHECK(host.charts.size() == calculated);
+    std::int64_t previous = std::numeric_limits<std::int64_t>::min();
+    for (std::size_t i = 0; i < calculated && i < host.charts.size(); ++i) {
+        at = static_cast<int>(i);
+        const ChartBar& chart = charts[i];
+        LATER_INPUT_CHECK(host.charts[i].timestamp == chart.open_ms);
+
+        // Site 0: the latest period complete by this chart bar's close; with
+        // gaps, only one that completed after the previous chart bar's close.
+        // Never a period a later input completes, and never a row in place of
+        // the aggregate of a period that has no row.
+        const int want = day::expected_row(closes, chart.close_ms, previous, gaps);
+        previous = chart.close_ms;
+        const auto& got = host.period_reads[i];
+        LATER_INPUT_CHECK(got.present == (want >= 0));
+        if (got.present && want >= 0) {
+            const Bar& period = series[static_cast<std::size_t>(want)];
+            LATER_INPUT_CHECK(got.bar.timestamp == period.timestamp);
+            LATER_INPUT_CHECK(got.bar.open == period.open && got.bar.high == period.high);
+            LATER_INPUT_CHECK(got.bar.low == period.low && got.bar.close == period.close);
+            LATER_INPUT_CHECK(got.bar.volume == period.volume);
+        }
+
+        // Site 1: the latest session-day whose last supplied bar this chart
+        // bar holds or follows.
+        int day_want = -1;
+        for (std::size_t k = 0; k < day_bars.size(); ++k) {
+            if (day_bars[k].close_ms <= chart.accepted_ms) day_want = static_cast<int>(k);
+        }
+        const auto& day_got = host.day_reads[i];
+        LATER_INPUT_CHECK(day_got.present == (day_want >= 0));
+        if (day_got.present && day_want >= 0) {
+            const DayBar& whole = day_bars[static_cast<std::size_t>(day_want)];
+            LATER_INPUT_CHECK(day::day_of(day_got.bar.timestamp) == whole.session_day);
+            LATER_INPUT_CHECK(day_got.bar.open == whole.bar.open
+                              && day_got.bar.high == whole.bar.high);
+            LATER_INPUT_CHECK(day_got.bar.low == whole.bar.low
+                              && day_got.bar.close == whole.bar.close);
+            LATER_INPUT_CHECK(day_got.bar.volume == whole.bar.volume);
+        }
+
+        // Site 2: exactly this chart bar's own inputs, and its one
+        // publication, have been evaluated when its body runs.
+        LATER_INPUT_CHECK(host.fine_before_chart[i] == fine_before_chart[i]);
+    }
+
+    // Site 0: every period complete within the supplied bars is evaluated
+    // exactly once and in order, the aggregates included.
+    std::vector<Bar> evaluated;
+    for (std::size_t i = 0; i < series.size(); ++i) {
+        if (closes[i] <= feed_end) evaluated.push_back(series[i]);
+    }
+    at = -1;
+    LATER_INPUT_CHECK(host.period_evaluated.size() == evaluated.size());
+    for (std::size_t i = 0; i < evaluated.size() && i < host.period_evaluated.size(); ++i) {
+        at = static_cast<int>(i);
+        const Bar& seen = host.period_evaluated[i];
+        LATER_INPUT_CHECK(seen.timestamp == evaluated[i].timestamp);
+        LATER_INPUT_CHECK(seen.open == evaluated[i].open && seen.high == evaluated[i].high);
+        LATER_INPUT_CHECK(seen.low == evaluated[i].low && seen.close == evaluated[i].close);
+        LATER_INPUT_CHECK(seen.volume == evaluated[i].volume);
+    }
+
+    // Site 1: every complete session-day exactly once and in order.
+    at = -1;
+    LATER_INPUT_CHECK(host.day_evaluated.size() == day_bars.size());
+    for (std::size_t i = 0; i < day_bars.size() && i < host.day_evaluated.size(); ++i) {
+        at = static_cast<int>(i);
+        const Bar& seen = host.day_evaluated[i];
+        LATER_INPUT_CHECK(day::day_of(seen.timestamp) == day_bars[i].session_day);
+        LATER_INPUT_CHECK(seen.open == day_bars[i].bar.open && seen.high == day_bars[i].bar.high);
+        LATER_INPUT_CHECK(seen.low == day_bars[i].bar.low && seen.close == day_bars[i].bar.close);
+        LATER_INPUT_CHECK(seen.volume == day_bars[i].bar.volume);
+    }
+
+    // Site 2: every supplied bar exactly once and in order, each chart bar's
+    // one publication in its place.
+    at = -1;
+    LATER_INPUT_CHECK(host.fine_evaluated.size() == fine.size());
+    for (std::size_t i = 0; i < fine.size() && i < host.fine_evaluated.size(); ++i) {
+        at = static_cast<int>(i);
+        LATER_INPUT_CHECK(host.fine_evaluated[i].close == fine[i].close);
+        LATER_INPUT_CHECK(host.fine_evaluated[i].publication == fine[i].publication);
+        LATER_INPUT_CHECK(host.fine_evaluated[i].replay == fine[i].replay);
+    }
+}
+#undef LATER_INPUT_CHECK
+
+// The inputs that follow a chart bar calculated ahead of its completion keep
+// reaching every request.security site. Each form leaves one 60-minute chart
+// bar short of its close and supplies more bars after it:
+//   - a session-day that closes at 13:00, then a whole one;
+//   - bars missing from 13:00 to 14:30 inside a session-day;
+//   - two early session-days in a row (13:00, then 12:30): the second one's
+//     last input still ends the requested period it leaves open;
+//   - a last session-day that stops at 11:00, inside a chart bar.
+void test_inputs_after_a_chart_bar_calculated_ahead_reach_every_site() {
+    namespace day = native_fixed_period_fixture::exchange;
+    const int whole = day::kCloseMinute;
+    const LaterInputForm forms[] = {
+        {"early close", {whole, 13 * 60, whole}, -1, 0, 0},
+        {"hole", {whole, whole, whole}, 0, 13 * 60, 14 * 60 + 30},
+        {"two early closes", {whole, 13 * 60, 12 * 60 + 30, whole}, -1, 0, 0},
+        {"partial last day", {whole, 13 * 60, 11 * 60}, -1, 0, 0},
+    };
+    for (const LaterInputForm& form : forms) {
+        for (bool gaps : {false, true}) check_later_input_tape(form, gaps);
+    }
+}
 #undef FIXED_CHECK
 } // namespace
 
@@ -1001,6 +1355,7 @@ int main() {
     test_native_fixed_period_early_close_gate();
     test_native_fixed_period_session_hole_is_not_a_close();
     test_native_divisible_period_early_close_is_kept();
+    test_inputs_after_a_chart_bar_calculated_ahead_reach_every_site();
     return fixed_failures == 0 ? 0 : 1;
 }
 
