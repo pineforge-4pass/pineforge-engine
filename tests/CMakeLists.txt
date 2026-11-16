@@ -303,6 +303,7 @@ set(TEST_SOURCES
     test_o_close_pct_day_anchor
     test_oanda_lazy_close
     test_historical_security_lookahead_projection
+    test_security_projection_clipped_bucket
     test_security_range_start_na_warmup
     test_security_range_start_bucket_gating
     test_chart_ema_na_warmup
@@ -405,6 +406,7 @@ set(TEST_SOURCES
     test_bracket_lifecycle_declined_reversal
     test_exit_bracket_pending_entry_leg
     test_exit_refire_after_own_fill
+    test_issue694_reported_exits
     test_dual_entry_placement_sizing
     test_fams_same_bar_market_tx
     test_default_flat_market_gross_admission
@@ -3961,6 +3963,54 @@ endif()
 foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
+
+if(TARGET test_security_projection_clipped_bucket)
+    # Compile the same input in both overload modes. The positive compile
+    # establishes the header closure; the negative must name the deleted
+    # registration. The unit's ordinary ctest row still runs every host case.
+    function(pineforge_check_security_literal_binding)
+        set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+        get_target_property(pf_registration_eigen_includes
+            Eigen3::Eigen INTERFACE_INCLUDE_DIRECTORIES)
+        set(pf_registration_includes
+            "${PROJECT_SOURCE_DIR}/include" "${PROJECT_BINARY_DIR}/include"
+            ${pf_registration_eigen_includes})
+        set(pf_registration_compile_flags -UNDEBUG -ffp-contract=off)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "^(Clang|AppleClang)$")
+            # Match pineforge's public header parsing allowance.
+            list(APPEND pf_registration_compile_flags -fbracket-depth=1024)
+        endif()
+        try_compile(PF_SECURITY_REGISTRATION_POSITIVE
+            "${CMAKE_CURRENT_BINARY_DIR}/security-registration-positive"
+            SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/test_security_projection_clipped_bucket.cpp"
+            CMAKE_FLAGS "-DINCLUDE_DIRECTORIES:STRING=${pf_registration_includes}"
+            COMPILE_DEFINITIONS ${pf_registration_compile_flags}
+            CXX_STANDARD 17 CXX_STANDARD_REQUIRED TRUE
+            OUTPUT_VARIABLE pf_registration_positive_output)
+        if(NOT PF_SECURITY_REGISTRATION_POSITIVE)
+            message(FATAL_ERROR "security registration positive compile failed:\n"
+                "${pf_registration_positive_output}")
+        endif()
+        try_compile(PF_SECURITY_REGISTRATION_NEGATIVE
+            "${CMAKE_CURRENT_BINARY_DIR}/security-registration-negative"
+            SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/test_security_projection_clipped_bucket.cpp"
+            CMAKE_FLAGS "-DINCLUDE_DIRECTORIES:STRING=${pf_registration_includes}"
+            COMPILE_DEFINITIONS ${pf_registration_compile_flags}
+                -DPINEFORGE_TEST_SECURITY_LITERAL_NEGATIVE=1
+            CXX_STANDARD 17 CXX_STANDARD_REQUIRED TRUE
+            OUTPUT_VARIABLE pf_registration_negative_output)
+        file(APPEND "${CMAKE_BINARY_DIR}/CMakeFiles/CMakeOutput.log"
+            "\nSecurity registration positive compile:\n${pf_registration_positive_output}"
+            "\nSecurity registration negative compile:\n${pf_registration_negative_output}\n")
+        if(PF_SECURITY_REGISTRATION_NEGATIVE
+            OR NOT pf_registration_negative_output MATCHES
+                "(deleted[^\n]*register_security_eval|register_security_eval[^\n]*deleted)")
+            message(FATAL_ERROR "security foreign literal did not select the deleted overload:\n"
+                "${pf_registration_negative_output}")
+        endif()
+    endfunction()
+    pineforge_check_security_literal_binding()
+endif()
 
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     target_link_libraries(test_runtime_context_failures PRIVATE Threads::Threads)
@@ -7602,6 +7652,8 @@ set(PINEFORGE_PR_FAST_TESTS
     test_native_bare_host_contracts
     test_native_kernel_edge
     test_abi_layout_probe
+    test_exit_refire_after_own_fill
+    test_issue694_reported_exits
 )
 
 # CR-150 P00: append after the pre-existing line-pinned registrations.

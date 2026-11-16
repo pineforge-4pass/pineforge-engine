@@ -508,6 +508,12 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         f.s(exit.exit_id); f.s(exit.from_entry); f.d(exit.trail_points); f.d(exit.trail_offset);
         f.d(exit.trail_price); f.d(exit.qty_percent); f.s(exit.comment); f.d(exit.qty);
         f.s(exit.oca_name); f.d(exit.profit_ticks); f.d(exit.loss_ticks);
+        if (!std::isnan(exit.limit_price) || !std::isnan(exit.stop_price)) {
+            f.s("absolute-siblings"); f.d(exit.limit_price); f.d(exit.stop_price);
+        }
+        if (exit.command_sequence != 0) {
+            f.s("entry-call-cutoff"); f.u(exit.command_sequence);
+        }
         // Folded only when set, like PlacementSnapshot::void_global_issue.
         if (exit.void_global) f.u(0x766f6964676cULL);
         if (exit.reservation_sequence != 0) {
@@ -547,6 +553,9 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         for (const auto& exit : per_entry_exits_) {
             f.s(exit.exit_id); f.i(exit.cycle); f.b(exit.long_side);
             f.d(exit.profit_ticks); f.d(exit.loss_ticks); f.s(exit.comment);
+            if (!exit.from_entry.empty()) {
+                f.s("entry-selector"); f.s(exit.from_entry); f.u(exit.command_sequence);
+            }
             f.u(exit.children.size());
             for (const auto& child : exit.children) {
                 f.u(child.origin); f.d(child.fill_price); f.d(child.units); f.b(child.consumed);
@@ -1238,6 +1247,10 @@ void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const
         for (const auto& [sec_id, pine] : pine_security_states_) {
             f.i(sec_id);
             f.b(pine.lookahead_on);
+            if (pine.historical_lookahead_projection) {
+                f.s("historical-lookahead-projection");
+                f.b(pine.historical_lookahead_projection);
+            }
             f.b(pine.gaps_on);
             f.i(pine.publish_gate_tf_seconds);
             f.b(pine.calling_close_completes_partial);
