@@ -148,10 +148,9 @@ def _path_selection_requested(args) -> bool:
     )
 
 
-# Keys in inputs.json that are validator/harness metadata, not Pine input()
-# values. Mirrors the canonical validator's VALIDATION_INPUT_META_KEYS so
-# they are not forwarded to ``strategy_set_input`` (which would either
-# silently no-op or pollute the strategy's input table).
+# This exported set is also used by unbound jailed/stream consumers. Keep its
+# historical membership: only the receipt-bound classifier may drop new keys.
+_CORPUS_ARTIFACT_META_KEYS = frozenset({"expected_tier", "notes", "_comment"})
 _VALIDATION_META_KEYS = frozenset({
     "tv_trades_csv_tz",
     "tv_trades_csv",
@@ -167,6 +166,77 @@ _VALIDATION_META_KEYS = frozenset({
     "input_tf",
     "chart_timezone",
 })
+
+
+def _is_corpus_metadata_key(key) -> bool:
+    key = str(key)
+    return (key.startswith("tv_") or key in _VALIDATION_META_KEYS
+            or key in _CORPUS_ARTIFACT_META_KEYS)
+
+
+def corpus_input_values(params, *, declared_input_names=None) -> dict[str, str]:
+    """Separate explicit metadata from Pine settings without dropping unknowns.
+
+    Names are the literal ``inputs[].name`` values in the module's effective
+    settings receipt, not Pine variable aliases. Without a binding, a
+    metadata-spelled key might be a real input and cannot safely be discarded.
+    Every other key reaches the native setter, including unrecognized keys.
+    """
+    if declared_input_names is None:
+        if any(_is_corpus_metadata_key(key) for key in params):
+            raise RuntimeError(
+                "NEEDS declared Pine input binding from "
+                "strategy_get_effective_settings before classifying corpus metadata")
+        declared_input_names = ()
+    declared = frozenset(declared_input_names)
+    return {
+        str(key): str(value) for key, value in params.items()
+        if str(key) in declared or not _is_corpus_metadata_key(key)
+    }
+
+
+def declared_pine_input_names(lib, state) -> frozenset[str]:
+    """Read the existing v1 settings receipt; a missing binding is never empty."""
+    version = getattr(lib, "strategy_settings_api_version", None)
+    getter = getattr(lib, "strategy_get_effective_settings", None)
+    if version is None or getter is None:
+        raise RuntimeError(
+            "NEEDS strategy_get_effective_settings and "
+            "strategy_settings_api_version for declared Pine input binding")
+    version.argtypes = []
+    version.restype = ctypes.c_uint32
+    if version() != 1:
+        raise RuntimeError("NEEDS settings API v1 for declared Pine input binding")
+    getter.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t,
+    ]
+    getter.restype = ctypes.c_int
+    required = ctypes.c_size_t()
+    error = ctypes.create_string_buffer(1024)
+    # PF_SETTINGS_BUFFER_TOO_SMALL=4 and PF_SETTINGS_OK=0, pineforge.h.
+    status = getter(state, None, 0, ctypes.byref(required), error, len(error))
+    if status != 4 or required.value == 0:
+        raise RuntimeError(
+            f"NEEDS declared Pine input receipt: size query returned {status}: "
+            + error.value.decode("utf-8", "replace"))
+    capacity = required.value
+    receipt = ctypes.create_string_buffer(capacity)
+    status = getter(state, receipt, capacity, ctypes.byref(required), error, len(error))
+    if (status != 0 or required.value > capacity
+            or required.value != len(receipt.value) + 1):
+        raise RuntimeError(
+            f"NEEDS declared Pine input receipt: read returned {status}: "
+            + error.value.decode("utf-8", "replace"))
+    try:
+        rows = json.loads(receipt.value.decode("utf-8"))["inputs"]
+        if (not isinstance(rows, list)
+                or any(not isinstance(row, dict)
+                       or not isinstance(row.get("name"), str) for row in rows)):
+            raise ValueError("inputs must list literal descriptor names")
+        return frozenset(row["name"] for row in rows)
+    except (ValueError, TypeError, KeyError) as error:
+        raise RuntimeError("NEEDS valid declared Pine input receipt") from error
 
 # >>> fingerprint helpers (DUPLICATED verbatim in scripts/run_strategy.py;
 #     scripts/ is .dockerignore'd so this cannot be a shared module.
@@ -2380,6 +2450,21 @@ class Strategy:
         return (hasattr(self.lib, "strategy_declares_bar_magnifier")
                 and self.lib.strategy_declares_bar_magnifier() == 1)
 
+    def corpus_inputs(self, params, state=None) -> dict[str, str]:
+        """Bind metadata collisions to this module, optionally on its live state."""
+        if not any(_is_corpus_metadata_key(key) for key in params):
+            return corpus_input_values(params)
+        if state is not None:
+            return corpus_input_values(
+                params, declared_input_names=declared_pine_input_names(self.lib, state))
+        state = self.lib.strategy_create(b"{}")
+        if not state:
+            raise RuntimeError("NEEDS a strategy handle for declared Pine input binding")
+        try:
+            return self.corpus_inputs(params, state)
+        finally:
+            self.lib.strategy_free(state)
+
     def _setup_signatures(self) -> None:
         L = self.lib
         L.strategy_create.argtypes = [ctypes.c_char_p]
@@ -2952,6 +3037,7 @@ class Strategy:
         sink = None
         result_ready = False
         try:
+            inputs = self.corpus_inputs(params, state)
             if os.environ.get(REPORT_SINK_ENV) == "1":
                 sink = _new_harness_report_sink(self.lib, state)
             # Strategy-property overrides (commission/slippage/pyramiding/...)
@@ -3058,16 +3144,14 @@ class Strategy:
                 self.lib.strategy_set_syminfo_mintick(state, float(syminfo_mintick))
             if syminfo_pointvalue is not None and hasattr(self.lib, "strategy_set_syminfo_pointvalue"):
                 self.lib.strategy_set_syminfo_pointvalue(state, float(syminfo_pointvalue))
+            if inputs and not hasattr(self.lib, "strategy_set_input"):
+                raise RuntimeError("NEEDS strategy_set_input for supplied Pine inputs")
             if hasattr(self.lib, "strategy_set_input"):
-                for key, value in params.items():
-                    if key.startswith("tv_"):
-                        continue
-                    if key in _VALIDATION_META_KEYS:
-                        continue
+                for key, value in inputs.items():
                     self.lib.strategy_set_input(
                         state,
-                        str(key).encode(),
-                        str(value).encode(),
+                        key.encode(),
+                        value.encode(),
                     )
             input_tf_b = (input_tf or "").encode()
             script_tf_b = (script_tf or "").encode()
@@ -3220,6 +3304,9 @@ class Strategy:
             _add_run_warnings(self.lib, state, diagnostics)
             if diagnostics:
                 result["diagnostics"] = diagnostics
+            # Preserve the exact values sent on this live handle for provenance.
+            # Fingerprinting must not reclassify on a fresh strategy instance.
+            result["applied_inputs"] = dict(inputs)
             result_ready = True
             return result
         finally:
@@ -4587,11 +4674,6 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
     if dist.upper() == "VOLUME_WEIGHTED":
         dist = "ENDPOINTS"
 
-    # Inputs forwarded to the engine: same filter as Strategy.run (drop tv_*/meta).
-    inputs_for_image = {
-        str(k): str(v) for k, v in params.items()
-        if not str(k).startswith("tv_") and k not in _VALIDATION_META_KEYS
-    }
     # syminfo from runtime_overrides. apply_syminfo covers mintick/pointvalue/
     # timezone/session; syminfo_metadata (fundamentals, and the lane's
     # syminfo.mincontract) is NOT covered, nor is a declared bar magnifier (the
@@ -4617,7 +4699,6 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
         str(k): str(v) for k, v in (run_kwargs.get("strategy_overrides") or {}).items()
     }
     kw = dict(
-        inputs=inputs_for_image,
         overrides=overrides_for_image,
         input_tf=run_kwargs.get("input_tf") or "",
         script_tf=run_kwargs.get("script_tf") or "",
@@ -4629,6 +4710,11 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
         chart_tz=run_kwargs.get("chart_timezone") or "",
         syminfo=syminfo or None,
     )
+    if any(_is_corpus_metadata_key(key) for key in params):
+        # Classification waits for the selected image's actual compiled module.
+        kw["corpus_params"] = params
+    else:
+        kw["inputs"] = corpus_input_values(params)
     if image:
         kw["image"] = image
     try:
@@ -5174,13 +5260,13 @@ def _main_run(args, resources) -> int:
                 }, f)
             print(f"  dump-book: wrote {len(book)} resting order(s) to {args.dump_book}")
     if args.fingerprint_json is not None:
+        if strat is None:
+            raise RuntimeError("NEEDS native engine provenance for --fingerprint-json")
+        if "applied_inputs" not in report:
+            raise RuntimeError("NEEDS inputs applied by this run for --fingerprint-json")
+        inputs_applied = report["applied_inputs"]
         try:
             cpp_path = strategy_dir / "generated.cpp"
-            # Inputs actually forwarded to the engine (drop tv_*/validator meta keys).
-            inputs_applied = {
-                str(k): str(v) for k, v in params.items()
-                if not str(k).startswith("tv_") and k not in _VALIDATION_META_KEYS
-            }
             overrides_applied = {
                 str(k): str(v) for k, v in (run_kwargs.get("strategy_overrides") or {}).items()
             }
@@ -5209,7 +5295,7 @@ def _main_run(args, resources) -> int:
                 json.dump(fp, f, indent=2)
             print(f"  fingerprint -> {args.fingerprint_json} ({fp['digest']})")
         except Exception as e:
-            print(f"  fingerprint: skipped ({e})", file=sys.stderr)
+            raise RuntimeError(f"NEEDS requested fingerprint: {e}") from e
     if isinstance(report, _SinkReport):
         # Every output is written; the sink is still open (the ExitStack
         # closes it after this function returns), so the canary can still
