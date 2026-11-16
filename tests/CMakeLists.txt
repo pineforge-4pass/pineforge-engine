@@ -8641,6 +8641,21 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 endif()
 # --- lane closed-rows-debug-fold-slope end ---
 
+# Named percentage trails use ordinary reservations, not PerEntryExit caps.
+# Registered before the PR fast-row registration below, which stays the
+# file's last code (the workflow contract in scripts/ci_preflight.py).
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES
+        test_named_percent_trail_ownership test_named_relative_exit_controls)
+    pineforge_add_unit_test(test_named_percent_trail_ownership)
+    pineforge_add_unit_test(test_named_relative_exit_controls)
+endif()
+
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_pooc_explicit_close_reversal_qty)
+    pineforge_add_unit_test(test_pooc_explicit_close_reversal_qty)
+endif()
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
@@ -8668,18 +8683,4 @@ foreach(_pf_registered_test IN LISTS _pf_registered_tests)
 endforeach()
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_custom_target(pineforge_pr_smoke DEPENDS ${PINEFORGE_PR_FAST_TESTS})
-endif()
-
-# Named percentage trails use ordinary reservations, not PerEntryExit caps.
-# Append after the line-pinned registrations.
-if(PINEFORGE_BUILD_SOURCE_LAYER)
-    list(APPEND TEST_SOURCES
-        test_named_percent_trail_ownership test_named_relative_exit_controls)
-    pineforge_add_unit_test(test_named_percent_trail_ownership)
-    pineforge_add_unit_test(test_named_relative_exit_controls)
-endif()
-
-if(PINEFORGE_BUILD_SOURCE_LAYER)
-    list(APPEND TEST_SOURCES test_pooc_explicit_close_reversal_qty)
-    pineforge_add_unit_test(test_pooc_explicit_close_reversal_qty)
 endif()
