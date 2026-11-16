@@ -927,6 +927,13 @@ Two session-flag questions the session-day rule left open were decided by the ke
 | Final script bucket | Batch end and `stream_end(true)` calculate a pending bucket if its final contributing input reached the calendar's last-traded close. `stream_end(false)` and a feed stopped inside its session leave it pending. | Completion follows the declared session and input intervals, not a source-language end-of-history flag. There is no completion policy field. | `tests/test_native_kernel_edge.cpp` B1; two unpublished audit probes |
 | Host report mark | `NativeStrategyHost::mark_native_report_point` exposes the existing kernel report producer to a C++ host that chose `KernelRecordedAtHostMarks`, and answers whether a mark was accepted. C still has no value for this policy. | A host supplies only the timestamp and cadence; the kernel defines the equity point for every venue. The existing report policy is the choice, so no new knob is needed. | `tests/test_native_kernel_edge.cpp` G1; an unpublished audit probe |
 
+The final-script-bucket row describes the default native-host lifecycle.
+Ordinary historical Pine calendar-chart runs also calculate their last
+available aggregate at the supplied input horizon, as specified in
+[Strategy lifecycle](@ref lifecycle_historical_calendar_tail). That chart
+calculation creates no input bar and does not complete a pending requested
+series. Continuing streams keep their normal completion rules.
+
 `FeedTolerant` warmup may omit in-session slots while realtime confirmed-bar
 pushes still refuse an in-session gap under either slot-label policy. This is a
 feed admission asymmetry, documented with the stream contract; it introduces

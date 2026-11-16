@@ -64,6 +64,21 @@ Or for the common case of "auto-detect timeframe, no magnifier":
 run_backtest(s, bars, n, &r);
 ```
 
+### Final calendar chart bar in historical runs {#lifecycle_historical_calendar_tail}
+
+An ordinary historical Pine run that aggregates input into calendar chart
+bars calculates its last available chart aggregate when the supplied input
+ends, even when that calendar period has not ended. One confirmed input bar
+is enough to contribute a final chart bar; the calculation uses only the
+confirmed inputs supplied to that run.
+
+This final chart calculation does not manufacture missing input bars or
+complete a still-open requested-series period. An earlier chart callback
+still observes its own last contributing child before the next period's
+retained input becomes visible. Continuing streams and their warmup keep
+their pending aggregate under the stream lifecycle. Explicit chart
+partitions, selected windows and live-tail runs retain their own end rules.
+
 ### Continue from historical bars into realtime trades
 
 Use the stream lifecycle when the data source changes but the strategy
