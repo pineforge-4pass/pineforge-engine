@@ -62,7 +62,7 @@ gain:
 - **Your own decision model.** `on_native_bar` is an ordinary C++ member
   function (native_host.hpp:913). Any data structure, any library, any
   precomputation — no Pine type system, no series-of-everything.
-- **Explicit setup.** One `NativeRunSpec` (native_run_spec.hpp:622) names the
+- **Explicit setup.** One `NativeRunSpec` (native_run_spec.hpp:626) names the
   clock, instrument, account, fees and caps. Nothing is inferred from the bars
   and nothing comes from a chart.
 - **Typed orders and typed outcomes.** A request is a value
@@ -112,7 +112,7 @@ missing summary line (examples/native/run_example.cmake:1).
 
 A Pine script declares its broker once, in the `strategy()` call, and inherits
 the rest from the chart. A native host declares *everything* in one
-`NativeRunSpec` (native_run_spec.hpp:622) applied by `configure_native`
+`NativeRunSpec` (native_run_spec.hpp:626) applied by `configure_native`
 (native_host.hpp:1222); a C host sends `pf_native_run_spec_v1`
 (pineforge.h:500) plus `pf_native_run_spec_ext_v1` (native_c_api.h:2322)
 through `strategy_configure_native_ext_v1` (native_c_api.h:3187). Setup is
@@ -121,20 +121,20 @@ rather than defaulted.
 
 | Pine | C++ | C | Runs in | Notes |
 | --- | --- | --- | --- | --- |
-| `strategy()` | `NativeRunSpec` native_run_spec.hpp:622 | `pf_native_run_spec_v1` pineforge.h:500 | `hello_kernel.cpp` / `hello_kernel_c.c` | One atomic setup value. `validate_native_run_spec` native_run_spec.hpp:916 names the offending field before a run begins. |
-| `initial_capital` | `initial_capital` native_run_spec.hpp:648 | `initial_capital` pineforge.h:506 | `hello_kernel.cpp` | Required, positive. |
-| `currency` | `currency` native_run_spec.hpp:639 | `currency` pineforge.h:504 | `hello_kernel.cpp` | With `ticker` native_run_spec.hpp:636, `tickerid` native_run_spec.hpp:637, `type` native_run_spec.hpp:638, `basecurrency` native_run_spec.hpp:640, `description` native_run_spec.hpp:641 and `volumetype` native_run_spec.hpp:642 this is Pine's whole `syminfo` block, named rather than inherited from a chart. |
+| `strategy()` | `NativeRunSpec` native_run_spec.hpp:626 | `pf_native_run_spec_v1` pineforge.h:500 | `hello_kernel.cpp` / `hello_kernel_c.c` | One atomic setup value. `validate_native_run_spec` native_run_spec.hpp:920 names the offending field before a run begins. |
+| `initial_capital` | `initial_capital` native_run_spec.hpp:652 | `initial_capital` pineforge.h:506 | `hello_kernel.cpp` | Required, positive. |
+| `currency` | `currency` native_run_spec.hpp:643 | `currency` pineforge.h:504 | `hello_kernel.cpp` | With `ticker` native_run_spec.hpp:640, `tickerid` native_run_spec.hpp:641, `type` native_run_spec.hpp:642, `basecurrency` native_run_spec.hpp:644, `description` native_run_spec.hpp:645 and `volumetype` native_run_spec.hpp:646 this is Pine's whole `syminfo` block, named rather than inherited from a chart. |
 | `commission_type` | `NativeFeeKind` native_run_spec.hpp:19 | `fee_kind` pineforge.h:507 | `native_open_lots_strategy.cpp` | `Percent`, `CashPerUnit`, `CashPerExecution` — the same three TradingView offers. |
-| `commission_value` | `fee_value` native_run_spec.hpp:658 | `fee_value` pineforge.h:507 | `native_open_lots_strategy.cpp` | Quoted per execution by `quote_execution_commissions` engine_execution.cpp:1690. A cash-per-execution ticket is split by units over every slice of that execution. |
-| `slippage` | `slippage_ticks` native_run_spec.hpp:652 | `slippage_ticks` pineforge.h:507 | `native_price_grid_strategy.cpp` | Raw `ticks * price_tick`, applied once by `native_matching::apply_slippage` native_execution_consumer.cpp:7763. TradingView's round-then-slip order is adapter-only. |
-| `process_orders_on_close` | `NativeCloseExecution` native_run_spec.hpp:33 | `close_execution` pineforge.h:508 | `native_open_lots_strategy.cpp` | `AfterCalculation` emits the post-calculation close point native_execution_consumer.cpp:9343, so a request submitted in bar *k*'s calculation fills at bar *k*'s own close. |
-| `pyramiding` | `max_open_lots` native_run_spec.hpp:664 | `max_open_lots` pineforge.h:510 | `native_open_lots_strategy.cpp` | Caps surviving+new physical lots (`resulting_lot_count` native_execution_consumer.cpp:4078). The Pine adapter keeps its own per-cycle *entry count*, ruled **adapter-policy** in ADR-0001's table row `max_open_lots`; measured against TradingView it is not TradingView's rule, and this cap is the closer one (14 of 15 tape scenarios against 13, the private test `test_pyramiding_count_differential`). Lowered onto the cap, four corpus probes move away from TradingView, for want of its first-eligible-point rule, so the adapter keeps its count. |
+| `commission_value` | `fee_value` native_run_spec.hpp:662 | `fee_value` pineforge.h:507 | `native_open_lots_strategy.cpp` | Quoted per execution by `quote_execution_commissions` engine_execution.cpp:1690. A cash-per-execution ticket is split by units over every slice of that execution. |
+| `slippage` | `slippage_ticks` native_run_spec.hpp:656 | `slippage_ticks` pineforge.h:507 | `native_price_grid_strategy.cpp` | Raw `ticks * price_tick`, applied once by `native_matching::apply_slippage` native_execution_consumer.cpp:7767. TradingView's round-then-slip order is adapter-only. |
+| `process_orders_on_close` | `NativeCloseExecution` native_run_spec.hpp:33 | `close_execution` pineforge.h:508 | `native_open_lots_strategy.cpp` | `AfterCalculation` emits the post-calculation close point native_execution_consumer.cpp:9347, so a request submitted in bar *k*'s calculation fills at bar *k*'s own close. |
+| `pyramiding` | `max_open_lots` native_run_spec.hpp:668 | `max_open_lots` pineforge.h:510 | `native_open_lots_strategy.cpp` | Caps surviving+new physical lots (`resulting_lot_count` native_execution_consumer.cpp:4082). The Pine adapter keeps its own per-cycle *entry count*, ruled **adapter-policy** in ADR-0001's table row `max_open_lots`; measured against TradingView it is not TradingView's rule, and this cap is the closer one (14 of 15 tape scenarios against 13, the private test `test_pyramiding_count_differential`). Lowered onto the cap, four corpus probes move away from TradingView, for want of its first-eligible-point rule, so the adapter keeps its count. |
 | `default_qty_type` | `Sized` native_order.hpp:186 with `CashValue` native_order.hpp:113 or `EquityFraction` native_order.hpp:119 | `PF_NATIVE_INTENT_SIZED` native_c_api.h:360 with `size_basis` native_c_api.h:2159 | `native_sized_report_strategy.cpp` | The size is a property of the *request*, not of the run: a native host may size one order by cash and the next by equity fraction. `Transact` native_order.hpp:62 is the fixed-units form. Pine itself has no per-call `qty_type` — TradingView's compiler refuses one — so a script's `strategy.entry(qty = ...)` is always units; the source layer's typed per-call entry, which only generated or C++ callers reach, converts its money exactly as the declared default does. |
 | `default_qty_value` | the basis's own scalar: `CashValue::cash` native_order.hpp:114, `EquityFraction::fraction` native_order.hpp:120 | `intent_value` native_c_api.h:2163 | `native_sized_report_strategy.cpp` | `SizeTime` native_order.hpp:128 chooses *when* the basis resolves and `SizePrice` native_order.hpp:168 *which* price it converts at; both compose. |
-| `calc_on_order_fills` | `NativeCalculationTrigger` native_run_spec.hpp:94 | `calculation` native_c_api.h:2333 | `native_calc_on_fills_strategy.cpp` | `BarCloseAndFills` recalculates once at the cursor of each applied execution, bounded by `max_recalculations_per_point` native_run_spec.hpp:695. The generic cadence only: TradingView's waypoint-only refill, its two-fills-at-open rule and its script-state rollback stay in the adapter. |
+| `calc_on_order_fills` | `NativeCalculationTrigger` native_run_spec.hpp:94 | `calculation` native_c_api.h:2333 | `native_calc_on_fills_strategy.cpp` | `BarCloseAndFills` recalculates once at the cursor of each applied execution, bounded by `max_recalculations_per_point` native_run_spec.hpp:699. The generic cadence only: TradingView's waypoint-only refill, its two-fills-at-open rule and its script-state rollback stay in the adapter. |
 | `calc_on_every_tick` | `NativeCalculationTrigger` native_run_spec.hpp:94 | `calculation` native_c_api.h:2333 | `native_calc_on_fills_strategy.cpp` | `EveryModeledPoint` additionally recalculates at every modeled point of the delivered path and at every observed print. In a stream, `on_native_tick` native_host.hpp:898 is one call per accepted realtime print whatever the trigger is. |
 | `margin_long` | `NativeMarginModel::initial_long` native_run_spec.hpp:241 | `margin_initial_long` native_c_api.h:2343 | `native_margin_strategy.cpp` | A fraction, not a percent. `0.0` is the maintenance-only spelling for that side: the kernel enforces no opening requirement there and the host owns opening admission. |
-| `margin_short` | `NativeMarginModel::initial_short` native_run_spec.hpp:242 | `margin_initial_short` native_c_api.h:2347 | `native_margin_strategy.cpp` | Per side, unlike the one-scalar `initial_margin_fraction` native_run_spec.hpp:666 the model replaces. `maintenance_long` native_run_spec.hpp:243 / `maintenance_short` native_run_spec.hpp:244 add the liquidation half Pine has no word for. |
+| `margin_short` | `NativeMarginModel::initial_short` native_run_spec.hpp:242 | `margin_initial_short` native_c_api.h:2347 | `native_margin_strategy.cpp` | Per side, unlike the one-scalar `initial_margin_fraction` native_run_spec.hpp:670 the model replaces. `maintenance_long` native_run_spec.hpp:243 / `maintenance_short` native_run_spec.hpp:244 add the liquidation half Pine has no word for. |
 | `close_entries_rule` | none — a native close names the lots it closes | — | `native_selected_strategy.cpp` | Pine picks FIFO or ANY for the whole script. A native reduce is explicit instead: `BindOpening` native_order.hpp:467 closes one opening's lots, `BindOpenings` native_order.hpp:513 a chosen set, a bare `Reduce` native_order.hpp:242 the book in FIFO order. The adapter keeps the run-level rule (`close_entries_rule` pine_adapter.hpp:106). |
 | `backtest_fill_limits_assumption` | none — a generic limit fills when the level is reached | — | `tests/test_native_order_core.cpp` | TradingView's assumption is "the price must exceed the limit by *n* ticks". The generic knob beside it is `Limit::fill_through` native_order.hpp:261, which makes a limit market-if-touched; the *n*-tick assumption itself is a TradingView rule and stays in the adapter. |
 | `use_bar_magnifier` | `IntrabarPath` native_run_spec.hpp:378 | `intrabar_kind` native_c_api.h:2386 | `tests/test_native_calc_timing.cpp` | The host owns the lower bars, as `lower_tf` native_run_spec.hpp:394 or `synthesized` native_run_spec.hpp:408. The C magnifier arguments of `run_backtest_full` pineforge.h:615 configure a *compiled Pine strategy*, never a native host; its lower bars are TradingView's own intrabars, built from the finer feed at TradingView's table's timeframe (2 minutes on a 15-minute chart) and owned by the chart bar holding their last minute (`tradingview_magnifier_bars` magnifier_intrabars.hpp:46, @ref magnifier_intrabars). |
@@ -296,7 +296,7 @@ is `strategy_native_submit_v1` native_c_api.h:2754 over a
 | `strategy.oca.reduce` | `GroupEffect::Reduce` native_order.hpp:526 | `PF_NATIVE_GROUP_REDUCE` native_c_api.h:491 | `tests/test_native_resting_group_contract.cpp` | The sibling's quantity is reduced instead of cancelled. |
 | `strategy.oca.none` | `NoGroup` native_order.hpp:527 | `PF_NATIVE_GROUP_NONE` native_c_api.h:484 | `hello_kernel.cpp` | The default: no group, no sibling effect. |
 | `strategy.direction.all` | `NativeOpenDirections::Both` native_run_spec.hpp:76 | `allowed_open_directions` pineforge.h:508 | `native_risk_limits_strategy.cpp` | The default. |
-| `strategy.direction.long` | `NativeOpenDirections::Long` native_run_spec.hpp:74 | `allowed_open_directions` pineforge.h:508 | `tests/test_native_run_spec.cpp` | An opening the direction forbids is refused with `OpeningDirection` native_execution_consumer.cpp:4067. |
+| `strategy.direction.long` | `NativeOpenDirections::Long` native_run_spec.hpp:74 | `allowed_open_directions` pineforge.h:508 | `tests/test_native_run_spec.cpp` | An opening the direction forbids is refused with `OpeningDirection` native_execution_consumer.cpp:4071. |
 | `strategy.direction.short` | `NativeOpenDirections::Short` native_run_spec.hpp:75 | `allowed_open_directions` pineforge.h:508 | `tests/test_native_run_spec.cpp` | Same, the other way. |
 | `strategy.commission.percent` | `NativeFeeKind::Percent` native_run_spec.hpp:20 | `fee_kind` pineforge.h:507 | `native_sized_report_strategy.cpp` | `fee_value` is percent ÷ 100 of the absolute account notional. |
 | `strategy.commission.cash_per_contract` | `NativeFeeKind::CashPerUnit` native_run_spec.hpp:21 | `fee_kind` pineforge.h:507 | `tests/test_native_selected_requests.cpp` | Account currency per unit. |
@@ -405,8 +405,8 @@ block is the `PF_NATIVE_SPEC_EXT_RISK` native_c_api.h:751 tail.
 
 | Pine | C++ | C | Runs in | Notes |
 | --- | --- | --- | --- | --- |
-| `strategy.risk.allow_entry_in()` | `allowed_open_directions` native_run_spec.hpp:665 | `allowed_open_directions` pineforge.h:508 | `native_risk_limits_strategy.cpp` | The one `strategy.risk.*` rule that is already the kernel's, per ADR-0001's `risk` ruling row. Rejects with `OpeningDirection` native_execution_consumer.cpp:4067. |
-| `strategy.risk.max_position_size()` | `max_abs_units` native_run_spec.hpp:663 | `max_abs_units` pineforge.h:509 | `tests/test_native_run_spec.cpp` | Tests the *resulting* book. TradingView gates the *live* book before the fill, so an entry is refused only once the book already holds the limit — ruled **adapter-policy** in ADR-0001's `max_abs_units` row, with lane N12's measurement (the adapter ends at 4 where the kernel cap ends at 2). |
+| `strategy.risk.allow_entry_in()` | `allowed_open_directions` native_run_spec.hpp:669 | `allowed_open_directions` pineforge.h:508 | `native_risk_limits_strategy.cpp` | The one `strategy.risk.*` rule that is already the kernel's, per ADR-0001's `risk` ruling row. Rejects with `OpeningDirection` native_execution_consumer.cpp:4071. |
+| `strategy.risk.max_position_size()` | `max_abs_units` native_run_spec.hpp:667 | `max_abs_units` pineforge.h:509 | `tests/test_native_run_spec.cpp` | Tests the *resulting* book. TradingView gates the *live* book before the fill, so an entry is refused only once the book already holds the limit — ruled **adapter-policy** in ADR-0001's `max_abs_units` row, with lane N12's measurement (the adapter ends at 4 where the kernel cap ends at 2). |
 | `strategy.risk.max_drawdown()` | `NativeRiskLimits::max_drawdown` native_run_spec.hpp:311 | `risk_max_drawdown` native_c_api.h:2369 | `native_risk_limits_strategy.cpp` | `NativeLossLimit` native_run_spec.hpp:259 is account currency, or a percent of the running peak when `percent` native_run_spec.hpp:261 is set. Blocks openings to the end of the run. |
 | `strategy.risk.max_intraday_loss()` | `NativeRiskLimits::max_intraday_loss` native_run_spec.hpp:312 | `risk_max_intraday_loss` native_c_api.h:2372 | `native_risk_limits_strategy.cpp` | Percent is of the day's opening equity. Blocks to the end of its own day. |
 | `strategy.risk.max_cons_loss_days()` | `NativeRiskLimits::max_consecutive_loss_days` native_run_spec.hpp:313 | `risk_max_consecutive_loss_days` native_c_api.h:2374 | `native_risk_limits_strategy.cpp` | Counts *days* that close with a realized loss; TradingView's streak counts trades. `NativeRiskDay` native_run_spec.hpp:270 chooses the session day or the civil date in the spec timezone. |
@@ -444,7 +444,7 @@ liquidation level, and the ticket the forced close is booked under.
 | the host's own liquidation size | `resolve_margin_call_units` native_host.hpp:1015 | `on_margin_call_units` native_c_api.h:2581 | `native_margin_strategy.cpp` |
 | the liquidation event | `MarginCallEvent` native_order.hpp:1355 delivered to `on_native_margin_call` native_host.hpp:1021 | `on_margin_call` native_c_api.h:2529 | `native_margin_strategy.cpp` |
 
-The one-scalar `initial_margin_fraction` native_run_spec.hpp:666 predates the
+The one-scalar `initial_margin_fraction` native_run_spec.hpp:670 predates the
 model and remains the simple spelling; the two are mutually exclusive. It is
 ruled **adapter-policy** (ADR-0001's `initial_margin_fraction` row): the
 adapter answers TradingView's ten-significant-digit money admission itself with
@@ -487,7 +487,7 @@ migration decision:
    engine.hpp:1265, `current_equity` engine.hpp:1266 and the rest. They are
    reachable from inside your host exactly as they are from inside a generated
    Pine strategy, and `native_open_lots_strategy.cpp` reads every one of them.
-3. **The report, after the run** — `fill_report` engine.hpp:2235 into a
+3. **The report, after the run** — `fill_report` engine.hpp:2241 into a
    `pf_report_t` pineforge.h:436, which is what a C host reads.
 
 One rule governs the whole table, in two scopes. The equity **series** is
@@ -532,11 +532,11 @@ range-end reporting is off.
 
 | Pine | C++ | C | Runs in | Notes |
 | --- | --- | --- | --- | --- |
-| `strategy.account_currency` | `currency` native_run_spec.hpp:639 | `currency` pineforge.h:504 | `hello_kernel.cpp` / `native_fx_roll_strategy.cpp` | Declared, never inferred. `account_fx` native_run_spec.hpp:650 is the one positive scalar that converts quote to account; a timestamped curve is `configure_native_fx_curve` native_host.hpp:1228. The FX-roll example runs a JPY account on a USD-quoted stock through such a curve, and a step of it is a margin check point of its own. |
-| `strategy.initial_capital` | `initial_capital` native_run_spec.hpp:648 | `initial_capital` pineforge.h:506 | `hello_kernel.cpp` | The value you declared, unchanged by the run. |
+| `strategy.account_currency` | `currency` native_run_spec.hpp:643 | `currency` pineforge.h:504 | `hello_kernel.cpp` / `native_fx_roll_strategy.cpp` | Declared, never inferred. `account_fx` native_run_spec.hpp:654 is the one positive scalar that converts quote to account; a timestamped curve is `configure_native_fx_curve` native_host.hpp:1228. The FX-roll example runs a JPY account on a USD-quoted stock through such a curve, and a step of it is a margin check point of its own. |
+| `strategy.initial_capital` | `initial_capital` native_run_spec.hpp:652 | `initial_capital` pineforge.h:506 | `hello_kernel.cpp` | The value you declared, unchanged by the run. |
 | `strategy.equity` | `native_marked_equity(mark)` native_host.hpp:1337; on the Pine host `current_equity() + open_profit(mark)` pine_strategy_host.hpp:768 | `strategy_native_marked_equity_v1` native_c_api.h:3091 | `native_open_lots_strategy.cpp` | Pine marks at the current `close`. The native marked call takes the mark explicitly and returns balance plus open lots' **net** `unrealized_pnl` native_host.hpp:341, which is Pine's equity: TradingView charges the open lots' paid entry fees. |
 | `strategy.netprofit` | on the Pine host `net_profit` pine_strategy_host.hpp:767; `net_profit` engine.hpp:1263 is the closed trades' figure | `net_profit` pineforge.h:377, less open lots' `entry_commission` | `native_open_lots_strategy.cpp` | The closed trades' net profit less the entry fees the open lots have paid. The report's figure is the closed trades'. |
-| `strategy.netprofit_percent` | derive: `net_profit` pine_strategy_host.hpp:767 over `initial_capital` native_run_spec.hpp:648 | `pf_metrics_t` pineforge.h:320 | `native_sized_report_strategy.cpp` | The kernel keeps the facts, not the ratio. |
+| `strategy.netprofit_percent` | derive: `net_profit` pine_strategy_host.hpp:767 over `initial_capital` native_run_spec.hpp:652 | `pf_metrics_t` pineforge.h:320 | `native_sized_report_strategy.cpp` | The kernel keeps the facts, not the ratio. |
 | `strategy.grossprofit` | `gross_profit` engine.hpp:1264 | `pf_trade_stats_t` pineforge.h:269 | `native_open_lots_strategy.cpp` | |
 | `strategy.grossprofit_percent` | `grossprofit_percent` engine.hpp:1271 | `pf_metrics_t` pineforge.h:320 | `native_sized_report_strategy.cpp` | Of initial capital. |
 | `strategy.grossloss` | `gross_loss` engine.hpp:1265 | `pf_trade_stats_t::gross_loss` pineforge.h:224 | `native_open_lots_strategy.cpp` | For booked closed trades the protected C++ accessor is signed (negative for losses), while the C report stores a positive loss magnitude. With range-end reporting off, `-C.gross_loss == gross_loss()` and `netprofit == grossprofit - C.gross_loss`. With it on, C trade statistics include the report-only range-end rows; filter `open_at_end == 0` before comparing to Pine's closed-trade statistics. |
@@ -544,7 +544,7 @@ range-end reporting is off.
 | `strategy.openprofit` | `open_profit` engine.hpp:1321 | `strategy_native_marked_equity_v1` native_c_api.h:3091 less realized balance, plus open lots' `entry_commission` | `native_open_lots_strategy.cpp` | Pine's open profit is gross of remaining entry fees. The native marked equity and open-lot `unrealized_pnl` are net of them; use the same explicit mark for every term. |
 | `strategy.openprofit_percent` | derive from `open_profit` engine.hpp:1321 | — | `native_open_lots_strategy.cpp` | Pine's denominator is the initial capital plus `strategy.netprofit`, the open lots' paid entry fees charged. |
 | `strategy.max_drawdown` | `max_drawdown_` engine.hpp:755 | `max_equity_drawdown` pineforge.h:274 | `native_open_lots_strategy.cpp` | Folded under **every** report policy — see the rule above. The scalar is the run's own; the `pf_equity_stats_t` figure derived from the recorded curve still needs `KernelRecorded` native_run_spec.hpp:63. |
-| `strategy.max_drawdown_percent` | `max_drawdown_percent` engine.hpp:1848 | `max_equity_drawdown_pct` pineforge.h:274 | `native_sized_report_strategy.cpp` | Same rule. |
+| `strategy.max_drawdown_percent` | `max_drawdown_percent` engine.hpp:1854 | `max_equity_drawdown_pct` pineforge.h:274 | `native_sized_report_strategy.cpp` | Same rule. |
 | `strategy.max_runup` | `max_runup_` engine.hpp:756 | `max_equity_runup` pineforge.h:276 | `native_open_lots_strategy.cpp` | Same rule. |
 | `strategy.max_runup_percent` | `max_runup_percent` engine.hpp:1268 | `max_equity_runup_pct` pineforge.h:278 | `native_sized_report_strategy.cpp` | Same rule. |
 | `strategy.avg_trade` | `avg_trade` engine.hpp:1277 | `pf_trade_stats_t` pineforge.h:269 | `native_open_lots_strategy.cpp` | |
@@ -555,15 +555,15 @@ range-end reporting is off.
 | `strategy.avg_losing_trade_percent` | `avg_losing_trade_percent` engine.hpp:1303 | `pf_trade_stats_t` pineforge.h:269 | `native_sized_report_strategy.cpp` | |
 | `strategy.wintrades` | `count_wintrades` engine.hpp:1338 | `pf_trade_stats_t` pineforge.h:269 | `native_open_lots_strategy.cpp` | |
 | `strategy.losstrades` | `count_losstrades` engine.hpp:1339 | `pf_trade_stats_t` pineforge.h:269 | `native_open_lots_strategy.cpp` | |
-| `strategy.eventrades` | `eventrades` engine.hpp:2233 | `pf_trade_stats_t` pineforge.h:269 | `native_open_lots_strategy.cpp` | Public, not protected: a zero-profit closed row. Win + loss + even is the closed-row count, which the example asserts. |
-| `strategy.max_contracts_held_all` | `max_contracts_held_all` engine.hpp:2228 | — | `native_open_lots_strategy.cpp` | `pf_trade_stats_t` has no max-contracts-held field. A C host must derive the peak from position/open-lot observations; there is no direct C report counterpart. |
-| `strategy.max_contracts_held_long` | `max_contracts_held_long` engine.hpp:2229 | — | `tests/test_native_report_truth.cpp` | No direct C report counterpart; derive the long-side peak from position/open-lot observations. |
-| `strategy.max_contracts_held_short` | `max_contracts_held_short` engine.hpp:2230 | — | `tests/test_native_report_truth.cpp` | No direct C report counterpart; derive the short-side peak from position/open-lot observations. |
+| `strategy.eventrades` | `eventrades` engine.hpp:2239 | `pf_trade_stats_t` pineforge.h:269 | `native_open_lots_strategy.cpp` | Public, not protected: a zero-profit closed row. Win + loss + even is the closed-row count, which the example asserts. |
+| `strategy.max_contracts_held_all` | `max_contracts_held_all` engine.hpp:2234 | — | `native_open_lots_strategy.cpp` | `pf_trade_stats_t` has no max-contracts-held field. A C host must derive the peak from position/open-lot observations; there is no direct C report counterpart. |
+| `strategy.max_contracts_held_long` | `max_contracts_held_long` engine.hpp:2235 | — | `tests/test_native_report_truth.cpp` | No direct C report counterpart; derive the long-side peak from position/open-lot observations. |
+| `strategy.max_contracts_held_short` | `max_contracts_held_short` engine.hpp:2236 | — | `tests/test_native_report_truth.cpp` | No direct C report counterpart; derive the short-side peak from position/open-lot observations. |
 | `strategy.position_size` | `NativePhysicalPosition::signed_units` native_host.hpp:297 | `strategy_native_position_v1` native_c_api.h:2867 | `hello_kernel.cpp` | Signed: no separate direction field. |
 | `strategy.position_avg_price` | `NativePhysicalPosition::average_price` native_host.hpp:298 | `strategy_native_position_v1` native_c_api.h:2867 | `native_selected_strategy.cpp` | Volume-weighted over the open lots. |
 | `strategy.position_entry_name` | `native_open_lots` native_host.hpp:1330 then the last row's `entry_label` native_host.hpp:333 | `strategy_native_open_lot_get_v1` native_c_api.h:2908 | `native_open_lots_strategy.cpp` | Pine reports the newest entry's id; the native book lets you read any lot's. |
 | `strategy.margin_liquidation_price` | `native_liquidation_price` native_host.hpp:1356 | `strategy_native_liquidation_price_v1` native_c_api.h:3099 | `native_margin_strategy.cpp` | Solved from the declared maintenance requirement, so it answers `nullopt` when the model declares none or the slope is degenerate (a long at full maintenance has no finite level). |
-| `strategy.convert_to_account()` | none — the kernel converts with the FX you declare | `strategy_configure_native_fx_curve_v1` pineforge.h:551 | `native_fx_roll_strategy.cpp` / `tests/test_native_fx_curve.cpp` | Pine's converter needs TradingView's own FX series. Natively, `account_fx` native_run_spec.hpp:650 is one scalar and `configure_native_fx_curve` native_host.hpp:1228 stages an immutable timestamped curve; codegen emits the Pine call as the identity, because no fixed table reproduces TradingView's series. |
+| `strategy.convert_to_account()` | none — the kernel converts with the FX you declare | `strategy_configure_native_fx_curve_v1` pineforge.h:551 | `native_fx_roll_strategy.cpp` / `tests/test_native_fx_curve.cpp` | Pine's converter needs TradingView's own FX series. Natively, `account_fx` native_run_spec.hpp:654 is one scalar and `configure_native_fx_curve` native_host.hpp:1228 stages an immutable timestamped curve; codegen emits the Pine call as the identity, because no fixed table reproduces TradingView's series. |
 | `strategy.convert_to_symbol()` | none — same reason, the other direction | `strategy_configure_native_fx_curve_v1` pineforge.h:551 | `tests/test_native_fx_curve.cpp` | Same ruling. |
 
 @anchor pine_to_native_map_trades
@@ -611,11 +611,11 @@ run the two excursion fields fold `mark` alone.
 
 ## Closed trades {#pine_to_native_map_closed_trades}
 
-`closed_trade_count` engine.hpp:2181 and `closed_trade` engine.hpp:2182 answer
+`closed_trade_count` engine.hpp:2187 and `closed_trade` engine.hpp:2188 answer
 the `Trade` engine.hpp:189 rows this run booked, in booking order;
-`report_trade_count` engine.hpp:2194 and `get_report_trade` engine.hpp:2198
+`report_trade_count` engine.hpp:2200 and `get_report_trade` engine.hpp:2204
 span the same rows followed by the range-end rows
-`report_open_position_at_end` native_run_spec.hpp:683 adds. In C the report's
+`report_open_position_at_end` native_run_spec.hpp:687 adds. In C the report's
 `pf_report_t::trades` pineforge.h:374 carries the numeric fields, and the
 strings and the cause come from `strategy_closed_trade_entry_id`
 pineforge.h:1489, `strategy_closed_trade_exit_id` pineforge.h:1502,
@@ -625,7 +625,7 @@ rows of that array.
 
 | Pine | C++ | C | Runs in | Notes |
 | --- | --- | --- | --- | --- |
-| `strategy.closedtrades` | `closed_trade_count` engine.hpp:2181 | `total_trades` pineforge.h:368 | `native_open_lots_strategy.cpp` | `closed_trade_count` counts booked closed rows. The C report's `total_trades` also includes range-end rows when `report_open_position_at_end` is enabled; filter `pf_trade_t::open_at_end == 0` to match Pine `strategy.closedtrades`. |
+| `strategy.closedtrades` | `closed_trade_count` engine.hpp:2187 | `total_trades` pineforge.h:368 | `native_open_lots_strategy.cpp` | `closed_trade_count` counts booked closed rows. The C report's `total_trades` also includes range-end rows when `report_open_position_at_end` is enabled; filter `pf_trade_t::open_at_end == 0` to match Pine `strategy.closedtrades`. |
 | `strategy.closedtrades.first_index` | none — the kernel keeps every row | — | `native_open_lots_strategy.cpp` | TradingView drops old rows past a 9000-trade cap and advances `first_index` when it does. The kernel caps nothing, so the first index is always 0 and codegen emits the literal. |
 | `strategy.closedtrades.entry_id()` | `entry_id` engine.hpp:200 | `strategy_closed_trade_entry_id` pineforge.h:1489 | `native_open_lots_strategy.cpp` | The same string the lot carried as `entry_label` native_host.hpp:333. |
 | `strategy.closedtrades.entry_comment()` | `entry_comment` engine.hpp:201 | — | `native_open_lots_strategy.cpp` | No C accessor: `strategy_closed_trade_entry_id` pineforge.h:1489 answers the id, not the comment, and `pf_trade_t` carries no strings. A C host that needs it reads the open lot's `entry_comment` (`pf_native_open_lot_v1` native_c_api.h:1779) before the close. |
@@ -647,7 +647,7 @@ rows of that array.
 | `strategy.closedtrades.max_drawdown_percent()` | derive from `max_drawdown` engine.hpp:217 | — | `native_open_lots_strategy.cpp` | |
 
 Pine has no word for *why* a row closed. The native row does:
-`closed_trade_close_cause` engine.hpp:2225 (C:
+`closed_trade_close_cause` engine.hpp:2231 (C:
 `strategy_closed_trade_close_cause` pineforge.h:1571) distinguishes a script
 close, a liquidation, a risk flatten and the range end — the kernel states the
 last three itself. The bracket-leg cause (`2`) is the kernel's too for a close
@@ -662,12 +662,12 @@ classifies its own rows by order family instead. Which leg closed a row is its
 
 | Pine | C++ | C | Runs in | Notes |
 | --- | --- | --- | --- | --- |
-| `request.security()` | `NativeTimeframeSubscription` native_run_spec.hpp:491 in `subscriptions` native_run_spec.hpp:701, or `declare_timeframe_subscriptions` native_host.hpp:1162 inside `on_native_run_begin` native_host.hpp:892 | `strategy_native_declare_subscriptions_v1` native_c_api.h:2972 | `native_htf_strategy.cpp` | A subscription is a series instance: several may share one timeframe. Completed buckets arrive at `on_native_timeframe_bar` native_host.hpp:905 and the latest is pulled with `native_series_bar` native_host.hpp:1145. `authoritative_bars` native_run_spec.hpp:493 replace a completed bucket's OHLCV. The row's two delivery words are typed in C: `pf_native_lookahead_e` native_c_api.h:811 and `pf_native_gaps_e` native_c_api.h:822 (lane E7). The Pine adapter runs its own plain sites through these same subscriptions, ruled **adapter-hook** in ADR-0001's `subscriptions` row. Another symbol's bars are an instrument feed: `NativeInstrumentFeed` native_run_spec.hpp:580 in `instrument_feeds` native_run_spec.hpp:711, read by a series whose source is `InstrumentFeed` native_run_spec.hpp:488 (C++ only in 1.0: @ref native_engine, "Instrument feeds: another symbol's bars"). |
-| `request.security_lower_tf()` | `NativeAuxiliaryFeed` native_run_spec.hpp:524 with `NativeSeriesSource::AuxiliaryFeed` native_run_spec.hpp:487 | `strategy_native_append_auxiliary_bars_v1` native_c_api.h:3249 | `native_auxiliary_feed_strategy.cpp` | Not the same shape: Pine returns an intrabar *array* per bar, the kernel gives you a finer *series* routed by time. A host that wants the raw sub-bars puts them in `IntrabarPath` native_run_spec.hpp:378 and reads `on_native_sub_bar` native_host.hpp:948 instead. |
-| `barmerge.gaps_off` | `NativeTimeframeSubscription::gaps` native_run_spec.hpp:495 set false | `pf_native_subscription_v1::gaps` = `PF_NATIVE_GAPS_HOLD` native_c_api.h:823 | `native_htf_strategy.cpp` | The delivered bucket stands until the next delivery replaces it. |
-| `barmerge.gaps_on` | `NativeTimeframeSubscription::gaps` native_run_spec.hpp:495 set true | `pf_native_subscription_v1::gaps` = `PF_NATIVE_GAPS_CLEAR` native_c_api.h:825 | `native_htf_strategy.cpp` | The series is cleared on every input bar it delivers nothing on, so the pull answers empty — the native spelling of `na`. |
-| `barmerge.lookahead_off` | `NativeTimeframeSubscription::lookahead` native_run_spec.hpp:494 set false | `pf_native_subscription_v1::lookahead` = `PF_NATIVE_LOOKAHEAD_AT_COMPLETION` native_c_api.h:812 | `native_htf_strategy.cpp` | The default and the honest one: a bucket is delivered when it completes. |
-| `barmerge.lookahead_on` | `NativeTimeframeSubscription::lookahead` native_run_spec.hpp:494 set true | `pf_native_subscription_v1::lookahead` = `PF_NATIVE_LOOKAHEAD_AT_FIRST_INPUT` native_c_api.h:814 | `tests/test_native_htf_subscriptions.cpp` | Delivers a bucket's final values on the input that held its first bar. It is lookahead: use it to reproduce a chart, never to trade. |
+| `request.security()` | `NativeTimeframeSubscription` native_run_spec.hpp:495 in `subscriptions` native_run_spec.hpp:705, or `declare_timeframe_subscriptions` native_host.hpp:1162 inside `on_native_run_begin` native_host.hpp:892 | `strategy_native_declare_subscriptions_v1` native_c_api.h:2972 | `native_htf_strategy.cpp` | A subscription is a series instance: several may share one timeframe. Completed buckets arrive at `on_native_timeframe_bar` native_host.hpp:905 and the latest is pulled with `native_series_bar` native_host.hpp:1145. `authoritative_bars` native_run_spec.hpp:497 replace a completed bucket's OHLCV. The row's two delivery words are typed in C: `pf_native_lookahead_e` native_c_api.h:811 and `pf_native_gaps_e` native_c_api.h:822 (lane E7). The Pine adapter runs its own plain sites through these same subscriptions, ruled **adapter-hook** in ADR-0001's `subscriptions` row. Another symbol's bars are an instrument feed: `NativeInstrumentFeed` native_run_spec.hpp:584 in `instrument_feeds` native_run_spec.hpp:715, read by a series whose source is `InstrumentFeed` native_run_spec.hpp:492 (C++ only in 1.0: @ref native_engine, "Instrument feeds: another symbol's bars"). |
+| `request.security_lower_tf()` | `NativeAuxiliaryFeed` native_run_spec.hpp:528 with `NativeSeriesSource::AuxiliaryFeed` native_run_spec.hpp:491 | `strategy_native_append_auxiliary_bars_v1` native_c_api.h:3249 | `native_auxiliary_feed_strategy.cpp` | Not the same shape: Pine returns an intrabar *array* per bar, the kernel gives you a finer *series* routed by time. A host that wants the raw sub-bars puts them in `IntrabarPath` native_run_spec.hpp:378 and reads `on_native_sub_bar` native_host.hpp:948 instead. |
+| `barmerge.gaps_off` | `NativeTimeframeSubscription::gaps` native_run_spec.hpp:499 set false | `pf_native_subscription_v1::gaps` = `PF_NATIVE_GAPS_HOLD` native_c_api.h:823 | `native_htf_strategy.cpp` | The delivered bucket stands until the next delivery replaces it. |
+| `barmerge.gaps_on` | `NativeTimeframeSubscription::gaps` native_run_spec.hpp:499 set true | `pf_native_subscription_v1::gaps` = `PF_NATIVE_GAPS_CLEAR` native_c_api.h:825 | `native_htf_strategy.cpp` | The series is cleared on every input bar it delivers nothing on, so the pull answers empty — the native spelling of `na`. |
+| `barmerge.lookahead_off` | `NativeTimeframeSubscription::lookahead` native_run_spec.hpp:498 set false | `pf_native_subscription_v1::lookahead` = `PF_NATIVE_LOOKAHEAD_AT_COMPLETION` native_c_api.h:812 | `native_htf_strategy.cpp` | The default and the honest one: a bucket is delivered when it completes. |
+| `barmerge.lookahead_on` | `NativeTimeframeSubscription::lookahead` native_run_spec.hpp:498 set true | `pf_native_subscription_v1::lookahead` = `PF_NATIVE_LOOKAHEAD_AT_FIRST_INPUT` native_c_api.h:814 | `tests/test_native_htf_subscriptions.cpp` | Delivers a bucket's final values on the input that held its first bar. It is lookahead: use it to reproduce a chart, never to trade. |
 | `request.currency_rate()` | none — no FX data feed | `strategy_configure_native_fx_curve_v1` pineforge.h:551 | `native_fx_roll_strategy.cpp` / `tests/test_native_fx_curve.cpp` | The kernel converts with the curve you stage; it fetches nothing. |
 | `request.dividends()` | none — no fundamentals feed | — | — | For a Pine script, pineforge-codegen 1.0.0 (0.10.4 rejects the call at transpile) reads TradingView's recorded answers by request key from the source host (`strategy_set_recorded_series` pineforge.h:1840), reads `na` when the value reaches only plots and alerts, and otherwise stops the run where the value is read if nothing is recorded. A native host fetches and models it itself. |
 | `request.earnings()` | none — no fundamentals feed | — | — | Same. |
@@ -683,7 +683,7 @@ the same numerics the adapter uses, and the header pulls only `na`, `series`
 and `window_sum` ta.hpp:2-4, so it is engine-free. `pineforge::Series<T>`
 series.hpp:474 is Pine's history operator as a fixed-capacity ring you push what
 you want to keep into. Pine's `input.*` becomes ordinary constructor
-parameters: `set_input` engine.hpp:2281 exists but its getters are protected,
+parameters: `set_input` engine.hpp:2287 exists but its getters are protected,
 and a native host takes its parameters in C++.
 
 ## One strategy, three ways {#pine_to_native_three_ways}
@@ -728,9 +728,9 @@ class HelloKernel : public pineforge::NativeStrategyHost {
 };
 ```
 
-The host is a class; the run is one `NativeRunSpec` native_run_spec.hpp:622
+The host is a class; the run is one `NativeRunSpec` native_run_spec.hpp:626
 naming the clock, instrument, account and fees; `configure_native`
-native_host.hpp:1222 applies it and `run` engine.hpp:2065 drives the bars.
+native_host.hpp:1222 applies it and `run` engine.hpp:2071 drives the bars.
 
 **C**, against the same kernel — `examples/native/hello_kernel_c.c:36` is this
 callback and `examples/native/hello_kernel_c.c:66` the run spec:
@@ -828,9 +828,9 @@ spec.fee_value = 0.1;                                       // commission_value 
 spec.max_open_lots = 1;                                     // pyramiding = 1
 ```
 
-Nothing is inferred. `price_tick` native_run_spec.hpp:651 is the ladder the
+Nothing is inferred. `price_tick` native_run_spec.hpp:655 is the ladder the
 next three blocks all measure against, and `fee_value`
-native_run_spec.hpp:658 is a **percent**, spelled exactly as Pine's
+native_run_spec.hpp:662 is a **percent**, spelled exactly as Pine's
 `commission_value` is: `0.1` charges 0.1 % of each execution's notional. A
 fraction there (`0.001`) would charge a hundred times too little.
 
@@ -861,7 +861,7 @@ is set. This strategy never shorts, so its short side simply keeps the ordinary
 requirement `margin_short = 20` declares, `initial_short = 0.20`. Writing
 `initial_short = 0.0` there with no `maintenance_short` would state nothing at
 all, and `configure_native` would refuse the whole spec with
-`MarginSideUndeclared` native_run_spec.hpp:836.
+`MarginSideUndeclared` native_run_spec.hpp:840.
 The grid is what makes a bracket level a *ladder*
 price: `native_price_grid_strategy.cpp` runs one strategy under all four
 answers and `native_margin_strategy.cpp` drives a real liquidation.
@@ -879,7 +879,7 @@ void on_native_run_begin() override {
 `native_series_bar(0)` native_host.hpp:1145 then answers the latest completed
 hourly bucket inside any callback — `request.security(…, "60", close)` is
 `native_series_bar(0)->close`. `native_htf_strategy.cpp` is the runnable
-version, including what `gaps` native_run_spec.hpp:495 changes.
+version, including what `gaps` native_run_spec.hpp:499 changes.
 
 ### 4. The entry: cash, with the fee reserved
 
@@ -990,12 +990,12 @@ closes the stop at `101 - 20 × 0.25 = 96`.
    native_order.hpp:82.
 4. **Most percents become fractions — two stay out of 100.** `margin_long = 20`
    is `0.20` and `EquityFraction{0.10}` native_order.hpp:119 is ten percent.
-   The two exceptions keep Pine's own unit: `fee_value` native_run_spec.hpp:658
+   The two exceptions keep Pine's own unit: `fee_value` native_run_spec.hpp:662
    under `NativeFeeKind::Percent`, so `commission_value = 0.1` is
    `fee_value = 0.1`, and a `NativeLossLimit` whose `percent`
    native_run_spec.hpp:261 is set, so `20.0` is twenty percent.
 5. **The equity curve is opt-in; the rest of the report is not.** `trade_count`
-   engine.hpp:2169 and `get_trade` engine.hpp:2170 are always complete, and so
+   engine.hpp:2175 and `get_trade` engine.hpp:2176 are always complete, and so
    are the equity extremes and the position-size peaks, which every report
    policy folds. Only the recorded equity **series**, and the
    `pf_equity_stats_t` figures walked out of it, arrive with

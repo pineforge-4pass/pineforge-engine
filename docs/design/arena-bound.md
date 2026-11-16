@@ -159,7 +159,7 @@ The carried declaration fields are visible in `PineStrategyConfig` at
 
 | Declaration / native fact | Sizing consequence and evidence |
 | --- | --- |
-| pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset (the `max_open_lots` setting spelling is at `src/source/pine_adapter.cpp:2918`). Do not assume this caps strategy.order or use it as an unconditional H. |
+| pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:668`; the Pine projection deliberately leaves it unset (the `max_open_lots` setting spelling is at `src/source/pine_adapter.cpp:2918`). Do not assume this caps strategy.order or use it as an unconditional H. |
 | calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard `kCoofLoopGuard` through the native cadence at `src/source/pine_adapter.cpp:3099`; the `kCoofLoopGuard` literal is declared at `include/pineforge/source/pine_adapter.hpp:78`. The native point budget is a callback bound, not a total fill bound. |
 | max_recalculations_per_point | Further executions still apply after callbacks stop; see the cadence comment and `max_recalculations_per_point` declaration at `include/pineforge/native_run_spec.hpp:686-695`. The actual counter check is `src/native_execution_consumer.cpp:8272`. |
 | first-open COOF chain | A second source-side guard exists at `src/source/pine_scheduler_native.cpp:945`. Count this source path; a native budget of 8 is not Pine's bound. |
@@ -558,7 +558,7 @@ non-command certificates exactly.
 These formulas apply to the EngineRecorded streamed invocation. The
 selected recorder appends its anchor and selected observations in one
 writer (`equity_scratch` append at `src/engine_report.cpp:1563`), and capture transfers that writer as `metric_curve`
-instead of copying its prefix (`src/native_execution_consumer.cpp:13491`).
+instead of copying its prefix (`src/native_execution_consumer.cpp:13633`).
 HostRecorded array presentation and a second full curve are outside this
 profile. Adding another persistent scratch user requires another term and
 rounding region.
@@ -569,7 +569,7 @@ rounding region.
 timestamp: 48 bytes/bar. Borrowed feed views retain pointers and counts,
 not another history (`include/pineforge/native_bar_views.hpp:30`).
 Instrument columns are double arrays
-(`include/pineforge/native_run_spec.hpp:532`); instrument close timestamps
+(`include/pineforge/native_run_spec.hpp:536`); instrument close timestamps
 are int64 arrays (`include/pineforge/native_run_spec.hpp:584`).
 Before page rounding the terms are 48*N for primary input, 48 times every
 actually allocated script-bar or magnifier-bar capacity, and

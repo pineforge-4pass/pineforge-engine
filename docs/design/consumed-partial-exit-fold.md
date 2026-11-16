@@ -69,7 +69,7 @@ Terminal input updates also call `capture_script_continuation_hash`
 (`src/source/pine_strategy_host.cpp:900`). Without recording, that refresh
 does not call the broker hash; explicit broker/stream hash queries still do.
 Each broker hash reaches `hash_host_extension`
-(`src/engine_state_hash.cpp:129`); the adapter's `hash_state`
+(`src/engine_state_hash.cpp:153`); the adapter's `hash_state`
 (`src/source/pine_state_hash.cpp:315`) calls exactly one `fold_sorted`
 (`src/source/pine_state_hash.cpp:572`). A full-table lazy rebuild per dirty
 bar is therefore unsuitable.

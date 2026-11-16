@@ -11237,6 +11237,18 @@
   },
   {
    "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "id",
+   "scope": [
+    "namespace pineforge :: source #2",
+    "class PineExecutionAdapter #1",
+    "struct CohortHandleCacheEntry #1"
+   ],
+   "cls": "decl",
+   "spelling": "SourceId",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_adapter.hpp",
    "symbol": "unrepeated_margin_calls_",
    "scope": [
     "namespace pineforge :: source #2",
@@ -20840,8 +20852,6 @@
     "namespace pineforge #1",
     "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: project_timeframe_subscription ( BacktestEngine & engine , TimeframeSubscription & subscription , const Bar * input_bars , int n_input ) #1",
-    "if ( subscription . auxiliary ) #1",
-    "+ + i ) #1",
     "const auto record = [ & subscription ] ( const Bar & bucket , int first_index , std :: int64_t first_ms , NativeCompletionKind completion ) #1"
    ],
    "cls": "grow",
@@ -20855,8 +20865,6 @@
     "namespace pineforge #1",
     "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: project_timeframe_subscription ( BacktestEngine & engine , TimeframeSubscription & subscription , const Bar * input_bars , int n_input ) #1",
-    "if ( subscription . auxiliary ) #1",
-    "+ + i ) #1",
     "const auto record = [ & subscription ] ( const Bar & bucket , int first_index , std :: int64_t first_ms , NativeCompletionKind completion ) #1"
    ],
    "cls": "grow",
@@ -20870,8 +20878,6 @@
     "namespace pineforge #1",
     "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: project_timeframe_subscription ( BacktestEngine & engine , TimeframeSubscription & subscription , const Bar * input_bars , int n_input ) #1",
-    "if ( subscription . auxiliary ) #1",
-    "+ + i ) #1",
     "const auto record = [ & subscription ] ( const Bar & bucket , int first_index , std :: int64_t first_ms , NativeCompletionKind completion ) #1"
    ],
    "cls": "grow",
@@ -20885,8 +20891,6 @@
     "namespace pineforge #1",
     "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: project_timeframe_subscription ( BacktestEngine & engine , TimeframeSubscription & subscription , const Bar * input_bars , int n_input ) #1",
-    "if ( subscription . auxiliary ) #1",
-    "+ + i ) #1",
     "const auto record = [ & subscription ] ( const Bar & bucket , int first_index , std :: int64_t first_ms , NativeCompletionKind completion ) #1"
    ],
    "cls": "grow",
@@ -31959,6 +31963,17 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "id",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: remember_cohort_handle ( const SourceId & id , native_order :: CohortHandle handle ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "id = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "adopted_reissues",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -41448,17 +41463,6 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "sequence_index_",
-   "scope": [
-    "namespace pineforge :: source #7",
-    "void PlacementTable :: begin_exit_sequence_certificate ( ) #1"
-   ],
-   "cls": "alloc",
-   "spelling": "make_shared",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
    "symbol": "result",
    "scope": [
     "namespace pineforge :: source #7",
@@ -41542,6 +41546,17 @@
    ],
    "cls": "grow",
    "spelling": "index . insert ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "sequence_index_",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "void PlacementTable :: begin_exit_sequence_certificate ( ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
    "ordinal": 1
   },
   {
@@ -42095,7 +42110,7 @@
    "scope": [
     "namespace pineforge #1",
     "void source :: PineStrategyHost :: feed_aux_security_for_chart_bar ( int chart_index ) #1",
-    "for ( auto & state : security_eval_states_ ) #2"
+    "for ( auto & state : security_eval_states_ ) #3"
    ],
    "cls": "decl",
    "spelling": "std :: vector < Bar >",
@@ -42107,7 +42122,7 @@
    "scope": [
     "namespace pineforge #1",
     "void source :: PineStrategyHost :: feed_aux_security_for_chart_bar ( int chart_index ) #1",
-    "for ( auto & state : security_eval_states_ ) #2"
+    "for ( auto & state : security_eval_states_ ) #3"
    ],
    "cls": "grow",
    "spelling": "requested_bars . reserve ( . . . )",
@@ -42119,7 +42134,7 @@
    "scope": [
     "namespace pineforge #1",
     "void source :: PineStrategyHost :: feed_aux_security_for_chart_bar ( int chart_index ) #1",
-    "for ( auto & state : security_eval_states_ ) #2",
+    "for ( auto & state : security_eval_states_ ) #3",
     "if ( aggregate_ratio = = 1 ) #1"
    ],
    "cls": "grow",
@@ -42132,7 +42147,7 @@
    "scope": [
     "namespace pineforge #1",
     "void source :: PineStrategyHost :: feed_aux_security_for_chart_bar ( int chart_index ) #1",
-    "for ( auto & state : security_eval_states_ ) #2",
+    "for ( auto & state : security_eval_states_ ) #3",
     "else #1",
     "i + = aggregate_ratio ) #1"
    ],
@@ -48142,29 +48157,6 @@
    ],
    "cls": "decl",
    "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/source/pine_adapter.hpp",
-   "symbol": "id",
-   "scope": [
-    "namespace pineforge :: source #2",
-    "class PineExecutionAdapter #1",
-    "struct CohortHandleCacheEntry #1"
-   ],
-   "cls": "decl",
-   "spelling": "SourceId",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "id",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: remember_cohort_handle ( const SourceId & id , native_order :: CohortHandle handle ) const #1"
-   ],
-   "cls": "assign",
-   "spelling": "id = . . .",
    "ordinal": 1
   }
  ]
