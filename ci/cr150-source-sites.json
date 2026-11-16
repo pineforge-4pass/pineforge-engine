@@ -10674,6 +10674,18 @@
   },
   {
    "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "from_entry",
+   "scope": [
+    "namespace pineforge :: source #2",
+    "class PineExecutionAdapter #1",
+    "struct PerEntryExit #1"
+   ],
+   "cls": "decl",
+   "spelling": "SourceId",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_adapter.hpp",
    "symbol": "comment",
    "scope": [
     "namespace pineforge :: source #2",
@@ -33559,7 +33571,7 @@
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: cancel_bracket_siblings ( native_order :: RequestHandle handle , std :: uint64_t executed_at ) #1",
     "for ( const auto & candidate : live_handles_ ) #1",
-    "if ( sibling . source_id = = snapshot . source_id && sibling . from_entry = = snapshot . from_entry && sibling . bracket_origin = = snapshot . bracket_origin && ( sibling . family = = PineOrderFamily :: ExitLimit || sibling . family = = PineOrderFamily :: ExitStop || sibling . family = = PineOrderFamily :: ExitTrail ) ) #1"
+    "if ( sibling . source_id = = snapshot . source_id && sibling . from_entry = = snapshot . from_entry && sibling . bracket_origin = = snapshot . bracket_origin && ( snapshot . from_entry . empty ( ) || ! owns_per_entry_exit ( snapshot ) || sibling . per_entry_origin = = snapshot . per_entry_origin ) && ( sibling . family = = PineOrderFamily :: ExitLimit || sibling . family = = PineOrderFamily :: ExitStop || sibling . family = = PineOrderFamily :: ExitTrail ) ) #1"
    ],
    "cls": "grow",
    "spelling": "matches . push_back ( . . . )",
@@ -37201,7 +37213,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "std :: vector < PineExecutionAdapter :: RelativeLegShape > PineExecutionAdapter :: relative_leg_shapes ( const PendingRelativeExit & value , bool parent_long ) const #1",
-    "if ( finite_positive ( value . profit_ticks ) ) #1"
+    "if ( std :: isnan ( value . limit_price ) && finite_positive ( value . profit_ticks ) ) #1"
    ],
    "cls": "grow",
    "spelling": "shapes . push_back ( . . . )",
@@ -37213,7 +37225,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "std :: vector < PineExecutionAdapter :: RelativeLegShape > PineExecutionAdapter :: relative_leg_shapes ( const PendingRelativeExit & value , bool parent_long ) const #1",
-    "if ( finite_positive ( value . loss_ticks ) ) #1"
+    "if ( std :: isnan ( value . stop_price ) && finite_positive ( value . loss_ticks ) ) #1"
    ],
    "cls": "grow",
    "spelling": "shapes . push_back ( . . . )",
@@ -39480,7 +39492,7 @@
    "symbol": "entries",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "detail :: ExitScratchRows < PineExecutionAdapter :: PerEntryExitChild > PineExecutionAdapter :: per_entry_open_entries ( bool long_side ) const #1",
+    "detail :: ExitScratchRows < PineExecutionAdapter :: PerEntryExitChild > PineExecutionAdapter :: per_entry_open_entries ( bool long_side , const SourceId & from_entry ) const #1",
     "detail :: exit_scratch_lots ( entries . context ( ) , require_host ( ) , kNaN , [ & ] ( const NativeOpenLot & lot ) #1"
    ],
    "cls": "grow",
@@ -39492,9 +39504,9 @@
    "symbol": "legs",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "detail :: ExitScratchRows < native_order :: RequestHandle > PineExecutionAdapter :: per_entry_child_legs ( const SourceId & exit_id , std :: uint64_t origin ) const #1",
+    "detail :: ExitScratchRows < native_order :: RequestHandle > PineExecutionAdapter :: per_entry_child_legs ( const SourceId & exit_id , std :: uint64_t origin , const SourceId & from_entry ) const #1",
     "for ( const auto & handle : live_handles_ ) #1",
-    "if ( row ! = placement_ . end ( ) && row -> second . per_entry_origin ! = 0 && row -> second . from_entry . empty ( ) && row -> second . source_id = = exit_id && ( origin = = 0 || row -> second . per_entry_origin = = origin ) ) #1"
+    "if ( row ! = placement_ . end ( ) && owns_per_entry_exit ( row -> second ) && row -> second . source_id = = exit_id && row -> second . from_entry = = from_entry && ( origin = = 0 || row -> second . per_entry_origin = = origin ) ) #1"
    ],
    "cls": "grow",
    "spelling": "legs . push_back ( . . . )",
@@ -39532,7 +39544,7 @@
     "bool PineExecutionAdapter :: per_entry_exit_call ( const SourceId & exit_id , const SourceId & from_entry , double limit , double stop , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t command_sequence ) #1",
     "if ( record = = per_entry_exits_ . end ( ) ) #1",
     "for ( const auto & handle : live_handles_ ) #1",
-    "if ( ( leg . family = = PineOrderFamily :: ExitLimit || leg . family = = PineOrderFamily :: ExitStop || leg . family = = PineOrderFamily :: ExitTrail ) && leg . source_id = = exit_id && leg . from_entry . empty ( ) ) #1"
+    "if ( ( leg . family = = PineOrderFamily :: ExitLimit || leg . family = = PineOrderFamily :: ExitStop || leg . family = = PineOrderFamily :: ExitTrail ) && leg . source_id = = exit_id && leg . from_entry = = from_entry ) #1"
    ],
    "cls": "grow",
    "spelling": "whole . push_back ( . . . )",
@@ -39548,6 +39560,18 @@
    ],
    "cls": "assign",
    "spelling": "exit_id = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "from_entry",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "bool PineExecutionAdapter :: per_entry_exit_call ( const SourceId & exit_id , const SourceId & from_entry , double limit , double stop , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t command_sequence ) #1",
+    "if ( record = = per_entry_exits_ . end ( ) ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "from_entry = . . .",
    "ordinal": 1
   },
   {
@@ -39580,7 +39604,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "bool PineExecutionAdapter :: per_entry_exit_call ( const SourceId & exit_id , const SourceId & from_entry , double limit , double stop , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t command_sequence ) #1",
-    "for ( const auto & entry : per_entry_open_entries ( long_side ) ) #1"
+    "for ( const auto & entry : per_entry_open_entries ( long_side , from_entry ) ) #1"
    ],
    "cls": "grow",
    "spelling": "children . push_back ( . . . )",
@@ -39596,6 +39620,21 @@
    ],
    "cls": "assign",
    "spelling": "legs = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "dropped",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "bool PineExecutionAdapter :: per_entry_exit_call ( const SourceId & exit_id , const SourceId & from_entry , double limit , double stop , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t command_sequence ) #1",
+    "+ + position ) #1",
+    "else #1",
+    "for ( const auto & handle : legs ) #1",
+    "if ( ( row -> second . family = = PineOrderFamily :: ExitLimit && ! finite_positive ( profit_ticks ) ) || ( row -> second . family = = PineOrderFamily :: ExitStop && ! finite_positive ( loss_ticks ) ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "dropped . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -39633,13 +39672,14 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "<temp:SourceId>",
+   "symbol": "from_entry",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: submit_per_entry_child ( const PerEntryExit & exit , const PerEntryExitChild & child , std :: uint64_t command_sequence ) #1"
+    "void PineExecutionAdapter :: submit_per_entry_child ( const PerEntryExit & exit , const PerEntryExitChild & child , std :: uint64_t command_sequence ) #1",
+    "const auto submit = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1"
    ],
-   "cls": "temp",
-   "spelling": "SourceId",
+   "cls": "assign",
+   "spelling": "from_entry = . . .",
    "ordinal": 1
   },
   {
@@ -39730,6 +39770,18 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "<temp:SourceId>",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: per_entry_exits_at_entry_fill ( const PlacementSnapshot & opening , const native_order :: ExecutionAppliedEvent & event ) #1",
+    "for ( const auto & exit_id : standing ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "SourceId",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "exit_id",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -39801,6 +39853,17 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "from_entry",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: end_per_entry_exit ( std :: size_t index ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "SourceId",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "legs",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -39808,17 +39871,6 @@
    ],
    "cls": "assign",
    "spelling": "legs = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "<temp:SourceId>",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: end_per_entry_exit ( std :: size_t index ) #1"
-   ],
-   "cls": "temp",
-   "spelling": "SourceId",
    "ordinal": 1
   },
   {
@@ -43158,7 +43210,7 @@
    "symbol": "pine_security_states_",
    "scope": [
     "namespace pineforge #1",
-    "void source :: PineStrategyHost :: register_security_eval ( int sec_id , const std :: string & requested_tf , const std :: string & input_tf , bool lookahead_on , bool gaps_on , bool heikinashi ) #1"
+    "void source :: PineStrategyHost :: register_security_eval ( int sec_id , const std :: string & requested_tf , const std :: string & input_tf , bool lookahead_on , bool gaps_on , bool heikinashi , bool historical_lookahead_projection ) #1"
    ],
    "cls": "subscript",
    "spelling": "pine_security_states_ [ . . . ]",
