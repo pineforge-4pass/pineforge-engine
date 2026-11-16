@@ -12593,6 +12593,7 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         }
         return;
     }
+    const bool has_retained_reservation = reservation_sequence != 0;
     capture_reservation_sequence();
     const auto source_point = detail::callback_point(require_host());
     const OrderBirth exit_birth = capture_order_birth();
@@ -13331,6 +13332,10 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
             }
             if (defer_new_instance && live_by_source_key_.find(checked_live_key(replacement_key))
                 == live_by_source_key_.end()) {
+                // A new queued leg has no issued queue slot. Keep an inherited
+                // reservation, including a pending relative definition; otherwise
+                // remember() assigns the rank when the leg is submitted.
+                if (!has_retained_reservation) snapshot.chain_origin_sequence = 0;
                 auto queued = std::find_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
                     [&](const PendingBracketLeg& row) { return row.replacement_key == replacement_key; });
                 PendingBracketLeg staged{std::move(request), std::move(snapshot), replacement_key, family_key};
