@@ -658,14 +658,16 @@ session opening times. Unsupported bars refuse by name with guidance to use
 a supported chart timeframe without changing the session or timezone. The corresponding
 intraday ticks-mode paths remain admitted where they pass the engine's
 calendar aggregation. These restrictions lift when the engine supports
-the corresponding session-aware chart-bar delivery. Daily/weekly chart delivery
-is refused in **both bars and ticks modes** on calendars with daylight-saving
-transitions from warmup onward, without the tiling scan's time bound.
+the corresponding session-aware chart-bar delivery. Confirmed count-1 daily and
+weekly bars are supported on daylight-saving calendars; openings follow the
+session calendar. Other counts and tick/clock delivery on those calendars are
+refused with "daily/weekly chart delivery on a daylight-saving calendar is not supported yet;
+only confirmed count-1 daily/weekly bars are supported." Exchange holidays and
+early closes are not covered by this change.
 Standard-offset changes can also make a chart unsupported when they fall
 within the checked warmup-plus-1,098-day window, which remains anchored at
 the original warmup end on restart.
-The daylight-saving refusal says "daily/weekly chart delivery on a
-daylight-saving calendar is not supported yet". UTC daily/weekly charts
+UTC daily/weekly charts
 are supported; monthly stream input remains unsupported. The configured
 warmup never produces webhook actions, but it can establish a modeled
 position and pending orders. Your broker bridge must reconcile actual

@@ -152,9 +152,13 @@ refuses 60-minute bars at startup. Some split-session charts are refused conserv
 least three years after its last bar and
 refuses unsupported shapes by name before a ledger exists. Passing intraday
 tick paths remain admitted. These restrictions lift when the engine supports
-the corresponding session-aware chart-bar delivery. Daily/weekly chart delivery
-is refused in both modes on daylight-saving calendars from warmup onward;
-standard-offset changes can also make a chart unsupported. UTC charts are
+the corresponding session-aware chart-bar delivery. Confirmed count-1 daily and
+weekly bars are supported on daylight-saving calendars; openings follow the
+session calendar. Other counts and tick/clock delivery on those calendars are
+refused with "daily/weekly chart delivery on a daylight-saving calendar is not supported yet;
+only confirmed count-1 daily/weekly bars are supported." Exchange holidays and
+early closes are not covered by this change. Standard-offset changes can also
+make a chart unsupported. UTC charts are
 supported. Keep the configured session/timezone and choose a supported clock.
 See [Upgrading from 1-minute input](../runner/README.md#upgrading-from-1-minute-input)
 for old unsent actions, external open positions and fresh-ledger guidance.
