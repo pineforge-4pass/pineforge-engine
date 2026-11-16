@@ -8551,6 +8551,15 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
 endif()
 # --- lane run-json-run-warnings end ---
 
+# --- lane run-failure-validation begin ---
+# Strict external-name validation has no generated-strategy/private-fixture dependency.
+# Keep the CI-pinned PR smoke population; these normal rows run in full profiles
+# and the focused validation proof.
+list(APPEND TEST_SOURCES test_run_failure_validation test_run_failure_validation_unavailable)
+pineforge_add_unit_test(test_run_failure_validation)
+pineforge_add_unit_test(test_run_failure_validation_unavailable)
+# --- lane run-failure-validation end ---
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")

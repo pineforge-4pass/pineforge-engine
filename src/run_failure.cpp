@@ -115,8 +115,8 @@ RunFailureValue invariant() noexcept {
 }
 
 // The factory's JSON ownership domain. Private to this translation unit: only
-// make_run_failure mints it, and only RunFailureValue::observe_owned_storage
-// recognizes it, through std::get_deleter on this exact type plus its stable
+// the shared validation path mints it. RunFailureValue::observe_owned_storage
+// recognizes it through std::get_deleter on this exact type plus its stable
 // tag. The deleter and the shared control each hold a copy of the same
 // OwnedAllocator, so the ledger outlives every weak owner until the control
 // request itself is deallocated. Records are non-owning: there is no cycle.
@@ -148,6 +148,141 @@ std::shared_ptr<const std::string> own_json(std::string&& text) {
         object, TrackedJsonDeleter{allocation, object, kRunFailureJsonTag}, allocation);
 }
 
+// No fallback codes here: an empty result means invalid arguments, while
+// inability to validate/canonicalize propagates to each public API's policy.
+std::optional<RunFailureValue> validate_and_canonicalize(
+    RunFailureCode code, const RegistryCode& row, const RunFailureArgs& args) {
+    if (args.empty()) {
+        for (std::uint16_t a = 0; a < row.arg_count; ++a) {
+            if (!kRegistryArgs[row.first_arg + a].optional) return std::nullopt;
+        }
+        return RunFailureValue{code, nullptr};
+    }
+    // Each raised arg must be declared once, of its declared kind, a vocab
+    // value from its closed list; every required arg must be raised.
+    std::vector<std::pair<const RegistryArg*, const RunFailureArg*>> matched;
+    matched.reserve(args.size());
+    for (const RunFailureArg& arg : args) {
+        const RegistryArg* declared = nullptr;
+        for (std::uint16_t a = 0; a < row.arg_count; ++a) {
+            const RegistryArg& candidate = kRegistryArgs[row.first_arg + a];
+            if (arg.name != nullptr && std::string(candidate.name) == arg.name) {
+                declared = &candidate;
+                break;
+            }
+        }
+        if (declared == nullptr) return std::nullopt;
+        for (const auto& seen : matched) {
+            if (seen.first == declared) return std::nullopt;
+        }
+        switch (declared->kind) {
+        case RunFailureArgKind::integer:
+            if (arg.type != RunFailureArg::Type::integer) return std::nullopt;
+            if ((code == RunFailureCode::run_resource_quota_exceeded
+                 || code == RunFailureCode::run_descriptor_limit_exceeded)
+                && (arg.integer < 0
+                    || static_cast<std::uint64_t>(arg.integer) > detail::kRunQuotaMax)) {
+                return std::nullopt;
+            }
+            break;
+        case RunFailureArgKind::number:
+            // An integer or a finite number: never text, a boolean or a null.
+            if (arg.type != RunFailureArg::Type::integer
+                && arg.type != RunFailureArg::Type::number) {
+                return std::nullopt;
+            }
+            if (arg.type == RunFailureArg::Type::number && !std::isfinite(arg.number)) {
+                return std::nullopt;
+            }
+            break;
+        case RunFailureArgKind::string:
+            if (arg.type != RunFailureArg::Type::text) return std::nullopt;
+            if ((code == RunFailureCode::runtime_history_budget_exhausted
+                 || code == RunFailureCode::runtime_storage_observation_incomplete)
+                && !canonical_u64_decimal(arg.text)) {
+                return std::nullopt;
+            }
+            break;
+        case RunFailureArgKind::nullable_string:
+            if (arg.type != RunFailureArg::Type::text
+                && arg.type != RunFailureArg::Type::null_value) {
+                return std::nullopt;
+            }
+            break;
+        case RunFailureArgKind::scalar:
+            if (!scalar_value_ok(arg)) return std::nullopt;
+            break;
+        case RunFailureArgKind::boolean:
+            if (arg.type != RunFailureArg::Type::boolean
+                || (arg.integer != 0 && arg.integer != 1)) return std::nullopt;
+            break;
+        case RunFailureArgKind::vocab: {
+            if (arg.type != RunFailureArg::Type::text) return std::nullopt;
+            bool known = false;
+            for (std::uint16_t v = 0; v < declared->value_count; ++v) {
+                if (string_equals(kRegistryValues[declared->first_value + v], arg.text)) {
+                    known = true;
+                    break;
+                }
+            }
+            if (!known) return std::nullopt;
+            break;
+        }
+        default:
+            if (!text_kind(declared->kind) || arg.type != RunFailureArg::Type::text) {
+                return std::nullopt;
+            }
+            break;
+        }
+        matched.emplace_back(declared, &arg);
+    }
+    for (std::uint16_t a = 0; a < row.arg_count; ++a) {
+        const RegistryArg* declared = &kRegistryArgs[row.first_arg + a];
+        if (declared->optional) continue;
+        const bool raised = std::any_of(matched.begin(), matched.end(),
+            [&](const auto& seen) { return seen.first == declared; });
+        if (!raised) return std::nullopt;
+    }
+    // Canonical: keys in byte order (the registry lists them sorted, so
+    // registry order is key order), no whitespace.
+    std::sort(matched.begin(), matched.end(), [](const auto& l, const auto& r) {
+        return std::string(l.first->name) < std::string(r.first->name);
+    });
+    std::string json;
+    json.push_back('{');
+    bool first = true;
+    for (const auto& [declared, arg] : matched) {
+        if (!first) json.push_back(',');
+        first = false;
+        append_json_string(json, declared->name);
+        json.push_back(':');
+        switch (arg->type) {
+        case RunFailureArg::Type::integer:
+            json += std::to_string(arg->integer);
+            break;
+        case RunFailureArg::Type::number:
+            if (!append_json_number(json, arg->number)) return std::nullopt;
+            break;
+        case RunFailureArg::Type::text:
+            append_json_string(json, arg->text);
+            break;
+        case RunFailureArg::Type::boolean:
+            if (arg->integer != 0) {
+                json += "true";
+            } else {
+                json += "false";
+            }
+            break;
+        case RunFailureArg::Type::null_value:
+            json += "null";
+            break;
+        }
+    }
+    json.push_back('}');
+    // The same canonical bytes, now held in the tracked ownership domain.
+    return RunFailureValue{code, own_json(std::move(json))};
+}
+
 }  // namespace
 
 RunFailureArg::RunFailureArg(const char* arg_name, const char* value)
@@ -157,140 +292,31 @@ RunFailureValue make_run_failure(RunFailureCode code, const RunFailureArgs& args
     try {
         const RegistryCode* row = registry_row(code);
         if (row == nullptr) return invariant();
-        if (args.empty()) {
-            for (std::uint16_t a = 0; a < row->arg_count; ++a) {
-                if (!kRegistryArgs[row->first_arg + a].optional) return invariant();
-            }
-            return RunFailureValue{code, nullptr};
-        }
-        // Each raised arg must be declared once, of its declared kind, a vocab
-        // value from its closed list; every required arg must be raised.
-        std::vector<std::pair<const RegistryArg*, const RunFailureArg*>> matched;
-        matched.reserve(args.size());
-        for (const RunFailureArg& arg : args) {
-            const RegistryArg* declared = nullptr;
-            for (std::uint16_t a = 0; a < row->arg_count; ++a) {
-                const RegistryArg& candidate = kRegistryArgs[row->first_arg + a];
-                if (arg.name != nullptr && std::string(candidate.name) == arg.name) {
-                    declared = &candidate;
-                    break;
-                }
-            }
-            if (declared == nullptr) return invariant();
-            for (const auto& seen : matched) {
-                if (seen.first == declared) return invariant();
-            }
-            switch (declared->kind) {
-            case RunFailureArgKind::integer:
-                if (arg.type != RunFailureArg::Type::integer) return invariant();
-                if ((code == RunFailureCode::run_resource_quota_exceeded
-                     || code == RunFailureCode::run_descriptor_limit_exceeded)
-                    && (arg.integer < 0
-                        || static_cast<std::uint64_t>(arg.integer) > detail::kRunQuotaMax)) {
-                    return invariant();
-                }
-                break;
-            case RunFailureArgKind::number:
-                // An integer or a finite number: never text, a boolean or a null.
-                if (arg.type != RunFailureArg::Type::integer
-                    && arg.type != RunFailureArg::Type::number) {
-                    return invariant();
-                }
-                if (arg.type == RunFailureArg::Type::number && !std::isfinite(arg.number)) {
-                    return invariant();
-                }
-                break;
-            case RunFailureArgKind::string:
-                if (arg.type != RunFailureArg::Type::text) return invariant();
-                if ((code == RunFailureCode::runtime_history_budget_exhausted
-                     || code == RunFailureCode::runtime_storage_observation_incomplete)
-                    && !canonical_u64_decimal(arg.text)) {
-                    return invariant();
-                }
-                break;
-            case RunFailureArgKind::nullable_string:
-                if (arg.type != RunFailureArg::Type::text
-                    && arg.type != RunFailureArg::Type::null_value) {
-                    return invariant();
-                }
-                break;
-            case RunFailureArgKind::scalar:
-                if (!scalar_value_ok(arg)) return invariant();
-                break;
-            case RunFailureArgKind::boolean:
-                if (arg.type != RunFailureArg::Type::boolean
-                    || (arg.integer != 0 && arg.integer != 1)) return invariant();
-                break;
-            case RunFailureArgKind::vocab: {
-                if (arg.type != RunFailureArg::Type::text) return invariant();
-                bool known = false;
-                for (std::uint16_t v = 0; v < declared->value_count; ++v) {
-                    if (string_equals(kRegistryValues[declared->first_value + v], arg.text)) {
-                        known = true;
-                        break;
-                    }
-                }
-                if (!known) return invariant();
-                break;
-            }
-            default:
-                if (!text_kind(declared->kind) || arg.type != RunFailureArg::Type::text) {
-                    return invariant();
-                }
-                break;
-            }
-            matched.emplace_back(declared, &arg);
-        }
-        for (std::uint16_t a = 0; a < row->arg_count; ++a) {
-            const RegistryArg* declared = &kRegistryArgs[row->first_arg + a];
-            if (declared->optional) continue;
-            const bool raised = std::any_of(matched.begin(), matched.end(),
-                [&](const auto& seen) { return seen.first == declared; });
-            if (!raised) return invariant();
-        }
-        // Canonical: keys in byte order (the registry lists them sorted, so
-        // registry order is key order), no whitespace.
-        std::sort(matched.begin(), matched.end(), [](const auto& l, const auto& r) {
-            return std::string(l.first->name) < std::string(r.first->name);
-        });
-        std::string json;
-        json.push_back('{');
-        bool first = true;
-        for (const auto& [declared, arg] : matched) {
-            if (!first) json.push_back(',');
-            first = false;
-            append_json_string(json, declared->name);
-            json.push_back(':');
-            switch (arg->type) {
-            case RunFailureArg::Type::integer:
-                json += std::to_string(arg->integer);
-                break;
-            case RunFailureArg::Type::number:
-                if (!append_json_number(json, arg->number)) return invariant();
-                break;
-            case RunFailureArg::Type::text:
-                append_json_string(json, arg->text);
-                break;
-            case RunFailureArg::Type::boolean:
-                if (arg->integer != 0) {
-                    json += "true";
-                } else {
-                    json += "false";
-                }
-                break;
-            case RunFailureArg::Type::null_value:
-                json += "null";
-                break;
-            }
-        }
-        json.push_back('}');
-        // The same canonical bytes, now held in the tracked ownership domain.
-        return RunFailureValue{code, own_json(std::move(json))};
+        auto value = validate_and_canonicalize(code, *row, args);
+        return value ? std::move(*value) : invariant();
     } catch (const std::bad_alloc&) {
         return RunFailureValue{RunFailureCode::out_of_memory, nullptr};
     } catch (...) {
         return invariant();
     }
+}
+
+RunFailureValidation validate_run_failure_name(
+    std::string_view name, const RunFailureArgs& args) noexcept {
+    // Exclude none and compare the whole view, including any embedded NUL.
+    // Resolve before touching args, so unknown_code has consistent precedence.
+    for (std::size_t index = 1; index < kCodeRows; ++index) {
+        const RegistryCode& row = kRegistryCodes[index];
+        if (name != row.name) continue;
+        try {
+            auto value = validate_and_canonicalize(static_cast<RunFailureCode>(index), row, args);
+            if (!value) return {RunFailureValidationStatus::invalid_args, std::nullopt};
+            return {RunFailureValidationStatus::accepted, std::move(value)};
+        } catch (...) {
+            return {RunFailureValidationStatus::unavailable, std::nullopt};
+        }
+    }
+    return {RunFailureValidationStatus::unknown_code, std::nullopt};
 }
 
 void RunFailureValue::observe_owned_storage(OwnedStorage& out) const noexcept {
