@@ -1,0 +1,3 @@
+Trade number,Type,Date and time,Signal,Price USDT,Size (qty),Size (value),Net PnL USDT,Return %,Commission USDT,Favorable excursion USDT,Favorable excursion %,Adverse excursion USDT,Adverse excursion %,Cumulative PnL USDT,Cumulative PnL %,Duration (bars)
+1,Exit long,2024-03-01 08:00,,61501.11,2.34667,99999.9863119,44322.824,44.32,0,50186.895,50.19,-9524.124,-9.52,44322.824,44.32,1438
+1,Entry long,2024-01-01 10:00,L,42613.57,2.34667,99999.9863119,44322.824,44.32,0,50186.895,50.19,-9524.124,-9.52,44322.824,44.32,1438

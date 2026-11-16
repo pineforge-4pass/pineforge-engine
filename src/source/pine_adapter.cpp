@@ -5942,6 +5942,48 @@ bool PineExecutionAdapter::compute_exit_reservation(
     return true;
 }
 
+// True when an exit of another strategy.exit id of `from_entry` holds a place
+// in the exit queue (exit_queue_rank, as compute_exit_reservation reads it)
+// strictly between `low` and `high`. Only such an exit tells an earlier source
+// call's slot `low` from a later sequence up to `high`: without one, both put
+// the call's exit in the same place relative to every other exit. A row
+// without a place (a leg queued for a later submission) is in neither range.
+// `unresolved` also counts the slots of the definitions whose levels are not
+// resolved yet (pending_relative_exits_): a re-issue that yields to them keeps
+// their slots in the order the definitions were first made.
+bool PineExecutionAdapter::exit_ranked_between(
+        const SourceId& exit_id, const SourceId& from_entry,
+        std::uint64_t low, std::uint64_t high, bool unresolved) const {
+    const auto between = [&](std::uint64_t rank) { return low < rank && rank < high; };
+    const auto queued = [&](const PlacementSnapshot& row) {
+        const bool exit = row.family == PineOrderFamily::ExitLimit
+            || row.family == PineOrderFamily::ExitStop
+            || row.family == PineOrderFamily::ExitTrail;
+        return exit && !row.void_issue && row.from_entry == from_entry
+            && row.source_id != exit_id
+            && between(exit_queue_rank(placement_, row));
+    };
+    for (const auto& handle : live_handles_) {
+        const auto found = placement_.find(handle.incarnation);
+        if (found != placement_.end() && queued(found->second)) return true;
+    }
+    for (const auto& pending : pending_bracket_legs_)
+        if (queued(pending.snapshot)) return true;
+    for (const auto& pending : pending_coof_requests_)
+        if (queued(pending.snapshot)) return true;
+    for (const auto& delayed : delayed_market_orders_)
+        if (queued(delayed.snapshot)) return true;
+    if (!unresolved) return false;
+    for (const auto& pending : pending_relative_exits_) {
+        if (pending.from_entry == from_entry && !pending.void_global
+            && pending.exit_id != exit_id
+            && between(pending.reservation_sequence)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void PineExecutionAdapter::reconcile_deferred_exit_reservations(
         const SourceId& from_entry, double live_basis) {
     if (!(live_basis > internal::kQtyEpsilon)) return;
@@ -11829,10 +11871,6 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         const double floored = explicit_entry_quantity_floor(qty, staged_.quantity_grid);
         if (floored > 0.0 || !(qty_percent < 100.0)) qty = floored > 0.0 ? floored : kNaN;
     }
-    const bool percent_by_origin = config_.pyramiding > 1
-        && !from_entry.empty() && std::isnan(qty)
-        && finite_positive(requested_qty_percent)
-        && requested_qty_percent < 100.0 - internal::kFullPercentEps;
     if (!from_entry.empty()) {
         const auto token = named_entry_cancel_tokens_.find(from_entry);
         if (token != named_entry_cancel_tokens_.end()) {
@@ -11888,6 +11926,13 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
              && fixture_close_logical_units(from_entry) > 0.0)
         && !entry_order_pending(from_entry) && !open_lot_of(from_entry)
         && !standing_exit(exit_id, from_entry);
+    // Percentages, like explicit units, belong to each source entry instance
+    // (the per-origin sizing below). A call TradingView voids reserves
+    // nothing and keeps the route it had before per-entry sizing.
+    const bool percent_by_origin = config_.pyramiding > 1
+        && !from_entry.empty() && std::isnan(qty)
+        && finite_positive(requested_qty_percent)
+        && requested_qty_percent < 100.0 - internal::kFullPercentEps && !void_issue;
     // A call made in position for an entry that holds no lot but has a limit
     // or stop order working binds the exit to the entry id: it waits for that
     // id's next fill through closes and the flat (PlacementSnapshot::
@@ -11934,14 +11979,16 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
                                          "Pine source command sequence exhausted");
     }
     const std::uint64_t command_sequence = ++source_command_sequence_;
-    const auto capture_reservation_sequence = [&] {
-        if (reservation_sequence != 0) return;
+    // The source sequence a projection or a queue place takes, as every
+    // placement does: a projected shadow and a leg queued ahead of a full
+    // exit draw one here; submitted requests draw theirs in submit_or_replace.
+    const auto draw_source_sequence = [&] {
         if (source_sequence_ >= static_cast<std::uint64_t>(
                 std::numeric_limits<std::int64_t>::max())) {
             throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
                                              "Pine exit queue sequence exhausted");
         }
-        reservation_sequence = ++source_sequence_;
+        return ++source_sequence_;
     };
     // Trail point and offset operands are source tick counts, whereas the
     // generic native Trail carries prices.  Preserve the source operands in
@@ -12212,6 +12259,13 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         (!finite_positive(limit_price) && finite_positive(profit_ticks))
         || (!finite_positive(stop_price) && finite_positive(loss_ticks));
     const bool unresolved_relative = unresolved_trail || unresolved_ticks;
+    // A known absolute sibling is submitted below and draws its own source
+    // sequence there; otherwise the call projects a shadow, which draws the
+    // call's sequence as every projection does.
+    // ab9714be pine_strategy_commands.cpp:533-537: 0.0 is a present level.
+    const bool absolute_sibling = finite_non_negative(limit_price)
+        || finite_non_negative(stop_price);
+    std::uint64_t shadow_sequence = 0;
     // A void call leaves no relative leg for the entry's fill to resolve.
     if (unresolved_relative && !void_issue) {
         PendingRelativeExit pending;
@@ -12227,12 +12281,31 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
             [&](const PendingRelativeExit& value) {
                 return value.exit_id == exit_id && value.from_entry == from_entry;
         });
+        if (!absolute_sibling) shadow_sequence = draw_source_sequence();
         if (existing == pending_relative_exits_.end()) {
-            capture_reservation_sequence();
+            // The call's queue slot is its projection's sequence; with an
+            // absolute sibling the family's submitted rank answers for it.
+            if (reservation_sequence == 0) reservation_sequence = shadow_sequence;
             pending.reservation_sequence = reservation_sequence;
             pending_relative_exits_.push_back(std::move(pending));
         } else {
             reservation_sequence = existing->reservation_sequence;
+            // A re-issue keeps its first queue slot only while an exit of
+            // another family of the entry is queued between that slot and
+            // now (exit_queue_rank); otherwise its new sequence is the same
+            // place in the queue.
+            if (!absolute_sibling) {
+                if (reservation_sequence == 0
+                    || !exit_ranked_between(exit_id, from_entry, reservation_sequence,
+                                            shadow_sequence)) {
+                    reservation_sequence = shadow_sequence;
+                }
+            } else if (reservation_sequence != 0
+                       && !exit_ranked_between(exit_id, from_entry, reservation_sequence,
+                                               source_sequence_ + 1)) {
+                // The submitted sibling's own sequence is the same place.
+                reservation_sequence = 0;
+            }
             pending.reservation_sequence = reservation_sequence;
             const auto same = [](double left, double right) {
                 return same_double_bits(left, right) || (std::isnan(left) && std::isnan(right));
@@ -12263,10 +12336,9 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
             source_shadow_pending_.end());
         // A known absolute sibling remains executable while the relative
         // trail/profit/loss component waits for its MARKET parent's fill.
-        // ab9714be pine_strategy_commands.cpp:533-537: 0.0 is a present level.
         // Kernel validate_levels still refuses non-finite and negative
         // levels (A43); those stay command projections.
-        if (finite_non_negative(limit_price) || finite_non_negative(stop_price)) {
+        if (absolute_sibling) {
             // Continue below and submit the known absolute sibling.
         } else {
         if (void_issue) return;
@@ -12281,8 +12353,7 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         shadow.requested_qty = qty;
         shadow.qty_percent = qty_percent;
         shadow.command_sequence = command_sequence;
-        shadow.source_sequence = reservation_sequence;
-        shadow.chain_origin_sequence = reservation_sequence;
+        shadow.source_sequence = shadow_sequence;
         shadow.projection_position_side = static_cast<std::int32_t>(PositionSide::FLAT);
         shadow.exit_levels = {limit_price, stop_price, source_trail_points,
                               source_trail_offset, source_trail_price,
@@ -12459,6 +12530,11 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         if (finite_positive(units)) pending_parent_units += units;
     };
     for (const auto& handle : live_handles_) {
+        // Relative exits materialize inside their parent's applied callback,
+        // before that opening handle retires. Its units already belong to
+        // the physical book and source cohort, so adding them as pending
+        // again doubles a same-bar percentage's basis.
+        if (handle == materializing_parent_) continue;
         const auto parent = placement_.find(handle.incarnation);
         if (parent != placement_.end()) observe_pending_parent(parent->second);
     }
@@ -12486,6 +12562,21 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
     // entry's margin slices (tests/fixtures/margin_v6 w5-qp-*; 35% of 62.3911
     // despite prior slices of 0.0028 and 1.6712; lane W5-ENG-MARGIN-V6).
     double completed_entry_units = 0.0;
+    // A per-entry percentage sizes each opening from its own completed units:
+    // the per-origin parts of this same tracked query (the certificates it
+    // merges, or its one ordered walk), never a second walk. The rows are
+    // the entry's live openings in incarnation order, written before the
+    // query runs, so a part is found by binary search and the query inserts
+    // nothing.
+    std::vector<std::pair<std::uint64_t, double>> completed_parts;
+    const auto completed_part = [&](std::uint64_t incarnation) -> double* {
+        const auto found = std::lower_bound(completed_parts.begin(), completed_parts.end(),
+            incarnation, [](const std::pair<std::uint64_t, double>& part, std::uint64_t key) {
+                return part.first < key;
+            });
+        return found != completed_parts.end() && found->first == incarnation
+            ? &found->second : nullptr;
+    };
     if (std::isnan(qty) && std::isfinite(requested_qty_percent)
         && requested_qty_percent < 100.0 && physical.signed_units != 0.0
         && position_open_script_bar_ != std::numeric_limits<std::int64_t>::min()) {
@@ -12499,8 +12590,24 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
 #ifdef PINEFORGE_POSITION_TAIL_BEFORE_QUERY
         PINEFORGE_POSITION_TAIL_BEFORE_QUERY(summary);
 #endif
-        const bool certified = ancestry_sized_target
-            ? summary.ancestry(physical.signed_units > 0.0, [&](const auto& include) {
+        if (percent_by_origin) {
+            // Only a live opening of this entry is sized from its part; a
+            // spilled cohort holds none.
+            const auto sized = cohorts_by_id_.find_resident(from_entry);
+            if (sized != cohorts_by_id_.end()) {
+                completed_parts.reserve(sized->second.live_units_by_origin.size());
+                for (const auto& origin : sized->second.live_units_by_origin)
+                    completed_parts.emplace_back(origin.first, 0.0);
+                std::sort(completed_parts.begin(), completed_parts.end());
+            }
+        }
+        // Parts accumulate in the query's own row order.
+        const auto add_part = [&](std::uint64_t incarnation, double units) {
+            if (!percent_by_origin) return;
+            if (auto* part = completed_part(incarnation)) *part += units;
+        };
+        bool certified = ancestry_sized_target
+            ? summary.ancestry_parts(physical.signed_units > 0.0, [&](const auto& include) {
                 // Membership is the CURRENT live map, not the opening
                 // roster or a subtotal minus the most recently drained lot.
                 using CohortRow = std::remove_reference_t<decltype(*cohorts_by_id_.begin())>;
@@ -12510,10 +12617,19 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
                     for (const auto& origin : cohort.second.live_units_by_origin)
                         include(origin.first);
                 });
-              }, completed_entry_units, PINEFORGE_POSITION_TAIL_DIAGNOSTICS{})
+              }, completed_entry_units, [&](std::uint64_t incarnation, const auto& certificate) {
+                double units = 0.0;
+                if (percent_by_origin && certificate.read(units)) add_part(incarnation, units);
+              }, PINEFORGE_POSITION_TAIL_DIAGNOSTICS{})
             : summary.margin(physical.signed_units > 0.0,
                              fifo_named_entry ? &from_entry : nullptr, completed_entry_units,
                              PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
+        // A margin certificate holds no per-origin parts: per-entry sizing
+        // takes this query's ordered walk instead.
+        if (certified && percent_by_origin && !ancestry_sized_target
+            && completed_entry_units > 0.0) {
+            certified = false;
+        }
         const auto include_completed = [&](bool is_long, std::uint64_t incarnation,
                                             bool margin_call, const auto& named_entry_matches) {
             if (is_long != (physical.signed_units > 0.0)) return false; const auto held = cohorts_by_id_.held_rows(); // one range: one exactness assert
@@ -12526,14 +12642,17 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
                     })
                 : margin_call && (!fifo_named_entry || named_entry_matches());
         };
-        if (!certified)
-            completed_entry_units = detail::replay_position_tail(
+        if (!certified) {
+            // An uncertified query's parts come from its own walk alone.
+            for (auto& part : completed_parts) part.second = 0.0;
+            completed_entry_units = detail::replay_position_tail_split(
                 host.closed_trade_count(), base,
                 [&](std::size_t index) -> Trade {
                     return host.get_trade(static_cast<int>(index));
                 }, position_tail_spill_.get(), position_open_script_bar_,
-                include_completed, from_entry, summary.work,
+                include_completed, add_part, from_entry, summary.work,
                 PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
+        }
 #ifdef PINEFORGE_POSITION_TAIL_OBSERVE
         // Test-TU observer: the reference walk is never linked into runtime.
         PINEFORGE_POSITION_TAIL_OBSERVE(completed_entry_units, certified);
@@ -12596,8 +12715,18 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         }
         return;
     }
+    // The family's earlier queue place (compute_exit_reservation) orders this
+    // call's legs differently from their own sequences only while an exit of
+    // another family is queued between them. No sequence is drawn here: a
+    // submitted leg draws its own in submit_or_replace, as every placement
+    // does, and a leg queued for a later submission stays unranked until it
+    // is issued unless it retains such an earlier place.
+    if (reservation_sequence != 0
+        && !exit_ranked_between(exit_id, from_entry, reservation_sequence,
+                                source_sequence_ + 1)) {
+        reservation_sequence = 0;
+    }
     const bool has_retained_reservation = reservation_sequence != 0;
-    capture_reservation_sequence();
     const auto source_point = detail::callback_point(require_host());
     const OrderBirth exit_birth = capture_order_birth();
     const auto exit_birth_reach = compat::pine::select_historical_birth_reach(
@@ -12948,20 +13077,8 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
                 if (completed_entry_units > 0.0 && basis > 0.0
                     && cohort != cohorts_by_id_.end()
                     && cohort->second.live_units_by_origin.count(origin) != 0) {
-                    const auto& host = require_host();
-                    const auto* pine = pine_view_of(host_);
-                    completed = detail::replay_position_tail(
-                        host.closed_trade_count(), pine ? pine->trades_.base() : 0,
-                        [&](std::size_t index) -> Trade {
-                            return host.get_trade(static_cast<int>(index));
-                        }, position_tail_spill_.get(), position_open_script_bar_,
-                        [&](bool is_long, std::uint64_t incarnation, bool margin_call,
-                            const auto&) {
-                            return incarnation == origin
-                                && is_long == (physical.signed_units > 0.0)
-                                && (ancestry_sized_target || margin_call);
-                        }, from_entry, position_tail_summary_->work,
-                        PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
+                    // This opening's part of the tracked query above.
+                    if (const auto* part = completed_part(origin)) completed = *part;
                 }
                 // A same-bar close owns held units before these exits.
                 // Pending parents supply their own capacity, including an
@@ -13358,6 +13475,29 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
                     stale = pending_write(pending_bracket_legs_).erase(stale);
                 else
                     ++stale;
+            }
+            // TradingView queues an entry's exits in the order they were
+            // created. A leg an earlier call queued for a later submission
+            // holds no place yet (it stays unranked until it is issued). A
+            // full exit re-expands on every call to the units the exits ahead
+            // of it leave, so issued first it would take that leg's units at
+            // its next call. Such a leg of another exit id of the same entry
+            // takes its place before a full exit's leg draws its own; nothing
+            // is drawn otherwise. A void call holds no place and orders none.
+            for (auto& earlier : pending_bracket_legs_) {
+                if (void_issue || !dynamic || (std::isfinite(requested_qty_percent)
+                        && requested_qty_percent < 100.0 - internal::kFullPercentEps)) break;
+                const PlacementSnapshot& waiting = earlier.snapshot;
+                const bool waiting_exit = waiting.family == PineOrderFamily::ExitLimit
+                    || waiting.family == PineOrderFamily::ExitStop
+                    || waiting.family == PineOrderFamily::ExitTrail;
+                if (!waiting_exit || waiting.void_issue || waiting.from_entry != from_entry
+                    || waiting.source_id == exit_id || waiting.chain_origin_sequence != 0
+                    || waiting.source_sequence != 0 || waiting.projection_predecessor != 0) {
+                    continue;
+                }
+                const std::uint64_t place = draw_source_sequence();
+                pending_write(earlier).snapshot.chain_origin_sequence = place;
             }
             const std::uint64_t placement_high_water = placement_.high_water();
             const bool opening_stop_now = family == PineOrderFamily::ExitStop
@@ -14125,18 +14265,22 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
         }
         // ab9714be pine_fills.cpp:7679-7700 evaluates a filled parent's priced
         // exits on its entry bar, whichever source batch placed the parent.
-        // An explicit leg issued after its flat MARKET parent,
+        // An explicit leg issued after its flat pyramiding=2 MARKET parent,
         // while that parent was still held in the same-bar batch, took origin
         // zero; the batch has now submitted the parent, so bind the leg to it
         // exactly as exit() binds a leg issued after a live pending parent:
         // it waits for the parent's opening instead of pre-arming on the
-        // signal bar.
+        // signal bar. The explicit-quantity rule is measured at pyramiding=2
+        // only, so other settings keep origin zero; a named percentage leg
+        // sized per entry (fixed_exit_reservation below 100%) binds to its
+        // parent at every pyramiding setting that sizes it per entry.
         const bool named_percent_leg = !leg.snapshot.from_entry.empty()
             && !std::isfinite(leg.snapshot.requested_qty)
             && leg.snapshot.fixed_exit_reservation
             && leg.snapshot.qty_percent < 100.0 - internal::kFullPercentEps;
         if (leg.snapshot.bracket_origin.incarnation == 0
-            && (std::isfinite(leg.snapshot.requested_qty) || named_percent_leg)
+            && ((config_.pyramiding == 2 && std::isfinite(leg.snapshot.requested_qty))
+                || named_percent_leg)
             && !leg.snapshot.from_entry.empty()) {
             const auto cohort = cohorts_by_id_.find(leg.snapshot.from_entry);
             if (cohort != cohorts_by_id_.end() && cohort->second.opened.empty()) {
@@ -15109,6 +15253,9 @@ void PineExecutionAdapter::materialize_relative_exits(
         withdraw_anchored_relative_legs(nullptr, &opening.source_id);
     for (auto& value : global_pending) pending.push_back(std::move(value));
     const double tick = staged_.syminfo.mintick;
+    // Every exit already queued has a lower sequence; the materialized ones
+    // below draw higher ones.
+    const std::uint64_t queued_bound = source_sequence_ + 1;
     for (const auto& value : pending) {
         // Bind a named tick definition to the entries that existed at its
         // source call, using their individual fills and the original cutoff.
@@ -15149,6 +15296,13 @@ void PineExecutionAdapter::materialize_relative_exits(
         // not synthesize a trailing distance from trail_points here; an
         // explicit zero/sub-tick offset remains distinguishable and is
         // lowered by exit()'s native sentinel policy.
+        // The call keeps its source queue slot only while an exit of another
+        // family of its entry, queued after that slot, would otherwise be
+        // ahead of it; otherwise the fill's own sequence orders it the same.
+        const std::uint64_t slot = value.reservation_sequence != 0
+                && exit_ranked_between(value.exit_id, value.from_entry,
+                                       value.reservation_sequence, queued_bound)
+            ? value.reservation_sequence : 0;
         materializing_relative_ = true;
         materializing_parent_ = event.handle();
         try {
@@ -15157,7 +15311,7 @@ void PineExecutionAdapter::materialize_relative_exits(
                 value.trail_price, value.qty_percent, value.comment, value.qty, value.oca_name,
                 value.from_entry.empty() ? value.profit_ticks : kNaN,
                 value.from_entry.empty() ? value.loss_ticks : kNaN,
-                value.reservation_sequence);
+                slot);
         } catch (...) {
             materializing_relative_ = false;
             materializing_parent_ = {};
@@ -18215,7 +18369,8 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         // candidate preserves the same observable trade roster.
         if (!view.account.would_open && !(view.inspected_closed_units > 0.0))
             return NativePrecommitVerdict::Refuse;
-        if (PF_RARE(((std::isfinite(source.requested_qty) && source.requested_qty > 0.0)
+        if (PF_RARE(source.bracket_origin.incarnation == 0
+                    && ((std::isfinite(source.requested_qty) && source.requested_qty > 0.0)
                      || (std::isfinite(source.qty_percent) && source.qty_percent < 100.0 - 1e-9))
                     && exit_tombstoned(source.source_id, source.from_entry))) {
             return NativePrecommitVerdict::Refuse;
@@ -26264,6 +26419,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         // for the unreserved two shares). An exit armed for a later opening
         // of the id fills as before (test_exit_bracket_pending_entry_leg).
         if (detail::margin_rule_switches().exit_child_tombstones
+            && placement_snapshot->bracket_origin.incarnation == 0
             && !placement_snapshot->from_entry.empty() && pinned_lot_grid()) {
             const std::uint64_t origin = entry_incarnation_of(placement_snapshot->from_entry);
             if (origin != 0)
