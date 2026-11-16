@@ -474,6 +474,13 @@ public:
     // Debug check a run's end makes, and a witness's probe.
     uint64_t closed_rows_digest(const TradeLedger& rows) const;
     bool closed_rows_digest_holds(const TradeLedger& rows) const;
+#ifndef NDEBUG
+    // Per-thread count of actual six-field row folds, including pending
+    // answers, verification and sealing. No counter or accessors in Release;
+    // these static functions add no consumer state or layout difference.
+    static std::uint64_t debug_closed_row_fold_work() noexcept;
+    static void reset_debug_closed_row_fold_work() noexcept;
+#endif
     // NativeStrategyHost::native_closed_rows_amended: the rows from `first` on
     // changed after they were final; the next read folds them again.
     void closed_rows_amended(std::size_t first) { rewind_closed_rows(first); }

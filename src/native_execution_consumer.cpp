@@ -12716,12 +12716,28 @@ void NativeExecutionConsumer::note_committed_events(
 // rows past the mark, whose notification is still pending, into its answer
 // only.
 namespace {
+#ifndef NDEBUG
+thread_local std::uint64_t closed_row_fold_work = 0;
+#endif
 void fold_closed_row(BrokerStateHashSink& f, const Trade& row) noexcept {
+#ifndef NDEBUG
+    ++closed_row_fold_work;
+#endif
     f.i(row.entry_time); f.i(row.exit_time);
     f.d(row.entry_price); f.d(row.exit_price);
     f.d(row.qty); f.d(row.pnl);
 }
 }  // namespace
+
+#ifndef NDEBUG
+std::uint64_t NativeExecutionConsumer::debug_closed_row_fold_work() noexcept {
+    return closed_row_fold_work;
+}
+
+void NativeExecutionConsumer::reset_debug_closed_row_fold_work() noexcept {
+    closed_row_fold_work = 0;
+}
+#endif
 
 uint64_t NativeExecutionConsumer::closed_rows_digest(
         const TradeLedger& rows) const {
