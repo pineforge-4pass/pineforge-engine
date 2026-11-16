@@ -1064,9 +1064,17 @@ private:
     public:
         std::optional<std::uint64_t> find(const RequestCallerKey&) const noexcept;
         void emplace(const RequestCallerKey&, std::uint64_t caller);
-        bool empty() const noexcept { return size_ == 0; }
-        std::size_t size() const noexcept { return size_; }
-        void clear() noexcept { runs_.clear(); size_ = 0; }
+        bool empty() const noexcept { return runs_.empty(); }
+        std::size_t size() const noexcept {
+            std::size_t rows = 0;
+            for (const auto& entry : runs_) {
+                const auto span = static_cast<std::uint64_t>(entry.second.last)
+                    - static_cast<std::uint64_t>(entry.first.second);
+                rows += static_cast<std::size_t>(span) + 1;
+            }
+            return rows;
+        }
+        void clear() noexcept { runs_.clear(); }
 
         template <typename Visit>
         void for_each(Visit&& visit) const {
@@ -1092,7 +1100,6 @@ private:
         static std::uint64_t caller_at(const RequestCallerKey&, const Run&,
                                         std::int64_t second) noexcept;
         std::map<RequestCallerKey, Run> runs_;
-        std::size_t size_ = 0;
     };
     struct RequestChartCaller {
         std::uint64_t caller = 0;

@@ -1980,7 +1980,6 @@ void source::PineStrategyHost::RequestCallerIds::emplace(
                 if (caller == caller_at(first, run, run.last) + stride) {
                     run.last = key.second;
                     run.stride = stride;
-                    ++size_;
                     return;
                 }
             }
@@ -2006,7 +2005,7 @@ void source::PineStrategyHost::RequestCallerIds::emplace(
             }
         }
     }
-    if (runs_.emplace(key, Run{caller, key.second, 0}).second) ++size_;
+    runs_.emplace(key, Run{caller, key.second, 0});
 }
 
 std::uint64_t source::PineStrategyHost::request_caller_id(
