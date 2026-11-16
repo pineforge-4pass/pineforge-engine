@@ -2192,8 +2192,8 @@ private:
         // entry order was working, which TradingView voids
         // (PlacementSnapshot::void_global_issue): no entry's fill arms it.
         bool void_global = false;
-        // The unresolved definition keeps its place until the parent's fill
-        // supplies prices and materializes the same reservation.
+        // A queue slot reserved for the definition; zero when it holds none,
+        // and the parent's fill then ranks its legs as they are submitted.
         std::uint64_t reservation_sequence = 0;
     };
 
