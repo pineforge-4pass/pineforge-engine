@@ -15,7 +15,6 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
-#include <utility>
 #include <vector>
 
 namespace pineforge::source::detail {
@@ -311,16 +310,6 @@ public:
 
     template<class Select, class Diagnostics = PositionTailNoDiagnostics>
     bool ancestry(bool is_long, Select&& select, double& result, Diagnostics diagnostics = {}) {
-        return ancestry_parts(is_long, std::forward<Select>(select), result,
-                              [](std::uint64_t, const PositionTailExact&) {}, diagnostics);
-    }
-
-    // ancestry(), also handing every origin it merges, once, with its exact
-    // completed certificate to `part`: the same query answers each origin's
-    // own completed units, with the same work.
-    template<class Select, class Part, class Diagnostics = PositionTailNoDiagnostics>
-    bool ancestry_parts(bool is_long, Select&& select, double& result, Part&& part,
-                        Diagnostics diagnostics = {}) {
         ++work.queries;
         if (!safe_ || !active_) return finish(false, unsafe_reason_, diagnostics);
         if (++query_generation_ == 0) {
@@ -349,10 +338,7 @@ public:
                     rejection.reject(row.completed.reason == PositionTailGuard::None
                         ? PositionTailGuard::InvalidCertificate : row.completed.reason);
                 total.valid = false;
-            } else if (row.is_long == is_long) {
-                total.merge(row.completed, rejection);
-                part(incarnation, row.completed);
-            }
+            } else if (row.is_long == is_long) total.merge(row.completed, rejection);
         });
         const bool certified = total.read(result, rejection);
         return finish(certified, rejection.value(), diagnostics);
@@ -444,15 +430,11 @@ private:
 // The predicate and the additions have the same evaluation/order as L18:
 // resident newest-to-oldest, then external newest-to-oldest, first strict
 // timestamp barrier terminates the entire walk. It remains O(history).
-// replay_position_tail_split also hands every included row's entry
-// incarnation and quantity to `part`: the one walk answers the total and each
-// origin's part, with the same rows, work and addition order.
-template<class Read, class Include, class Part, class Diagnostics = PositionTailNoDiagnostics>
-double replay_position_tail_split(std::size_t end, std::size_t base, Read&& read,
-                                  const PositionTailSpill* spill, std::int64_t barrier,
-                                  Include&& include, Part&& part, const std::string& from_entry,
-                                  PineExecutionAdapter::PositionTailWork& work,
-                                  Diagnostics = {}) {
+template<class Read, class Include, class Diagnostics = PositionTailNoDiagnostics>
+double replay_position_tail(std::size_t end, std::size_t base, Read&& read,
+                            const PositionTailSpill* spill, std::int64_t barrier,
+                            Include&& include, const std::string& from_entry,
+                            PineExecutionAdapter::PositionTailWork& work, Diagnostics = {}) {
     double result = 0.0;
     for (std::size_t index = end; index > base;) {
         const Trade& trade = read(--index);
@@ -463,10 +445,7 @@ double replay_position_tail_split(std::size_t end, std::size_t base, Read&& read
         }
         if (trade.exit_time < barrier) return result;
         if (include(trade.is_long, trade.entry_incarnation, trade.exit_id == kMarginCallLabel,
-                    [&] { return trade.entry_id == from_entry; })) {
-            result += trade.qty;
-            part(trade.entry_incarnation, trade.qty);
-        }
+                    [&] { return trade.entry_id == from_entry; })) result += trade.qty;
     }
     if (spill) {
         auto cursor = spill->size_bytes();
@@ -476,25 +455,10 @@ double replay_position_tail_split(std::size_t end, std::size_t base, Read&& read
             if constexpr (Diagnostics::enabled) ++work.spill_rows;
             if (trade.exit_time < barrier) break;
             if (include(trade.is_long, trade.entry_incarnation, trade.margin_call,
-                        [&] { return spill->entry_id_equals(trade, from_entry); })) {
-                result += trade.qty;
-                part(trade.entry_incarnation, trade.qty);
-            }
+                        [&] { return spill->entry_id_equals(trade, from_entry); })) result += trade.qty;
         }
     }
     return result;
-}
-
-template<class Read, class Include, class Diagnostics = PositionTailNoDiagnostics>
-double replay_position_tail(std::size_t end, std::size_t base, Read&& read,
-                            const PositionTailSpill* spill, std::int64_t barrier,
-                            Include&& include, const std::string& from_entry,
-                            PineExecutionAdapter::PositionTailWork& work,
-                            Diagnostics diagnostics = {}) {
-    return replay_position_tail_split(end, base, std::forward<Read>(read), spill, barrier,
-                                      std::forward<Include>(include),
-                                      [](std::uint64_t, double) {}, from_entry, work,
-                                      diagnostics);
 }
 
 // Source-only extension of the position-tail summary: every allocation uses it.

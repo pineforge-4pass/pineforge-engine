@@ -284,13 +284,6 @@
       "twinAssertionSha256": "af185b3c1eedb194ddc4524e6cb47057ac263ff9eb12b9765374e1298d40cc95",
       "twinAssertions": 11
     },
-    "test_full_close_while_pyramiding": {
-      "baseAssertions": 12,
-      "reason": "the partial re-issue guard follows the TradingView table in issue #810 (case C) and the Pine documentation section \"Exits for multiple entries\": a strategy.exit with qty_percent below 100 places one exit order for every entry of its id, each for that percentage of its own entry, so the three 10-unit entries close 5 units each at the limit (three trades, 15 units left open) where ab9714be kept one shared order frozen at the first entry's 5 (one trade, 25 units left open)",
-      "twin": "test_full_close_while_pyramiding_l4d.cpp",
-      "twinAssertionSha256": "24e21b77919d74d75b85fa38d53502521cade021405c0c58ab8f880dabad4990",
-      "twinAssertions": 16
-    },
     "test_integration": {
       "baseAssertions": 572,
       "reason": "legacy owner reads in the integration TU are rewritten to source-host projections; the close-reservation rows follow lane W3B-ENG-GRID's TradingView tapes (tests/fixtures/grid_close: w3f02-x1/-x2, w3bf02-a1/-a2/-f1 and the legacy scenarios w3bl-s6..-s10b): a call site's fill books its first id's close ledger and spills oldest first, every reducing fill books it, and no close holds a standing reservation, so the rows pin the ledger and the trades instead of the retired reservation and provenance maps; and test_strategy_close_pooc_keeps_same_bar_market_reentry follows TradingView's lab tv tape w8a-pooc-close-reentry-pyr2 (lane W8A-SIGSTATE-1 R2): under process_orders_on_close a same-bar strategy.close of L and a same-side entry L_add both fill, so the run ends holding L_add (position 1, not 0)",

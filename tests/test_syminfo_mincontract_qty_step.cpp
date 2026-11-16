@@ -10,7 +10,6 @@
 #include <limits>
 #include <string>
 
-#include <pineforge/pineforge.h>
 #include <pineforge/bar.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
