@@ -1867,6 +1867,9 @@ private:
     void revoke_activation_birth(const native_order::RequestHandle&);
     void note_committed_events(const native_order::EventRange& events) noexcept;
     void note_cohort_receipts() noexcept;
+    // Advance only final rows. Debug notification checks need no digest
+    // answer over the suffix whose applied callbacks have not returned.
+    void advance_closed_rows_prefix(const TradeLedger& rows) const;
     void verify_closed_rows(const BacktestEngine& engine) const;
     void rewind_closed_rows(std::size_t first) const;
     void write_streamed_trade(const BacktestEngine& engine, std::size_t global,
