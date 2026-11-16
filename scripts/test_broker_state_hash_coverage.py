@@ -140,9 +140,11 @@ class Coverage(unittest.TestCase):
         self.assertEqual(result, 1, output)
 
     def test_security_domain_is_pinned(self):
+        # expectation corrected: v8 -> v9, because the #694 re-apply moves the
+        # header to v9 and the checker already pins v9.
         result, output = self.check((
             ("include/pineforge/source/pine_strategy_host.hpp",
-             "pineforge-source-security/v8", "pineforge-source-security/v0"),))
+             "pineforge-source-security/v9", "pineforge-source-security/v0"),))
         self.assertEqual(result, 1, output)
 
     def test_security_site_field_is_enumerated(self):
