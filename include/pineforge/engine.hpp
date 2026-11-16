@@ -1606,6 +1606,10 @@ protected:
     // and dispatch the completed bucket. Publication at the last contributing
     // input is the consumer's; a source host composes its own step.
     void feed_security_eval_state(SecurityEvalState& state, const Bar& input_bar);
+    // An auxiliary series resolves intervals in the timeframe of its own
+    // contributing bars, independently of the primary input's timeframe.
+    void feed_security_eval_state(SecurityEvalState& state, const Bar& input_bar,
+                                  const std::string& feed_tf);
 
     // A new batch run (including stream_begin's historical warmup) starts a
     // fresh script lifecycle. Called once after broker reset, before any

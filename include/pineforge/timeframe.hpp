@@ -414,6 +414,14 @@ public:
     AggregatedBar feed(const Bar& input_bar, int64_t next_input_ms,
                        int64_t calling_close_ms);
 
+    /// Internal evaluator entry: retain the parsed input and target periods
+    /// when the input has no fixed duration. The intervals are resolved for
+    /// this call only; fixed-duration inputs and installed native partitions
+    /// keep the existing feed path.
+    AggregatedBar feed(const Bar& input_bar, int64_t next_input_ms,
+                       int64_t calling_close_ms, const std::string& input_tf,
+                       const std::string& target_tf);
+
     /// Current in-progress bar.
     Bar current() const;
 

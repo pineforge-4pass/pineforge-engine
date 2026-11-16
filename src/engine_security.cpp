@@ -100,10 +100,17 @@ void BacktestEngine::dispatch_security_eval(SecurityEvalState& state,
 
 void BacktestEngine::feed_security_eval_state(
         SecurityEvalState& state, const Bar& input_bar) {
+    feed_security_eval_state(state, input_bar,
+        security_input_tf_.empty() ? input_tf_ : security_input_tf_);
+}
+
+void BacktestEngine::feed_security_eval_state(
+        SecurityEvalState& state, const Bar& input_bar, const std::string& feed_tf) {
     // The next input bar's timestamp (0 when unknown) lets a calendar
     // bucket complete on the period's actual last input bar -- see
     // security_next_input_ms_.
-    AggregatedBar ab = state.aggregator.feed(input_bar, security_next_input_ms_);
+    AggregatedBar ab = state.aggregator.feed(
+        input_bar, security_next_input_ms_, 0, feed_tf, state.tf);
     state.feed_count++;
     state.current_sub_bar_count = ab.sub_bar_count;
     if (ab.is_complete) {

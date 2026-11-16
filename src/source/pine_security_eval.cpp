@@ -977,8 +977,9 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
     // security_next_input_ms_ -- and the calling chart bar's nominal close
     // (split-feed path, else 0) lets an OTC bucket do so exactly when that
     // close reaches the period's -- see security_calling_close_ms_.
-    AggregatedBar ab = state.aggregator.feed(input_bar, security_next_input_ms_,
-                                             security_calling_close_ms_);
+    AggregatedBar ab = state.aggregator.feed(
+        input_bar, security_next_input_ms_, security_calling_close_ms_,
+        security_input_tf_.empty() ? input_tf_ : security_input_tf_, state.tf);
     // timeframe.cpp excludes target_seconds >= kSecPerDay from its sub-day
     // session-close rule. A minute-spelled day closes at the day's close,
     // deliberately not at an intermediate session window's close.

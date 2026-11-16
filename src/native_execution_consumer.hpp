@@ -160,10 +160,22 @@ public:
     // Empty leaves all nominal calendar and completion paths unchanged.
     void set_script_period_source(std::shared_ptr<TimeframeAggregator::PeriodSource>,
                                   const Bar* bars, std::size_t n);
+    // Run-begin opt-in: include the available aggregate at a batch's input
+    // horizon. Returns false for a naturally complete final interval, a stream
+    // or a selected window, leaving their completion and hash bytes unchanged.
+    bool include_batch_script_tail(std::int64_t final_input_ms);
+    // Read-only chart population over the admitted native intervals. Counts
+    // lazy boundary seals and a final natural close or opted-in batch tail,
+    // independently of the request-completion preview.
+    std::optional<std::size_t> batch_script_population(const Bar*, std::size_t) const;
     std::optional<native_calendar::NativeInterval> script_period_interval(
             std::int64_t stamp) const {
         return script_period_.source ? script_interval_at(stamp) : std::nullopt;
     }
+    // The configured calendar span, including a known timeframe whose
+    // execution uses raw passthrough labels. Does not change that partition.
+    std::optional<native_calendar::NativeInterval> script_calendar_interval(
+        std::int64_t stamp) const;
 
     void run_simple(BacktestEngine& engine, const Bar* bars, int n) override;
     void run_tf(BacktestEngine& engine,
@@ -1242,6 +1254,7 @@ private:
         std::int64_t last_ms = 0;
         std::uint64_t digest = 0;
     } script_period_;
+    bool batch_script_tail_ = false;
     void prepare_day_labels(const BacktestEngine& engine, const Bar* input_bars, int n_input);
     // The instant a lookup by `timestamp` reads the calendar at: a label a
     // stamp moved before its bar's calendar open names that bar, so it reads

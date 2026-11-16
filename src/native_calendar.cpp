@@ -547,6 +547,16 @@ std::optional<int64_t> known_period_seconds(const Timeframe& tf) {
     return std::nullopt;
 }
 
+std::pair<int64_t, int64_t> calendar_day_bounds(const CivilDate& trading_date,
+                                               int64_t trading_days,
+                                               int count) {
+    // The session's exchange-local trading year anchors the day groups.
+    const int64_t year_start = days_from_civil(trading_date.year, 1, 1);
+    const int64_t next_year_start = days_from_civil(trading_date.year + 1, 1, 1);
+    const int64_t key = year_start + floor_div(trading_days - year_start, count) * count;
+    return {key, std::min(key + count, next_year_start)};
+}
+
 std::optional<PeriodCore> calendar_core(const SessionCalendar& cal,
                                         TimeframeUnit unit,
                                         int count,
@@ -561,8 +571,9 @@ std::optional<PeriodCore> calendar_core(const SessionCalendar& cal,
     CivilDate first_trading;
     CivilDate next_trading;
     if (unit == TimeframeUnit::Day) {
-        key = floor_div(trading_days, count) * count;
-        next_key = key + count;
+        const auto bounds = calendar_day_bounds(day->trading_date, trading_days, count);
+        key = bounds.first;
+        next_key = bounds.second;
         first_trading = civil_from_days(key);
         next_trading = civil_from_days(next_key);
     } else if (unit == TimeframeUnit::Week) {
@@ -1621,7 +1632,7 @@ std::optional<int64_t> period_key(const SessionCalendar& calendar, const Timefra
     if (tf.unit() == TimeframeUnit::Day) {
         auto ord = session_day_ordinal(calendar, ms);
         if (!ord) return std::nullopt;
-        return floor_div(*ord, tf.count()) * tf.count();
+        return calendar_day_bounds(civil_from_days(*ord), *ord, tf.count()).first;
     }
     if (tf.unit() == TimeframeUnit::Week) {
         auto ord = session_week_ordinal(calendar, ms);
@@ -1921,8 +1932,9 @@ std::optional<PeriodCore> memo_calendar_core(const SessionCalendar& cal,
     CivilDate first_trading;
     CivilDate next_trading;
     if (unit == TimeframeUnit::Day) {
-        key = floor_div(trading_days, count) * count;
-        next_key = key + count;
+        const auto bounds = calendar_day_bounds(trading_date, trading_days, count);
+        key = bounds.first;
+        next_key = bounds.second;
         first_trading = civil_from_days(key);
         next_trading = civil_from_days(next_key);
     } else if (unit == TimeframeUnit::Week) {

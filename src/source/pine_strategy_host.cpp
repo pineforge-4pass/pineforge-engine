@@ -2858,7 +2858,10 @@ void source::PineStrategyHost::present_report(ReportC* out) const {
 
 void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_bar) {
     range_end_trades_.clear();
-    if (stream_warmup_mode_ || realtime_tail_
+    // The scheduler omits its suppressed-tail mark, but on_native_bar and
+    // fill notifications can also reach this producer. Enforce the same
+    // no-range-end policy at their shared entry.
+    if (stream_warmup_mode_ || realtime_tail_ || probe_suppress_tail_logic_
         || position_side_ == PositionSide::FLAT || !last_equity_point()
         || !std::isfinite(terminal_bar.close)) return;
     const double fill_price = bar_fill_price(terminal_bar.close);
@@ -3927,8 +3930,17 @@ int64_t source::PineStrategyHost::chart_time_close() const {
 }
 
 int64_t source::PineStrategyHost::chart_bar_close_ms(int64_t stamp) const {
-    if (const auto interval = detail::run_consumer(*this).script_period_interval(stamp))
+    const auto& consumer = detail::run_consumer(*this);
+    if (const auto interval = consumer.script_period_interval(stamp))
         return interval->last_traded_close_ms;
+    const auto timeframe = native_calendar::parse_timeframe(script_tf_);
+    if (timeframe && timeframe->is_calendar() && timeframe->count() > 1) {
+        // The enum-only compatibility projection below describes one period.
+        // Use the run's full parsed interval for a calendar multiple, even
+        // when the supplied chart aggregate is still developing.
+        const auto interval = consumer.script_calendar_interval(stamp);
+        return interval ? interval->last_traded_close_ms : na<int64_t>();
+    }
     if (calendar_period_for(script_tf_) != CalendarPeriod::NONE) {
         return pine_time_close(stamp, script_tf_, "", "", script_tf_,
                                syminfo_.timezone, syminfo_.session);

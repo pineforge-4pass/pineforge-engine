@@ -541,14 +541,16 @@ static void test_stable_anchors() {
     auto two_d = must_tf("2D");
     auto two_w = must_tf("2W");
     auto three_m = must_tf("3M");
-    // 2D: Jan 2 and Jan 3 share a pair; Jan 1 is the previous pair.
+    // expectation corrected: epoch pairs -> year-relative pairs. TradingView's
+    // 2D/3D/5D charts restart on January 1 (#811): Jan 1/2 share a pair,
+    // and Jan 3 starts the next pair.
     // Querying only the later day does not shift the open.
-    CHECK(period_key(cal, two_d, kNyJan2) == period_key(cal, two_d, kNyJan3));
-    CHECK(period_key(cal, two_d, kNyJan1) != period_key(cal, two_d, kNyJan2));
+    CHECK(period_key(cal, two_d, kNyJan1) == period_key(cal, two_d, kNyJan2));
+    CHECK(period_key(cal, two_d, kNyJan2) != period_key(cal, two_d, kNyJan3));
     auto d2 = must_iv(cal, two_d, kNyJan2);
     auto d3 = must_iv(cal, two_d, kNyJan3);
-    CHECK_EQ(d2.open_ms, d3.open_ms);
-    CHECK_EQ(d2.open_ms, kNyJan2);
+    CHECK_EQ(d2.open_ms, kNyJan1);
+    CHECK_EQ(d3.open_ms, kNyJan3);
     // 2W: Jan 13 and Jan 20 share a pair; Jan 6 does not.
     CHECK(period_key(cal, two_w, kNyJan13) == period_key(cal, two_w, kNyJan20));
     CHECK(period_key(cal, two_w, kNyJan6) != period_key(cal, two_w, kNyJan13));
@@ -573,8 +575,9 @@ static void test_stable_anchors() {
     CHECK_EQ(wr13.open_ms, wr20.open_ms);
     CHECK_EQ(wr13.open_ms, kNyJan13_0930);
 
-    // Dates before the named origins keep floor-toward-inf grouping.
-    CHECK(period_key(cal, two_d, kNy1969Dec30) == period_key(cal, two_d, kNy1969Dec31));
+    // Before the epoch, Day pairs still restart each year; December 30
+    // and December 31 lie in different pairs in the 365-day year 1969.
+    CHECK(period_key(cal, two_d, kNy1969Dec30) != period_key(cal, two_d, kNy1969Dec31));
     auto week_ord = session_week_ordinal(cal, kNy1969Dec31);
     auto day_ord = session_day_ordinal(cal, kNy1969Dec31);
     CHECK(week_ord.has_value() && *week_ord <= 0);

@@ -1967,6 +1967,7 @@ bool NativeExecutionConsumer::prepare_public_begin(
     interval_cache_.clear();
     day_labels_.clear();
     script_period_ = {};
+    batch_script_tail_ = false;
     begin_bars_ = args.bars;
     begin_n_ = args.n;
     begin_is_stream_ = run_is_stream_ = args.is_stream;
@@ -2260,6 +2261,10 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
         f.i(script_period_.first_ms);
         f.i(script_period_.last_ms);
         f.u(script_period_.digest);
+    }
+    if (batch_script_tail_) {
+        f.s("batch-script-tail/v1");
+        f.b(batch_script_tail_);
     }
     // An explicit creation policy changes future callbacks. The unlimited
     // default adds no bytes to the historical continuation fold.
@@ -2645,6 +2650,17 @@ void NativeExecutionConsumer::cache_running_policy() noexcept {
     running_tolerant_labels_ = legacy_tolerant_slot_labels();
     running_raw_labels_ = uses_raw_label_partition();
     running_spec_ = &running->spec;
+}
+
+std::optional<native_calendar::NativeInterval>
+NativeExecutionConsumer::script_calendar_interval(std::int64_t stamp) const {
+    if (!spec_ptr() || has_undetected_timeframe() || !script_tf_.valid()
+        || !script_tf_.is_calendar())
+        return std::nullopt;
+    if (uses_raw_label_partition() && !script_period_.source)
+        return native_calendar::interval_containing(
+            calendar_, script_tf_, input_tf_, stamp, calendar_memo_);
+    return script_interval_at(stamp);
 }
 
 // A lookup the slot missed: the prior's answer when it is for this instant,
@@ -10480,6 +10496,7 @@ bool NativeExecutionConsumer::feed_auxiliary_slice(
         std::int64_t input_period_end_ms, Completed&& completed) {
     auto& state =
         engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
+    const std::string& feed_tf = spec_ptr()->auxiliary_feed->tf;
     const std::size_t total = auxiliary_bar_count();
     while (subscription.auxiliary_cursor < total) {
         const Bar feed_bar = auxiliary_bar(subscription.auxiliary_cursor);
@@ -10492,7 +10509,7 @@ bool NativeExecutionConsumer::feed_auxiliary_slice(
         engine.security_next_input_ms_ =
             at + 1 < total ? auxiliary_bar(at + 1).timestamp : 0;
         const std::int64_t before = state.eval_complete_count;
-        engine.feed_security_eval_state(state, feed_bar);
+        engine.feed_security_eval_state(state, feed_bar, feed_tf);
         engine.security_next_input_ms_ = 0;
         if (state.eval_complete_count <= before) continue;
         const bool boundary = state.aggregator.is_active()
@@ -11210,9 +11227,15 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
         // stream_begin uses this pump for Warmup too. Its pending bucket must
         // carry into Realtime; only a complete batch ends its input here.
         const auto* running = std::get_if<NativeRunning>(&state_);
+        const bool session_closed = final_script_session_closed();
         if (running && running->phase == NativeRunPhase::Batch
-            && final_script_session_closed()) {
-            seal_script(engine, NativeCompletionKind::Confirmed);
+            && (session_closed
+                || (batch_script_tail_ && script_.has_data && !script_.sealed))) {
+            // A host-requested input horizon does not confirm the period's
+            // calendar close. Use the same available-input seal as a later
+            // interval, without advancing any requested-series aggregator.
+            seal_script(engine, session_closed ? NativeCompletionKind::Confirmed
+                                               : NativeCompletionKind::LazyComplete);
             if (failed()) return;
             script_ = ScriptBucket{};
         }
@@ -14574,6 +14597,52 @@ void NativeExecutionConsumer::fill_streamed_report(
         throw;
     }
     *out = local;
+}
+
+bool NativeExecutionConsumer::include_batch_script_tail(std::int64_t final_input_ms) {
+    batch_script_tail_ = false;
+    const auto* running = std::get_if<NativeRunning>(&state_);
+    if (!running || running->phase != NativeRunPhase::Batch || run_is_stream_
+        || selected_epoch_.admitted_selected) return false;
+    const auto input = input_interval_at(final_input_ms);
+    if (!input) return false;
+    const auto script = script_interval_at(input->open_ms);
+    if (!script) return false;
+    const bool reaches_end = input->next_period_open_ms >= script->next_period_open_ms
+        || (script->last_traded_close_ms > script->eligible_open_ms
+            && input->last_traded_close_ms >= script->last_traded_close_ms);
+    batch_script_tail_ = !reaches_end;
+    return batch_script_tail_;
+}
+
+std::optional<std::size_t> NativeExecutionConsumer::batch_script_population(
+        const Bar* bars, std::size_t n) const {
+    const auto* running = std::get_if<NativeRunning>(&state_);
+    if (!running || running->phase != NativeRunPhase::Batch || run_is_stream_
+        || selected_epoch_.admitted_selected || script_period_.source
+        || !script_tf_.is_calendar() || (n != 0 && !bars)) return std::nullopt;
+    std::size_t count = 0;
+    std::optional<native_calendar::NativeInterval> input;
+    std::optional<native_calendar::NativeInterval> script;
+    for (std::size_t i = 0; i < n; ++i) {
+        input = input_interval_at(bars[i].timestamp);
+        if (!input) return std::nullopt;
+        const auto next = script_interval_at(input->open_ms);
+        if (!next) return std::nullopt;
+        // A later interval seals the preceding aggregate even across a
+        // missing input slot. Semantic aliases share the same native bounds.
+        if (!script || script->open_ms != next->open_ms) ++count;
+        script = next;
+    }
+    if (script && !batch_script_tail_) {
+        // A confirmed calendar input has its actual month/session close;
+        // no fixed-seconds projection or request cursor can supply it.
+        const bool reaches_end = input->next_period_open_ms >= script->next_period_open_ms
+            || (script->last_traded_close_ms > script->eligible_open_ms
+                && input->last_traded_close_ms >= script->last_traded_close_ms);
+        if (!reaches_end) --count;
+    }
+    return count;
 }
 
 void NativeExecutionConsumer::set_script_period_source(

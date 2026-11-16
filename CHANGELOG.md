@@ -256,6 +256,12 @@ version number follows semantic versioning over the surfaces the
   more recent than it, so a full set replaces the entry touched longest ago. A
   miss is probed once. Every value a script reads is unchanged.
 
+## 1.13.0
+
+### Changed
+
+- N-day (count>1) Day period keys now restart on 1 January, matching TradingView and the interval bounds.
+
 ## 1.9.1 — 2026-10-31
 
 - A script container (string, array, map or object store) whose scratch
