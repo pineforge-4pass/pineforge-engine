@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_ta_sma_price_tape)
+pineforge_add_unit_test(test_ta_sma_price_tape)

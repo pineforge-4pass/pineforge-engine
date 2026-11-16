@@ -795,22 +795,22 @@ std::optional<double> decimal_floor_lot(double units, double grid) noexcept {
 // never fills. TradingView floors the shortest decimal instead and never
 // rounds up (a risk-sized (E/100)/0.3200000000000003 = 3124.9999999999973
 // trades 3124, 1562 + 1562 after a 50% leg; literal 3124.9999995 trades 3124,
-// 3125.0000000000005 trades 3125; tests/fixtures/explicit_qty_floor). Only that
-// snap changes: an on-grid request, a floor below the request and a non-decimal
-// grid keep the grid floor's result. close(), exit(), and explicit
+// 3125.0000000000005 trades 3125; tests/fixtures/explicit_qty_floor). Apply the
+// decimal rule to every supported decimal grid: the binary floor can also
+// return a lot product one ULP away from the nearest double of the decimal
+// lot, even when no epsilon snap was needed. Non-decimal grids retain their
+// binary floor. close(), exit(), and explicit
 // strategy.order() quantities floor their executable units with it; source
 // quantities remain verbatim. TradingView tapes cover close, while the
 // strategy.order boundary is a native control rather than a TV measurement.
 double explicit_entry_quantity_floor(double units, const std::optional<double>& grid) noexcept {
-    const double floored = floor_quantity_grid(units, grid);
-    if (!detail::script_rule_switches().explicit_qty_decimal_floor || floored != units
+    if (!detail::script_rule_switches().explicit_qty_decimal_floor
         || !grid || !std::isfinite(*grid) || *grid <= 0.0 || !std::isfinite(units)
         || units <= 0.0) {
-        return floored;
+        return floor_quantity_grid(units, grid);
     }
-    if (!(std::floor(units / *grid + 1e-6) > std::floor(units / *grid))) return floored;
     const auto decimal = decimal_floor_lot(units, *grid);
-    return decimal && *decimal < units ? *decimal : floored;
+    return decimal ? *decimal : floor_quantity_grid(units, grid);
 }
 
 double source_money_floor_lot(double units, const std::optional<double>& grid) noexcept {
