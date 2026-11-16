@@ -8612,6 +8612,15 @@ pineforge_add_unit_test(test_run_failure_validation)
 pineforge_add_unit_test(test_run_failure_validation_unavailable)
 # --- lane run-failure-validation end ---
 
+# --- lane closed-rows-debug-fold-slope begin ---
+# This counter is absent from NDEBUG libraries. Register an executing Debug
+# row only, rather than a Release row that skips the measured path.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    list(APPEND TEST_SOURCES test_closed_rows_debug_fold_slope)
+    pineforge_add_unit_test(test_closed_rows_debug_fold_slope)
+endif()
+# --- lane closed-rows-debug-fold-slope end ---
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")

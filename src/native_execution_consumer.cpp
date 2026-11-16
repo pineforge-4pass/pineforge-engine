@@ -8628,11 +8628,12 @@ void NativeExecutionConsumer::invoke_applied_callback(
         }
         // v19: the rows this execution booked are final now that its host has
         // been notified of it (closed_rows_digest). Debug builds fold them at
-        // once, so a later amendment of one is caught at the run's end.
+        // once, so a later amendment of one is caught at the run's end. There
+        // is no digest reader here: leave the pending suffix to its callbacks.
         closed_rows_final_ = std::max<std::size_t>(
             closed_rows_final_, applied.first_trade_index + applied.closed_trade_count);
 #ifndef NDEBUG
-        (void)closed_rows_digest(engine.trades_);
+        advance_closed_rows_prefix(engine.trades_);
 #endif
         finish_callback(engine, notification.ordinal);
     } catch (const std::bad_alloc& e) {
@@ -12748,14 +12749,30 @@ void NativeExecutionConsumer::note_committed_events(
 // rows past the mark, whose notification is still pending, into its answer
 // only.
 namespace {
+#ifndef NDEBUG
+thread_local std::uint64_t closed_row_fold_work = 0;
+#endif
 void fold_closed_row(BrokerStateHashSink& f, const Trade& row) noexcept {
+#ifndef NDEBUG
+    ++closed_row_fold_work;
+#endif
     f.i(row.entry_time); f.i(row.exit_time);
     f.d(row.entry_price); f.d(row.exit_price);
     f.d(row.qty); f.d(row.pnl);
 }
 }  // namespace
 
-uint64_t NativeExecutionConsumer::closed_rows_digest(
+#ifndef NDEBUG
+std::uint64_t NativeExecutionConsumer::debug_closed_row_fold_work() noexcept {
+    return closed_row_fold_work;
+}
+
+void NativeExecutionConsumer::reset_debug_closed_row_fold_work() noexcept {
+    closed_row_fold_work = 0;
+}
+#endif
+
+void NativeExecutionConsumer::advance_closed_rows_prefix(
         const TradeLedger& rows) const {
     if (rows.base() != closed_trade_prefix_.base
         || closed_rows_digested_ < rows.base()
@@ -12774,7 +12791,14 @@ uint64_t NativeExecutionConsumer::closed_rows_digest(
     }
     closed_rows_digest_ = f.h;
     closed_rows_digested_ = final_rows;
-    for (std::size_t index = final_rows; index < rows.size(); ++index) {
+}
+
+uint64_t NativeExecutionConsumer::closed_rows_digest(
+        const TradeLedger& rows) const {
+    advance_closed_rows_prefix(rows);
+    BrokerStateHashSink f;
+    f.h = closed_rows_digest_;
+    for (std::size_t index = closed_rows_digested_; index < rows.size(); ++index) {
         fold_closed_row(f, rows[index]);
     }
     return f.h;

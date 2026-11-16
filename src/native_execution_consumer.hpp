@@ -474,6 +474,13 @@ public:
     // Debug check a run's end makes, and a witness's probe.
     uint64_t closed_rows_digest(const TradeLedger& rows) const;
     bool closed_rows_digest_holds(const TradeLedger& rows) const;
+#ifndef NDEBUG
+    // Per-thread count of actual six-field row folds, including pending
+    // answers, verification and sealing. No counter or accessors in Release;
+    // these static functions add no consumer state or layout difference.
+    static std::uint64_t debug_closed_row_fold_work() noexcept;
+    static void reset_debug_closed_row_fold_work() noexcept;
+#endif
     // NativeStrategyHost::native_closed_rows_amended: the rows from `first` on
     // changed after they were final; the next read folds them again.
     void closed_rows_amended(std::size_t first) { rewind_closed_rows(first); }
@@ -1860,6 +1867,9 @@ private:
     void revoke_activation_birth(const native_order::RequestHandle&);
     void note_committed_events(const native_order::EventRange& events) noexcept;
     void note_cohort_receipts() noexcept;
+    // Advance only final rows. Debug notification checks need no digest
+    // answer over the suffix whose applied callbacks have not returned.
+    void advance_closed_rows_prefix(const TradeLedger& rows) const;
     void verify_closed_rows(const BacktestEngine& engine) const;
     void rewind_closed_rows(std::size_t first) const;
     void write_streamed_trade(const BacktestEngine& engine, std::size_t global,
