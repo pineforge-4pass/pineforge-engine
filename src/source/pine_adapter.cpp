@@ -12587,7 +12587,9 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         return;
     }
     const bool has_retained_reservation = reservation_sequence != 0;
-    capture_reservation_sequence();
+    // Resolved legs receive their source sequence when submitted. Only an
+    // unresolved relative definition needs a slot before it has a request;
+    // allocating one here would advance ordinary exits twice.
     const auto source_point = detail::callback_point(require_host());
     const OrderBirth exit_birth = capture_order_birth();
     const auto exit_birth_reach = compat::pine::select_historical_birth_reach(
@@ -14045,17 +14047,21 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
         }
         // ab9714be pine_fills.cpp:7679-7700 evaluates a filled parent's priced
         // exits on its entry bar, whichever source batch placed the parent.
-        // An explicit leg issued after its flat MARKET parent,
-        // while that parent was still held in the same-bar batch, took origin
-        // zero; the batch has now submitted the parent, so bind the leg to it
+        // With multiple entry instances, an explicit leg issued after its
+        // flat MARKET parent, while that parent was still held in the same-bar
+        // batch, took origin zero. Bind it to the now-submitted parent,
         // exactly as exit() binds a leg issued after a live pending parent:
         // it waits for the parent's opening instead of pre-arming on the
         // signal bar.
+        // A single-entry book keeps its origin-zero leg working until the
+        // fill binds it, preserving the signal bar and cycle used by the
+        // partial-prearm delay.
         const bool named_percent_leg = !leg.snapshot.from_entry.empty()
             && !std::isfinite(leg.snapshot.requested_qty)
             && leg.snapshot.fixed_exit_reservation
             && leg.snapshot.qty_percent < 100.0 - internal::kFullPercentEps;
         if (leg.snapshot.bracket_origin.incarnation == 0
+            && config_.pyramiding > 1
             && (std::isfinite(leg.snapshot.requested_qty) || named_percent_leg)
             && !leg.snapshot.from_entry.empty()) {
             const auto cohort = cohorts_by_id_.find(leg.snapshot.from_entry);
