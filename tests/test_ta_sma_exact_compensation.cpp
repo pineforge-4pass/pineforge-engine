@@ -236,6 +236,53 @@ void test_captured_fold_rows() {
     }
 }
 
+// CAP-731-THREE-SOURCE: exported rows of the 0.1,0.3,0.7,0,0,0 probe.
+// decoded.tsv sha256 3f187f897f65b7ce2087e958bcfc29b7effb525c6e0e366f8aa664e3a4c1a356
+// checks.json sha256 102f872defa8968dfc4df07d8213194adbbf14ddf541ef1495e15e1531ee38cf
+// decoded.json sha256 46bd5c7d0d4cfccaf87ba85f445f2d13caba00049f9bd7821e7c2fbeffb7c423
+// s and m are the actual SMA and math.sum/3 codes; c is the independent
+// 0.1,0.3,0,0,0,0 SMA control. All exported NA/unsupported flags were false.
+// Bars 0 and 1 provided source values but exported no codes and are not pinned.
+void test_captured_three_source_rows() {
+    struct Observed {
+        int bar;
+        long long probe_code;
+        long long control_code;
+    };
+    const Observed captured[] = {
+        {2, 49999994, 50000000}, {3, 50000000, 50000000},
+        {4, 50000000, 50000000}, {5, 10000000, 10000000},
+    };
+    const double x[] = {0.1, 0.3, 0.7, 0.0, 0.0, 0.0};
+    const double cx[] = {0.1, 0.3, 0.0, 0.0, 0.0, 0.0};
+    ta::SMA sma(3), control(3);
+    math::Sum sum(3);
+    double s[6], m[6], c[6];
+    for (int b = 0; b < 6; ++b) {
+        s[b] = sma.compute(x[b]);
+        m[b] = sum.compute(x[b]) / 3.0;
+        c[b] = control.compute(cx[b]);
+    }
+    for (const Observed& row : captured) {
+        const int b = row.bar;
+        const double e = ((x[b] + x[b - 1]) + x[b - 2]) / 3.0;
+        const double ce = ((cx[b] + cx[b - 1]) + cx[b - 2]) / 3.0;
+        const double sc = pulse_code(b, s[b], e);
+        const double mc = pulse_code(b, m[b], e);
+        const double cc = pulse_code(b, c[b], ce);
+        const double observed = static_cast<double>(row.probe_code);
+        const double observed_control = static_cast<double>(row.control_code);
+        if (sc != observed || mc != observed || cc != observed_control) {
+            std::printf("  three-source bar %d: SMA %.17g code %.0f, sum/3 %.17g code %.0f,"
+                        " control %.17g code %.0f; TV %lld/%lld\n",
+                        b, s[b], sc, m[b], mc, c[b], cc, row.probe_code, row.control_code);
+        }
+        CHECK_TRUE(sc == observed, "CAP-731-THREE-SOURCE: ta.sma matches the captured code");
+        CHECK_TRUE(mc == observed, "CAP-731-THREE-SOURCE: math.sum/3 matches the captured code");
+        CHECK_TRUE(cc == observed_control, "CAP-731-THREE-SOURCE: control matches the captured code");
+    }
+}
+
 // What the rows resolve: arithmetic on the script's encoding only.
 void test_rows_hold_the_last_bit() {
     const double e = ((0.0 + 0.0) + 0.3) / 3.0;
@@ -712,6 +759,7 @@ void test_non_finite_sources_rewind() {
 int main() {
     test_captured_rows();
     test_captured_fold_rows();
+    test_captured_three_source_rows();
     test_rows_hold_the_last_bit();
     test_fold_rows_exclude_a_carried_remainder();
     test_control_pairs_meet_their_conditions();
