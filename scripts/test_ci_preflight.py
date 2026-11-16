@@ -13530,6 +13530,210 @@ class GkeSmokeOutputAdmission(unittest.TestCase):
                         self.assert_refused(in_job(workflow, job, before, after), finding)
 
 
+class NextReleaseFormAdmission(unittest.TestCase):
+    """Admission accepts the one reviewed next release form, by its exact bytes.
+
+    The next form is read from its fixture, never from the shipped workflow.
+    The cutover that ships that form with its own pins removes this class.
+    """
+
+    FIXTURE = ROOT / 'scripts/fixtures/ci_preflight/release_split_hosted_link_x86.yml'
+    RELEASE = '.github/workflows/release.yml'
+    # What the five-job rules say about the six-job form: at least one finding
+    # from each of the four checks that admission skips for its exact bytes.
+    FIVE_JOB_FINDINGS = (
+        SplitHostedReleaseAdmission.CREDENTIAL.format('prebuilt-x86'),
+        SplitHostedReleaseAdmission.CREDENTIAL.format('publish'),
+        'release.yml is missing job upload',
+        'release.yml job link-x86 needs a pinned runner and time limit',
+        'release.yml job publish needs a pinned runner and time limit',
+        SplitHostedReleaseAdmission.INVENTORY,
+    )
+    # One byte each: in a comment, in the dispatch description, in a step's script.
+    ONE_BYTE_CHANGES = (
+        (b'# Bump VERSION', b'# bump VERSION'),
+        (b"'Rehearse: commit", b"'Rehearse; commit"),
+        (b'push --atomic origin', b'push --atomic 0rigin'),
+    )
+    # The three custody checks inside the release structure pins, which are
+    # skipped with them, each with a change of the next form that makes it fire.
+    CUSTODY_PINS = (
+        ('release.yml split prebuilt must retain its read-only workflow permissions, '
+         'release-tag environment and default shell',
+         'permissions:\n  contents: read\n', 'permissions:\n  contents: write\n'),
+        ('release.yml Option C requires exactly one dedicated literal OIDC auth '
+         'step on x86 before private registry access',
+         'google-github-actions/auth@', 'google-github-actions/setup-gcloud@'),
+        ('release.yml Option C registry token must remain in the exact x86 '
+         'auth output and login step environment only',
+         '          SOURCE_SHA: ${{ needs.release.outputs.sha }}\n',
+         '          SOURCE_SHA: ${{ steps.toolchain-auth.outputs.access_token }}\n'),
+    )
+
+    def setUp(self):
+        shipped = ROOT / self.RELEASE
+        announce_compare_fixture_paths(self.FIXTURE, shipped)
+        self.next_form = self.FIXTURE.read_bytes()
+        self.shipped = shipped.read_bytes()
+
+    def admit(self, release, nested=None, others=None):
+        """Run the data-only admission over the repository's .github files.
+
+        The release workflow holds `release`; `nested` adds a second file of
+        that name in a subdirectory of the fetched workflows; `others` replaces
+        the bytes of other workflow files by name.
+        """
+        with tempfile.TemporaryDirectory(prefix='admit-next-release-') as fetched:
+            directory = Path(fetched)
+            shutil.copytree(ROOT / '.github/workflows', directory / '.github/workflows',
+                            symlinks=True)
+            shutil.copytree(ROOT / '.github/actions', directory / '.github/actions',
+                            symlinks=True)
+            shutil.copyfile(ROOT / '.github/actionlint.yaml',
+                            directory / '.github/actionlint.yaml', follow_symlinks=False)
+            (directory / self.RELEASE).write_bytes(release)
+            for name, data in (others or {}).items():
+                (directory / '.github/workflows' / name).write_bytes(data)
+            if nested is not None:
+                other = directory / '.github/workflows/zz-nested/release.yml'
+                other.parent.mkdir()
+                other.write_bytes(nested)
+            # The hosted admit job also runs actionlint; these rows check the text rules.
+            return admit_rule_findings(directory, run_actionlint=False)
+
+    def without_the_digest(self):
+        """The same checker with nothing admitted: no sha256 hex digest is this text."""
+        return mock.patch.object(ci_preflight, 'RELEASE_NEXT_FORM_SHA256', 'no admitted digest')
+
+    def one_byte_changes(self):
+        for before, after in self.ONE_BYTE_CHANGES:
+            label = before.decode('ascii')
+            self.assertEqual(self.next_form.count(before), 1, label)
+            yield label, self.next_form.replace(before, after, 1)
+        yield 'the last byte', self.next_form[:-1] + b' '
+
+    def assert_five_job_findings(self, findings):
+        for finding in self.FIVE_JOB_FINDINGS:
+            self.assertIn(finding, findings)
+
+    def contract_findings(self, release):
+        """The full workflow contract over the repository's files and this release text."""
+        paths = [ROOT / path for path in CI_SOURCES]
+        others = [ROOT / '.github/workflows' / name for name in (
+            'gke-pr.yml', 'prebuilt-hosted-diagnostic.yml', 'release-ruleset-probe.yml')]
+        announce_compare_fixture_paths(*paths, *others)
+        return ci_workflow_findings(
+            *(path.read_text(encoding='utf-8') for path in paths),
+            others={**{path.name: path.read_text(encoding='utf-8') for path in others},
+                    'release.yml': release})
+
+    def test_fixture_holds_exactly_the_admitted_bytes(self):
+        self.assertEqual(hashlib.sha256(self.next_form).hexdigest(),
+                         ci_preflight.RELEASE_NEXT_FORM_SHA256)
+
+    def test_next_form_is_admitted_by_the_data_only_admission(self):
+        self.assertEqual(self.admit(self.next_form), [])
+        # The digest is the only reason: without it the same tree is refused.
+        with self.without_the_digest():
+            self.assert_five_job_findings(self.admit(self.next_form))
+
+    def test_one_changed_byte_is_refused_with_the_five_job_findings(self):
+        self.assertEqual(self.admit(self.next_form), [])
+        for label, changed in self.one_byte_changes():
+            with self.subTest(changed=label):
+                self.assertEqual(len(changed), len(self.next_form))
+                self.assertEqual(
+                    sum(left != right for left, right in zip(changed, self.next_form)), 1)
+                findings = self.admit(changed)
+                self.assert_five_job_findings(findings)
+                # Exactly the findings these bytes get when nothing is admitted.
+                with self.without_the_digest():
+                    self.assertEqual(findings, self.admit(changed))
+
+    def test_shipped_form_is_admitted_by_the_five_job_rules_not_by_the_digest(self):
+        self.assertEqual(self.admit(self.shipped), [])
+        self.assertNotEqual(
+            hashlib.sha256(self.shipped).hexdigest(), ci_preflight.RELEASE_NEXT_FORM_SHA256,
+            'the shipped release workflow is the next form: remove its admission by digest')
+        with self.without_the_digest():
+            self.assertEqual(self.admit(self.shipped), [])
+
+    def test_exact_bytes_and_the_admission_entry_are_both_required(self):
+        text = self.next_form.decode('utf-8')
+        self.assertEqual(
+            ci_preflight.runner_findings({'release.yml': text}, admit_next_release=True), [])
+        changed = text.replace('# Bump VERSION', '# bump VERSION', 1)
+        self.assertNotEqual(changed, text)
+        cases = (
+            ('the exact bytes outside admission',
+             ci_preflight.runner_findings({'release.yml': text})),
+            ('admission with one changed byte',
+             ci_preflight.runner_findings({'release.yml': changed}, admit_next_release=True)),
+            ('the exact bytes in the full workflow contract', self.contract_findings(text)),
+        )
+        for label, findings in cases:
+            with self.subTest(case=label):
+                self.assert_five_job_findings(findings)
+
+    def test_custody_checks_skipped_with_the_release_pins_hold_on_these_bytes(self):
+        text = self.next_form.decode('utf-8')
+        self.assertEqual(
+            ci_preflight.runner_findings({'release.yml': text}, admit_next_release=True), [])
+        structure = ci_preflight.release_prebuilt_workflow_findings(text)
+        for finding, before, after in self.CUSTODY_PINS:
+            with self.subTest(finding=finding):
+                self.assertNotIn(finding, structure)
+                # The check is live: one change of these bytes makes it fire.
+                self.assertIn(before, text)
+                self.assertIn(finding, ci_preflight.release_prebuilt_workflow_findings(
+                    text.replace(before, after, 1)))
+        # The skipped credential check names the two jobs the five-job form
+        # cannot hold, and no other job.
+        self.assertEqual(
+            ci_preflight.release_credential_findings(text),
+            [SplitHostedReleaseAdmission.CREDENTIAL.format(job)
+             for job in ('prebuilt-x86', 'publish')])
+
+    def test_admitting_the_next_form_skips_nothing_in_another_workflow(self):
+        workflows = ROOT / '.github/workflows'
+        ci = (workflows / 'ci.yml').read_bytes()
+        probe = (workflows / 'release-ruleset-probe.yml').read_bytes()
+        self.assertEqual(ci.count(b'\n  authz:\n'), 1)
+        self.assertEqual(probe.count(b'\n  probe:\n'), 1)
+        cases = (
+            # A job with no runner pin, and a job missing from a release-class runner table.
+            ('ci.yml',
+             ci.replace(b'\n  authz:\n', b'\n  extra:\n    runs-on: ubuntu-24.04\n'
+                        b'    steps:\n      - run: "true"\n\n  authz:\n', 1),
+             'ci.yml job extra needs a pinned runner and time limit'),
+            ('release-ruleset-probe.yml', probe[:probe.index(b'\n  probe:\n') + 1],
+             'release-ruleset-probe.yml is missing job probe'),
+        )
+        for name, changed, finding in cases:
+            with self.subTest(workflow=name):
+                findings = self.admit(self.next_form, others={name: changed})
+                self.assertIn(finding, findings)
+                # The same findings as beside the shipped release workflow.
+                self.assertEqual(findings, self.admit(self.shipped, others={name: changed}))
+
+    def test_second_file_of_that_name_in_the_fetched_tree_admits_nothing(self):
+        # The digest is read at the release workflow's own path and again on the
+        # text the runner rules judge under that name: both must be the next form.
+        self.assertEqual(self.admit(self.next_form), [])
+        changed = self.next_form.replace(b'# Bump VERSION', b'# bump VERSION', 1)
+        self.assertNotEqual(changed, self.next_form)
+        for label, release, nested in (
+                ('the next form in a subdirectory, the shipped form at the release path',
+                 self.shipped, self.next_form),
+                ('the next form at the release path, other bytes in a subdirectory',
+                 self.next_form, changed)):
+            with self.subTest(case=label):
+                findings = self.admit(release, nested=nested)
+                self.assertTrue(findings)
+                with self.without_the_digest():
+                    self.assertEqual(findings, self.admit(release, nested=nested))
+
+
 if __name__ == '__main__':
     if any(arg == '--slice' or arg.startswith('--slice=') for arg in sys.argv[1:]):
         parser = argparse.ArgumentParser(description=__doc__)

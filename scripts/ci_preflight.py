@@ -351,6 +351,26 @@ def _release_split_requested(jobs: dict[str, str]) -> bool:
     return bool({'prebuilt-x86', 'prebuilt-arm', 'upload'} & jobs.keys())
 
 
+# Two-step release cutover. Pull-request admission judges a head's .github files
+# with the base tree's rules, and the release pins in this file encode the
+# five-job split form, so they refuse the workflow change that replaces it.
+# This is the sha256 of the one reviewed next form: six jobs, where link-x86
+# joins and upload becomes publish, the one job that writes to this repository.
+# Its bytes are kept for review as
+# scripts/fixtures/ci_preflight/release_split_hosted_link_x86.yml.
+# Only admit_rule_findings arms it, and only for .github/workflows/release.yml;
+# runner_findings then skips, for exactly these bytes, four checks that encode
+# the five-job form. One different byte gets every finding as before.
+# The cutover ships the six-job form with its own pins and removes this
+# constant, _is_release_next_form and the admit_next_release parameter.
+RELEASE_NEXT_FORM_SHA256 = '15d7b5a1a02a6559829b63079bfa075d905743bb8a3b7d49bfd356a6ebebef6e'
+
+
+def _is_release_next_form(workflow: str) -> bool:
+    """Whether the text is byte for byte the reviewed next release form."""
+    return hashlib.sha256(workflow.encode('utf-8')).hexdigest() == RELEASE_NEXT_FORM_SHA256
+
+
 # Credential-bearing jobs outside the release pins and gated docs build retain
 # standard hosted labels. Existing hosted exceptions above are pinned separately.
 STANDARD_RUNNERS = ('ubuntu-24.04', 'ubuntu-24.04-arm')
@@ -2186,7 +2206,11 @@ def admit_rule_findings(workflows_dir: Path, *, run_actionlint: bool = True) -> 
     action_findings += action_pin_findings(sources)
     action_findings += gke_admit_workflow_findings(workflows.get('gke-pr.yml', ''))
     action_findings += trusted_cache_findings(sources)
-    action_findings += runner_findings(workflows)
+    # The one caller that arms the next release form, and only when the file
+    # fetched at the release workflow's own path holds exactly its bytes.
+    action_findings += runner_findings(
+        workflows, admit_next_release=_is_release_next_form(
+            sources.get('.github/workflows/release.yml', '')))
     return list(dict.fromkeys(action_findings))
 
 
@@ -2967,10 +2991,20 @@ def _gke_cap_findings(workflows: dict[str, str]) -> list[str]:
     return findings
 
 
-def runner_findings(workflows: dict[str, str]) -> list[str]:
-    """Enforce event-derived fleets, release forms and command/core pins."""
+def runner_findings(workflows: dict[str, str], *,
+                    admit_next_release: bool = False) -> list[str]:
+    """Enforce event-derived fleets, release forms and command/core pins.
+
+    admit_next_release is set by pull-request admission alone. It has an effect
+    only on a release.yml whose bytes hash to RELEASE_NEXT_FORM_SHA256: the four
+    checks marked "Next form" below, which encode the five-job form, are skipped
+    whole for that file. The checks outside those four still run on it; other
+    workflows, and any other bytes, are judged exactly as without the argument.
+    """
     findings = workflow_fleet_findings(workflows) + _gke_cap_findings(workflows)
     routes = workflow_event_routes(workflows)
+    next_release = (admit_next_release
+                    and _is_release_next_form(workflows.get('release.yml', '')))
     for name, workflow in workflows.items():
         code = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(workflow))
         if 'pull_request' in routes[name] and (_GKE_ROUTE.search(code) or _GKP_ROUTE.search(code)):
@@ -2981,6 +3015,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             findings.append(f'{name} must not define a larger_runner key; use the GCP fleet or hosted exceptions')
         jobs = _jobs(workflow)
         split_release_form = name == 'release.yml' and _release_split_requested(jobs)
+        next_release_form = next_release and name == 'release.yml'
         arm_variant = _gke_pr_arm_variant(name, jobs)
         corpus_variant = _gke_pr_corpus_variant(name, jobs)
         timed = GKE_PR_ARM_JOB_COMMANDS if arm_variant else JOB_COMMANDS.get(name, {})
@@ -3008,7 +3043,10 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 and _events(workflow) != {'workflow_dispatch'}):
             findings.append(f'{name} must retain workflow_dispatch only for protected release jobs')
         if name == 'release.yml':
-            findings += release_credential_findings(workflow, name)
+            # Next form: publish holds the release environment by design, and the
+            # x86 reader exception needs the five-job inventory, dispatch and steps.
+            if not next_release_form:
+                findings += release_credential_findings(workflow, name)
             release_runner = _job_values(jobs.get('release', ''), 'runs-on',
                                          unquote=False)
             notify_runner = _job_values(jobs.get('notify-hub', ''), 'runs-on',
@@ -3039,8 +3077,10 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             findings.append(f'{name} must not admit untrusted caller events to isolated release jobs')
         if _unparsed(workflow):
             findings.append(f'{name} has jobs lines the runner contract cannot read')
+        # Next form: the release table's upload entry names the job it renamed.
         findings += [f'{name} is missing job {job}' for job in pinned
-                     if job not in jobs]
+                     if job not in jobs
+                     and not (next_release_form and job in fixed_release)]
         for job, body in jobs.items():
             runs_on, uses = _job_values(body, 'runs-on'), _job_values(body, 'uses')
             strict_prebuilt = name == 'release.yml' and job in (
@@ -3114,7 +3154,9 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 workflow, body, effective_permissions=exact_gke_runner,
                 strict=strict_prebuilt)
             if job not in pinned:
-                if pinned and runs_on:
+                # Next form: the release table has no link-x86 or publish entry;
+                # the rules for an unpinned job below still judge both jobs.
+                if pinned and runs_on and not next_release_form:
                     findings.append(f'{name} job {job} needs a pinned runner and time limit')
                 if uses and not runs_on:
                     if credentials:
@@ -3269,7 +3311,12 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                             < prebuilt_steps.index(configure))):
                 findings.append('release.yml prebuilt must install Eigen and assert exactly 3.4.0 '
                                 'before configuring')
-        findings += release_prebuilt_workflow_findings(workflows['release.yml'])
+        # Next form: these pins hold the five-job inventory, dispatch, headers
+        # and steps. Their three custody checks (workflow permissions, the one
+        # OIDC auth job, registry token custody) go with them; those bytes
+        # satisfy all three.
+        if not next_release:
+            findings += release_prebuilt_workflow_findings(workflows['release.yml'])
         if any(re.search(r'macos|darwin|CMAKE_OSX_', '\n'.join(_code(step)), re.IGNORECASE)
                for step in _steps(prebuilt)):
             findings.append('release.yml prebuilt must not contain macOS build steps')
