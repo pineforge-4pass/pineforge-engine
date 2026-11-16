@@ -6,12 +6,12 @@
     {
       "id": "report/buy_hold_return_overflow",
       "sha256": {
-        "probe.pine": "d2a45ca5b0bcb62c985c40dbf76855bc7d31cf079efa87998e6cf2568f7fd789",
+        "probe.pine": "6feaff24aff4db4445050a53a9ac3f54e9ec100068cfaa14807ced65e518286c",
         "bars.csv": "c4b0d57cab8fb1c6d2febdb5a55892eae9166b587aca07e58da0722188e012e9",
         "syminfo.json": "9b0a94d4a3c6a3d7e59aceef79008b56bb0ece06528803883f4d76cbc1e448e3",
         "run.json": "70dc9aee310653010c226e983e009b7a52b2ba8be9fb45b79ff500190ea61e37",
         "expect.json": "43896518e1d2d254a024a87365f1a154e704909ab5087d50009e5bf3585e4ea2",
-        "NOTES.md": "cd3f14bdab8ccc2e1cb1ed35688bfe1f4c4bd8d7fe81e136999fc36089a50bef"
+        "NOTES.md": "a54dd9e8008e8633183a26394f87b94ad42cc0df48929a6b3949d648f1477e12"
       }
     }
   ],
@@ -398,7 +398,7 @@
     {"id": "risk_setters", "file": "include/pineforge/source/pine_strategy_host.hpp", "anchor": "set_pine_risk_direction", "owner": "source", "fields": ["set_pine_risk_direction", "set_pine_risk_max_cons_loss_days", "set_pine_risk_max_drawdown", "set_pine_risk_max_intraday_filled_orders", "set_pine_risk_max_intraday_loss", "set_pine_risk_max_position_size"], "policy": "Every setter applies live, including earlier pre-roll; double setters use S for infinity while NaN retains absence. Integer direction/count/cap setters retain typed/default domains. Retained snapshot restore re-admits doubles. Derived thresholds/equity use G(risk)."},
     {"id": "checked_settings.Setting", "file": "include/pineforge/checked_settings.hpp", "anchor": "Setting", "owner": "source-or-caller", "fields": ["name", "type", "default_value", "options", "minimum", "maximum", "step", "integer_bits", "supported", "option_values", "kind"], "policy": "Declaration defaults are source-owned. Supplied int/float/bool/string/enum/source settings are caller-owned and keep setting_rejected/setting_unsupported/run_request_invalid. Source text must still be admitted before an actionable sink; generator descriptor/default rejection is a separate source declaration path."},
     {"id": "bound_input_getters", "file": "include/pineforge/engine.hpp", "anchor": "get_input_double", "owner": "source-or-caller", "fields": ["get_input_bool", "get_input_double", "get_input_int", "get_input_int64", "get_input_source", "get_input_string"], "policy": "Defaults belong to source, supplied bindings to caller. Getter/projection inconsistency is engine_invariant, a report-only schema fault is R(type_schema). input.value is a reserved S literal; no implemented default admission is claimed by its mere declaration."},
-    {"id": "request_doors", "file": "include/pineforge/source/pine_strategy_host.hpp", "anchor": "register_security_eval", "owner": "source-or-caller", "fields": ["register_security_eval/6/1", "register_security_eval/7/1", "register_security_eval/6/2", "security_column_value/2/1", "recorded_series_value/1/1", "register_security_lower_tf_eval/3/1"], "policy": "Source symbol/timeframe/library/series/expression requests keep request_symbol_invalid/request_timeframe_invalid/request_timeframe_unsupported/request_unsupported and Pine runtime codes. Caller feeds keep data/install refusals. The second six-argument overload is deleted to prevent pointer-to-bool binding. Installed engine request-state corruption is engine_invariant."}
+    {"id": "request_doors", "file": "include/pineforge/source/pine_strategy_host.hpp", "anchor": "register_security_eval", "owner": "source-or-caller", "fields": ["register_security_eval/6/1", "register_security_eval/7/1", "register_security_eval/7/2", "register_security_eval/7/3", "security_column_value/2/1", "recorded_series_value/1/1", "register_security_lower_tf_eval/3/1"], "policy": "Source symbol/timeframe/library/series/expression requests keep request_symbol_invalid/request_timeframe_invalid/request_timeframe_unsupported/request_unsupported and Pine runtime codes. Caller feeds keep data/install refusals. The seven-argument same-symbol overload selects historical projection per request. The third seven-argument overload is deleted to prevent pointer-to-bool binding. Installed engine request-state corruption is engine_invariant."}
   ],
   "catalog": {
     "file": "docker/run_failure_codes.json",
