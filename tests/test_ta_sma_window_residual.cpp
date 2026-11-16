@@ -184,9 +184,58 @@ static const Obs kPulseN20[] = {
 
 // 321 observations from sma-ident-n3-from-20250401: signal C = round((sma - manual/n) * 1e19), manual = the user-level plain running sum
 static const Obs kIdentC3[] = {
-    {4, -185}, {6, -93}, {8, -93}, {10, -93}, {12, -93}, {14, -93},
-    {16, -93}, {18, -93}, {20, -93}, {22, -93}, {24, -93}, {26, -93},
-    {28, -93}, {30, -93}, {32, -93}, {34, -93}, {36, -93}, {38, -93},
+    {4, -185},
+    // derived from CAP731PULSE 19ebeefd/a149d349 + refire c67c1415;
+    // C from s=0 and the unchanged plain running reference.
+    {6, -185},
+    // derived from CAP731PULSE 19ebeefd/a149d349 + refire c67c1415;
+    // C from s=0 and the unchanged plain running reference.
+    {8, -185},
+    // derived from CAP731PULSE 19ebeefd/a149d349 + refire c67c1415;
+    // C from s=0 and the unchanged plain running reference.
+    {10, -185},
+    // derived from CAP731PULSE 19ebeefd/a149d349 + refire c67c1415;
+    // C from s=0 and the unchanged plain running reference.
+    {12, -185},
+    // derived from CAP731PULSE 19ebeefd/a149d349 + refire c67c1415;
+    // C from s=0 and the unchanged plain running reference.
+    {14, -185},
+    // derived from CAP731PULSE 19ebeefd/a149d349 + refire c67c1415;
+    // C from s=0 and the unchanged plain running reference.
+    {16, -185},
+    // derived from CAP731PULSE 19ebeefd/a149d349 + refire c67c1415;
+    // C from s=0 and the unchanged plain running reference.
+    {18, -185},
+    // derived from CAP731PULSE 19ebeefd/a149d349 + refire c67c1415;
+    // C from s=0 and the unchanged plain running reference.
+    {20, -185},
+    // derived from CAP731PULSE 19ebeefd/a149d349 + refire c67c1415;
+    // C from s=0 and the unchanged plain running reference.
+    {22, -185},
+    // derived from CAP731PULSE 19ebeefd/a149d349 + refire c67c1415;
+    // C from s=0 and the unchanged plain running reference.
+    {24, -185},
+    // derived from CAP731PULSE 19ebeefd/a149d349 + refire c67c1415;
+    // C from s=0 and the unchanged plain running reference.
+    {26, -185},
+    // derived from CAP731PULSE 19ebeefd/a149d349 + refire c67c1415;
+    // C from s=0 and the unchanged plain running reference.
+    {28, -185},
+    // derived from CAP731PULSE 19ebeefd/a149d349 + refire c67c1415;
+    // C from s=0 and the unchanged plain running reference.
+    {30, -185},
+    // derived from CAP731PULSE 19ebeefd/a149d349 + refire c67c1415;
+    // C from s=0 and the unchanged plain running reference.
+    {32, -185},
+    // derived from CAP731PULSE 19ebeefd/a149d349 + refire c67c1415;
+    // C from s=0 and the unchanged plain running reference.
+    {34, -185},
+    // derived from CAP731PULSE 19ebeefd/a149d349 + refire c67c1415;
+    // C from s=0 and the unchanged plain running reference.
+    {36, -185},
+    // derived from CAP731PULSE 19ebeefd/a149d349 + refire c67c1415;
+    // C from s=0 and the unchanged plain running reference.
+    {38, -185},
     {40, -139}, {42, 0}, {44, 185}, {46, 0}, {48, 0}, {50, 0},
     {52, 0}, {54, 0}, {56, 0}, {58, 0}, {60, 0}, {62, 0},
     {64, 0}, {66, 0}, {68, 0}, {70, 0}, {72, 0}, {74, 0},
