@@ -96,9 +96,9 @@ runs the complete `ci_verify.py debug` profile, building every Debug test
 target and running that profile's CTest selection before merge. An irrelevant arm leg may skip while the other proof legs still run.
 
 `--tier github-only` runs `shellcheck-version`, `actionlint-runner-labels`,
-`runner-allowlist`, `workflow-lint`, `ci-workflow-contract`, `docs-workflow-contract` and
-`docs-workflow-contract-tests`, plus the usual actionlint version check.
-It excludes source guards and the general preflight test suite. A failed
+`runner-allowlist`, `workflow-lint`, `ci-workflow-contract`, `docs-workflow-contract`,
+`docs-workflow-contract-tests`, `public-text-added-tests` and `public-text-added`, plus the usual actionlint version check.
+It excludes the other source guards and the general preflight test suite. A failed
 classification selects the ordinary fast tier and fails the aggregate.
 `docs.yml` excludes `.github/**`-only PRs from its trigger so this class
 also avoids the Doxygen build.
@@ -1550,7 +1550,7 @@ A pull request or a push to `main` whose change is documentation only runs
 (three legs on a pull request, four on `main`), `sanitizers`, `kernel-only`,
 `native-live` and `corpus-parity-subset`. Every other check that reads the
 pages is a `preflight` stage: `doc-anchors`, `doc-lint`, `doc-reverts`,
-`public-role-words` (public working-name check over `docs/`, `README.md`, `CHANGELOG.md`, `src/`, `include/` and the two retained arena-bound files), `doc-pine-coverage`, `design-inventory`, `kernel-seam-rows`, the native C
+`public-role-words` (public working-name check over `docs/`, `README.md`, `CHANGELOG.md`, `src/`, `include/` and the two retained arena-bound files), `public-text-added` (added tracked content, added or renamed paths and commit messages; also runs for documentation-only and GitHub-only pull requests), `doc-pine-coverage`, `design-inventory`, `kernel-seam-rows`, the native C
 surface table (`source-guard-native-c-surface`) and their self-tests, beside
 the workflow wiring guards. The `build` job's `Build site` step in
 `.github/workflows/docs.yml` runs `bash docs/build.sh --self-test-seo` before

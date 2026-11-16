@@ -5198,6 +5198,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
             'dangling-comment-names-tests', 'doc-anchors-tests', 'doc-anchors',
             'doc-lint-tests', 'doc-lint', 'doc-reverts-tests', 'doc-reverts',
             'doc-reverts-net', 'public-role-words-tests', 'public-role-words',
+            'public-text-added-tests', 'public-text-added',
             'kernel-seam-rows-tests', 'kernel-seam-rows', 'doc-pine-coverage',
             'doc-pine-coverage-tests', 'duplicate-test-names-tests', 'duplicate-test-names',
         ]
@@ -5208,17 +5209,19 @@ class RunnerGroupAllowlist(unittest.TestCase):
         with mock.patch.object(ci_preflight.sys, 'platform', 'linux'):
             self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})], expected)
             # main() prepends actionlint-version to all/fast/github-only.
-            self.assertEqual(len(expected) + 1, 71)
-            self.assertEqual(len(check_commands(ROOT, tier='fast')), 66)
+            # expectation corrected: 71 -> 73, 66 -> 68, 7 -> 9 and 64 -> 66,
+            # because both added-text stages run in the full and reduced tiers.
+            self.assertEqual(len(expected) + 1, 73)
+            self.assertEqual(len(check_commands(ROOT, tier='fast')), 68)
             self.assertEqual(len(check_commands(ROOT, tier='slow')), 4)
-            self.assertEqual(len(check_commands(ROOT, tier='github-only')), 7)
+            self.assertEqual(len(check_commands(ROOT, tier='github-only')), 9)
         for platform in ('darwin', 'win32'):
             with mock.patch.object(ci_preflight.sys, 'platform', platform):
                 expected_platform = [name for name in expected
                                      if name not in ('prebuilt-bookworm-tests', 'prebuilt-glibc-tests')]
                 self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})],
                                  expected_platform)
-                self.assertEqual(len(check_commands(ROOT, tier='fast')), 64)
+                self.assertEqual(len(check_commands(ROOT, tier='fast')), 66)
 
 
 class PrebuiltGlibcRegistration(unittest.TestCase):
@@ -6992,7 +6995,8 @@ exit "$lookup_exit"
 
     def test_github_only_preflight_runs_only_workflow_contract_stages(self):
         expected = {'shellcheck-version', 'actionlint-runner-labels', 'runner-allowlist', 'workflow-lint',
-                    'ci-workflow-contract', 'docs-workflow-contract', 'docs-workflow-contract-tests'}
+                    'ci-workflow-contract', 'docs-workflow-contract', 'docs-workflow-contract-tests',
+                    'public-text-added-tests', 'public-text-added'}
         plan = check_commands(ROOT, tier='github-only')
         self.assertEqual({name for name, _ in plan}, expected)
         self.assertEqual(len(plan), len(expected))
@@ -9659,6 +9663,7 @@ finally:
         for name in ('doc-anchors', 'doc-lint', 'doc-anchors-tests', 'doc-lint-tests',
                      'doc-pine-coverage', 'design-inventory', 'design-inventory-tests',
                      'doc-reverts', 'doc-reverts-net', 'doc-reverts-tests', 'public-role-words', 'public-role-words-tests',
+                     'public-text-added', 'public-text-added-tests',
                      'kernel-seam-rows', 'kernel-seam-rows-tests',
                      'run-json-harness-tests'):
             self.assertIn(name, plan)
