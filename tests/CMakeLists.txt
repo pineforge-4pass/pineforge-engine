@@ -3939,9 +3939,7 @@ list(APPEND TEST_SOURCES test_metrics_overflow)
 list(APPEND TEST_SOURCES test_native_c_host_report_failure test_scratch_bulk_advance)
 list(APPEND TEST_SOURCES test_native_unreachable_book)
 list(APPEND TEST_SOURCES test_native_dormant_book_cost)
-# #291: the availability clocks of the composed EMA classes (ta::TSI, ta::KC,
-# ta::KCW) against clocks counted from the inputs alone. Source-free, so it
-# also runs in the kernel-only profile.
+# Composed EMA observation clocks, independent of source publication policy.
 list(APPEND TEST_SOURCES test_ta_stage_readiness)
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     list(APPEND TEST_SOURCES test_standing_orders_wall test_projected_pending_scaling)
@@ -3949,11 +3947,10 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     # #858: absent-parent strategy.exit calls preserve native issuance without
     # retained-sequence index work; one focused adapter work target.
     list(APPEND TEST_SOURCES test_issue858_absent_exit_work)
-    # #291: the EMA-family call classes of pine_ta_length.hpp. One target each:
-    # a value is published only once its inputs are ready; a length of 0, a
-    # negative length or an na length stops the run on every execution.
-    list(APPEND TEST_SOURCES test_pine_ta_ready_publication)
+    # Fixed-length EMA-family calls share the simple-length failure contract.
     list(APPEND TEST_SOURCES test_pine_ta_length_stop)
+    # Valid adapter calls preserve publication, checkpoints and context state.
+    list(APPEND TEST_SOURCES test_pine_ta_ready_publication)
 endif()
 list(APPEND TEST_SOURCES test_native_dormant_book_resident)
 list(APPEND TEST_SOURCES test_native_dormant_book_transcript)

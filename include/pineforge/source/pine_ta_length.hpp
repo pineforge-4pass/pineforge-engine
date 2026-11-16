@@ -9,8 +9,8 @@
 // "An argument of series int type was used but a simple int is expected").
 // Pinned with `lab tv` compile probes on 52 calls (K-TA-DYNLEN scratch
 // tv/acc). The generated code reaches this header only for a length the
-// constructor cannot take: a const or input length keeps the fixed-length
-// classes of <pineforge/ta.hpp> and their constructor.
+// constructor cannot take. The fixed-length EMA-family adapters below also
+// use the same validation for const and input lengths, at execution.
 //
 // * A simple length is fixed for the whole run: TradingView answers exactly
 //   the const-length call (rec-simple: ta.rsi/ema/rma/atr, chart and a
@@ -375,56 +375,18 @@ private:
     bool current_pushed_ = false;
 };
 
-// ta.ema, ta.tsi, ta.kc, ta.kcw and ta.macd as a script calls them: the
-// kernel class of <pineforge/ta.hpp>, with the two rules a script's call has
-// and the kernel's class does not.
+// Fixed-length Pine calls share simple_ta_length's validation regardless of
+// the length's qualifier. Check at execution, before an NA source or an
+// unavailable upstream stage can conceal an invalid argument. Construction
+// alone does not execute the call, so an unused site does not throw.
 //
-// 1. A length of 0, a negative length or an na length stops the run. The
-//    length is checked on every execution, compute() and recompute() alike,
-//    before the source is read, so a first bar without a previous source, an
-//    na source or an unready stage cannot answer na in its place. The stop is
-//    simple_ta_length's: pine_invalid_argument with the rule must_be_positive
-//    or must_not_be_na, under the function and argument names a simple length
-//    of the same call is already checked under.
-//    Measured: TradingView's stop and its text for ta.ema's length (see
-//    simple_ta_length). Not measured: the stop and its text for ta.tsi,
-//    ta.kc, ta.kcw and ta.macd, and which of several bad lengths TradingView
-//    names. Those four apply the same check under the call's own names, and
-//    the first bad length in the signature is the one reported here.
-// 2. A value is published only once its inputs are ready. One rule for every
-//    EMA stage: a stage has a value once `length` defined inputs have reached
-//    it, and a stage fed by another stage counts only that stage's ready
-//    values.
-//    Measured: TradingView's built-in EMA is na until `length` defined
-//    sources have accumulated (tests/test_chart_ema_na_warmup.cpp;
-//    tests/test_series_origin_tailh_tape.cpp compares the declared-origin
-//    warm-up with a TradingView tape), and an EMA fed by an EMA waits for the
-//    ready values of the first: a weekly MACD's EMA26 first reads on its
-//    26th bar and its EMA9 signal eight bars later (pine_security_eval.cpp,
-//    retained weekly reference), and codegen issue 291 reports the histogram
-//    of ta.macd(close, 12, 26, 9) first defined on bar 33.
-//    Not measured: the first bars of ta.tsi, ta.kc and ta.kcw, and the bar a
-//    stage becomes ready on when an na input falls inside its warm-up. The
-//    classes apply the stage rule to the stages each function is built from:
-//      ta.ema   after `length` defined sources;
-//      ta.tsi   after `long_length` defined changes, then `short_length`
-//               ready long-stage values;
-//      ta.kc    the middle band after `length` defined sources, the bands
-//               once the range stage has also seen `length` defined ranges;
-//      ta.kcw   where ta.kc's bands are;
-//      ta.macd  the kernel class already publishes by its stage clocks.
-//    Only the publication moves. The numbers are the kernel's, bit for bit:
-//    the seeding is still the one the instance latches (the ambient default
-//    the host raises for a declared series origin, or the first value), an na
-//    source still answers na and changes no state, and a zero ta.tsi
-//    denominator still answers na. Under the average seeding the kernel's
-//    value is already na exactly while the clock is not ready, so nothing
-//    changes there. Which seeding a run without a declared origin should use
-//    is not decided here and is not measured.
-//
-// Each class is a plain value: its only state is the kernel object and the
-// lengths it was built with, so a copy is a checkpoint and recompute()
-// rewinds the availability with the numbers.
+// These adapters retain the kernel's current numbers, NA publication,
+// context-dependent seeding, and recompute checkpoint. In particular they
+// do not choose a new TSI/Keltner startup policy: retained EMA provenance
+// does not supply the missing family-specific startup/value tapes.
+// Non-EMA diagnostic names follow the existing simple-length caller
+// contract; their exact TV text and multiple-invalid-length precedence
+// still require separate captures.
 class PineEma {
     ta::EMA impl_;
     int length_;
@@ -432,19 +394,16 @@ class PineEma {
     void check() const {
         if (length_ <= 0) (void)simple_ta_length(length_, "ema", "length");
     }
-    double published(double value) const {
-        return impl_.ready() ? value : na<double>();
-    }
 
 public:
     explicit PineEma(int length) : impl_(length), length_(length) {}
     double compute(double src) {
         check();
-        return published(impl_.compute(src));
+        return impl_.compute(src);
     }
     double recompute(double src) {
         check();
-        return published(impl_.recompute(src));
+        return impl_.recompute(src);
     }
     void observe_owned_storage(OwnedStorage& out) const noexcept {
         ::pineforge::observe_owned_members(out, impl_);
@@ -462,9 +421,6 @@ class PineTsi {
         if (long_length_ <= 0)
             (void)simple_ta_length(long_length_, "tsi", "long_length");
     }
-    double published(double value) const {
-        return impl_.ready() ? value : na<double>();
-    }
 
 public:
     PineTsi(int short_length, int long_length)
@@ -472,11 +428,11 @@ public:
           short_length_(short_length), long_length_(long_length) {}
     double compute(double src) {
         check();
-        return published(impl_.compute(src));
+        return impl_.compute(src);
     }
     double recompute(double src) {
         check();
-        return published(impl_.recompute(src));
+        return impl_.recompute(src);
     }
     void observe_owned_storage(OwnedStorage& out) const noexcept {
         ::pineforge::observe_owned_members(out, impl_);
@@ -490,26 +446,17 @@ class PineKc {
     void check() const {
         if (length_ <= 0) (void)simple_ta_length(length_, "kc", "length");
     }
-    ta::KCResult published(ta::KCResult result) const {
-        const bool basis = impl_.basis_ready();
-        if (!basis) result.middle = na<double>();
-        if (!basis || !impl_.range_ready()) {
-            result.upper = na<double>();
-            result.lower = na<double>();
-        }
-        return result;
-    }
 
 public:
     PineKc(int length, double mult, bool use_true_range = true)
         : impl_(length, mult, use_true_range), length_(length) {}
     ta::KCResult compute(double src, double high, double low, double close) {
         check();
-        return published(impl_.compute(src, high, low, close));
+        return impl_.compute(src, high, low, close);
     }
     ta::KCResult recompute(double src, double high, double low, double close) {
         check();
-        return published(impl_.recompute(src, high, low, close));
+        return impl_.recompute(src, high, low, close);
     }
     void observe_owned_storage(OwnedStorage& out) const noexcept {
         ::pineforge::observe_owned_members(out, impl_);
@@ -523,20 +470,17 @@ class PineKcw {
     void check() const {
         if (length_ <= 0) (void)simple_ta_length(length_, "kcw", "length");
     }
-    double published(double value) const {
-        return impl_.ready() ? value : na<double>();
-    }
 
 public:
     PineKcw(int length, double mult, bool use_true_range = true)
         : impl_(length, mult, use_true_range), length_(length) {}
     double compute(double src, double high, double low, double close) {
         check();
-        return published(impl_.compute(src, high, low, close));
+        return impl_.compute(src, high, low, close);
     }
     double recompute(double src, double high, double low, double close) {
         check();
-        return published(impl_.recompute(src, high, low, close));
+        return impl_.recompute(src, high, low, close);
     }
     void observe_owned_storage(OwnedStorage& out) const noexcept {
         ::pineforge::observe_owned_members(out, impl_);
@@ -581,6 +525,3 @@ public:
 
 // Feature macro: the classes above exist.
 #define PINEFORGE_HAS_TA_SERIES_LENGTH 1
-
-// Feature macro: PineEma, PineTsi, PineKc, PineKcw and PineMacd exist.
-#define PINEFORGE_HAS_TA_EMA_FAMILY_CALLS 1
