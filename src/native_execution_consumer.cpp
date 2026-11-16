@@ -10500,15 +10500,18 @@ const Bar& NativeExecutionConsumer::auxiliary_bar(std::size_t at) const noexcept
 template <typename Completed>
 bool NativeExecutionConsumer::feed_fixed_subscription(
         BacktestEngine& engine, TimeframeSubscription& subscription, int index,
-        const Bar* feed_bar, std::int64_t horizon_ms, Completed&& completed) {
+        const Bar* feed_bar, std::int64_t horizon_ms, std::int64_t next_feed_ms,
+        Completed&& completed) {
     auto& state = engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
     auto& clock = state.fixed_clock;
     if (!clock.cursor_ms) {
         if (!feed_bar || horizon_ms <= feed_bar->timestamp) return true;
         clock.cursor_ms = feed_bar->timestamp;
     }
-    const auto drain = [&](std::int64_t horizon) {
-        while (auto bucket = engine.next_native_fixed_security_bar(state, horizon)) {
+    const auto drain = [&](std::int64_t horizon, std::int64_t observed_ms = 0,
+                           std::int64_t next_ms = 0) {
+        while (auto bucket = engine.next_native_fixed_security_bar(
+                   state, horizon, observed_ms, next_ms)) {
             const int first_index = subscription.bucket_first_index;
             const auto first_ms = first_index >= 0
                 ? subscription.bucket_first_ms : bucket->bar.timestamp;
@@ -10535,6 +10538,11 @@ bool NativeExecutionConsumer::feed_fixed_subscription(
                 subscription.bucket_first_index = index;
                 subscription.bucket_first_ms = feed_bar->timestamp;
             }
+            // Only a feed bar just observed carries the early-close context:
+            // with its accepted successor (0: not known) it says whether it
+            // was its session-day's last, as the aggregating step is told
+            // through security_next_input_ms_.
+            return drain(horizon_ms, feed_bar->timestamp, next_feed_ms) && !failed();
         }
     }
     return drain(horizon_ms) && !failed();
@@ -10566,7 +10574,11 @@ bool NativeExecutionConsumer::feed_auxiliary_slice(
                                                   feed_interval->next_period_open_ms));
             if (at + 1 < total && auxiliary_bar(at + 1).timestamp > feed_bar.timestamp)
                 close = std::min(close, auxiliary_bar(at + 1).timestamp);
-            if (!feed_fixed_subscription(engine, subscription, index, &feed_bar, close, completed))
+            // The feed bar's own successor, the one the aggregating step
+            // below is told: 0 when the feed does not hold it yet.
+            if (!feed_fixed_subscription(
+                    engine, subscription, index, &feed_bar, close,
+                    at + 1 < total ? auxiliary_bar(at + 1).timestamp : 0, completed))
                 return false;
             continue;
         }
@@ -10599,7 +10611,7 @@ bool NativeExecutionConsumer::feed_auxiliary_slice(
         }
     }
     if (fixed && accepted)
-        return feed_fixed_subscription(engine, subscription, index, nullptr, horizon, completed);
+        return feed_fixed_subscription(engine, subscription, index, nullptr, horizon, 0, completed);
     return !failed();
 }
 
@@ -10662,7 +10674,8 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
             auto horizon = std::min(interval->last_traded_close_ms, interval->next_period_open_ms);
             const auto next = subscription_next_input_ms(i);
             if (next > input_bars[i].timestamp) horizon = std::min(horizon, next);
-            if (!feed_fixed_subscription(engine, subscription, i, &input_bars[i], horizon, record))
+            if (!feed_fixed_subscription(engine, subscription, i, &input_bars[i], horizon, next,
+                                         record))
                 return false;
         }
         return !failed();
@@ -10785,7 +10798,8 @@ bool NativeExecutionConsumer::pump_timeframe_subscriptions(
                     return deliver_timeframe_bar(engine, subscription, bucket, first_ms,
                                                  bar.timestamp, completion);
                 };
-                if (!feed_fixed_subscription(engine, subscription, index, &bar, horizon, deliver))
+                if (!feed_fixed_subscription(engine, subscription, index, &bar, horizon, next,
+                                             deliver))
                     return false;
             }
             if (!delivered) clear_if_gapped(subscription);

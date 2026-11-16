@@ -1311,6 +1311,160 @@ void test_fixed_period_confirmed_stream_and_tick_contract() {
     CHECK(batch.native_continuation_hash() == first_hash);
 }
 
+// ---- an exchange session-day that closes early ----------------------------
+//
+// Native engine controls over supplied bars (native_fixed_period_fixture::
+// exchange): no TradingView price, na or time is asserted here. One "75"
+// series with the exchange's own bars, read through the callback and the pull
+// accessor.
+
+struct ExchangeDayRoute {
+    int script;        // script timeframe, minutes
+    int input;         // primary input timeframe, minutes
+    int aux;           // auxiliary feed the series is built from, minutes; 0: the input
+    int early_close;   // minute of day the middle session-day stops at
+    const char* type;  // instrument class of the run spec
+    bool exchange;     // whether that class's session template knows early closes
+};
+
+// Replays `bars` (and `aux`, when the route names an auxiliary feed) and holds
+// every script bar's read and every delivery to the fixture's arithmetic.
+void check_exchange_day_series(const ExchangeDayRoute& route, const std::vector<Bar>& bars,
+                               const std::vector<Bar>& aux) {
+    namespace day = native_fixed_period_fixture::exchange;
+    static std::string label;
+    label = "exchange day: script " + std::to_string(route.script) + " input "
+        + std::to_string(route.input) + " aux " + std::to_string(route.aux) + " close "
+        + std::to_string(route.early_close) + " " + route.type;
+    scenario = label.c_str();
+    NativeRunSpec spec = base_spec(std::to_string(route.input).c_str(),
+                                   std::to_string(route.script).c_str(),
+                                   "native-fixed-exchange-day");
+    spec.type = route.type;
+    spec.timezone = day::kTimezone;
+    spec.session = day::kSession;
+    NativeTimeframeSubscription series;
+    series.tf = "75";
+    series.authoritative_bars = day::native(75, route.early_close);
+    if (route.aux != 0) {
+        NativeAuxiliaryFeed feed;
+        feed.tf = std::to_string(route.aux);
+        feed.bars = aux;
+        spec.auxiliary_feed = feed;
+        series.source = NativeSeriesSource::AuxiliaryFeed;
+    }
+    spec.subscriptions.push_back(series);
+    SeriesHost host;
+    host.probes = 1;
+    const auto setup = host.configure_native(spec);
+    CHECK(setup.status == NativeSetupStatus::Applied);
+    // A setup refusal is not a behavior result: say so and leave this route.
+    if (setup.status != NativeSetupStatus::Applied) return;
+    host.run(bars.data(), static_cast<int>(bars.size()), spec.input_tf, spec.script_tf,
+             false, 4, MagnifierDistribution::ENDPOINTS);
+    CHECK(host.last_error().empty());
+    if (!host.last_error().empty()) std::printf("  error: %s\n", host.last_error().c_str());
+
+    const auto& rows = series.authoritative_bars;
+    // The series is built from the auxiliary feed when the route names one.
+    const auto& source = route.aux != 0 ? aux : bars;
+    const int source_step = route.aux != 0 ? route.aux : route.input;
+    const auto closes = day::row_closes(rows, 75, source, source_step, route.exchange);
+    const auto charts = day::charts(bars, route.input, route.script);
+
+    // What each script bar reads: the latest row complete by the close of the
+    // script bar's own last accepted input, and nothing later.
+    CHECK(host.series_at_bar.size() == charts.size());
+    for (std::size_t i = 0; i < charts.size() && i < host.series_at_bar.size(); ++i) {
+        CHECK(host.series_at_bar[i].size() == 1);
+        if (host.series_at_bar[i].size() != 1) continue;
+        const auto& got = host.series_at_bar[i][0];
+        const int want = day::expected_row(closes, charts[i].close_ms, 0, false);
+        CHECK(got.has_value() == (want >= 0));
+        if (!got || want < 0) continue;
+        check_bucket(*got, rows[static_cast<std::size_t>(want)], "exchange day read");
+    }
+
+    // One delivery per supplied row, in order, each on the accepted input
+    // whose own close first reaches the row's: none repeated on the next
+    // session's first input, none ahead of its close, each the supplied row.
+    CHECK(host.deliveries.size() == rows.size());
+    for (std::size_t i = 0; i < rows.size() && i < host.deliveries.size(); ++i) {
+        const Delivery& delivery = host.deliveries[i];
+        check_bucket(delivery.bar, rows[i], "exchange day payload");
+        CHECK(delivery.accessor_matches);
+        CHECK(delivery.context.delivered_at_ms
+              == day::delivered_at(closes[i], bars, route.input));
+        // A period its session-day's last input closes is a confirmed
+        // completion, as every bucket its own last contributor closes is.
+        if (closes[i] < day::nominal_end(rows[i], 75))
+            CHECK(delivery.context.completion == NativeCompletionKind::Confirmed);
+    }
+}
+
+void check_exchange_day_series(const ExchangeDayRoute& route) {
+    namespace day = native_fixed_period_fixture::exchange;
+    check_exchange_day_series(
+        route, day::bars(route.input, route.early_close),
+        route.aux != 0 ? day::bars(route.aux, route.early_close) : std::vector<Bar>{});
+}
+
+// The session-day's last accepted input ends the requested period it leaves
+// open: the 75-minute period that opened at 12:00 is delivered on the last
+// input of a 13:00 (and of a 12:30) close, when the next accepted input opens
+// a later session-day. The ratio path's law, merged and singleton form alike,
+// for a series its script timeframe does not divide. A primary input at the
+// script timeframe, a finer primary input and the auxiliary feed all reach it.
+void test_fixed_period_exchange_early_close() {
+    for (int early_close : {13 * 60, 12 * 60 + 30}) {
+        for (int script : {30, 60}) {
+            for (int fine : {5, 1}) {
+                check_exchange_day_series({script, fine, 0, early_close, "stock", true});
+                check_exchange_day_series({script, script, fine, early_close, "stock", true});
+            }
+        }
+        // The script's own bars as input. A 30-minute bar never crosses a
+        // 75-minute boundary of this session inside the early day.
+        check_exchange_day_series({30, 30, 0, early_close, "stock", true});
+    }
+    // A 60-minute input bar that opens at 12:30 is accepted to 13:30, past the
+    // period's nominal end: the period completes on it without the law.
+    check_exchange_day_series({60, 60, 0, 13 * 60, "stock", true});
+    // The law is the instrument class's, not one spelling of it.
+    check_exchange_day_series({30, 30, 0, 13 * 60, "futures", true});
+}
+
+// The gate: an OTC quote stream has no holiday template. Its period keeps its
+// nominal end and is delivered by the next accepted input, never by the last
+// input of the short day.
+void test_fixed_period_early_close_gate() {
+    for (const char* type : {"crypto", "forex", "cfd"}) {
+        for (int early_close : {13 * 60, 12 * 60 + 30}) {
+            check_exchange_day_series({30, 30, 0, early_close, type, false});
+            check_exchange_day_series({30, 5, 0, early_close, type, false});
+            check_exchange_day_series({60, 5, 0, early_close, type, false});
+            check_exchange_day_series({30, 30, 5, early_close, type, false});
+        }
+    }
+}
+
+// A hole inside one session-day is not a close: the input before it leaves its
+// period open, and the first input after it delivers that period and the
+// unobserved one behind it, in order.
+void test_fixed_period_session_hole_is_not_a_close() {
+    namespace day = native_fixed_period_fixture::exchange;
+    // Three whole session-days, so no close is early; 13:00 to 14:30 of the
+    // first one is missing from every supplied feed.
+    const int whole = day::kCloseMinute;
+    const auto holed = [whole](int step) {
+        return day::without(day::bars(step, whole), 0, 13 * 60, 14 * 60 + 30);
+    };
+    for (int fine : {30, 5}) {
+        check_exchange_day_series({30, fine, 0, whole, "stock", true}, holed(fine), {});
+    }
+    check_exchange_day_series({30, 30, 5, whole, "stock", true}, holed(30), holed(5));
+}
+
 }  // namespace
 
 int main() {
@@ -1330,6 +1484,9 @@ int main() {
     test_fixed_period_fine_primary_retained_carry();
     test_fixed_period_fine_primary_and_sparse_boundary();
     test_fixed_period_confirmed_stream_and_tick_contract();
+    test_fixed_period_exchange_early_close();
+    test_fixed_period_early_close_gate();
+    test_fixed_period_session_hole_is_not_a_close();
     std::printf("native HTF subscriptions: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

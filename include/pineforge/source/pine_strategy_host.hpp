@@ -1256,7 +1256,8 @@ private:
                                        bool calling_bar_complete = false);
     bool pine_native_fixed_security_clock(const SecurityEvalState&) const;
     void pine_begin_native_fixed_chart(SecurityEvalState&, std::int64_t chart_open);
-    void pine_drain_native_fixed_security(SecurityEvalState&, std::int64_t horizon_ms);
+    void pine_drain_native_fixed_security(SecurityEvalState&, std::int64_t horizon_ms,
+        std::int64_t input_ms = 0, std::int64_t next_input_ms = 0);
     void scheduler_finish_native_fixed_security(const Bar& chart_bar);
     // The site's Pine semantics; a sec_id registered outside this host's
     // register_security_eval (none today) reads as a plain site.

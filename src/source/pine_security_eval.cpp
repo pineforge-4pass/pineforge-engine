@@ -821,11 +821,13 @@ void source::PineStrategyHost::pine_begin_native_fixed_chart(
 }
 
 void source::PineStrategyHost::pine_drain_native_fixed_security(
-        SecurityEvalState& state, std::int64_t horizon_ms) {
+        SecurityEvalState& state, std::int64_t horizon_ms,
+        std::int64_t input_ms, std::int64_t next_input_ms) {
     auto& pine = pine_security_state(state.sec_id);
     internal::AmbientEmaSeedingScope warmup(
         NativeExecutionConsumer::bound(*this).pump_ambient(), security_range_start_na_warmup_);
-    while (auto completed = next_native_fixed_security_bar(state, horizon_ms)) {
+    while (auto completed = next_native_fixed_security_bar(
+               state, horizon_ms, input_ms, next_input_ms)) {
         Bar bar = completed->bar;
         if (pine.heikinashi) {
             const double close = (bar.open + bar.high + bar.low + bar.close) / 4.0;
@@ -1123,7 +1125,12 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
             pine_drain_native_fixed_security(state, std::min(input_bar.timestamp, horizon));
             state.aggregator.observe_fixed(state.fixed_clock, input_bar);
             ++state.feed_count;
-            pine_drain_native_fixed_security(state, horizon);
+            // Now observed, this input and the accepted one after it (the
+            // next primary bar, or the next auxiliary bar across chart bars;
+            // 0 at the feed's end) say whether it was its session-day's last:
+            // the early-close context of the bucket it leaves open.
+            pine_drain_native_fixed_security(
+                state, horizon, input_bar.timestamp, security_next_input_ms_);
             return;
         }
     }

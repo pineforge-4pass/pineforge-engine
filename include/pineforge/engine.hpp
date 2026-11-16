@@ -1627,7 +1627,7 @@ protected:
                                   const std::string& feed_tf);
     bool native_fixed_security_clock(const SecurityEvalState&) const;
     std::optional<AggregatedBar> next_native_fixed_security_bar(
-        SecurityEvalState&, int64_t horizon_ms);
+        SecurityEvalState&, int64_t horizon_ms, int64_t input_ms = 0, int64_t next_input_ms = 0);
     bool hash_fixed_security_clocks(BrokerStateHashSink&) const noexcept;
 
     // A new batch run (including stream_begin's historical warmup) starts a

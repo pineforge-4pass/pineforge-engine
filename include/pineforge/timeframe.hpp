@@ -435,8 +435,15 @@ public:
     void observe_fixed(FixedPeriodClock&, const Bar&) const;
     // The caller supplies an accepted, session-clipped completion horizon.
     // A later input/session cannot complete a bucket beyond that horizon.
+    // `input_ms` names the accepted input that horizon closes, once it has
+    // been observed, and `next_input_ms` its accepted successor (both 0: no
+    // such context). With them the session-day's last input completes, AT
+    // that horizon, the bucket it was observed into: feed()'s exchange
+    // early-close rule, under the same early_close_completes() gate. They
+    // never move the horizon and are not clock state.
     std::optional<AggregatedBar> next_fixed_completion(
-        FixedPeriodClock&, int64_t horizon_ms) const;
+        FixedPeriodClock&, int64_t horizon_ms,
+        int64_t input_ms = 0, int64_t next_input_ms = 0) const;
 
     /// Current in-progress bar.
     Bar current() const;

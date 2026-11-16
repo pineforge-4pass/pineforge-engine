@@ -1247,7 +1247,8 @@ void TimeframeAggregator::observe_fixed(
 }
 
 std::optional<AggregatedBar> TimeframeAggregator::next_fixed_completion(
-        FixedPeriodClock& clock, int64_t horizon_ms) const {
+        FixedPeriodClock& clock, int64_t horizon_ms,
+        int64_t input_ms, int64_t next_input_ms) const {
     if (!supports_fixed_completion() || !clock.cursor_ms) return std::nullopt;
     while (*clock.cursor_ms < horizon_ms) {
         const auto cursor = *clock.cursor_ms;
@@ -1281,7 +1282,28 @@ std::optional<AggregatedBar> TimeframeAggregator::next_fixed_completion(
         auto close = bucket.end_ms;
         if (target_seconds_ < kSecPerDay && has_trading_session(anchor_session_))
             close = std::min(close, session_window_close_ms(cursor, anchor_tz_, anchor_session_));
-        if (close <= cursor || close > horizon_ms) return std::nullopt;
+        if (close <= cursor) return std::nullopt;
+        if (close > horizon_ms) {
+            // Exchange early close: feed_ratio_mode's rule for a merged bucket
+            // and for a singleton, on this clock. The accepted input the
+            // horizon closes was observed into this bucket, and its accepted
+            // successor opens a later session-day: that input was the
+            // session-day's last, so the bucket ends with it, at the horizon,
+            // not at a nominal close the session never reached. Everything
+            // else keeps waiting: an OTC stream
+            // (set_early_close_completes(false)), an unknown successor, a
+            // successor of the same session-day (a hole is not a close), and a
+            // bucket that input was not observed into.
+            const bool session_final = clock.observed_count > 0
+                && early_close_completes_ && target_seconds_ < kSecPerDay
+                && has_trading_session(anchor_session_)
+                && input_ms < horizon_ms && next_input_ms > input_ms
+                && !(intraday_bucket(input_ms, target_seconds_, anchor_tz_, anchor_session_,
+                                     &native_late_opens_, prefix).key != bucket.key)
+                && crosses_boundary(input_ms, next_input_ms, CalendarPeriod::DAY,
+                                    anchor_tz_, anchor_session_);
+            if (!session_final) return std::nullopt;
+        }
         AggregatedBar completed{clock.observed, true, clock.observed_count};
         completed.bar.timestamp = bucket.open_ms;
         // Keep the grid successor when a split-session window clips a bucket.

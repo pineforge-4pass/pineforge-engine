@@ -117,8 +117,10 @@ bool BacktestEngine::native_fixed_security_clock(const SecurityEvalState& state)
 }
 
 std::optional<AggregatedBar> BacktestEngine::next_native_fixed_security_bar(
-        SecurityEvalState& state, int64_t horizon_ms) {
-    while (auto completed = state.aggregator.next_fixed_completion(state.fixed_clock, horizon_ms)) {
+        SecurityEvalState& state, int64_t horizon_ms,
+        int64_t input_ms, int64_t next_input_ms) {
+    while (auto completed = state.aggregator.next_fixed_completion(
+               state.fixed_clock, horizon_ms, input_ms, next_input_ms)) {
         const bool native = substitute_native_security_bar(
             state, completed->bar, completed->sub_bar_count > 0);
         if (native || completed->sub_bar_count > 0) return completed;

@@ -1358,7 +1358,7 @@ private:
     template <typename Completed>
     bool feed_fixed_subscription(BacktestEngine&, TimeframeSubscription&, int index,
                                  const Bar* feed_bar, std::int64_t horizon_ms,
-                                 Completed&& completed);
+                                 std::int64_t next_feed_ms, Completed&& completed);
     // A declared series is fed by accepted CONFIRMED input only, because that
     // is the only input a batch of the same bars also has. True (refused)
     // exactly when a stream that declares one is asked for tick-driven input.

@@ -29,6 +29,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 #include "native_fixed_period_fixture.hpp"
@@ -775,6 +776,210 @@ void test_native_fixed_period_grid_and_session_controls() {
             FIXED_CHECK(session.reads[i].requested_close <= session.chart_ends[i]);
     }
 }
+
+// ── an exchange session-day that closes early ────────────────────────────────
+//
+// Native engine controls over supplied bars (native_fixed_period_fixture::
+// exchange): no TradingView price, na or time is asserted here. One site of
+// one requested timeframe; the host records what each chart bar reads and
+// places no order.
+class ExchangeDayProbe final : public pineforge::source::PineStrategyHost {
+public:
+    struct Read {
+        Bar bar{};
+        bool present = false;
+    };
+    std::string requested = "75";
+    bool gaps = false;
+    Read latest;
+    std::vector<Read> reads;
+    std::vector<Bar> charts;
+    std::vector<Bar> evaluated_bars;
+    void configure_security_evaluators() override {
+        latest = {}; reads.clear(); charts.clear(); evaluated_bars.clear();
+        security_eval_states_.clear();
+        register_security_eval(0, requested, input_tf_, false, gaps);
+    }
+    void evaluate_security(int, const Bar& bar, bool) override {
+        evaluated_bars.push_back(bar);
+        latest = {bar, true};
+    }
+    void clear_security(int) override { latest = {}; }
+    void on_source_bar(const Bar& bar) override {
+        reads.push_back(latest);
+        charts.push_back(bar);
+    }
+};
+
+struct ExchangeDayForm {
+    int chart;         // chart timeframe, minutes
+    int input;         // primary input timeframe, minutes
+    int aux;           // auxiliary request.security feed, minutes; 0: none
+    int requested;     // requested timeframe, minutes
+    int early_close;   // minute of day the middle session-day stops at
+    const char* type;  // syminfo.type
+    bool exchange;     // whether that class's session template knows early closes
+    bool gaps;
+};
+
+#define EXCHANGE_DAY_CHECK(condition) do { if (!(condition)) { \
+    ++fixed_failures; std::fprintf(stderr, \
+        "exchange-day line %d: %s [chart %d input %d aux %d request %d close %d %s%s row %d]\n", \
+        __LINE__, #condition, form.chart, form.input, form.aux, form.requested, \
+        form.early_close, form.type, form.gaps ? " gaps" : "", at); } } while (false)
+
+// Replays `bars` (and `aux`, when the form names an auxiliary feed) against
+// the supplied native rows and holds every chart bar, and the evaluation
+// order, to the fixture's arithmetic.
+void check_exchange_day_tape(const ExchangeDayForm& form, const std::vector<Bar>& bars,
+                             const std::vector<Bar>& aux) {
+    namespace day = native_fixed_period_fixture::exchange;
+    const auto rows = day::native(form.requested, form.early_close);
+    int at = -1;
+    ExchangeDayProbe host;
+    host.requested = std::to_string(form.requested);
+    host.gaps = form.gaps;
+    host.set_syminfo_timezone(day::kTimezone);
+    host.set_syminfo_session(day::kSession);
+    host.set_syminfo_type(form.type);
+    EXCHANGE_DAY_CHECK(strategy_set_native_security_feed(
+        static_cast<pf_strategy_t>(&host), host.requested.c_str(),
+        reinterpret_cast<const pf_bar_t*>(rows.data()),
+        static_cast<int>(rows.size())) == 0);
+    if (form.aux != 0) {
+        EXCHANGE_DAY_CHECK(strategy_set_aux_security_feed(
+            static_cast<pf_strategy_t>(&host),
+            reinterpret_cast<const pf_bar_t*>(aux.data()),
+            static_cast<int>(aux.size()), std::to_string(form.aux).c_str()) == 0);
+    }
+    host.run(bars.data(), static_cast<int>(bars.size()), std::to_string(form.input),
+             std::to_string(form.chart), false, 4, MagnifierDistribution::ENDPOINTS);
+    EXCHANGE_DAY_CHECK(host.last_error().empty());
+
+    // The series is built from the auxiliary feed when there is one.
+    const auto& source = form.aux != 0 ? aux : bars;
+    const int source_step = form.aux != 0 ? form.aux : form.input;
+    const auto closes =
+        day::row_closes(rows, form.requested, source, source_step, form.exchange);
+    const auto charts = day::charts(bars, form.input, form.chart);
+    EXCHANGE_DAY_CHECK(host.reads.size() == charts.size());
+    std::int64_t previous = std::numeric_limits<std::int64_t>::min();
+    for (std::size_t i = 0; i < charts.size() && i < host.reads.size(); ++i) {
+        at = static_cast<int>(i);
+        const int want = day::expected_row(closes, charts[i].close_ms, previous, form.gaps);
+        previous = charts[i].close_ms;
+        const auto& got = host.reads[i];
+        EXCHANGE_DAY_CHECK(host.charts[i].timestamp == charts[i].open_ms);
+        // Neither a row whose period is still open at this chart bar's close
+        // nor a held row its own close has not reached.
+        EXCHANGE_DAY_CHECK(got.present == (want >= 0));
+        if (!got.present || want < 0) continue;
+        // That very row: its label and every field of the supplied payload.
+        const Bar& row = rows[static_cast<std::size_t>(want)];
+        EXCHANGE_DAY_CHECK(got.bar.timestamp == row.timestamp);
+        EXCHANGE_DAY_CHECK(got.bar.open == row.open && got.bar.high == row.high);
+        EXCHANGE_DAY_CHECK(got.bar.low == row.low && got.bar.close == row.close);
+        EXCHANGE_DAY_CHECK(got.bar.volume == row.volume);
+    }
+    // Every supplied row is evaluated exactly once and in order: a period the
+    // early close ended is not delivered again by the next session's first
+    // input, and no later row overtakes it.
+    at = -1;
+    EXCHANGE_DAY_CHECK(host.evaluated_bars.size() == rows.size());
+    for (std::size_t i = 0; i < rows.size() && i < host.evaluated_bars.size(); ++i) {
+        at = static_cast<int>(i);
+        EXCHANGE_DAY_CHECK(host.evaluated_bars[i].timestamp == rows[i].timestamp);
+        EXCHANGE_DAY_CHECK(host.evaluated_bars[i].close == rows[i].close);
+    }
+}
+
+void check_exchange_day_tape(const ExchangeDayForm& form) {
+    namespace day = native_fixed_period_fixture::exchange;
+    check_exchange_day_tape(
+        form, day::bars(form.input, form.early_close),
+        form.aux != 0 ? day::bars(form.aux, form.early_close) : std::vector<Bar>{});
+}
+#undef EXCHANGE_DAY_CHECK
+
+// The session-day's last accepted input ends the requested period it leaves
+// open: a 75-minute period that opened at 12:00 is complete at a 13:00 (and a
+// 12:30) close, on the chart bar that close ends, when the next accepted
+// input opens a later session-day. The same law the divisible ratio path
+// keeps (its merged and its singleton form), here for a request that is not
+// a multiple of its chart. Chart input, a finer primary input and the
+// auxiliary feed all reach it; the days around the early one keep the
+// nominal close.
+void test_native_fixed_period_exchange_early_close() {
+    for (int early_close : {13 * 60, 12 * 60 + 30}) {
+        for (bool gaps : {false, true}) {
+            for (int chart : {30, 60}) {
+                for (int fine : {5, 1}) {
+                    check_exchange_day_tape(
+                        {chart, fine, 0, 75, early_close, "stock", true, gaps});
+                    check_exchange_day_tape(
+                        {chart, chart, fine, 75, early_close, "stock", true, gaps});
+                }
+            }
+            // The chart's own bars as input. A 30-minute bar never crosses a
+            // 75-minute boundary of this session inside the early day.
+            check_exchange_day_tape({30, 30, 0, 75, early_close, "stock", true, gaps});
+        }
+    }
+    for (bool gaps : {false, true}) {
+        // A 60-minute chart bar of its own input: the 12:30 bar's accepted
+        // interval runs to 13:30, past the period's nominal end, so the
+        // period completes on it without the early-close law.
+        check_exchange_day_tape({60, 60, 0, 75, 13 * 60, "stock", true, gaps});
+        // The law is the instrument class's, not one spelling of it.
+        check_exchange_day_tape({30, 30, 0, 75, 13 * 60, "futures", true, gaps});
+    }
+}
+
+// The gate: an OTC quote stream has no holiday template, so its period keeps
+// its nominal end and is revealed only by the next accepted input.
+void test_native_fixed_period_early_close_gate() {
+    for (const char* type : {"crypto", "forex", "cfd"}) {
+        for (int early_close : {13 * 60, 12 * 60 + 30}) {
+            for (bool gaps : {false, true}) {
+                check_exchange_day_tape({30, 30, 0, 75, early_close, type, false, gaps});
+                check_exchange_day_tape({30, 5, 0, 75, early_close, type, false, gaps});
+                check_exchange_day_tape({30, 30, 5, 75, early_close, type, false, gaps});
+            }
+        }
+    }
+}
+
+// A hole inside one session-day is not a close: the input before it leaves
+// its period open, the first input after it reveals that period and the
+// unobserved one behind it in order, and nothing is read before its own end.
+void test_native_fixed_period_session_hole_is_not_a_close() {
+    namespace day = native_fixed_period_fixture::exchange;
+    // Three whole session-days, so no close is early; 13:00 to 14:30 of the
+    // first one is missing from every supplied feed.
+    const int whole = day::kCloseMinute;
+    const auto holed = [whole](int step) {
+        return day::without(day::bars(step, whole), 0, 13 * 60, 14 * 60 + 30);
+    };
+    for (bool gaps : {false, true}) {
+        for (int fine : {30, 5}) {
+            check_exchange_day_tape({30, fine, 0, 75, whole, "stock", true, gaps},
+                                    holed(fine), {});
+        }
+        check_exchange_day_tape({30, 30, 5, 75, whole, "stock", true, gaps},
+                                holed(30), holed(5));
+    }
+}
+
+// A request the chart divides keeps the ratio path and its own early-close
+// forms: the 12:30 bar of a 13:00 close is the whole 60-minute period it
+// opens (the singleton form), and a finer input ends that period on its last
+// bar (the merged form).
+void test_native_divisible_period_early_close_is_kept() {
+    for (int early_close : {13 * 60, 12 * 60 + 30}) {
+        check_exchange_day_tape({30, 30, 0, 60, early_close, "stock", true, false});
+        check_exchange_day_tape({30, 5, 0, 60, early_close, "stock", true, false});
+    }
+}
 #undef FIXED_CHECK
 } // namespace
 
@@ -792,6 +997,10 @@ int main() {
     test_native_fixed_period_tick_admission_and_reset();
     test_native_fixed_period_unbacked_and_divisible_controls();
     test_native_fixed_period_grid_and_session_controls();
+    test_native_fixed_period_exchange_early_close();
+    test_native_fixed_period_early_close_gate();
+    test_native_fixed_period_session_hole_is_not_a_close();
+    test_native_divisible_period_early_close_is_kept();
     return fixed_failures == 0 ? 0 : 1;
 }
 
