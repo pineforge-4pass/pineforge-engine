@@ -1,4 +1,4 @@
-// R5 lane PERF-P1, reverted to an eager latch by lane V19-A: a Pine run's
+// Continuation views, restored to an eager latch: a Pine run's
 // terminal continuation at every capture site, read for read.
 //
 // PineStrategyHost::capture_script_continuation_hash latches the
@@ -330,7 +330,7 @@ void emit(const char* name, const std::vector<std::uint64_t>& reads) {
 //   14580145596766604804ull -> 7253611708149050520ull
 //   12763565106297155564ull -> 13208968445305919179ull
 //   12763565106297155564ull -> 13208968445305919179ull
-// expectation corrected (V19-FIX, k_chart, 7 of 7 values), because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree:
+// expectation corrected (adapter hash cleanup, k_chart, 7 of 7 values), because adapter hash cleanup moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and the kernel lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the corrected tree:
 //   2543779130970217232ull -> 14621553252499744072ull
 //   2482407147974245352ull -> 1560069015253079270ull
 //   17904934979399943420ull -> 8181232920474966978ull
@@ -338,7 +338,7 @@ void emit(const char* name, const std::vector<std::uint64_t>& reads) {
 //   13208968445305919179ull -> 4370795498617211977ull
 //   10324478866479362969ull -> 10361542891827113526ull
 //   13208968445305919179ull -> 4370795498617211977ull
-// expectation corrected (INT25, k_chart, 7 of 7 values), because the integrated tree folds V19-FIX's Pine hash inputs and K-IDX's script-bar coordinate together (each lane re-pinned on a tree without the other); harvested once on the INT25 tree with this TU's harvest switch:
+// expectation corrected (hash and script-coordinate integration, k_chart, 7 of 7 values), because the integrated tree folds the corrected Pine hash inputs and script-bar coordinate together (each correction was previously pinned independently); harvested once on the hash and script-coordinate integration tree with this TU's harvest switch:
 //   14621553252499744072ull -> 5575980828577033360ull
 //   1560069015253079270ull -> 17778912298194596574ull
 //   8181232920474966978ull -> 16463834114134690168ull
@@ -346,23 +346,23 @@ void emit(const char* name, const std::vector<std::uint64_t>& reads) {
 //   4370795498617211977ull -> 2898399952537902865ull
 //   10361542891827113526ull -> 8964175343669296125ull
 //   4370795498617211977ull -> 2898399952537902865ull
-// expectation corrected (INT26 v19 hash re-pin, k_chart, 4 of 7 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+// expectation corrected (integrated source rules v19 hash correction, k_chart, 4 of 7 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: source hash cleanup's hash step (the Pine host's excursion model leaves the source-layer fold; a FIFO exit reserves its own entry's quantity), the current execution order correction's new transient coof_fill_forced_ fold and the post-fill margin correction's post-fill margin waypoint and cash-fee sizing's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since the pending-entry timestamp correction (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
 //   17778912298194596574ull -> 2540222023230692795ull [H-THIN]
 //   8941018855024971093ull -> 7277266162097189602ull [H-THIN]
 //   2898399952537902865ull -> 13929697350787785222ull [H-THIN]
 //   2898399952537902865ull -> 13929697350787785222ull [H-THIN]
-// expectation corrected (INT28, k_chart, 6 of 7 values), because lane W3B-ENG-GRID's void rule (an exit whose entry neither exists nor rests is void: the call folds its flag, reserves nothing, holds no queue place and is withdrawn at its entry's opening); harvested with PINEFORGE_P1_HARVEST on the integrated tree (main 962960b3 and the wave-J picks) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
+// expectation corrected (integrated order and margin rules, k_chart, 6 of 7 values), because the void-exit rule applies (an exit whose entry neither exists nor rests is void: the call folds its flag, reserves nothing, holds no queue place and is withdrawn at its entry's opening); harvested with PINEFORGE_P1_HARVEST on the integrated tree (main 962960b3 and the order and margin corrections) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
 //   2540222023230692795ull -> 13298479936274484395ull [W3B void exit]
 //   16463834114134690168ull -> 14057090632594196994ull [W3B void exit]
 //   7277266162097189602ull -> 14688281789591022039ull [W3B void exit]
 //   13929697350787785222ull -> 16409846652215781920ull [W3B void exit]
 //   8964175343669296125ull -> 13147035262705757206ull [W3B void exit]
 //   13929697350787785222ull -> 16409846652215781920ull [W3B void exit]
-// Join head (6cac82ce51, s1c line), harvest job rj-20261022t152941-1a6cf3 (NTU2, engine 3dc24bad43 = the join head
+// Integration head (6cac82ce51), harvested with engine 3dc24bad43 (the integration head
 // with PINEFORGE_P1_HARVEST on): 169 of 227 continuation read hashes moved (the other 58 reads do not fold the scratch
 // stores); every array has the same length. Cause: the exit and trade scratch folds of 3c6f46d159 and the provider's
 // context.versions of 4b5ef3dd28; design, not a bug. The harvest owns these values, never edit one by hand.
-// expectation corrected (LAB-QUIETFIX, k_chart, 4 of 7 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_continuation_view.txt:
+// expectation corrected (scope-allocation hash correction, k_chart, 4 of 7 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, with private fixtures overlaid, using this test's harvest output:
 //   2745704450706323418ull -> 18182466203520105876ull
 //   16282097370453327154ull -> 3199363816222489316ull
 //   10952641480126439025ull -> 3382485606652193703ull
@@ -396,7 +396,7 @@ constexpr std::uint64_t k_chart[] = {
 //   17362997550053029786ull -> 3037174366487220809ull
 //   1693323071214726469ull -> 4411147221463257853ull
 //   1693323071214726469ull -> 4411147221463257853ull
-// expectation corrected (V19-FIX, k_magnifier, 7 of 7 values), because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree:
+// expectation corrected (adapter hash cleanup, k_magnifier, 7 of 7 values), because adapter hash cleanup moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and the kernel lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the corrected tree:
 //   2055499121853794215ull -> 1310098789583311035ull
 //   14570450431216633494ull -> 9252967425603149690ull
 //   12633570209086223403ull -> 9717019523752667192ull
@@ -404,7 +404,7 @@ constexpr std::uint64_t k_chart[] = {
 //   4411147221463257853ull -> 15984354419168920510ull
 //   11201307460949430058ull -> 16607038826027722339ull
 //   4411147221463257853ull -> 15984354419168920510ull
-// expectation corrected (INT25, k_magnifier, 7 of 7 values), because the integrated tree folds V19-FIX's Pine hash inputs and K-IDX's script-bar coordinate together (each lane re-pinned on a tree without the other); harvested once on the INT25 tree with this TU's harvest switch:
+// expectation corrected (hash and script-coordinate integration, k_magnifier, 7 of 7 values), because the integrated tree folds the corrected Pine hash inputs and script-bar coordinate together (each correction was previously pinned independently); harvested once on the hash and script-coordinate integration tree with this TU's harvest switch:
 //   1310098789583311035ull -> 4430826578646987126ull
 //   9252967425603149690ull -> 14738067743722080804ull
 //   9717019523752667192ull -> 2077753189921542836ull
@@ -412,19 +412,19 @@ constexpr std::uint64_t k_chart[] = {
 //   15984354419168920510ull -> 13581436790443683042ull
 //   16607038826027722339ull -> 14737345821341801219ull
 //   15984354419168920510ull -> 13581436790443683042ull
-// expectation corrected (INT26 v19 hash re-pin, k_magnifier, 4 of 7 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+// expectation corrected (integrated source rules v19 hash correction, k_magnifier, 4 of 7 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: source hash cleanup's hash step (the Pine host's excursion model leaves the source-layer fold; a FIFO exit reserves its own entry's quantity), the current execution order correction's new transient coof_fill_forced_ fold and the post-fill margin correction's post-fill margin waypoint and cash-fee sizing's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since the pending-entry timestamp correction (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
 //   14738067743722080804ull -> 10187142414804555211ull [H-THIN]
 //   2917741806179085516ull -> 13316113226488762715ull [H-THIN]
 //   13581436790443683042ull -> 489358674406674971ull [H-THIN]
 //   13581436790443683042ull -> 489358674406674971ull [H-THIN]
-// expectation corrected (INT28, k_magnifier, 6 of 7 values), because lane W3B-ENG-GRID's void rule (an exit whose entry neither exists nor rests is void: the call folds its flag, reserves nothing, holds no queue place and is withdrawn at its entry's opening); harvested with PINEFORGE_P1_HARVEST on the integrated tree (main 962960b3 and the wave-J picks) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
+// expectation corrected (integrated order and margin rules, k_magnifier, 6 of 7 values), because the void-exit rule applies (an exit whose entry neither exists nor rests is void: the call folds its flag, reserves nothing, holds no queue place and is withdrawn at its entry's opening); harvested with PINEFORGE_P1_HARVEST on the integrated tree (main 962960b3 and the order and margin corrections) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
 //   10187142414804555211ull -> 695445923892006573ull [W3B void exit]
 //   2077753189921542836ull -> 12713572297021794328ull [W3B void exit]
 //   13316113226488762715ull -> 7922416470599285928ull [W3B void exit]
 //   489358674406674971ull -> 3282916354838007561ull [W3B void exit]
 //   14737345821341801219ull -> 7289104483314840584ull [W3B void exit]
 //   489358674406674971ull -> 3282916354838007561ull [W3B void exit]
-// expectation corrected (LAB-QUIETFIX, k_magnifier, 4 of 7 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_continuation_view.txt:
+// expectation corrected (scope-allocation hash correction, k_magnifier, 4 of 7 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, with private fixtures overlaid, using this test's harvest output:
 //   7259925144997165860ull -> 4612877275595339018ull
 //   2387673908045066541ull -> 11828421549642364691ull
 //   8292476304768853788ull -> 6574845576357635558ull
@@ -448,18 +448,18 @@ constexpr std::uint64_t k_magnifier[] = {
 //   17786335956283624301ull -> 10940756508045292790ull
 //   4311320861969680288ull -> 5992953984750558008ull
 //   4311320861969680288ull -> 5992953984750558008ull
-// expectation corrected (V19-FIX, k_aggregated, 4 of 5 values), because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree:
+// expectation corrected (adapter hash cleanup, k_aggregated, 4 of 5 values), because adapter hash cleanup moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and the kernel lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the corrected tree:
 //   10940756508045292790ull -> 11387000028137044299ull
 //   5992953984750558008ull -> 4995545673543620333ull
 //   5456021430637490595ull -> 9893483468656556008ull
 //   5992953984750558008ull -> 4995545673543620333ull
-// expectation corrected (INT25, k_aggregated, 5 of 5 values), because the integrated tree folds V19-FIX's Pine hash inputs and K-IDX's script-bar coordinate together (each lane re-pinned on a tree without the other); harvested once on the INT25 tree with this TU's harvest switch:
+// expectation corrected (hash and script-coordinate integration, k_aggregated, 5 of 5 values), because the integrated tree folds the corrected Pine hash inputs and script-bar coordinate together (each correction was previously pinned independently); harvested once on the hash and script-coordinate integration tree with this TU's harvest switch:
 //   7408940017323371281ull -> 16542564830293500828ull
 //   11387000028137044299ull -> 13031512803108236715ull
 //   4995545673543620333ull -> 6906214955679447270ull
 //   9893483468656556008ull -> 10543459672655655434ull
 //   4995545673543620333ull -> 6906214955679447270ull
-// expectation corrected (INT26 v19 hash re-pin, k_aggregated, 3 of 5 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+// expectation corrected (integrated source rules v19 hash correction, k_aggregated, 3 of 5 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: source hash cleanup's hash step (the Pine host's excursion model leaves the source-layer fold; a FIFO exit reserves its own entry's quantity), the current execution order correction's new transient coof_fill_forced_ fold and the post-fill margin correction's post-fill margin waypoint and cash-fee sizing's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since the pending-entry timestamp correction (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
 //   13031512803108236715ull -> 12703961494282243636ull [H-THIN]
 //   6906214955679447270ull -> 4636245846172056503ull [H-THIN]
 //   6906214955679447270ull -> 4636245846172056503ull [H-THIN]
@@ -468,11 +468,11 @@ constexpr std::uint64_t k_magnifier[] = {
 //   4636245846172056503ull -> 16843987575962729789ull
 //   4636245846172056503ull -> 16843987575962729789ull
 // expectation corrected (F0b, k_aggregated, 3 of 5 values), because K5 compares in script-bar space and retires terminal placement evidence from closed script bars; the broker-state hash folds the retained rows and their erased count/digest:
-// authority: CORE-TOP fixture authority 10-19 05:50, read core-cr150-read-l19f, values from a lab harvest of the post-hardening build (rj-20261018t220229-07a5eb)
+// Provenance: values from a lab harvest of the build after terminal placement hardening.
 //   12041604811111138262ull -> 18293691538757856047ull
 //   16843987575962729789ull -> 13524955674396934022ull
 //   16843987575962729789ull -> 13524955674396934022ull
-// expectation corrected (LAB-QUIETFIX, k_aggregated, 3 of 5 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_continuation_view.txt:
+// expectation corrected (scope-allocation hash correction, k_aggregated, 3 of 5 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, with private fixtures overlaid, using this test's harvest output:
 //   7134416626771510236ull -> 10337815993199449376ull
 //   5557820348860420849ull -> 2701115311397681784ull
 //   5557820348860420849ull -> 2701115311397681784ull
@@ -493,22 +493,22 @@ constexpr std::uint64_t k_aggregated[] = {
 //   11362706686723722160ull -> 2877250321201605922ull
 //   8515292501914737744ull -> 18112393076487589516ull
 //   8515292501914737744ull -> 18112393076487589516ull
-// expectation corrected (V19-FIX, k_aggregated_magnifier, 4 of 5 values), because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree:
+// expectation corrected (adapter hash cleanup, k_aggregated_magnifier, 4 of 5 values), because adapter hash cleanup moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and the kernel lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the corrected tree:
 //   2877250321201605922ull -> 301774797075971540ull
 //   18112393076487589516ull -> 6106527879897255797ull
 //   13595293692156698476ull -> 14842205570428090150ull
 //   18112393076487589516ull -> 6106527879897255797ull
-// expectation corrected (INT25, k_aggregated_magnifier, 5 of 5 values), because the integrated tree folds V19-FIX's Pine hash inputs and K-IDX's script-bar coordinate together (each lane re-pinned on a tree without the other); harvested once on the INT25 tree with this TU's harvest switch:
+// expectation corrected (hash and script-coordinate integration, k_aggregated_magnifier, 5 of 5 values), because the integrated tree folds the corrected Pine hash inputs and script-bar coordinate together (each correction was previously pinned independently); harvested once on the hash and script-coordinate integration tree with this TU's harvest switch:
 //   2376229218543853263ull -> 14031106247497767919ull
 //   301774797075971540ull -> 10607093485200722581ull
 //   6106527879897255797ull -> 22607172627576334ull
 //   14842205570428090150ull -> 12265832737220737843ull
 //   6106527879897255797ull -> 22607172627576334ull
-// expectation corrected (PAR-ORDERS, k_aggregated_magnifier, 3 of 5 values), because R5 lane PAR-ORDERS dates every fill of an aggregated magnified run at its chart bar's open, as TradingView does, and the lots' dated times are Pine hash inputs; harvested with this TU's harvest switch on the lane's tree (a second harvest reproduces it):
+// expectation corrected (pending-entry timestamps, k_aggregated_magnifier, 3 of 5 values), because pending-entry order handling dates every fill of an aggregated magnified run at its chart bar's open, as TradingView does, and the lots' dated times are Pine hash inputs; harvested with this TU's harvest switch on the corrected tree (a second harvest reproduces it):
 //   10607093485200722581ull -> 7363580706773703120ull
 //   22607172627576334ull -> 5380311451522306220ull
 //   22607172627576334ull -> 5380311451522306220ull
-// expectation corrected (INT26 v19 hash re-pin, k_aggregated_magnifier, 3 of 5 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+// expectation corrected (integrated source rules v19 hash correction, k_aggregated_magnifier, 3 of 5 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: source hash cleanup's hash step (the Pine host's excursion model leaves the source-layer fold; a FIFO exit reserves its own entry's quantity), the current execution order correction's new transient coof_fill_forced_ fold and the post-fill margin correction's post-fill margin waypoint and cash-fee sizing's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since the pending-entry timestamp correction (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
 //   7363580706773703120ull -> 6822321611223800121ull [H-THIN]
 //   5380311451522306220ull -> 1968062868302397607ull [H-THIN]
 //   5380311451522306220ull -> 1968062868302397607ull [H-THIN]
@@ -517,11 +517,11 @@ constexpr std::uint64_t k_aggregated[] = {
 //   1968062868302397607ull -> 980215841112202357ull
 //   1968062868302397607ull -> 980215841112202357ull
 // expectation corrected (F0b, k_aggregated_magnifier, 3 of 5 values), because K5 compares in script-bar space and retires terminal placement evidence from closed script bars; the broker-state hash folds the retained rows and their erased count/digest:
-// authority: CORE-TOP fixture authority 10-19 05:50, read core-cr150-read-l19f, values from a lab harvest of the post-hardening build (rj-20261018t220229-07a5eb)
+// Provenance: values from a lab harvest of the build after terminal placement hardening.
 //   1121975842132629243ull -> 10754984951218339308ull
 //   980215841112202357ull -> 8581611433610258972ull
 //   980215841112202357ull -> 8581611433610258972ull
-// expectation corrected (LAB-QUIETFIX, k_aggregated_magnifier, 3 of 5 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_continuation_view.txt:
+// expectation corrected (scope-allocation hash correction, k_aggregated_magnifier, 3 of 5 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, with private fixtures overlaid, using this test's harvest output:
 //   6239558560477148259ull -> 6738571395668926543ull
 //   10097937587452850175ull -> 5122643790319648354ull
 //   10097937587452850175ull -> 5122643790319648354ull
@@ -557,7 +557,7 @@ constexpr std::uint64_t k_aggregated_magnifier[] = {
 //   4634335044637977031ull -> 220118684227198753ull
 //   15964838513564229050ull -> 5365537423784642334ull
 //   15964838513564229050ull -> 5365537423784642334ull
-// expectation corrected (V19-FIX, k_coof, 10 of 10 values), because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree:
+// expectation corrected (adapter hash cleanup, k_coof, 10 of 10 values), because adapter hash cleanup moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and the kernel lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the corrected tree:
 //   8160477046829279565ull -> 10706142720152936082ull
 //   8683725853452377701ull -> 14042469651802437968ull
 //   16612330879755983674ull -> 1992762524201176782ull
@@ -568,7 +568,7 @@ constexpr std::uint64_t k_aggregated_magnifier[] = {
 //   5365537423784642334ull -> 10916717879615654635ull
 //   17202960931486753898ull -> 17916071608255404005ull
 //   5365537423784642334ull -> 10916717879615654635ull
-// expectation corrected (INT25, k_coof, 10 of 10 values), because the integrated tree folds V19-FIX's Pine hash inputs and K-IDX's script-bar coordinate together (each lane re-pinned on a tree without the other); harvested once on the INT25 tree with this TU's harvest switch:
+// expectation corrected (hash and script-coordinate integration, k_coof, 10 of 10 values), because the integrated tree folds the corrected Pine hash inputs and script-bar coordinate together (each correction was previously pinned independently); harvested once on the hash and script-coordinate integration tree with this TU's harvest switch:
 //   10706142720152936082ull -> 16820608513549156800ull
 //   14042469651802437968ull -> 9462991605602344175ull
 //   1992762524201176782ull -> 12220673217690837314ull
@@ -579,13 +579,13 @@ constexpr std::uint64_t k_aggregated_magnifier[] = {
 //   10916717879615654635ull -> 784137025905909089ull
 //   17916071608255404005ull -> 11981249830754474578ull
 //   10916717879615654635ull -> 784137025905909089ull
-// expectation corrected (INT26 v19 hash re-pin, k_coof, 5 of 10 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+// expectation corrected (integrated source rules v19 hash correction, k_coof, 5 of 10 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: source hash cleanup's hash step (the Pine host's excursion model leaves the source-layer fold; a FIFO exit reserves its own entry's quantity), the current execution order correction's new transient coof_fill_forced_ fold and the post-fill margin correction's post-fill margin waypoint and cash-fee sizing's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since the pending-entry timestamp correction (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
 //   1856715264914641232ull -> 17725898018428294595ull [H-THIN]
 //   9115044940243703863ull -> 8234685298969568092ull [PAR-ORDERS-2, H-THIN]
 //   9198850018143016781ull -> 13907186164657073030ull [H-THIN]
 //   784137025905909089ull -> 5915100548425272856ull [H-THIN]
 //   784137025905909089ull -> 5915100548425272856ull [H-THIN]
-// expectation corrected (INT28, k_coof, 7 of 10 values), because lane W3B-ENG-GRID's void rule (an exit whose entry neither exists nor rests is void: the call folds its flag, reserves nothing, holds no queue place and is withdrawn at its entry's opening); harvested with PINEFORGE_P1_HARVEST on the integrated tree (main 962960b3 and the wave-J picks) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
+// expectation corrected (integrated order and margin rules, k_coof, 7 of 10 values), because the void-exit rule applies (an exit whose entry neither exists nor rests is void: the call folds its flag, reserves nothing, holds no queue place and is withdrawn at its entry's opening); harvested with PINEFORGE_P1_HARVEST on the integrated tree (main 962960b3 and the order and margin corrections) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
 //   17725898018428294595ull -> 1326999487335470744ull [W3B void exit]
 //   12811765853164186626ull -> 240263086577443158ull [W3B void exit]
 //   8234685298969568092ull -> 17472516310728554491ull [W3B void exit]
@@ -596,7 +596,7 @@ constexpr std::uint64_t k_aggregated_magnifier[] = {
 // expectation corrected (resting-limit tick reach, k_coof, 2 of 10 values), because a calc_on_order_fills limit exit that closes the position held when it is placed, on the chart path and not yet reached where it is placed, rests at its tick-built threshold (RestingLimitTickReach, src/compat/pine/callback_lifecycle_rules.hpp): the scenario's long exit limit rests at its threshold, a live request's trigger price the continuation folds; the run's trades are unchanged in every field; harvested with PINEFORGE_P1_HARVEST against main 44eab7b1 (every old pin reproduced) and this tree:
 //   17472516310728554491ull -> 15280150896568494531ull
 //   18115634141272427811ull -> 11950837235660036444ull
-// expectation corrected (LAB-QUIETFIX, k_coof, 5 of 10 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_continuation_view.txt:
+// expectation corrected (scope-allocation hash correction, k_coof, 5 of 10 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, with private fixtures overlaid, using this test's harvest output:
 //   1795363085796019659ull -> 17249300795796536905ull
 //   668834339570044899ull -> 6349397221662990354ull
 //   17231590883610272954ull -> 13777866605331052961ull
@@ -808,7 +808,7 @@ constexpr std::uint64_t k_coof[] = {
 //   4258395109503891217ull -> 11989522059105970117ull
 //   14202785402043642137ull -> 14967623866548664000ull
 //   12763565106297155564ull -> 13208968445305919179ull
-// expectation corrected (V19-FIX, k_recording, 71 of 72 values), because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree:
+// expectation corrected (adapter hash cleanup, k_recording, 71 of 72 values), because adapter hash cleanup moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and the kernel lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the corrected tree:
 //   2543779130970217232ull -> 14621553252499744072ull
 //   13638291719838344805ull -> 16947653718640119089ull
 //   17904934979399943420ull -> 8181232920474966978ull
@@ -880,7 +880,7 @@ constexpr std::uint64_t k_coof[] = {
 //   11989522059105970117ull -> 5548300568428407565ull
 //   14967623866548664000ull -> 4191735526950747220ull
 //   13208968445305919179ull -> 4370795498617211977ull
-// expectation corrected (INT25, k_recording, 71 of 72 values), because the integrated tree folds V19-FIX's Pine hash inputs and K-IDX's script-bar coordinate together (each lane re-pinned on a tree without the other); harvested once on the INT25 tree with this TU's harvest switch:
+// expectation corrected (hash and script-coordinate integration, k_recording, 71 of 72 values), because the integrated tree folds the corrected Pine hash inputs and script-bar coordinate together (each correction was previously pinned independently); harvested once on the hash and script-coordinate integration tree with this TU's harvest switch:
 //   14621553252499744072ull -> 5575980828577033360ull
 //   16947653718640119089ull -> 16309388099732889217ull
 //   8181232920474966978ull -> 16463834114134690168ull
@@ -952,7 +952,7 @@ constexpr std::uint64_t k_coof[] = {
 //   5548300568428407565ull -> 4010960734010157804ull
 //   4191735526950747220ull -> 5172512134487820157ull
 //   4370795498617211977ull -> 2898399952537902865ull
-// expectation corrected (INT26 v19 hash re-pin, k_recording, 68 of 72 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+// expectation corrected (integrated source rules v19 hash correction, k_recording, 68 of 72 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: source hash cleanup's hash step (the Pine host's excursion model leaves the source-layer fold; a FIFO exit reserves its own entry's quantity), the current execution order correction's new transient coof_fill_forced_ fold and the post-fill margin correction's post-fill margin waypoint and cash-fee sizing's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since the pending-entry timestamp correction (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
 //   16309388099732889217ull -> 13909724611150684752ull [H-THIN]
 //   14697449118452563264ull -> 6058006111773907271ull [H-THIN]
 //   2898399952537902865ull -> 13929697350787785222ull [H-THIN]
@@ -1021,7 +1021,7 @@ constexpr std::uint64_t k_coof[] = {
 //   4010960734010157804ull -> 5576052922734185379ull [H-THIN]
 //   5172512134487820157ull -> 1575805364117614574ull [H-THIN]
 //   2898399952537902865ull -> 13929697350787785222ull [H-THIN]
-// expectation corrected (INT28, k_recording, 60 of 72 values), because lane W3B-ENG-GRID's void rule (an exit whose entry neither exists nor rests is void: the call folds its flag, reserves nothing, holds no queue place and is withdrawn at its entry's opening); harvested with PINEFORGE_P1_HARVEST on the integrated tree (main 962960b3 and the wave-J picks) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
+// expectation corrected (integrated order and margin rules, k_recording, 60 of 72 values), because the void-exit rule applies (an exit whose entry neither exists nor rests is void: the call folds its flag, reserves nothing, holds no queue place and is withdrawn at its entry's opening); harvested with PINEFORGE_P1_HARVEST on the integrated tree (main 962960b3 and the order and margin corrections) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
 //   13909724611150684752ull -> 11553201082349619899ull [W3B void exit]
 //   16463834114134690168ull -> 14057090632594196994ull [W3B void exit]
 //   6058006111773907271ull -> 6651409999010522456ull [W3B void exit]
@@ -1082,7 +1082,7 @@ constexpr std::uint64_t k_coof[] = {
 //   5576052922734185379ull -> 12502523624038255591ull [W3B void exit]
 //   1575805364117614574ull -> 5490423642303156793ull [W3B void exit]
 //   13929697350787785222ull -> 16409846652215781920ull [W3B void exit]
-// expectation corrected (LAB-QUIETFIX, k_recording, 68 of 72 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_continuation_view.txt:
+// expectation corrected (scope-allocation hash correction, k_recording, 68 of 72 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, with private fixtures overlaid, using this test's harvest output:
 //   3988593274317881674ull -> 13530676769210440900ull
 //   8204133196247732229ull -> 1294611621110800251ull
 //   10952641480126439025ull -> 3382485606652193703ull
@@ -1375,7 +1375,7 @@ constexpr std::uint64_t k_recording[] = {
 //   14751690121258578908ull -> 10443374725851587239ull
 //   14751690121258578908ull -> 10443374725851587239ull
 //   14751690121258578908ull -> 10443374725851587239ull
-// expectation corrected (V19-FIX, k_stream, 54 of 54 values), because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree:
+// expectation corrected (adapter hash cleanup, k_stream, 54 of 54 values), because adapter hash cleanup moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and the kernel lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the corrected tree:
 //   7287402210134811723ull -> 16510252855932086823ull
 //   6258262929575333087ull -> 14048324983519873828ull
 //   3613812001802944490ull -> 17804079663198632649ull
@@ -1430,7 +1430,7 @@ constexpr std::uint64_t k_recording[] = {
 //   10443374725851587239ull -> 8444087394523764362ull
 //   11033218740417797382ull -> 14079671624423886806ull
 //   10443374725851587239ull -> 8444087394523764362ull
-// expectation corrected (INT25, k_stream, 54 of 54 values), because the integrated tree folds V19-FIX's Pine hash inputs and K-IDX's script-bar coordinate together (each lane re-pinned on a tree without the other); harvested once on the INT25 tree with this TU's harvest switch:
+// expectation corrected (hash and script-coordinate integration, k_stream, 54 of 54 values), because the integrated tree folds the corrected Pine hash inputs and script-bar coordinate together (each correction was previously pinned independently); harvested once on the hash and script-coordinate integration tree with this TU's harvest switch:
 //   16510252855932086823ull -> 16458853630937199693ull
 //   14048324983519873828ull -> 10534014544629119321ull
 //   17804079663198632649ull -> 15852567477617018112ull
@@ -1485,7 +1485,7 @@ constexpr std::uint64_t k_recording[] = {
 //   8444087394523764362ull -> 971242319250035563ull
 //   14079671624423886806ull -> 6931684686417541656ull
 //   8444087394523764362ull -> 971242319250035563ull
-// expectation corrected (INT26 v19 hash re-pin, k_stream, 39 of 54 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+// expectation corrected (integrated source rules v19 hash correction, k_stream, 39 of 54 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: source hash cleanup's hash step (the Pine host's excursion model leaves the source-layer fold; a FIFO exit reserves its own entry's quantity), the current execution order correction's new transient coof_fill_forced_ fold and the post-fill margin correction's post-fill margin waypoint and cash-fee sizing's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since the pending-entry timestamp correction (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
 //   16458853630937199693ull -> 6675987432147888000ull [H-THIN]
 //   15852567477617018112ull -> 15316836834528354089ull [H-THIN]
 //   8395254103899656747ull -> 122347678355491576ull [H-THIN]
@@ -1525,7 +1525,7 @@ constexpr std::uint64_t k_recording[] = {
 //   971242319250035563ull -> 6512545530849110454ull [H-THIN]
 //   971242319250035563ull -> 6512545530849110454ull [H-THIN]
 //   971242319250035563ull -> 6512545530849110454ull [H-THIN]
-// expectation corrected (INT28, k_stream, 54 of 54 values), because lane W3B-ENG-GRID's void rule (an exit whose entry neither exists nor rests is void: the call folds its flag, reserves nothing, holds no queue place and is withdrawn at its entry's opening); harvested with PINEFORGE_P1_HARVEST on the integrated tree (main 962960b3 and the wave-J picks) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
+// expectation corrected (integrated order and margin rules, k_stream, 54 of 54 values), because the void-exit rule applies (an exit whose entry neither exists nor rests is void: the call folds its flag, reserves nothing, holds no queue place and is withdrawn at its entry's opening); harvested with PINEFORGE_P1_HARVEST on the integrated tree (main 962960b3 and the order and margin corrections) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
 //   6675987432147888000ull -> 15231599106958763369ull [W3B void exit]
 //   10534014544629119321ull -> 13039419243949199190ull [W3B void exit]
 //   15316836834528354089ull -> 11830571113911255458ull [W3B void exit]
@@ -1617,7 +1617,7 @@ constexpr std::uint64_t k_recording[] = {
 //   [49] 10400255747134785074ull -> 16147691293902360278ull
 //   [51] 10400255747134785074ull -> 16147691293902360278ull
 //   [53] 10400255747134785074ull -> 16147691293902360278ull
-// expectation corrected (LAB-QUIETFIX, k_stream, 39 of 54 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_continuation_view.txt:
+// expectation corrected (scope-allocation hash correction, k_stream, 39 of 54 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, with private fixtures overlaid, using this test's harvest output:
 //   6048433411197787977ull -> 5574783730642711309ull
 //   8359135180042823588ull -> 9018326482734827424ull
 //   638078513021885734ull -> 7003825855642324522ull
@@ -1811,7 +1811,7 @@ constexpr std::uint64_t k_stream[] = {
 //   1739880003141880127ull -> 13980272045865766065ull
 //   2467030153255185580ull -> 7431106375660941195ull
 //   2467030153255185580ull -> 7431106375660941195ull
-// expectation corrected (V19-FIX, k_stream_aborted, 35 of 35 values), because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree:
+// expectation corrected (adapter hash cleanup, k_stream_aborted, 35 of 35 values), because adapter hash cleanup moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and the kernel lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the corrected tree:
 //   7287402210134811723ull -> 16510252855932086823ull
 //   6258262929575333087ull -> 14048324983519873828ull
 //   3613812001802944490ull -> 17804079663198632649ull
@@ -1847,7 +1847,7 @@ constexpr std::uint64_t k_stream[] = {
 //   7431106375660941195ull -> 12788838416146221578ull
 //   13404512392582016370ull -> 6600350751158217016ull
 //   7431106375660941195ull -> 12788838416146221578ull
-// expectation corrected (INT25, k_stream_aborted, 35 of 35 values), because the integrated tree folds V19-FIX's Pine hash inputs and K-IDX's script-bar coordinate together (each lane re-pinned on a tree without the other); harvested once on the INT25 tree with this TU's harvest switch:
+// expectation corrected (hash and script-coordinate integration, k_stream_aborted, 35 of 35 values), because the integrated tree folds the corrected Pine hash inputs and script-bar coordinate together (each correction was previously pinned independently); harvested once on the hash and script-coordinate integration tree with this TU's harvest switch:
 //   16510252855932086823ull -> 16458853630937199693ull
 //   14048324983519873828ull -> 10534014544629119321ull
 //   17804079663198632649ull -> 15852567477617018112ull
@@ -1883,7 +1883,7 @@ constexpr std::uint64_t k_stream[] = {
 //   12788838416146221578ull -> 4930499034900633496ull
 //   6600350751158217016ull -> 6596242839819495123ull
 //   12788838416146221578ull -> 4930499034900633496ull
-// expectation corrected (INT26 v19 hash re-pin, k_stream_aborted, 25 of 35 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+// expectation corrected (integrated source rules v19 hash correction, k_stream_aborted, 25 of 35 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: source hash cleanup's hash step (the Pine host's excursion model leaves the source-layer fold; a FIFO exit reserves its own entry's quantity), the current execution order correction's new transient coof_fill_forced_ fold and the post-fill margin correction's post-fill margin waypoint and cash-fee sizing's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since the pending-entry timestamp correction (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
 //   16458853630937199693ull -> 6675987432147888000ull [H-THIN]
 //   15852567477617018112ull -> 15316836834528354089ull [H-THIN]
 //   8395254103899656747ull -> 122347678355491576ull [H-THIN]
@@ -1909,7 +1909,7 @@ constexpr std::uint64_t k_stream[] = {
 //   15796138674937755121ull -> 5707160760001918266ull [H-THIN]
 //   4930499034900633496ull -> 17256519628932910437ull [H-THIN]
 //   4930499034900633496ull -> 17256519628932910437ull [H-THIN]
-// expectation corrected (INT28, k_stream_aborted, 35 of 35 values), because lane W3B-ENG-GRID's void rule (an exit whose entry neither exists nor rests is void: the call folds its flag, reserves nothing, holds no queue place and is withdrawn at its entry's opening); harvested with PINEFORGE_P1_HARVEST on the integrated tree (main 962960b3 and the wave-J picks) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
+// expectation corrected (integrated order and margin rules, k_stream_aborted, 35 of 35 values), because the void-exit rule applies (an exit whose entry neither exists nor rests is void: the call folds its flag, reserves nothing, holds no queue place and is withdrawn at its entry's opening); harvested with PINEFORGE_P1_HARVEST on the integrated tree (main 962960b3 and the order and margin corrections) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
 //   6675987432147888000ull -> 15231599106958763369ull [W3B void exit]
 //   10534014544629119321ull -> 13039419243949199190ull [W3B void exit]
 //   15316836834528354089ull -> 11830571113911255458ull [W3B void exit]
@@ -1968,7 +1968,7 @@ constexpr std::uint64_t k_stream[] = {
 //   [31] 5272587354990813877ull -> 6897809726362065146ull
 //   [32] 18272465346582742508ull -> 12632903257595494931ull
 //   [34] 18272465346582742508ull -> 12632903257595494931ull
-// expectation corrected (LAB-QUIETFIX, k_stream_aborted, 25 of 35 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_continuation_view.txt:
+// expectation corrected (scope-allocation hash correction, k_stream_aborted, 25 of 35 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, with private fixtures overlaid, using this test's harvest output:
 //   6048433411197787977ull -> 5574783730642711309ull
 //   8359135180042823588ull -> 9018326482734827424ull
 //   638078513021885734ull -> 7003825855642324522ull
@@ -2048,31 +2048,31 @@ constexpr std::uint64_t k_stream_aborted[] = {
 //   18435485463499933528ull -> 2482407147974245352ull
 //   16410967088932597466ull -> 7856356957291164459ull
 //   16410967088932597466ull -> 7856356957291164459ull
-// expectation corrected (V19-FIX, k_aborted, 6 of 6 values), because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree:
+// expectation corrected (adapter hash cleanup, k_aborted, 6 of 6 values), because adapter hash cleanup moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and the kernel lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the corrected tree:
 //   2543779130970217232ull -> 14621553252499744072ull
 //   2482407147974245352ull -> 1560069015253079270ull
 //   17904934979399943420ull -> 8181232920474966978ull
 //   7856356957291164459ull -> 12415576349368044635ull
 //   4177885075058309128ull -> 14564863596030526264ull
 //   7856356957291164459ull -> 12415576349368044635ull
-// expectation corrected (INT25, k_aborted, 6 of 6 values), because the integrated tree folds V19-FIX's Pine hash inputs and K-IDX's script-bar coordinate together (each lane re-pinned on a tree without the other); harvested once on the INT25 tree with this TU's harvest switch:
+// expectation corrected (hash and script-coordinate integration, k_aborted, 6 of 6 values), because the integrated tree folds the corrected Pine hash inputs and script-bar coordinate together (each correction was previously pinned independently); harvested once on the hash and script-coordinate integration tree with this TU's harvest switch:
 //   14621553252499744072ull -> 5575980828577033360ull
 //   1560069015253079270ull -> 17778912298194596574ull
 //   8181232920474966978ull -> 16463834114134690168ull
 //   12415576349368044635ull -> 12754404695042992156ull
 //   14564863596030526264ull -> 8825354032181240290ull
 //   12415576349368044635ull -> 12754404695042992156ull
-// expectation corrected (INT26 v19 hash re-pin, k_aborted, 3 of 6 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+// expectation corrected (integrated source rules v19 hash correction, k_aborted, 3 of 6 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: source hash cleanup's hash step (the Pine host's excursion model leaves the source-layer fold; a FIFO exit reserves its own entry's quantity), the current execution order correction's new transient coof_fill_forced_ fold and the post-fill margin correction's post-fill margin waypoint and cash-fee sizing's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since the pending-entry timestamp correction (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
 //   17778912298194596574ull -> 2540222023230692795ull [H-THIN]
 //   12754404695042992156ull -> 8965275888317139301ull [H-THIN]
 //   12754404695042992156ull -> 8965275888317139301ull [H-THIN]
-// expectation corrected (INT28, k_aborted, 5 of 6 values), because lane W3B-ENG-GRID's void rule (an exit whose entry neither exists nor rests is void: the call folds its flag, reserves nothing, holds no queue place and is withdrawn at its entry's opening); harvested with PINEFORGE_P1_HARVEST on the integrated tree (main 962960b3 and the wave-J picks) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
+// expectation corrected (integrated order and margin rules, k_aborted, 5 of 6 values), because the void-exit rule applies (an exit whose entry neither exists nor rests is void: the call folds its flag, reserves nothing, holds no queue place and is withdrawn at its entry's opening); harvested with PINEFORGE_P1_HARVEST on the integrated tree (main 962960b3 and the order and margin corrections) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
 //   2540222023230692795ull -> 13298479936274484395ull [W3B void exit]
 //   16463834114134690168ull -> 14057090632594196994ull [W3B void exit]
 //   8965275888317139301ull -> 15467877564368653149ull [W3B void exit]
 //   8825354032181240290ull -> 8290435306024084815ull [W3B void exit]
 //   8965275888317139301ull -> 15467877564368653149ull [W3B void exit]
-// expectation corrected (LAB-QUIETFIX, k_aborted, 3 of 6 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_continuation_view.txt:
+// expectation corrected (scope-allocation hash correction, k_aborted, 3 of 6 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, with private fixtures overlaid, using this test's harvest output:
 //   2745704450706323418ull -> 18182466203520105876ull
 //   4444576774011532442ull -> 10017004384466485666ull
 //   4444576774011532442ull -> 10017004384466485666ull
@@ -2124,7 +2124,7 @@ constexpr std::uint64_t k_aborted[] = {
 //   5493020030945000624ull -> 4221562876897277718ull
 //   11175928055869418645ull -> 17064616757066975641ull
 //   11175928055869418645ull -> 17064616757066975641ull
-// expectation corrected (V19-FIX, k_reused, 15 of 15 values), because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree:
+// expectation corrected (adapter hash cleanup, k_reused, 15 of 15 values), because adapter hash cleanup moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and the kernel lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the corrected tree:
 //   2543779130970217232ull -> 14621553252499744072ull
 //   2482407147974245352ull -> 1560069015253079270ull
 //   17904934979399943420ull -> 8181232920474966978ull
@@ -2140,7 +2140,7 @@ constexpr std::uint64_t k_aborted[] = {
 //   17064616757066975641ull -> 3498362567022607364ull
 //   15316717102556938983ull -> 9810780513184341561ull
 //   17064616757066975641ull -> 3498362567022607364ull
-// expectation corrected (INT25, k_reused, 15 of 15 values), because the integrated tree folds V19-FIX's Pine hash inputs and K-IDX's script-bar coordinate together (each lane re-pinned on a tree without the other); harvested once on the INT25 tree with this TU's harvest switch:
+// expectation corrected (hash and script-coordinate integration, k_reused, 15 of 15 values), because the integrated tree folds the corrected Pine hash inputs and script-bar coordinate together (each correction was previously pinned independently); harvested once on the hash and script-coordinate integration tree with this TU's harvest switch:
 //   14621553252499744072ull -> 5575980828577033360ull
 //   1560069015253079270ull -> 17778912298194596574ull
 //   8181232920474966978ull -> 16463834114134690168ull
@@ -2156,7 +2156,7 @@ constexpr std::uint64_t k_aborted[] = {
 //   3498362567022607364ull -> 4620349392656757831ull
 //   9810780513184341561ull -> 7040750059417794475ull
 //   3498362567022607364ull -> 4620349392656757831ull
-// expectation corrected (INT26 v19 hash re-pin, k_reused, 9 of 15 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+// expectation corrected (integrated source rules v19 hash correction, k_reused, 9 of 15 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: source hash cleanup's hash step (the Pine host's excursion model leaves the source-layer fold; a FIFO exit reserves its own entry's quantity), the current execution order correction's new transient coof_fill_forced_ fold and the post-fill margin correction's post-fill margin waypoint and cash-fee sizing's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since the pending-entry timestamp correction (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
 //   17778912298194596574ull -> 2540222023230692795ull [H-THIN]
 //   8941018855024971093ull -> 7277266162097189602ull [H-THIN]
 //   17778912298194596574ull -> 2540222023230692795ull [H-THIN]
@@ -2166,7 +2166,7 @@ constexpr std::uint64_t k_aborted[] = {
 //   4063572268643314481ull -> 3045160088509885646ull [H-THIN]
 //   4620349392656757831ull -> 9863308761378043570ull [H-THIN]
 //   4620349392656757831ull -> 9863308761378043570ull [H-THIN]
-// expectation corrected (INT28, k_reused, 13 of 15 values), because lane W3B-ENG-GRID's void rule (an exit whose entry neither exists nor rests is void: the call folds its flag, reserves nothing, holds no queue place and is withdrawn at its entry's opening); harvested with PINEFORGE_P1_HARVEST on the integrated tree (main 962960b3 and the wave-J picks) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
+// expectation corrected (integrated order and margin rules, k_reused, 13 of 15 values), because the void-exit rule applies (an exit whose entry neither exists nor rests is void: the call folds its flag, reserves nothing, holds no queue place and is withdrawn at its entry's opening); harvested with PINEFORGE_P1_HARVEST on the integrated tree (main 962960b3 and the order and margin corrections) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
 //   2540222023230692795ull -> 13298479936274484395ull [W3B void exit]
 //   16463834114134690168ull -> 14057090632594196994ull [W3B void exit]
 //   7277266162097189602ull -> 14688281789591022039ull [W3B void exit]
@@ -2186,7 +2186,7 @@ constexpr std::uint64_t k_aborted[] = {
 //   [11] 3133379660965460499ull -> 18398959962163102051ull
 //   [12] 16277941155900115129ull -> 4792740626223167282ull
 //   [14] 16277941155900115129ull -> 4792740626223167282ull
-// expectation corrected (LAB-QUIETFIX, k_reused, 9 of 15 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_continuation_view.txt:
+// expectation corrected (scope-allocation hash correction, k_reused, 9 of 15 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, with private fixtures overlaid, using this test's harvest output:
 //   2745704450706323418ull -> 18182466203520105876ull
 //   16282097370453327154ull -> 3199363816222489316ull
 //   2745704450706323418ull -> 18182466203520105876ull
@@ -2243,7 +2243,7 @@ constexpr std::uint64_t k_reused[] = {
 //   14580145596766604804ull -> 7253611708149050520ull
 //   12763565106297155564ull -> 13208968445305919179ull
 //   12763565106297155564ull -> 13208968445305919179ull
-// expectation corrected (V19-FIX, k_refused, 11 of 11 values), because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree:
+// expectation corrected (adapter hash cleanup, k_refused, 11 of 11 values), because adapter hash cleanup moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and the kernel lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the corrected tree:
 //   10324478866479362969ull -> 10361542891827113526ull
 //   13208968445305919179ull -> 4370795498617211977ull
 //   10324478866479362969ull -> 10361542891827113526ull
@@ -2255,7 +2255,7 @@ constexpr std::uint64_t k_reused[] = {
 //   13208968445305919179ull -> 4370795498617211977ull
 //   10324478866479362969ull -> 10361542891827113526ull
 //   13208968445305919179ull -> 4370795498617211977ull
-// expectation corrected (INT25, k_refused, 11 of 11 values), because the integrated tree folds V19-FIX's Pine hash inputs and K-IDX's script-bar coordinate together (each lane re-pinned on a tree without the other); harvested once on the INT25 tree with this TU's harvest switch:
+// expectation corrected (hash and script-coordinate integration, k_refused, 11 of 11 values), because the integrated tree folds the corrected Pine hash inputs and script-bar coordinate together (each correction was previously pinned independently); harvested once on the hash and script-coordinate integration tree with this TU's harvest switch:
 //   10361542891827113526ull -> 8964175343669296125ull
 //   4370795498617211977ull -> 2898399952537902865ull
 //   10361542891827113526ull -> 8964175343669296125ull
@@ -2267,14 +2267,14 @@ constexpr std::uint64_t k_reused[] = {
 //   4370795498617211977ull -> 2898399952537902865ull
 //   10361542891827113526ull -> 8964175343669296125ull
 //   4370795498617211977ull -> 2898399952537902865ull
-// expectation corrected (INT26 v19 hash re-pin, k_refused, 6 of 11 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
+// expectation corrected (integrated source rules v19 hash correction, k_refused, 6 of 11 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: source hash cleanup's hash step (the Pine host's excursion model leaves the source-layer fold; a FIFO exit reserves its own entry's quantity), the current execution order correction's new transient coof_fill_forced_ fold and the post-fill margin correction's post-fill margin waypoint and cash-fee sizing's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since the pending-entry timestamp correction (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary:
 //   2898399952537902865ull -> 13929697350787785222ull [H-THIN]
 //   2898399952537902865ull -> 13929697350787785222ull [H-THIN]
 //   17778912298194596574ull -> 2540222023230692795ull [H-THIN]
 //   8941018855024971093ull -> 7277266162097189602ull [H-THIN]
 //   2898399952537902865ull -> 13929697350787785222ull [H-THIN]
 //   2898399952537902865ull -> 13929697350787785222ull [H-THIN]
-// expectation corrected (INT28, k_refused, 10 of 11 values), because lane W3B-ENG-GRID's void rule (an exit whose entry neither exists nor rests is void: the call folds its flag, reserves nothing, holds no queue place and is withdrawn at its entry's opening); harvested with PINEFORGE_P1_HARVEST on the integrated tree (main 962960b3 and the wave-J picks) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
+// expectation corrected (integrated order and margin rules, k_refused, 10 of 11 values), because the void-exit rule applies (an exit whose entry neither exists nor rests is void: the call folds its flag, reserves nothing, holds no queue place and is withdrawn at its entry's opening); harvested with PINEFORGE_P1_HARVEST on the integrated tree (main 962960b3 and the order and margin corrections) and at every pick boundary, the same harvest against main reproducing every old value; an instrumented copy of the adapter (scratch only) shows the rule firing in the scenario on the final tree:
 //   8964175343669296125ull -> 13147035262705757206ull [W3B void exit]
 //   13929697350787785222ull -> 16409846652215781920ull [W3B void exit]
 //   8964175343669296125ull -> 13147035262705757206ull [W3B void exit]
@@ -2285,7 +2285,7 @@ constexpr std::uint64_t k_reused[] = {
 //   13929697350787785222ull -> 16409846652215781920ull [W3B void exit]
 //   8964175343669296125ull -> 13147035262705757206ull [W3B void exit]
 //   13929697350787785222ull -> 16409846652215781920ull [W3B void exit]
-// expectation corrected (LAB-QUIETFIX, k_refused, 6 of 11 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_continuation_view.txt:
+// expectation corrected (scope-allocation hash correction, k_refused, 6 of 11 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P1_HARVEST mode on 2cf32840b8, with private fixtures overlaid, using this test's harvest output:
 //   10952641480126439025ull -> 3382485606652193703ull
 //   10952641480126439025ull -> 3382485606652193703ull
 //   2745704450706323418ull -> 18182466203520105876ull

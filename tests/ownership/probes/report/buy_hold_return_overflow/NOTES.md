@@ -1,4 +1,4 @@
-# TNX-CX c18_3: buy_hold_return overflow
+# Buy-and-hold return overflow
 
 Pinned before the producer edits from selected-window wire v1.3 revision 3,
 Appendix A lines 74, 83 and 93: a computed equity metric must be finite or

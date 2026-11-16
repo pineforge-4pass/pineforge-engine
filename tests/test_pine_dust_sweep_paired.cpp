@@ -23,7 +23,7 @@
 // 1.0 lot; the Pine host sweeps it and books TradingView's twelve rows, the
 // bare host keeps it and books it as a row of its own at the flatten.
 //
-// Sections 1 and 2 are the AUDIT4 probes probe_dust / probe_dust3 (a sell of
+// Sections 1 and 2 are the fractional-close probes probe_dust / probe_dust3 (a sell of
 // 2 - 1e-11 against two and three 1-unit lots), pinned on both hosts.
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
@@ -102,7 +102,7 @@ NativeRunSpec bare_spec(const std::string& key, const char* tf) {
     return spec;
 }
 
-// ── 1 and 2: the AUDIT4 shapes ─────────────────────────────────────────────
+// ── 1 and 2: fractional-close shapes ───────────────────────────────────────
 
 // `lots` 1-unit entries on bars 0..lots-1, then a sell of 2 - 1e-11.
 class PineDust final : public source::PineStrategyHost {
@@ -138,7 +138,7 @@ private:
 };
 
 void test_audit_shapes() {
-    std::printf("1-2. AUDIT4 probe_dust (2 lots) and probe_dust3 (3 lots): sell 2 - 1e-11\n");
+    std::printf("1-2. Fractional-close probe_dust (2 lots) and probe_dust3 (3 lots): sell 2 - 1e-11\n");
     for (int lots : {2, 3}) {
         const auto bars = synthetic(lots + 4);
         PineDust pine(lots);

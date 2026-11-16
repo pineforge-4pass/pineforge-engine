@@ -56,9 +56,9 @@ class Fixture final : public pineforge::NativeStrategyHost {
 public:
     Fixture(int field, double value) : field_(field), value_(value) {
         pineforge::NativeRunSpec spec;
-        spec.identity = {"CR-289-cpp-fd", 1};
+        spec.identity = {"nonfinite-equity-cpp-fd", 1};
         spec.input_tf = spec.script_tf = "1";
-        spec.tickerid = "TEST:CR289";
+        spec.tickerid = "TEST:EQUITY";
         spec.timezone = "UTC";
         spec.session = "24x7";
         spec.initial_capital = 10000.0;
@@ -97,9 +97,9 @@ void fd_run(int field, double value, bool refuses) {
     auto host_owner = std::make_unique<Fixture>(field, value);
     auto& host = *host_owner;
     const pf_report_sink_v1 replaced{sizeof replaced, 1,
-        "CR-289-replaced-cpp-sink-must-not-open.ndjson", "CR-289", nullptr};
+        "replaced-equity-cpp-sink-must-not-open.ndjson", "nonfinite-equity", nullptr};
     require(strategy_set_report_sink_v1(host.handle(), &replaced) == 0, "path setup refused");
-    const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.descriptors[1], "CR-289"};
+    const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.descriptors[1], "nonfinite-equity"};
     fd_flag_diagnostics::Trace fd_trace(pipe.descriptors[1], "before sink installation");
     require(strategy_set_report_sink_fd_v1(host.handle(), &sink) == 0, "fd replacement refused");
     fd_trace.record("after sink installation");

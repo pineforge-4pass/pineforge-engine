@@ -13,7 +13,7 @@
 // the printed wo: omit EXTFOLD, HROW and FINALHASH inputs, keeping other bytes.
 // The full digest's input order is unchanged; dump state exists only in dump mode.
 //
-// R5 lane D2-D: the host's per-bar source publication moves no value.
+// Source publication caching: the host's per-bar source publication moves no value.
 //
 // PineStrategyHost::scheduler_publish_source_bar now asks two questions
 // before two calls it made on every bar (src/source/pine_strategy_host.cpp):
@@ -57,7 +57,7 @@
 // statement of its own. Provenance: this TU compiled unchanged against the
 // 6c081f5d library with -DPINEFORGE_D2D_PUBLICATION_HARVEST; the harvest is
 // byte-identical with AppleClang on arm64 and GCC 13 on aarch64. Rebuild the
-// table that way; never edit a row by hand. Re-harvested once on the INT23
+// table that way; never edit a row by hand. Re-harvested once on the runtime context and cached-view integration
 // tree, which carries lane V19-D: its steps 6 and 7 change what the source
 // layer's fold (pineforge-source-adapter/v4) folds -- a bracket family's
 // erased members park behind a retained one, and K1 releases a leg the
@@ -65,7 +65,7 @@
 // digest. The same TU harvests the same table against V19-D's own library,
 // and its digest without the three hash inputs (that fold, the recorded
 // broker-state hash rows, the final hash) is the 6c081f5d harvest's in all
-// 156 runs, as are every count. Re-harvested once more for R5 lane K-ULP3:
+// 156 runs, as are every count. Re-harvested once more for whole-lot close:
 // three runs (ConfigFlags103, Storm18, Storm18M) close a pyramided book by
 // exactly its own sum, whose last lot the kernel now closes whole, so their
 // closing rows book one ulp more -- the lot's full size instead of the rest
@@ -73,22 +73,22 @@
 // the adapter's day ledger that sums it, the recorded broker-state hash rows
 // and the final hash move with them. Every count and the other 153 runs keep
 // their digest, and the rule fires in exactly those three runs (its census).
-// Re-harvested once more for R5 lane V19-FIX's hash step: the source layer's
+// Re-harvested once more for adapter hash cleanup's hash step: the source layer's
 // fold (pineforge-source-adapter/v4) no longer folds the dead
 // PineExecutionAdapter::path_order_, a script cancel retires every leg of
 // each exit it withdraws and K1 lets a withdrawn leg go, so all 156 runs pin
 // a new digest. Every count is unchanged, and this TU with the three hash
 // inputs taken out (the host-extension fold, the recorded broker-state hash
 // rows, the final hash) prints the same table against main 91d65ad6 and the
-// lane's library, byte for byte. Re-harvested once more for R5 lane
-// PAR-ORDERS (21 runs): a pending entry's trailing exit is no longer placed
+// corrected library, byte for byte. Re-harvested once more for the
+// pending-entry order correction (21 runs): a pending entry's trailing exit is no longer placed
 // as an anchored kernel child (17 runs: the host-extension fold, the recorded
 // broker-state hash rows and the final hash), and a process_orders_on_close
 // add stays under the pyramiding cap when the pending opposite entry is not
 // in the close pass (4 runs). With the three hash inputs taken out, this TU
-// prints INT25's table byte for byte but for Storm11 and Storm11M, whose
+// prints hash and script-coordinate integration's table byte for byte but for Storm11 and Storm11M, whose
 // trades the cap moves.
-// Re-harvested once more for R5 lane PAR-MARGIN-2 (its v19 re-pin): one run,
+// Re-harvested once more for post-fill margin checks (its v19 re-pin): one run,
 // Config03, opens a short with a sell limit filled at 111.25 on its way up a
 // low-first bar (O110.5 L109.5 H112.5 C112.25), and the kernel's post-fill
 // margin point now measures that bar's high -- the waypoint the fill was
@@ -96,11 +96,11 @@
 // books its margin call on the fill bar at the high, 4 @112.5, where it booked
 // 2 @112.25 there and 6 @114.75 a bar later, so it closes 48 trades instead of
 // 50 and its digest moves (461a919ebdcd41e9 -> 4593ef08ab33e045 on the lane's
-// tree; INT26 moves it on the integrated tree in its v19 hash re-pin); TradingView
+// tree; the integrated source rules move it on the integrated tree in the v19 hash correction); TradingView
 // books a short limit's call at its fill bar's high
 // (tests/fixtures/margin_entry_bar/pm2-m7-slim-*, pm2-m7-s1lim-*). The other 155
 // runs keep their digest and every count.
-// Re-harvested once more for R5 lane PAR-CASHFEE's hash step: a
+// Re-harvested once more for cash-fee sizing's hash step: a
 // percent-of-equity default quantity under a cash commission takes its
 // percentage of strategy.equity, the open entries' cash fees charged, and
 // leaves out the fee its own order pays (tests/fixtures/cash_fee_sizing), and
@@ -112,9 +112,9 @@
 // trades (Config03 50 -> 48, Config03M 48 -> 44, ConfigFlags103 65 -> 63,
 // ConfigFlags103M 66 -> 65, ConfigFlags104 and ConfigFlags104M 12 -> 13). The
 // same harvest against the base 09f0bbda reproduces every old row. (The
-// counts are the lane's tree's; INT26 pins the integrated tree's trades with
+// counts are from the separately corrected tree; the source integration pins its trades with
 // this pick and moves the digests in its v19 hash re-pin.)
-// Re-harvested once more for INT28, on the integrated tree (main 962960b3 and
+// Re-harvested once more for integrated order and margin rules, on the integrated tree (main 962960b3 and
 // the wave-J picks): 142 runs pin a new digest, each marked with the pick(s)
 // at whose boundary it moved (a harvest at every pick) and checked against an
 // instrumented copy of the adapter that shows each pick's rule firing in the
@@ -879,12 +879,12 @@ struct Pinned {
 
 #if defined(PINEFORGE_D2D_PUBLICATION_HARVEST) || defined(PINEFORGE_D2D_PUBLICATION_DUMP)
 void harvest() {
-    std::printf("// R5 lane D2-D: the values tests/test_publication_witness.cpp pins, one\n"
+    std::printf("// Source publication: the values tests/test_publication_witness.cpp pins, one\n"
                 "// row per run of its battery (name, digest, source folds, closed trades,\n"
                 "// recorded broker-state hash rows).\n"
-                "// Harvested on 6c081f5d, re-harvested once for V19-D's v4 fold (INT23),\n"
-                "// once for K-ULP3's whole-lot close, once for V19-FIX's hash step and once\n"
-                "// for PAR-MARGIN-2's post-fill margin path: see the provenance note in the\n"
+                "// Harvested on 6c081f5d, re-harvested once for the cached-view v4 fold,\n"
+                "// once for the whole-lot close, once for adapter hash cleanup and once\n"
+                "// for the post-fill margin path: see the provenance note in the\n"
                 "// test.\n"
                 "// Generated -- never edit a row by hand.\n");
     std::printf("constexpr Pinned kPinned[] = {\n");

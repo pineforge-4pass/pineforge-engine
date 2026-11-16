@@ -1,7 +1,7 @@
 {
   "schema": "pineforge-arena-bound-vectors/v1",
   "arithmetic": "unsigned 64-bit checked integers; TypeScript BigInt; JSON integers decoded losslessly",
-  "provenance": "All eight vectors are hand-derived, not harvested from execution. The current non-command inventory includes 136*Q + 2088*max(Q-1,0) + 2096*savedPath and stock-source external openings zero. CR150-CX retains Bcert=chunkCeil(B)+14*C, then reserves three command shares: b=Bcert/C, q=max(1,floor((b-3)/13)), arenaBytes=(b+3*q)*C, C=1048576, f=1/16. See docs/design/arena-bound.md for every vector's arithmetic. Unbounded arena output is unchanged, including its legacy derivation metadata. Only arena, ohlcv and finalizerStream affect the top-level verdict; childPrivate is informational.",
+  "provenance": "All eight vectors are hand-derived, not harvested from execution. The current non-command inventory includes 136*Q + 2088*max(Q-1,0) + 2096*savedPath and stock-source external openings zero. The arena bound retains Bcert=chunkCeil(B)+14*C, then reserves three command shares: b=Bcert/C, q=max(1,floor((b-3)/13)), arenaBytes=(b+3*q)*C, C=1048576, f=1/16. See docs/design/arena-bound.md for every vector's arithmetic. Unbounded arena output is unchanged, including its legacy derivation metadata. Only arena, ohlcv and finalizerStream affect the top-level verdict; childPrivate is informational.",
   "vectors": [
     {
       "name": "empty-run-common-empty-id",

@@ -4,7 +4,7 @@
 Run this before the complete ci_verify.py profiles. Both local use and GitHub
 Actions require actionlint 1.7.12; missing tools and failed checks fail closed.
 
-The documentation guards ``doc-anchors`` and ``doc-lint`` (R5 lane L14-A) are
+The documentation guards ``doc-anchors`` and ``doc-lint`` are
 ordinary fail-closed stages. They ran ADVISORY for exactly as long as their
 offenders existed - the stale ``file:line`` anchors and the stale prose the two
 page-rewriting lanes L14-B and L14-C were written to remove - and the
@@ -6005,7 +6005,7 @@ def check_commands(source: Path, output: Path | None = None,
          [sys.executable, str(source / 'scripts/check_market_admission_schema.py')]),
         ('source-guard-cancellation',
          [sys.executable, str(source / 'scripts/check_cancellation_hash_coverage.py')]),
-        # CR-150 / C4: a new growable container in the scanned engine, inline
+        # Source bounds: a new growable container in the scanned engine, inline
         # header or generated C++ needs a manifest entry whose bound names only
         # declared fixed inputs; the existing sites are listed OPEN, never PASS
         # (ci/cr150-source-bounds.yaml). Unconditional: a merge that adds a site
@@ -6021,9 +6021,9 @@ def check_commands(source: Path, output: Path | None = None,
         CheckCommand('cr150-source-gate-tests',
                      [sys.executable, str(source / 'scripts/test_cr150_source_gate.py')],
                      parallel=True),
-        # R5 lane H-DOCGATES (AUDIT4-opus X17, perf N-2): two random draws whose
+        # Random draw ordering: two random draws whose
         # order C++ leaves to the compiler build a different battery on x86-64
-        # GCC than on AppleClang -- XPLAT1's bug class, back at ten sites.
+        # GCC than on AppleClang -- the same portability defect at ten sites.
         CheckCommand('rng-draw-order-tests',
                      [sys.executable, str(source / 'scripts/test_check_rng_draw_order.py')],
                      parallel=True),
@@ -6053,7 +6053,7 @@ def check_commands(source: Path, output: Path | None = None,
          [sys.executable, str(source / 'scripts/test_check_kernel_residuals.py')]),
         ('corpus-parity-identity-tests',
          [sys.executable, str(source / 'scripts/test_corpus_trades_identity.py')]),
-        # R5 lane H-MEASURE (AUDIT3 H12): the pull-request subset witnesses
+        # Parity subset coverage: the pull-request subset witnesses
         # every mutation of the recorded battery the full sweep caught.
         ('corpus-parity-subset-cover-tests',
          [sys.executable, str(source / 'scripts/test_corpus_parity_subset_cover.py')]),
@@ -6065,7 +6065,7 @@ def check_commands(source: Path, output: Path | None = None,
          [sys.executable, str(source / 'scripts/test_write_corpus_file_digests.py')]),
         ('corpus-admission-variant-tests',
          [sys.executable, str(source / 'scripts/test_ci_corpus_variant.py')]),
-        # Lane REL10: the JSON report keys outlive the removed C spellings, and
+        # The JSON report keys outlive the removed C spellings, and
         # release.yml's version arithmetic is a tested script.
         ('report-schema-key-tests',
          [sys.executable, str(source / 'scripts/test_report_schema_keys.py')]),
@@ -6117,7 +6117,7 @@ def check_commands(source: Path, output: Path | None = None,
         # scripts/requirements-preflight.txt (pytest 9.1.1, the remote
         # verifier's), and without it the stage fails.
         ('run-json-harness-tests', run_json_harness_command(source)),
-        # Lane pf-ci-docs: ci.yml skips its proof jobs on a documentation-only
+        # Documentation CI: ci.yml skips its proof jobs on a documentation-only
         # change, and scripts/ci_docs_only.py's rule decides which that is.
         ('docs-only-tests',
          [sys.executable, str(source / 'scripts/test_ci_docs_only.py')]),
@@ -6150,7 +6150,7 @@ def check_commands(source: Path, output: Path | None = None,
         CheckCommand('doc-lint',
                      [sys.executable, str(source / 'scripts/check_doc_lint.py')],
                      parallel=True),
-        # R5 lane H-DOCGATES (AUDIT4-opus X13): a published sentence leaves only
+        # Documentation history: a published sentence leaves only
         # when its commit's message names it -- by the introducing lane or commit,
         # or by its words -- and older text never silently replaces newer text.
         ('doc-reverts-tests',

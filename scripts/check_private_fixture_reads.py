@@ -20,8 +20,8 @@ set (tests/private_fixture_paths.txt), and requires each hit to be either
     the pinned SKIP placeholder the absent branch registers, or
   * reported as a violation.
 
-It also checks the class the overlay-mode round found (A-release,
-rj-20261011t185619-d9567d): a Python tape driver whose private-marker guard
+It also checks the class found by the Release run with private fixtures
+overlaid: a Python tape driver whose private-marker guard
 composes the fixture directory onto an add_test argument that already IS that
 directory -- a marker that can never exist, so the row prints the pinned SKIP
 literal and exits 77 in every mode, and the overlay-mode refusal stage blames
@@ -41,8 +41,8 @@ matched exits 1.
 The list() subcommands the two files use are modelled, and the model is
 printed as a table (subcommand, uses, modelled). APPEND and REMOVE_ITEM edit
 the tracked list; SORT orders a tracked list (default ascending or ORDER
-DESCENDING) and refuses an input the walk never saw built. The exact CR-150
-lane glob is tracked, including when empty. LENGTH writes the tracked length
+DESCENDING) and refuses an input the walk never saw built. The exact test
+registration glob is tracked, including when empty. LENGTH writes the tracked length
 into its out-var; GET, SUBLIST and
 POP_FRONT write the element(s) they select, so a value a row gets through them
 is swept like any other. POP_FRONT follows CMake: N out-vars take the first N
@@ -657,13 +657,13 @@ class Rows:
         if '${lane_file}' not in body:
             return                          # existing non-lane include handling
         if body.strip().strip('"') != '${lane_file}':
-            raise Unparseable(f'{self.path}:{line_i + 1}: unreadable CR-150 lane include')
+            raise Unparseable(f'{self.path}:{line_i + 1}: unreadable test registration include')
         target = Path(subst('${lane_file}', env))
         if self.lane_files is None or target not in self.lane_files:
             raise Unparseable(
-                f'{self.path}:{line_i + 1}: include({target}) is not a globbed CR-150 lane')
+                f'{self.path}:{line_i + 1}: include({target}) is not a globbed test registration file')
         if any(table.path == target for table in self.tables):
-            raise Unparseable(f'{target}:1: CR-150 lane file included more than once')
+            raise Unparseable(f'{target}:1: test registration file included more than once')
         Rows(target, self.root, including=self, env=env, conditions=conditions)
 
     def _do_list(self, body: str, line_i: int, env: dict) -> None:

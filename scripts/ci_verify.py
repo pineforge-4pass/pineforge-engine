@@ -92,7 +92,7 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # (test_doc_anchors, test_doc_lint) and L14-B's two example hosts
 # (example_native_auxiliary_feed_strategy, example_native_open_lots_strategy).
 # 194 registered, 193 run: the WebSocket row still skips on a system libcurl.
-# 199 = those 193 plus the six TUs the R5 follow-up wave (INT13, wave D) adds
+# 199 = those 193 plus the six TUs the native follow-up adds
 # that this profile builds -- one per lane, measured on the integrated tree,
 # not summed from the lanes' own bases:
 #   +1 E1  test_native_anchored_trail_absent_arm
@@ -107,8 +107,8 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # E12, E13 and E15 add no row: every one of their witnesses is a scenario
 # inside a TU that already existed.
 # 200 registered, 199 run: the WebSocket row still skips on a system libcurl.
-# 202 run = those 199 plus the three TUs of the R5 follow-up wave (INT14,
-# wave E) that this profile builds -- measured on the integrated tree, not
+# 202 run = those 199 plus the three TUs of the adapter follow-up,
+# that this profile builds -- measured on the integrated tree, not
 # summed from the lanes' own bases:
 #   +1 E16 test_native_trail_stop_ladder
 #   +1 E23 test_native_continuation_portable
@@ -121,12 +121,12 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # no commit. E18, E20, E21 and E22 add no row either: every one of their
 # witnesses is a scenario inside a TU that already existed.
 # 203 registered, 202 run: the WebSocket row still skips on a system libcurl.
-# The R5 post-wave-E lanes (INT15) leave this profile alone: E26 changes
+# The subsequent adapter changes leave this profile alone: one change updates
 # src/source/pine_strategy_host.cpp and adds its checks to the TU lane E25
 # already registered, and E27's witness includes pineforge/source/, so it
 # registers in release only -- see RELEASE_MIN_TESTS. Still 203 registered,
 # 202 run, recounted on the integrated tree.
-# 213 run = those 202 plus the eleven TUs of the R5 wave F (INT16) that this
+# 213 run = those 202 plus the eleven TUs of the runtime and portability update that this
 # profile builds -- measured on the integrated tree (ctest -N), not summed
 # from the lanes' own bases:
 #   +3 F12 example_native_fee_reserve_strategy, example_native_fx_roll_strategy,
@@ -142,7 +142,7 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # (their TUs reach the source layer -- see RELEASE_MIN_TESTS); F7 and F10 add
 # no row. 214 registered, 213 run: the WebSocket row still skips on a system
 # libcurl.
-# 229 run = those 213 plus the sixteen TUs of R5 performance slice A (INT17)
+# 229 run = those 213 plus the sixteen TUs of the first performance update
 # that this profile builds -- measured on the integrated tree (ctest -N), not
 # summed from the lanes' own bases:
 #   +1 P1    test_native_continuation_view
@@ -160,7 +160,7 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # release-only rows between them (their TUs reach the source layer -- see
 # RELEASE_MIN_TESTS). 230 registered, 229 run: the WebSocket row still skips
 # on a system libcurl.
-# 237 run = those 229 plus the eight TUs of R5 performance slice B (INT18)
+# 237 run = those 229 plus the eight TUs of the second performance update
 # that this profile builds -- measured on the integrated tree (ctest -N), not
 # summed from the lanes' own bases:
 #   +5 L1 test_native_host_reads, test_native_lean_path,
@@ -171,12 +171,12 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # All eight are source-free. Lane L5 adds one release-only row and lane L4
 # three (their TUs reach the source layer -- see RELEASE_MIN_TESTS). 238
 # registered, 237 run: the WebSocket row still skips on a system libcurl.
-# 242 run = those 237 plus the five source-free TUs of R5 lane TA1 (the TA
+# 242 run = those 237 plus the five source-free TUs of the technical-analysis update (the TA
 # inputs TradingView has and the KC middle band on bar 0):
 #   +5 TA1 test_ta_anchored_vwap, test_ta_alma_floor, test_ta_kc_basis,
 #          test_ta_kc_range, test_ta_pivot_point_levels
 # 243 registered, 242 run.
-# 245 run = those 242 plus the three TUs of INT19 (V19-A, K-COHORT, PERF-P7)
+# 245 run = those 242 plus the three TUs of the hash, cohort and lookup-index update
 # that this profile builds -- measured on the integrated tree (ctest -N), not
 # summed from the lanes' own bases:
 #   +1 V19-A    test_native_state_continuation
@@ -185,16 +185,16 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # All three are source-free. PERF-P7 adds four release-only rows (their TUs
 # reach the source layer -- see RELEASE_MIN_TESTS); FPC adds no row. 246
 # registered, 245 run: the WebSocket row still skips on a system libcurl.
-# 249 run = those 245 plus the four TUs of INT20 (V19-B, PERF-L2) -- measured
+# 249 run = those 245 plus the four TUs of the receipt and settlement update -- measured
 # on the integrated tree (ctest -N), not summed from the lanes' own bases:
 #   +2 V19-B   test_native_journal_window, test_native_event_retention
 #   +2 PERF-L2 test_native_fused_settlement,
 #              test_native_fused_settlement_allocations
-# All four are source-free, so they register in release too. INT20 retires no
+# All four are source-free, so they register in release too. The receipt and settlement update retires no
 # row: test_native_definition_index stays, re-targeted at the core's chain
 # index. 250 registered, 249 run: the WebSocket row still skips on a system
 # libcurl.
-# 257 run = those 249 plus the eight TUs of INT22 (L3, D2-A) -- measured on
+# 257 run = those 249 plus the eight TUs of the direct-command and hook update -- measured on
 # the integrated tree (ctest -N), not summed from the lanes' own bases:
 #   +2 L3   test_native_direct_mutation,
 #           test_native_direct_mutation_allocations
@@ -204,8 +204,8 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # All eight are source-free, so they register in release too; LAYOUT1 adds
 # no row. 258 registered, 257 run: the WebSocket row still skips on a system
 # libcurl.
-# 262 run = those 257 plus the five source-free TUs of INT23 (D2-D, D2-C,
-# V19-D) -- measured on the integrated tree (ctest -N), not summed from the
+# 262 run = those 257 plus the five source-free TUs for runtime context and handle-stable replacement,
+# measured on the integrated tree (ctest -N), not summed from the
 # lanes' own bases:
 #   +1 D2-D  test_utc_month_memo
 #   +3 D2-C  test_native_runtime_ambient, test_native_in_place_reads,
@@ -214,8 +214,8 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # All five register in release too; the lanes' other rows reach the source
 # layer (see RELEASE_MIN_TESTS). 263 registered, 262 run: the WebSocket row
 # still skips on a system libcurl.
-# 271 run = those 262 plus the nine source-free TUs of INT24 (K-ULP2, K-ULP3,
-# B-ENGINE, B-ADAPTER, B-GATES) -- measured on the integrated tree (ctest -N),
+# 271 run = those 262 plus the nine source-free TUs for close quantities, adapter rules and gates,
+# measured on the integrated tree (ctest -N),
 # not summed from the lanes' own bases:
 #   +1 K-ULP2    test_native_partial_close_split
 #   +1 K-ULP3    test_native_exact_sum_close
@@ -224,11 +224,11 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #                test_native_current_execution_rate
 #   +3 B-GATES   test_benchmark_harness, test_benchmark_provenance,
 #                test_docs_doxygen_retry
-# All nine register in release too; B-ADAPTER's other four rows and INT24's
+# All nine register in release too; the adapter's other four rows and the simultaneous
 # dual-entry witness reach the source layer (see RELEASE_MIN_TESTS), and
 # B-C-SURFACE and B-DOCS add no row. 272 registered, 271 run: the WebSocket
 # row still skips on a system libcurl.
-# 277 run = those 271 plus the six source-free TUs of wave G (INT25) --
+# 277 run = those 271 plus the six source-free TUs of the public C surface update --
 # measured on the integrated tree (ctest -N), not summed from the lanes' own
 # bases:
 #   +1 C-SURFACE-1 test_native_c_api_int23_header (the INT23 frozen-header
@@ -241,7 +241,7 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #                  extracted from the page and run)
 # All six register in release too; RATIO-HARDEN, V19-FIX and K-IDX add no row.
 # 278 registered, 277 run: the WebSocket row still skips on a system libcurl.
-# 286 run = those 277 plus the nine source-free rows of wave H (INT26),
+# 286 run = those 277 plus the nine source-free rows of the source parity update,
 # counted with ctest -N on the integrated tree:
 #   +1 H-MEASURE    test_native_acid_composite (the G1 acid composite, C++
 #                   and C)
@@ -259,7 +259,7 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # test_removed_public_spellings); PAR-ORDERS and CI-FLAKE add no row. All
 # nine register in release too. 287 registered, 286 run: the WebSocket row
 # still skips on a system libcurl.
-# 289 run = those 286 plus INT27's three source-free rows, counted with ctest
+# 289 run = those 286 plus fill recalculation update's three source-free rows, counted with ctest
 # -N on the integrated tree:
 #   +1 PERF-ZONED   test_native_session_day_zoned (session-day facts on a
 #                   certified cycle of an exchange zone without a calendar
@@ -301,7 +301,7 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # Both register in release too. 296 registered, 295 run: the WebSocket row
 # still skips on a system libcurl.
 # 296 run = those 295 plus lane W11-ENG-TIME-COLOR's source-free row, counted
-# with ctest -N on INT29's integrated tree (kernel profile, 297 registered):
+# with ctest -N on order and timing update's integrated tree (kernel profile, 297 registered):
 #   +1 test_color_tapes (colours as TradingView reads them back)
 # It registers in release too. 297 registered, 296 run: the WebSocket row
 # still skips on a system libcurl.
@@ -343,32 +343,32 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # suites register wherever the tests do, the two example hosts wherever
 # PINEFORGE_BUILD_EXAMPLES is ON. No release row skips, so 558 registered is
 # 558 run.
-# 566 = those 558 plus the eight TUs of the R5 follow-up wave (INT13, wave D):
+# 566 = those 558 plus the eight TUs of the native follow-up:
 # the six KERNEL_MIN_TESTS lists above, which register here too, plus the two
 # source-bound ones the kernel profile does not build:
 #   +1 E5  test_offset_trail_quantized_arm
 #   +1 E9  test_trail_activation_tick_reach
 # No release row skips, so 566 registered is 566 run.
-# 571 = those 566 plus the five TUs of the R5 follow-up wave (INT14, wave E):
+# 571 = those 566 plus the five TUs of the adapter follow-up:
 # the three KERNEL_MIN_TESTS lists above, which register here too, plus the two
 # source-bound ones the kernel profile does not build:
 #   +1 E19 test_e19_excursion_path_order
 #   +1 E25 test_session_islastbar_aggregation
 # No release row skips, so 571 registered is 571 run.
-# 572 = those 571 plus the one TU of the R5 post-wave-E lanes (INT15):
+# 572 = those 571 plus the one TU of the subsequent adapter changes (runtime follow-up):
 #   +1 E27 test_pooc_fill_stamp_aggregation
 # Its TU reaches the source layer, so it registers in release only and the
 # kernel floor does not move. Lane E26 adds no row: its witnesses are
 # scenarios inside test_session_islastbar_aggregation, which lane E25
 # already registered. No release row skips, so 572 registered is 572 run.
-# 586 = those 572 plus the fourteen TUs of the R5 wave F (INT16): the eleven
+# 586 = those 572 plus the fourteen TUs of the runtime and portability update: the eleven
 # KERNEL_MIN_TESTS lists above, which register here too, plus the three
 # source-bound ones the kernel profile does not build:
 #   +1 F1  test_aggregated_path_regressions
 #   +1 F5  test_session_day_facts_adapter
 #   +1 F9  test_adapter_recording_hash_witness
 # No release row skips, so 586 registered is 586 run.
-# 607 = those 586 plus the twenty-one TUs of R5 performance slice A (INT17):
+# 607 = those 586 plus the twenty-one TUs of the first performance update:
 # the sixteen KERNEL_MIN_TESTS lists above, which register here too, plus the
 # five source-bound ones the kernel profile does not build:
 #   +1 P1    test_adapter_continuation_view
@@ -376,7 +376,7 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #   +1 P4    test_adapter_receipts_in_place
 #   +2 P5611 test_chart_day_key_arithmetic, test_aggregates_input_bars_literals
 # No release row skips, so 607 registered is 607 run.
-# 619 = those 607 plus the twelve rows of R5 performance slice B (INT18): the
+# 619 = those 607 plus the twelve rows of the second performance update: the
 # eight KERNEL_MIN_TESTS lists above, which register here too, plus the four
 # source-bound ones the kernel profile does not build:
 #   +1 L5 test_adapter_command_allocations
@@ -385,25 +385,25 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # No release row skips, so 619 registered is 619 run.
 # 624 = those 619 plus the five TA1 rows KERNEL_MIN_TESTS lists above, which
 # register here too. No release row skips, so 624 registered is 624 run.
-# 631 = those 624 plus the seven rows of INT19: the three KERNEL_MIN_TESTS
+# 631 = those 624 plus the seven rows of hash and cohort update: the three KERNEL_MIN_TESTS
 # lists above, which register here too, plus the four source-bound ones the
 # kernel profile does not build:
 #   +4 PERF-P7 test_adapter_lookup_index_witness, test_adapter_purge_index,
 #              test_adapter_exit_leg_index, test_adapter_lookup_index_scaling
 # No release row skips, so 631 registered is 631 run.
-# 635 = those 631 plus the four INT20 rows KERNEL_MIN_TESTS lists above, which
+# 635 = those 631 plus the four receipt and settlement update rows KERNEL_MIN_TESTS lists above, which
 # register here too; neither lane adds a release-only row. No release row
 # skips, so 635 registered is 635 run.
-# 637 = those 635 plus V19-E's two rows (INT21), counted with ctest -N on the
+# 637 = those 635 plus the adapter retirement update's two rows, counted with ctest -N on the
 # integrated tree; their TUs reach the source layer, so they register in
 # release only and the kernel floor does not move (CORPUS2 adds no row):
 #   +2 V19-E test_adapter_live_state_equivalence, test_adapter_live_state_scaling
 # No release row skips, so 637 registered is 637 run.
-# 645 = those 637 plus the eight INT22 rows KERNEL_MIN_TESTS lists above,
+# 645 = those 637 plus the eight direct-command and hook update rows KERNEL_MIN_TESTS lists above,
 # which register here too, counted with ctest -N on the integrated tree;
 # neither L3 nor D2-A adds a release-only row and LAYOUT1 adds no row. No
 # release row skips, so 645 registered is 645 run.
-# 658 = those 645 plus the five INT23 rows KERNEL_MIN_TESTS lists above, which
+# 658 = those 645 plus the five runtime context update rows KERNEL_MIN_TESTS lists above, which
 # register here too, and eight source-bound rows the kernel profile does not
 # build, counted with ctest -N on the integrated tree:
 #   +2 D2-D  test_chart_day_memo, test_publication_witness
@@ -412,26 +412,26 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #   +3 V19-D test_adapter_reissue_binding, test_bracket_roster_parking,
 #            test_adapter_margin_revival_erasure
 # No release row skips, so 658 registered is 658 run.
-# 672 = those 658 plus the nine INT24 rows KERNEL_MIN_TESTS lists above, which
+# 672 = those 658 plus the nine close-quantity and adapter update rows KERNEL_MIN_TESTS lists above, which
 # register here too, and five source-bound rows the kernel profile does not
 # build, counted with ctest -N on the integrated tree:
 #   +4 B-ADAPTER test_adapter_fill_qty_probe,
 #                test_adapter_typed_entry_admission,
 #                test_adapter_range_end_fx,
 #                test_adapter_margin_revival_cancel
-#   +1 INT24     test_adapter_dual_entry_tie (the ruling on B-ADAPTER's
+#   +1 close-quantity and adapter update     test_adapter_dual_entry_tie (the ruling on typed entry admission's
 #                finding 1)
 # B-C-SURFACE's witnesses are rows inside test_native_c_api.
-# 678 = those 672 plus the six wave-G (INT25) rows KERNEL_MIN_TESTS lists
+# 678 = those 672 plus the six public C surface update rows KERNEL_MIN_TESTS lists
 # above -- C-SURFACE-1 +1, KERNEL-EDGE +1, K-ULP4 +2, K-ULP5 +1, DOC-TRUTH-4 +1
 # -- which register here too, counted with ctest -N on the integrated tree; no
 # wave-G lane adds a source-bound row (the K-ULP4 and K-ULP5 C checks and
 # V19-FIX's scaling rows are rows inside existing TUs). No release row skips,
 # so 678 registered is 678 run.
-# 702 = those 678 plus wave H's twenty-four (INT26), counted with ctest -N on
+# 702 = those 678 plus the source parity update's twenty-four, counted with ctest -N on
 # the integrated tree: the nine KERNEL_MIN_TESTS lists above, which register
 # here too, H-MEASURE's eleven source-bound rows the kernel profile does not
-# build (AUDIT4 X14) and PAR-ORDERS-2's three tape rows:
+# build (adapter-retention coverage) and current-execution order checks' three tape rows:
 #   +1 G2-09/-10/-12/-13, E20 f1  test_adapter_margin_schedule_differential
 #   +3 G2-15, G2-18, E5/E14       test_pyramiding_count_differential,
 #                                 test_zero_trail_sibling_stop,
@@ -450,10 +450,10 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # PAR-MARGIN's own count also held the margin differential, which that lane
 # had cherry-picked for its pins; it counts once, as H-MEASURE's. No release
 # row skips, so 702 registered is 702 run.
-# 703 = those 702 plus INT26 round 2's source-bound tape row,
+# 703 = those 702 plus source parity update round 2's source-bound tape row,
 # test_pooc_stop_reentry_bracket_tapes (the gate sweep's lost re-entry
 # bracket); 703 registered is 703 run.
-# 716 = those 703 plus INT27's thirteen, counted with ctest -N on the
+# 716 = those 703 plus fill recalculation update's thirteen, counted with ctest -N on the
 # integrated tree: the three KERNEL_MIN_TESTS rows above, which register here
 # too, and ten source-bound rows the kernel profile does not build:
 #   +1 K-RUNERR     test_security_finer_than_feed (a request.security finer
@@ -490,7 +490,7 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #   +1 F7 test_session_break_open_bar_tape (aggregated bars that open inside a
 #         session break)
 # No release row skips, so 724 registered is 724 run.
-# 748 = those 724 plus INT28's twenty-two source-bound rows and RUN-HARNESS's
+# 748 = those 724 plus the order and margin update's twenty-two source-bound rows and the run harness's
 # two kernel-profile rows above, counted with ctest -N on the integrated tree
 # (the kernel profile builds none of the twenty-two):
 #   +1 TVDEF-DROPS        test_tvdef_drops_tapes
@@ -519,18 +519,18 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #   +1 INT28              test_int28_rule_compositions (two lanes' rules in
 #                         one run, on TradingView's tapes)
 # No release row skips, so 748 registered is 748 run.
-# 751 = those 748 plus INT28-FIX's three source-bound rows, counted the same
+# 751 = those 748 plus admission and margin corrections' three source-bound rows, counted the same
 # way (the kernel profile builds none of them):
-#   +1 INT28-FIX CA       test_reversal_close_all_tapes
-#   +1 W5B-ENG-MARGIN-RESIDUAL test_margin_residual_tapes (picked by INT28-FIX)
-#   +1 INT28-FIX SS       test_slipped_short_tapes (OU and OF add their rows
+#   +1 reversal close_all association     test_reversal_close_all_tapes
+#   +1 margin residuals                  test_margin_residual_tapes (included with admission and margin corrections)
+#   +1 slipped short admission           test_slipped_short_tapes (later admission and opening-fill checks add their rows
 #                         to this one)
 # No release row skips, so 751 registered is 751 run.
-# 752 = those 751 plus INT28-FIX round 3's source-bound row, counted the same
+# 752 = those 751 plus admission and margin corrections round 3's source-bound row, counted the same
 # way (the kernel profile builds none):
-#   +1 INT28-FIX RC       test_coof_recalc_security_tapes
+#   +1 fill recalculation security       test_coof_recalc_security_tapes
 # No release row skips, so 752 registered is 752 run.
-# 759 = those 752 plus INT29's seven rows, counted the same way on the
+# 759 = those 752 plus order and timing update's seven rows, counted the same way on the
 # integrated tree (the kernel profile builds only the first):
 #   +1 W11-ENG-TIME-COLOR test_color_tapes
 #   +4 W10-DIAG-UNKNOWN   test_coqueued_open_margin_tapes (COQ),
@@ -544,7 +544,7 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # 761 = those 759 plus the two W15-KERNEL-CAL rows KERNEL_MIN_TESTS lists
 # above, which register here too. No release row skips, so 761 registered
 # is 761 run.
-# 785 = those 761 plus INT30's twenty-four source-bound rows, counted with
+# 785 = those 761 plus combined fill update's twenty-four source-bound rows, counted with
 # ctest -N on the integrated tree (the kernel profile builds none of them):
 #   +1 TAIL-A  test_security_multi_day_buckets_tapes (N-day request.security)
 #   +1 TAIL-B  test_add_sibling_margin_tapes (AS, AC, LF)
@@ -596,10 +596,10 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # No release row skips, so 792 registered is 792 run (SM-E1: below EXCLUDED_REGISTERED_MIN).
 # RELEASE_MIN_TESTS itself is defined with KERNEL_MIN_TESTS below, both derived from
 # PRIVATE_FIXTURE_PROFILE_FLOORS (the one place the numbers live).
-# ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
-# AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
+# ADR-0001 ruled-count floors, beside the ctest floors:
+# check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the
-# 175 AUDIT4 counted, less the bare word `Pine`, and the 3 feed texts plus
+# 175 counted by the coverage audit, less the bare word `Pine`, and the 3 feed texts plus
 # the 42 texts the lane rules by their exact words (6 deprecated-alias texts,
 # map.hpp's 4 static_assert texts, the runtime's 32 dotted argument checks).
 # A row the vocabulary reads cannot leave silently -- its name turns unruled
@@ -610,7 +610,7 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # 170 identifiers and 40 texts once lane REL10 removed the four deprecated
 # spellings for 1.0 (sharpe_tv, sortino_tv, Coof, MagnifierCoof): their names
 # and their six deprecation and static_assert texts left the headers, the
-# archive and the ADR's residual table together (INT26 pick of 38e8ad1e).
+# archive and the ADR's residual table together (source parity update pick of 38e8ad1e).
 # 193 identifiers and 59 texts with the run-failure codes' three rows: 23
 # identifiers (7 code names, 6 argument values, the 9 generated-code helpers
 # and the `pine_source` kind) and 19 texts (18 dotted argument values and the
@@ -619,25 +619,25 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 ADR_RULED_IDENTIFIERS_MIN = 193
 ADR_RULED_TEXTS_MIN = 59
 # PR-only registration floors: the complete CTest populations of the three
-# excluded profiles at INT25, counted with ctest -N on the integrated tree --
-# 653/653/662 at 91d65ad6 (INT24) plus wave G's six rows (C-SURFACE-1 +1,
+# excluded profiles at public C surface update, counted with ctest -N on the integrated tree --
+# 653/653/662 at 91d65ad6 (close-quantity and adapter update) plus six public C surface rows (frozen C header +1,
 # KERNEL-EDGE +1, K-ULP4 +2, K-ULP5 +1, DOC-TRUTH-4 +1) in each; 683/683/692
-# at INT26, each with wave H's twenty-four rows of RELEASE_MIN_TESTS
+# at source parity update, each with its twenty-four rows of RELEASE_MIN_TESTS
 # (H-MEASURE +12, H-DOCGATES +3, K-OCA-KEEP +1, PAR-ORDERS-2 +4, PAR-MARGIN
 # +1, PAR-MARGIN-2 +1, PERF-KEDGE +1, PAR-CASHFEE +1), counted the same way;
-# 684/684/693 with INT26 round 2's tape row; 697/697/706 at INT27, each with
-# INT27's thirteen rows of RELEASE_MIN_TESTS (K-RUNERR +1, PERF-ZONED +1,
+# 684/684/693 with source parity update round 2's tape row; 697/697/706 at fill recalculation update, each with
+# fill recalculation update's thirteen rows of RELEASE_MIN_TESTS (run-failure diagnostics +1, zoned-session performance +1,
 # TV-DEFAULTS +1, MAG-INTRABAR +3, PAR-ORDERS-3 +1, K-DRAWSNAP +3,
 # K-TA-DYNLEN +3), counted the same way; 701/701/710 with lane XSYM-D's four
 # rows of RELEASE_MIN_TESTS in each, counted the same way; 705/705/714 with
 # lane K-SESSION-WINDOWS' four, counted the same way on the rebased tree;
-# 729/729/738 at INT28, each with its twenty-four rows of RELEASE_MIN_TESTS,
-# counted the same way; 732/732/741 at INT28-FIX, each with its three rows of
-# RELEASE_MIN_TESTS, counted the same way; 733/733/742 with INT28-FIX round
-# 3's row of RELEASE_MIN_TESTS, counted the same way; 740/740/749 at INT29,
+# 729/729/738 at order and margin update, each with its twenty-four rows of RELEASE_MIN_TESTS,
+# counted the same way; 732/732/741 at admission and margin corrections, each with its three rows of
+# RELEASE_MIN_TESTS, counted the same way; 733/733/742 with admission and margin corrections round
+# 3's row of RELEASE_MIN_TESTS, counted the same way; 740/740/749 at order and timing update,
 # each with its seven rows of RELEASE_MIN_TESTS, counted the same way;
 # 742/742/751 with W15-KERNEL-CAL's two rows, counted the same way;
-# 766/766/775 at INT30, each with its twenty-four rows of RELEASE_MIN_TESTS,
+# 766/766/775 at combined fill update, each with its twenty-four rows of RELEASE_MIN_TESTS,
 # counted the same way; 767/767/776 with lane TAIL-I's row of
 # RELEASE_MIN_TESTS, counted the same way;
 # 771/771/780 with lane XAU-CAL's four rows of RELEASE_MIN_TESTS in each,
@@ -784,12 +784,12 @@ PRIVATE_FIXTURE_SKIP_LITERAL = 'SKIP private fixtures not present: '
 # registers; absent the overlay those pinned rows register as SKIP
 # placeholders, so the absent floor is `full - pinned`.
 #
-# Re-measured at 024fdf92c from that head's four Lab jobs, each job's own
-# `ctest`. Release overlay rj-20261012t003156-430909: 910 tests, 0 skipped,
-# 4 failed (this lane's harness rows plus test_doc_lint), 300 pinned. Release
-# absent rj-20261012t003153-098c2a: 910 registered, 610 ran, those 300
-# skipped. Kernel overlay rj-20261012t003157-d19ae9: 337 tests, 0 skipped,
-# the same four failed, 28 pinned. Kernel absent rj-20261012t003154-1c9988:
+# Re-measured at 024fdf92c from that head's four lab runs, each run's own
+# `ctest`. Release with private fixtures: 910 tests, 0 skipped,
+# 4 failed (the harness rows plus test_doc_lint), 300 pinned. Release
+# without private fixtures: 910 registered, 610 ran, those 300
+# skipped. Kernel with private fixtures: 337 tests, 0 skipped,
+# the same four failed, 28 pinned. Kernel without private fixtures:
 # 337 registered, 309 ran, those 28 skipped. No row skipped in either overlay
 # job, so those four failures are that head's own red rows, not floor losses.
 # Both `full` numbers come from the OVERLAY-PRESENT registry only: never from

@@ -3,10 +3,10 @@
  * trail_exit_product_probe.hpp — one-bar trailing-exit scenarios run through
  * the PRODUCT and read back from the kernel's own event record.
  *
- * R5 lane P9. The three trail suites (test_trail_open_arm_subtick_offset,
+ * The three trail suites (test_trail_open_arm_subtick_offset,
  * test_trail_fill_snap, test_trail_activation_tick_bar) used to pin their
  * finest-grained rows against `internal::resolve_exit_path_fill`, the
- * TradingView exit-path resolver that lane N10 carried out of the shipped
+ * TradingView exit-path resolver that was moved out of the shipped
  * layer into tests/exit_path_resolver_oracle.hpp because no production
  * caller reached it any more. That header was a second fill simulation kept
  * alive only for those rows. This probe replaces it with the one simulation

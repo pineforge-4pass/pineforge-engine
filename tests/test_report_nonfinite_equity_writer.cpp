@@ -55,7 +55,7 @@ void refusal(double equity, double open_profit, const char* field) {
     // Mutation: remove either corresponding finite_value() call in write_e.
     // That field's three rows then reach the missing-refusal assertion below.
     Pipe pipe;
-    const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.descriptors[1], "CR-289-writer"};
+    const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.descriptors[1], "nonfinite-equity-writer"};
     rs::LineWriter writer(sink);
     writer.write_header({false, false, false, 0, 0});
     writer.write_e({0, 10000.0, -0.0});
@@ -103,7 +103,7 @@ void refusal(double equity, double open_profit, const char* field) {
 
 void finite() {
     Pipe pipe;
-    const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.descriptors[1], "CR-289-finite"};
+    const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.descriptors[1], "finite-equity"};
     rs::LineWriter writer(sink);
     writer.write_header({false, false, false, 0, 0});
     writer.write_e({0, 10000.0, -0.0});

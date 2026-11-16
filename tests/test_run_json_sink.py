@@ -625,14 +625,14 @@ def test_native_frozen_producer_bytes(tmp_path, fixture, outputs, binary, bench,
 
 
 def test_lab_corpus_subset_frozen_bytes(tmp_path):
-    """CORE-TOP supplies exact probe argv after preparing derived feeds ONCE.
+    """The caller supplies exact probe argv after preparing derived feeds ONCE.
 
     Manifest: [{"so": "/lab/probe.so", "argv": ["--ohlcv", "...", ...]}, ...].
     This consumes ready modules/feeds and never builds or derives concurrently.
     """
     manifest = os.environ.get("PINEFORGE_L9A_CORPUS_CASES")
     if not manifest:
-        pytest.skip("SKIP corpus byte proof requires PINEFORGE_L9A_CORPUS_CASES from CORE-TOP")
+        pytest.skip("SKIP corpus byte proof requires PINEFORGE_L9A_CORPUS_CASES from the caller")
     cases = json.loads(Path(manifest).read_text())
     assert cases, "the corpus proof must name real probes"
     for case in cases:
