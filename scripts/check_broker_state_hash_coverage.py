@@ -367,8 +367,10 @@ def main(root: Path = ROOT) -> int:
                      "stream v19 fold")
         host_header = (root / "include/pineforge/source/pine_strategy_host.hpp").read_text()
         # expectation corrected: v6 -> v8 (issue 871 domain bump)
+        # expectation corrected: v8 -> v9 (issue 694 domain bump: the per-site
+        # historical security projection changes what a security state hashes)
         require_once(host_header,
-                     'kSourceSecurityDomain[] = "pineforge-source-security/v8"',
+                     'kSourceSecurityDomain[] = "pineforge-source-security/v9"',
                      "source request.security hash domain")
         # expectation corrected: 1 -> 3, because #871 folds runtime, site and caller state.
         if source_hash.count("f.s(kSourceSecurityDomain);") != 3:
