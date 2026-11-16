@@ -333,7 +333,7 @@ already in the sink are emitted exactly once, followed by the resident suffix
 and open rows. The sink remains the complete row report.
 
 HostRecorded contract, also to be carried into DESIGN 3.6 and the release-notes
-draft: a host that owns and pushes the curve owns its memory; the production Pine host uses KernelRecordedAtHostMarks (src/source/pine_adapter.cpp:3127), whose recorded curve, with a report sink installed, is held as one point and streamed to the scratch file; without a sink the curve stays in memory.
+draft: a host that owns and pushes the curve owns its memory; the production Pine host uses KernelRecordedAtHostMarks (src/source/pine_adapter.cpp:3145), whose recorded curve, with a report sink installed, is held as one point and streamed to the scratch file; without a sink the curve stays in memory.
 HostRecorded's host-owned curve and the sink-OFF curve path retain their
 existing behavior.
 
