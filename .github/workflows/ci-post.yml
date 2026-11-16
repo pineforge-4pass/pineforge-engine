@@ -426,7 +426,7 @@ jobs:
         run: |
           echo "::error::authz did not pass; nothing of this run's code is checked out or run"
           exit 1
-      - name: Require every verification lane to have passed
+      - name: Require every verification job to have passed
         shell: bash
         env:
           AUTHZ_RESULT: ${{ needs.authz.result }}

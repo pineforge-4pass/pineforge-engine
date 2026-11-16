@@ -8075,6 +8075,8 @@ exit "$lookup_exit"
         passed = ('          passed() { [[ "$1" == "success" || '
                   '( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }\n')
         mutations = (
+            ('      - name: Require every verification job to have passed\n',
+             '      - name: Require every verification lane to have passed\n'),
             # (e) Neither an empty result nor a skipped smoke matrix on push is the
             # PR's absent cell; accepting either must fail the exact gate pin.
             (passed, passed.replace('|| (', '|| -z "$1" || (')),
@@ -8119,7 +8121,7 @@ exit "$lookup_exit"
                                  result.stdout + result.stderr)
         for event in ('push', 'workflow_dispatch', 'schedule', 'release'):
             script = job_script(self.ci_sources()[6], 'build-gate',
-                                'Require every verification lane to have passed')
+                                'Require every verification job to have passed')
             matrices = [('X86_GCC133_RESULT', 'native x86 GNU 13.3.0')]
             matrices.append(('SMOKE_RESULT', 'amd64 smoke'))
             if event != 'pull_request':
@@ -8143,7 +8145,7 @@ exit "$lookup_exit"
         self.addCleanup(directory.cleanup)
         script = Path(directory.name) / 'gate.sh'
         script.write_text(job_script(self.ci_sources()[6], 'build-gate',
-                                     'Require every verification lane to have passed'))
+                                     'Require every verification job to have passed'))
         env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'AUTHZ_RESULT': 'success',
                'GITHUB_EVENT_NAME': 'push'}
         lanes = list(PROOF_JOBS.values())
@@ -8552,7 +8554,7 @@ finally:
                     self.assertEqual(result.returncode == 0, expected, result.stdout + result.stderr)
         for event in ('push', 'schedule', 'workflow_dispatch'):
             script = job_script(self.ci_sources()[6], 'build-gate',
-                                'Require every verification lane to have passed')
+                                'Require every verification job to have passed')
             # Every CI round fits 15 minutes: the slow preflight tier, the leg
             # aggregates, kernel-only, native-live and the full parity sweep left
             # ci-post for the lab's verify; the smoke legs and the subset parity remain.
