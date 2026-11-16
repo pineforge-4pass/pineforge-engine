@@ -10492,21 +10492,27 @@ const Bar& NativeExecutionConsumer::auxiliary_bar(std::size_t at) const noexcept
 template <typename Completed>
 bool NativeExecutionConsumer::feed_fixed_subscription(
         BacktestEngine& engine, TimeframeSubscription& subscription, int index,
-        const Bar* input_bar, const native_calendar::NativeInterval& input_interval,
+        const Bar* input_bar, const native_calendar::NativeInterval& input_partition,
         Completed&& completed) {
     auto& state =
         engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
     const std::int64_t next_input = subscription_next_input_ms(index);
-    std::int64_t horizon = input_interval.last_traded_close_ms;
-    if (horizon <= input_interval.open_ms
-        || input_interval.next_period_open_ms <= input_interval.open_ms) {
+    // Resolving a raw-label observation must not move its first input back
+    // to the calendar slot's nominal opening.
+    const std::int64_t input_open_ms = input_partition.open_ms;
+    const auto completion_interval = completion_input_interval(input_partition);
+    if (!completion_interval
+        || completion_interval->last_traded_close_ms <= input_open_ms
+        || completion_interval->next_period_open_ms <= input_open_ms) {
         fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Input});
         render(engine, "native fixed subscription requires a positive accepted interval");
         return false;
     }
+    const auto& input_interval = *completion_interval;
+    std::int64_t horizon = input_interval.last_traded_close_ms;
     horizon = std::min(horizon, input_interval.next_period_open_ms);
-    if (next_input > input_interval.open_ms) horizon = std::min(horizon, next_input);
-    if (!state.fixed_clock.cursor_ms) state.fixed_clock.cursor_ms = input_interval.open_ms;
+    if (next_input > input_open_ms) horizon = std::min(horizon, next_input);
+    if (!state.fixed_clock.cursor_ms) state.fixed_clock.cursor_ms = input_open_ms;
     if (subscription.bucket_first_index < 0) {
         subscription.bucket_first_index = index;
         subscription.bucket_first_ms = *state.fixed_clock.cursor_ms;
@@ -10536,12 +10542,12 @@ bool NativeExecutionConsumer::feed_fixed_subscription(
         return !failed();
     };
     const auto drain_observed = [&](const Bar& observed, std::int64_t close) {
-        if (!drain(std::min(observed.timestamp, input_interval.open_ms),
+        if (!drain(std::min(observed.timestamp, input_open_ms),
                    NativeCompletionKind::LazyComplete)
             || !drain(observed.timestamp, NativeCompletionKind::Confirmed)) return false;
         state.aggregator.observe_fixed(state.fixed_clock, observed);
         ++state.feed_count;
-        return drain(std::min(close, input_interval.open_ms), NativeCompletionKind::LazyComplete)
+        return drain(std::min(close, input_open_ms), NativeCompletionKind::LazyComplete)
             && drain(close, NativeCompletionKind::Confirmed);
     };
     if (subscription.auxiliary) {
@@ -10568,9 +10574,9 @@ bool NativeExecutionConsumer::feed_fixed_subscription(
     }
     // Older fine history has been consumed before this gap/empty-slice drain.
     // The primary is a clock here; it never contributes auxiliary OHLCV.
-    return drain(input_interval.open_ms, NativeCompletionKind::LazyComplete)
+    return drain(input_open_ms, NativeCompletionKind::LazyComplete)
         && drain(horizon, NativeCompletionKind::Confirmed,
-                 input_interval.open_ms, next_input);
+                 input_open_ms, next_input);
 }
 
 template <typename Completed>

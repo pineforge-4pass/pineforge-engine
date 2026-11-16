@@ -165,23 +165,30 @@ public:
         return script_period_.source ? script_interval_at(stamp) : std::nullopt;
     }
     // Accepted context for an adapter's immediate or delayed security step.
-    // Older accepted inputs resolve through the same interval provider used
-    // at acceptance; an unaccepted future input never obtains a horizon.
+    // Completion reads the accepted observation's calendar span, even when
+    // the driver uses a raw-label partition. Older accepted inputs resolve
+    // behind the same frontier; an unaccepted future input gets no horizon.
     std::optional<native_calendar::NativeInterval> accepted_input_interval(
             std::int64_t stamp) const {
         if (accepted_input_context_
-            && accepted_input_context_->input_interval.open_ms == stamp)
-            return accepted_input_context_->input_interval;
+            && (accepted_input_context_->input_interval.open_ms == stamp
+                || accepted_input_context_->input_interval.eligible_open_ms == stamp))
+            return completion_input_interval(accepted_input_context_->input_interval);
         if (input_callback_context_
-            && input_callback_context_->input_interval.open_ms == stamp)
-            return input_callback_context_->input_interval;
-        if (last_accepted_input_ && last_accepted_input_->open_ms == stamp)
-            return last_accepted_input_;
+            && (input_callback_context_->input_interval.open_ms == stamp
+                || input_callback_context_->input_interval.eligible_open_ms == stamp))
+            return completion_input_interval(input_callback_context_->input_interval);
+        if (last_accepted_input_
+            && (last_accepted_input_->open_ms == stamp
+                || last_accepted_input_->eligible_open_ms == stamp))
+            return completion_input_interval(*last_accepted_input_);
         const auto* latest = accepted_input_context_
             ? &accepted_input_context_->input_interval
             : input_callback_context_ ? &input_callback_context_->input_interval
             : last_accepted_input_ ? &*last_accepted_input_ : nullptr;
-        return latest && stamp < latest->open_ms ? input_interval_at(stamp) : std::nullopt;
+        if (!latest || stamp >= latest->open_ms) return std::nullopt;
+        const auto interval = input_interval_at(stamp);
+        return interval ? completion_input_interval(*interval) : std::nullopt;
     }
 
     void run_simple(BacktestEngine& engine, const Bar* bars, int n) override;
@@ -1239,6 +1246,29 @@ private:
         if (uses_raw_label_partition()) return timestamp_partition(timestamp);
         return input_interval_resolved(timestamp);
     }
+    // A raw-label partition carries identity only. A completed observation
+    // with a known cadence gets its actual session-clipped span from the
+    // calendar, without changing that partition or its driver callbacks.
+    // Callers supply an admitted input (or a prevalidated projection input).
+    // Preserve every supplied duration, including shorter accepted closes;
+    // only the exact marker produced by timestamp_partition is resolved.
+    std::optional<native_calendar::NativeInterval> completion_input_interval(
+            const native_calendar::NativeInterval& interval) const {
+        const auto stamp = interval.open_ms;
+        if (!uses_raw_label_partition()
+            || interval.eligible_open_ms != stamp
+            || interval.last_traded_close_ms != stamp
+            || interval.next_period_open_ms != stamp
+            || interval.next_input_open_ms != stamp) return interval;
+        if (has_undetected_timeframe()) return std::nullopt;
+        const auto resolved = native_calendar::interval_containing(
+            calendar_, input_tf_, day_label_origin(stamp), calendar_memo_);
+        // A closed-gap label can still name a calendar period whose traded
+        // close is already past. It supplies no completed observation here.
+        if (!resolved || resolved->last_traded_close_ms <= stamp
+            || resolved->next_period_open_ms <= stamp) return std::nullopt;
+        return resolved;
+    }
     std::optional<native_calendar::NativeInterval> script_interval_at(std::int64_t timestamp) const {
         if (interval_cache_.script_ts == timestamp) return interval_cache_.script_interval;
         if (uses_raw_label_partition()) return timestamp_partition(timestamp);
@@ -1321,7 +1351,7 @@ private:
     template <typename Completed>
     bool feed_fixed_subscription(BacktestEngine& engine, TimeframeSubscription& subscription,
                                  int index, const Bar* input_bar,
-                                 const native_calendar::NativeInterval& input_interval,
+                                 const native_calendar::NativeInterval& input_partition,
                                  Completed&& completed);
     // A declared series is fed by accepted CONFIRMED input only, because that
     // is the only input a batch of the same bars also has. True (refused)
