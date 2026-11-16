@@ -3,9 +3,10 @@
 // source enters a smaller sum.
 //
 // TradingView rows. The pulse capture of 2026-11-16 (the neighbouring SMA
-// tests cite it as CAP-731-PULSE): a strategy on a 15-minute chart, 44 closed
-// trades and no open one, whose entry comments carry ta.sma(x, 3) of bars
-// 2..45 of its pulse window.
+// tests cite it as CAP-731-PULSE): a strategy on OANDA:EURUSD 15 over
+// 2025-04-01..2025-04-02, the chart and start of the September pulse tapes,
+// with 44 closed trades and no open one, whose entry comments carry
+// ta.sma(x, 3) of bars 2..45 of its pulse window.
 //     script         strategy.pine  sha256 276834fe7b2c2f7c18888e7bf69469fe6aa8bcfe85a7961e0b2d419543b26443
 //     trade list     tv_trades.csv  sha256 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28
 //     decoded rows   decoded.tsv    sha256 a149d349a4302b18eaef95be2ec7cf9d6327a1d3dd108a1fdde29f2f2a554cf5

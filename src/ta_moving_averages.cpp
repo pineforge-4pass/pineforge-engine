@@ -54,11 +54,12 @@ namespace pineforge {
 // The compensation is the step's EXACT rounding error (pinned 2026-11-16, a
 // second capture): with T = fl(S + y), c is T - (S + y) itself, whatever the
 // magnitudes of S and y. The textbook form (T - S) - y is that number only
-// while T - S is exact, which needs S at least as large as y in exponent.
-// When a larger source enters a smaller sum that subtraction rounds and the
-// textbook c is off by what it lost: 0.1 then 0.3 gives 2^-54 where the sum
-// 0.4 is 2^-55 above 0.1 + 0.3. The capture is the start of the round-7 pulse
-// series taken again, as a strategy on a 15-minute chart (script sha256
+// while T - S is exact, which is assured only when S is at least as large as
+// y in exponent. When a larger source enters a smaller sum that subtraction
+// can round, and the textbook c is then off by what it lost: 0.1 then 0.3
+// gives 2^-54 where the sum 0.4 is 2^-55 above 0.1 + 0.3. The capture is the
+// start of the round-7 pulse series taken again on the chart of the September
+// tapes, OANDA:EURUSD 15 from 2025-04-01 (script sha256
 // 276834fe7b2c2f7c18888e7bf69469fe6aa8bcfe85a7961e0b2d419543b26443, trade
 // list sha256
 // 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28): 44 closed
@@ -69,7 +70,7 @@ namespace pineforge {
 // 0; on bars 5..39 the September tape kept 2^-54 and then 2^-55. With the
 // textbook c the zero of bar 2 folds 2^-54 into S and bar 3 lands one unit in
 // the last place of S below 0.3 (0.09999999999999998 for the average, which
-// is what this file computed and what the September tape read there).
+// is what this file computed before and what the September tape read there).
 // tests/test_ta_sma_exact_compensation.cpp replays the 44 rows.
 //
 // The other pieces are the fits of 2026-09-05 and 2026-09-06 (round-7
