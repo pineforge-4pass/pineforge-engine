@@ -35,7 +35,7 @@ decision rather than guessing at it. Two halves:
 1. **Registration.** ``TEST_SOURCES`` is built by one ``set()`` plus a series
    of ``list(APPEND …)`` / ``list(REMOVE_ITEM …)`` calls. Those are replayed
    here for that one variable (and for the one helper list a ``REMOVE_ITEM``
-   expands, ``L3A_LEGACY_OWNER_TEST_SOURCES``), so the result is the same set
+   expands, ``SUPERSEDED_TEST_SOURCES``), so the result is the same set
    CMake computes.
 2. **Reach.** ``pineforge_test_reaches_source_layer`` walks a TU's transitive
    *quoted* include closure and answers TRUE as soon as a line matches
