@@ -2998,6 +2998,23 @@ private:
     private:
         NativeExecutionConsumer& consumer_;
     };
+
+    // The warning array as rendered each time a warning was first raised while
+    // the run was executing (record_live_run_warning), oldest first. The array
+    // rendered before the run stays in run_warnings_json_ and a deque never
+    // moves a text it holds, so a pointer a caller read earlier keeps the
+    // lifetime strategy_get_run_warnings states. Observational, like the
+    // records: never an execution input or hash state. Cleared at every begin.
+    std::deque<std::string> run_warnings_live_;
+    const std::string& run_warnings_text() const noexcept {
+        return run_warnings_live_.empty() ? run_warnings_json_ : run_warnings_live_.back();
+    }
+
+public:
+    // A warning first raised while the run is executing: recorded under the
+    // same site-and-code key as record_run_warning, so a repeat adds nothing,
+    // and the array is rendered again when the key is new.
+    void record_live_run_warning(int site_id, std::string code, std::string args_json);
 };
 
 // The same lazy backing used by RunCommandScratch's Book binding. Kept in

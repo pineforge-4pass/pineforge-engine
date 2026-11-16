@@ -365,6 +365,7 @@ set(TEST_SOURCES
     test_matrix_ops_extra
     test_timeframe_aggregator_extra
     test_c_abi_setters
+    test_host_currency_conversion
     test_fills_edge
     test_default_qty_signal_freeze
     test_sizing_basis_mintick

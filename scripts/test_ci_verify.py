@@ -3363,10 +3363,12 @@ class CAbiRuntimeInventory(unittest.TestCase):
         header = [name for relative in RUNTIME_HEADERS
                   for name in _pf_api_names(ROOT / 'include/pineforge' / relative)]
         runtime = _pf_api_names(ROOT / 'src/c_abi.cpp')
-        # Source rows: pineforge.h 114 + observer 3 + window 3 + sink 5;
-        # 105 c_abi.cpp definitions and twenty generated declarations.
-        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 125)
-        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 105)
+        # Source rows: pineforge.h 115 + observer 3 + window 3 + sink 5;
+        # 106 c_abi.cpp definitions and twenty generated declarations.
+        # expectation corrected: 125 -> 126 and 105 -> 106, because the runtime
+        # adds the export strategy_set_account_currency_fx_scalar.
+        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 126)
+        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 106)
         self.assertEqual(len(EXPECTED_RUNTIME), EXPECTED_RUNTIME_IMPLEMENTATIONS)
         self.assertEqual(len(header), EXPECTED_PUBLIC_DECLARATIONS)
         self.assertEqual(len(header), len(set(header)))
@@ -3378,6 +3380,8 @@ class CAbiRuntimeInventory(unittest.TestCase):
         self.assertIn('strategy_configure_native_fx_curve_v1', runtime)
         self.assertIn('strategy_configure_native_fx_curve_ext_v1', header)
         self.assertIn('strategy_configure_native_fx_curve_ext_v1', runtime)
+        self.assertIn('strategy_set_account_currency_fx_scalar', header)
+        self.assertIn('strategy_set_account_currency_fx_scalar', runtime)
         for name in ('strategy_set_report_sink_fd_v1',
                      'strategy_report_sink_summary_v1',
                      'strategy_report_sink_diagnostics_v1',

@@ -1,6 +1,6 @@
 /*
- * engine_run.cpp — the account-currency FX series, the per-run state reset,
- * the chart-bar session predicate and the input accessors.
+ * engine_run.cpp — the account-currency FX series and scalar, the per-run state
+ * reset, the chart-bar session predicate and the input accessors.
  *
  * The bar pumps, the magnifier sampling loop and the run entrypoints are not
  * here: driving a run is the market driver's and the execution consumer's
@@ -214,6 +214,37 @@ std::string BacktestEngine::get_input_string(const std::string& key, const std::
     auto it = inputs_.find(key);
     if (it != inputs_.end()) return it->second;
     return default_val;
+}
+
+// --- The host-supplied scalar account-currency rate ---
+// The scalar is the rate account_currency_fx_at() answers wherever no curve
+// point is active. Whether a host supplied it is kept apart from its value: the
+// ledger converts at the 1.0 fallback as it always has, while a caller that
+// needs host data asks has_account_currency_fx_at() first.
+bool BacktestEngine::install_account_currency_fx_scalar(double rate) noexcept {
+    const bool valid = std::isfinite(rate) && rate > 0.0;
+    account_currency_fx_ = valid ? rate : 1.0;
+    account_currency_fx_scalar_supplied_ = valid;
+    return valid;
+}
+
+bool BacktestEngine::set_account_currency_fx_scalar(double rate) {
+    guard_native_mutation("set_account_currency_fx_scalar");
+    // Run configuration, held to the window the curve setter keeps: a stream
+    // takes no rate once its warmup has begun, and a refused call changes
+    // nothing.
+    if (stream_phase_ == StreamPhase::REALTIME || stream_warmup_mode_) {
+        return false;
+    }
+    return install_account_currency_fx_scalar(rate);
+}
+
+bool BacktestEngine::has_account_currency_fx_at(std::int64_t at_ms) const noexcept {
+    if (account_currency_fx_scalar_supplied_) return true;
+    // The same boundary account_currency_fx_at() reads: a point is active from
+    // its own timestamp on, and before the first point only the scalar answers.
+    return !account_currency_fx_timestamps_.empty()
+        && account_currency_fx_timestamps_.front() <= at_ms;
 }
 
 }  // namespace pineforge

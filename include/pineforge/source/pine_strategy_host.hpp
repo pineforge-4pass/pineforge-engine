@@ -1614,6 +1614,50 @@ public:
     // for a negative price. Observation only: no order is placed and no driver
     // point advances.
     double default_entry_qty(double fill_price) const;
+
+    // The script's account-currency conversions -- strategy.convert_to_account,
+    // strategy.convert_to_symbol and request.currency_rate -- answered from the
+    // rate the embedding host supplied and from nothing else. A is
+    // `account_currency`, the script's resolved account currency, which the
+    // generated code passes on every call. Q is the currency of the symbol
+    // being evaluated (syminfo.currency). r(t) is the supplied rate in effect at
+    // `at_ms`, in account-currency units per one unit of the chart symbol's
+    // currency (set_account_currency_fx_scalar, set_account_currency_fx_series);
+    // `at_ms` is the evaluation's own Pine time and is never shifted.
+    //
+    //   A == Q: both conversions return `value` and the request Q -> A returns
+    //     1. The currency codes decide it, never a rate equal to 1, and no rate
+    //     is needed.
+    //   A != Q and r(t) supplied: convert_to_account returns value * r(t),
+    //     convert_to_symbol value / r(t), the request Q -> A r(t) and the
+    //     request A -> Q 1 / r(t). A NaN `value` stays NaN.
+    //   Anything else is refused: a missing or invalid currency code, no
+    //     supplied rate in effect at `at_ms`, or a pair other than the symbol's
+    //     and the account's. No rate is guessed, triangulated, fetched or taken
+    //     from another code (USDT is not USD).
+    //
+    // A refusal throws the coded run failure currency_conversion_rate_unavailable,
+    // whose arguments name the function, the currencies and `at_ms`; it stops
+    // the run. request_currency_rate with `ignore_invalid_currency` returns NaN
+    // instead and records that code with those arguments as a run warning
+    // (strategy_get_run_warnings), once per run. The members are not const
+    // because of that record.
+    double strategy_convert_to_account(double value, const std::string& account_currency,
+                                       std::int64_t at_ms);
+    double strategy_convert_to_symbol(double value, const std::string& account_currency,
+                                      std::int64_t at_ms);
+    double request_currency_rate(const std::string& from, const std::string& to,
+                                 const std::string& account_currency, std::int64_t at_ms,
+                                 bool ignore_invalid_currency = false);
+
+private:
+    // One conversion decided under the rule above: the supplied rate it reads,
+    // or the refusal it ends in (pine_strategy_host.cpp).
+    struct CurrencyConversion;
+    CurrencyConversion currency_conversion(const char* function, const char* spelling,
+                                           const std::string& from, const std::string& to,
+                                           const std::string& account_currency,
+                                           std::int64_t at_ms) const;
 };
 
 class PineRequestCallerScope {
@@ -1647,3 +1691,10 @@ using FixtureIntentRow = PineStrategyHost::FixtureIntentRow;
 using FixtureIntentKind = PineStrategyHost::FixtureIntentKind;
 
 } // namespace pineforge::source
+
+// This header declares PineStrategyHost's host-input currency conversions
+// (strategy_convert_to_account, strategy_convert_to_symbol and
+// request_currency_rate). The macro states that the declarations are present
+// and nothing else: a host without a supplied rate refuses those calls, so it
+// never selects an identity or any other substitute implementation.
+#define PINEFORGE_HAS_HOST_CURRENCY_CONVERSION_V1 1

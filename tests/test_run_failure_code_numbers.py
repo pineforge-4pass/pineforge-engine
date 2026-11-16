@@ -40,6 +40,11 @@ V1110_ADDITIONS = {
 V1120_ADDITIONS = {
     "pine_timezone_error": 88,
 }
+# The 1.13.0 group is numbered by name after the 1.12.0 group.
+# These are contract pins, not measured output.
+V1130_ADDITIONS = {
+    "currency_conversion_rate_unavailable": 89,
+}
 # The selected-capacity additions are an independently closed membership list.
 # The generator orders same-release additions by name, so this tuple also pins
 # the contiguous suffix after the released map code without reading the
@@ -51,7 +56,9 @@ SELECTED_CAPACITY_ADDITIONS = (
     "selected_script_bars_limit_exceeded",
     "selected_source_rows_limit_exceeded",
 )
-EXPECTED_ENUMERATOR_COUNT = 89
+# expectation corrected: 89 -> 90, because the catalog adds
+# currency_conversion_rate_unavailable (1.13.0).
+EXPECTED_ENUMERATOR_COUNT = 90
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import check_run_failure_codes as registry
@@ -106,6 +113,7 @@ def test_run_failure_code_numbers_stable():
     assert {name: current.get(name) for name in V190_ADDITIONS} == V190_ADDITIONS
     assert {name: current.get(name) for name in V1110_ADDITIONS} == V1110_ADDITIONS
     assert {name: current.get(name) for name in V1120_ADDITIONS} == V1120_ADDITIONS
+    assert {name: current.get(name) for name in V1130_ADDITIONS} == V1130_ADDITIONS
     assert_selected_capacity_suffix(current)
     assert set(current.values()) == set(range(EXPECTED_ENUMERATOR_COUNT))
     header = (ROOT / HEADER).read_text()
@@ -122,6 +130,7 @@ def test_run_failure_generator_appends_after_released_numbers():
     assert {name: generated.get(name) for name in V190_ADDITIONS} == V190_ADDITIONS
     assert {name: generated.get(name) for name in V1110_ADDITIONS} == V1110_ADDITIONS
     assert {name: generated.get(name) for name in V1120_ADDITIONS} == V1120_ADDITIONS
+    assert {name: generated.get(name) for name in V1130_ADDITIONS} == V1130_ADDITIONS
     assert_selected_capacity_suffix(generated)
     for path, rendered in registry.generated(catalogue).items():
         assert (ROOT / path).read_text(encoding="utf-8") == rendered, str(path)
@@ -224,6 +233,7 @@ def test_report_channel_catalog_contract():
         | set(V190_ADDITIONS)
         | set(V1110_ADDITIONS)
         | set(V1120_ADDITIONS)
+        | set(V1130_ADDITIONS)
         | set(SELECTED_CAPACITY_ADDITIONS)
     )
     assert set(catalogue["codes"]) == expected_names

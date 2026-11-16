@@ -131,7 +131,13 @@ ceilings:
   # #809 retires six groups, adds four OPEN groups, and reclassifies three
   # changed mixed-shape groups as unreviewed. Total OPEN: 1618 -> 1616.
   # No group is claimed bounded; window length remains an input-dependent axis.
-  unreviewed: 1437
+  # expectation corrected: 1437 -> 1439, because two more unreviewed groups:
+  # the native execution consumer's list of warning arrays rendered after a
+  # run began (its declaration and its one append). It holds one text per
+  # warning first raised while the run executes and is cleared at every begin;
+  # a text's length follows the warning's arguments. None is bounded in the
+  # gate's sense: no fixed input is declared for them.
+  unreviewed: 1439
   pending-flat-memory: 179
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1804,3 +1810,5 @@ entries:
   - {id: "U1857", file: "src/ta_moving_averages.cpp", symbol: "replacement", ops: ["decl"], container: "std::vector<Entry>", owner: "ta-series", phase: "unclassified", state: "unreviewed", line: 100}
   - {id: "U1858", file: "src/ta_oscillators.cpp", symbol: "replacement", ops: ["decl"], container: "std::vector<double>", owner: "ta-series", phase: "unclassified", state: "unreviewed", line: 192}
   - {id: "U1859", file: "src/ta_volatility_trend.cpp", symbol: "buffer", ops: ["grow"], container: "unresolved by the index: buffer.push_back(...)", owner: "ta-series", phase: "unclassified", state: "unreviewed", line: 190}
+  - {id: "U1860", file: "src/native_execution_consumer.hpp", symbol: "run_warnings_live_", ops: ["decl"], container: "std::deque<std::string>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", note: "The run-warning array as rendered each time a warning was first raised while the run executed: one text per such warning, kept so that a text a caller already read stays valid, and cleared at every begin. The count follows the distinct site-and-code keys raised during the run and a text's length follows the warning arguments; no fixed input bounds either. OPEN.", line: 2985}
+  - {id: "U1861", file: "src/native_execution_consumer.cpp", symbol: "run_warnings_live_", ops: ["grow"], container: "unresolved by the index: run_warnings_live_.emplace_back(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", note: "record_live_run_warning appends one rendered array when a warning's site-and-code key is new, and removes it again if the rendering fails. One append per distinct key per run; no fixed input bounds the keys or the text. OPEN.", line: 15163}

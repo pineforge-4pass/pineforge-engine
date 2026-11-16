@@ -1499,7 +1499,7 @@ const char* NativeExecutionConsumer::run_warnings_of(const BacktestEngine& engin
     if (consumer == nullptr || !consumer->rows_current_) return "[]";
     if (consumer->run_warnings_unavailable_)
         return "[{\"args\":{},\"code\":\"run_warnings_unavailable\"}]";
-    return consumer->run_warnings_json_.c_str();
+    return consumer->run_warnings_text().c_str();
 }
 
 const char* native_run_warnings(const BacktestEngine* engine) noexcept {
@@ -3209,7 +3209,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     for (auto& run : run_command_scratch_) run.reset();
     dependency_scratch_stats_ = {};
     run_cache_diagnostics_.begin_run();
-    run_warning_records_.clear();
+    run_warning_records_.clear(); run_warnings_live_.clear();
     run_warnings_json_ = "[]";
     run_warnings_unavailable_ = false;
     engine.reset_run_state();
@@ -15274,6 +15274,28 @@ bool NativeExecutionConsumer::read_indexed_cohort_target(
         return a.queried_opening == b.queried_opening;
     }), out.end());
     return true;
+}
+
+// A warning first raised while the run is executing. finish_run_warnings() has
+// rendered the pre-run array into run_warnings_json_ by then and a caller may
+// hold that text, so it is put back exactly as it was: the new array is
+// rendered into its own element of run_warnings_live_, which never moves one.
+void NativeExecutionConsumer::record_live_run_warning(
+        int site_id, std::string code, std::string args_json) {
+    const bool added = run_warning_records_.try_emplace(
+        std::make_pair(site_id, std::move(code)), std::move(args_json)).second;
+    if (!added) return;
+    std::string& rendered = run_warnings_live_.emplace_back();
+    // Lend finish_run_warnings() the new element as the text it renders into.
+    rendered.swap(run_warnings_json_);
+    try {
+        finish_run_warnings();
+    } catch (...) {
+        rendered.swap(run_warnings_json_);
+        run_warnings_live_.pop_back();
+        throw;
+    }
+    rendered.swap(run_warnings_json_);
 }
 
 }  // namespace pineforge::engine_script_run_v20

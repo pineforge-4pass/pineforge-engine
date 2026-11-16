@@ -7,7 +7,8 @@
  *   strategy_get_last_error,
  *   strategy_set_trade_start_time, strategy_set_chart_timezone,
  *   strategy_set_syminfo_timezone / _session / _mintick / _pointvalue /
- *   _metadata / _account_currency_fx_series, and pf_version_string.
+ *   _metadata / _account_currency_fx_series / _account_currency_fx_scalar,
+ *   and pf_version_string.
  *
  * Each entry point begins with a null-guard (`if (!s) return;` — or
  * `if (!s || !arg) return;`) and then forwards to a BacktestEngine
@@ -84,6 +85,7 @@ public:
     double fx_rate(std::size_t i) const {
         return account_currency_fx_rates_.at(i);
     }
+    double fx_scalar() const { return account_currency_fx_; }
     // get_syminfo_metadata() is protected on BacktestEngine; expose it via
     // the subclass. It returns na<double>() (NaN) for keys never injected.
     double meta(const std::string& key) const { return get_syminfo_metadata(key); }
@@ -140,6 +142,7 @@ int main() {
     strategy_set_syminfo_metadata(nullptr, "shares_outstanding_total", 1.0);
     CHECK(strategy_set_account_currency_fx_series(
               nullptr, nullptr, nullptr, 0) == -1);
+    CHECK(strategy_set_account_currency_fx_scalar(nullptr, 1.25) == -1);
     CHECK(strategy_stream_begin(nullptr, nullptr, 0, "1", "1") == -1);
     CHECK(strategy_stream_push_tick(nullptr, nullptr) == -1);
     CHECK(strategy_stream_push_ticks(nullptr, nullptr, 0) == -1);
@@ -313,6 +316,15 @@ int main() {
     CHECK(strategy_set_account_currency_fx_series(
               h, nullptr, nullptr, 0) == 0);
     CHECK(eng.fx_points() == 0);
+
+    // Scalar account-currency FX: the export forwards a finite positive rate
+    // and answers 0; an invalid rate answers -1 and the engine is back on its
+    // 1.0 fallback.
+    CHECK(eng.fx_scalar() == 1.0);                    // constructor default
+    CHECK(strategy_set_account_currency_fx_scalar(h, 1.25) == 0);
+    CHECK(eng.fx_scalar() == 1.25);
+    CHECK(strategy_set_account_currency_fx_scalar(h, 0.0) == -1);
+    CHECK(eng.fx_scalar() == 1.0);
 
     // ── Historical -> realtime lifecycle wrappers ─────────────────
     ProbeEngine stream_eng;

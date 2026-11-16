@@ -4250,3 +4250,191 @@ void source::PineStrategyHost::stage_symbol_feed_views() {
 }
 
 }  // namespace pineforge
+
+// ---- the script's account-currency conversions ------------------------------
+// strategy.convert_to_account, strategy.convert_to_symbol and
+// request.currency_rate (pine_strategy_host.hpp states the rule). The rate is a
+// host input: these read what the host supplied, and where it supplied nothing
+// they refuse. Nothing here guesses a rate, and the ledger's 1.0 fallback is
+// never taken for one.
+
+namespace pineforge {
+
+namespace {
+
+// Why a conversion has no answer: the failure's closed `reason` value and the
+// clause that ends its English text.
+struct CurrencyRefusal {
+    const char* reason;
+    const char* detail;
+};
+constexpr CurrencyRefusal kCurrencyInvalid{
+    "invalid_currency", "a currency is missing or invalid"};
+constexpr CurrencyRefusal kCurrencyRateUnavailable{
+    "rate_unavailable", "the host supplied no rate in effect at that time"};
+constexpr CurrencyRefusal kCurrencyPairUnsupported{
+    "unsupported_pair",
+    "the host-supplied rate converts only between the symbol currency and the account currency"};
+
+// request.currency_rate carries no request site of its own: the generated call
+// passes none. Its warnings share this one site identity, below every
+// request.security site (those count from 0), so a run records the first
+// refused request and a repeat adds nothing.
+constexpr int kCurrencyRateWarningSite = -1;
+
+// A currency code two sides can be compared by: letters and digits, as
+// TradingView spells its codes. An empty code, any other text and Pine's
+// currency.NONE name no currency, so they never prove two sides equal.
+bool currency_code_valid(const std::string& code) noexcept {
+    if (code.empty() || code.size() > 32 || code == "NONE") return false;
+    for (const char c : code) {
+        const bool letter = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+        if (!letter && !(c >= '0' && c <= '9')) return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+struct source::PineStrategyHost::CurrencyConversion {
+    // The request, as a refusal names it: the failure's closed `function`
+    // value, the Pine spelling for the English text, and the evaluation.
+    const char* function;
+    const char* spelling;
+    const std::string& from;
+    const std::string& to;
+    const std::string& account_currency;
+    const std::string& symbol_currency;
+    std::int64_t at_ms;
+    // The answer. `reason` is null when there is one: the same currency on
+    // both sides (`identity`), or the supplied rate r(t), in account-currency
+    // units per one unit of the symbol's currency; `to_account` says whether
+    // the request runs symbol -> account, the direction r(t) is quoted in.
+    // Otherwise `reason` and `detail` are the refusal's.
+    const char* reason;
+    const char* detail;
+    bool identity;
+    bool to_account;
+    double account_per_symbol;
+
+    // The coded failure of the refusal: its code and canonical arguments.
+    RunFailureValue failure() const {
+        return make_run_failure(
+            RunFailureCode::currency_conversion_rate_unavailable,
+            {{"function", function}, {"reason", reason}, {"from", from}, {"to", to},
+             {"account_currency", account_currency}, {"symbol_currency", symbol_currency},
+             {"time_ms", at_ms}});
+    }
+
+    // Stops the run: the transport every coded source failure takes.
+    [[noreturn]] void refuse() const {
+        throw coded<std::runtime_error>(
+            failure(),
+            std::string(spelling) + ": no account-currency conversion rate for \"" + from
+                + "\" to \"" + to + "\" at time " + std::to_string(at_ms)
+                + " (symbol currency \"" + symbol_currency + "\", account currency \""
+                + account_currency + "\"): " + detail);
+    }
+
+    // The same code and arguments as a run warning, for the request that was
+    // told to answer na instead of stopping. A warning that cannot be
+    // recorded marks the run's warnings unavailable: it is never dropped.
+    void warn(BacktestEngine& host) const noexcept {
+        try {
+            const RunFailureValue value = failure();
+            if (value.code == RunFailureCode::currency_conversion_rate_unavailable
+                && value.args) {
+                NativeExecutionConsumer::bound(host).record_live_run_warning(
+                    kCurrencyRateWarningSite, run_failure_code_name(value.code),
+                    std::string(*value.args));
+                return;
+            }
+        } catch (...) {
+            NativeExecutionConsumer::mark_run_warnings_unavailable(host);
+            return;
+        }
+        NativeExecutionConsumer::mark_run_warnings_unavailable(host);
+    }
+};
+
+source::PineStrategyHost::CurrencyConversion source::PineStrategyHost::currency_conversion(
+        const char* function, const char* spelling, const std::string& from,
+        const std::string& to, const std::string& account_currency,
+        std::int64_t at_ms) const {
+    // Q is the currency of the symbol being evaluated. While a foreign request
+    // site's payload runs, syminfo_ is that site's symbol (run_foreign_site_bar
+    // swaps it in) and the chart's own facts wait in the site. The host's rate
+    // is quoted against the chart symbol's currency, whichever symbol is being
+    // evaluated.
+    const std::string& symbol_currency = syminfo_.currency;
+    const std::string& chart_currency =
+        foreign_context_ != nullptr ? foreign_context_->syminfo.currency : symbol_currency;
+    CurrencyConversion conversion{function, spelling, from, to, account_currency,
+                                  symbol_currency, at_ms, nullptr, nullptr, false, false,
+                                  std::numeric_limits<double>::quiet_NaN()};
+    const auto no_answer = [&conversion](const CurrencyRefusal& why) {
+        conversion.reason = why.reason;
+        conversion.detail = why.detail;
+        return conversion;
+    };
+    if (!currency_code_valid(from) || !currency_code_valid(to)
+        || !currency_code_valid(account_currency) || !currency_code_valid(symbol_currency)) {
+        return no_answer(kCurrencyInvalid);
+    }
+    // The two directions the host's rate answers: symbol -> account and back.
+    conversion.to_account = from == symbol_currency && to == account_currency;
+    const bool to_symbol = from == account_currency && to == symbol_currency;
+    if (!conversion.to_account && !to_symbol) return no_answer(kCurrencyPairUnsupported);
+    // The same currency on both sides, decided by the codes alone: no rate is
+    // read, and a supplied rate of 1 for two different currencies is not this.
+    if (account_currency == symbol_currency) {
+        conversion.identity = true;
+        return conversion;
+    }
+    // A foreign symbol quoted in another currency has no supplied rate.
+    if (symbol_currency != chart_currency) return no_answer(kCurrencyPairUnsupported);
+    // Host data only: an explicit scalar, or a curve point in effect at at_ms.
+    // The ledger's 1.0 fallback answers neither question.
+    if (!has_account_currency_fx_at(at_ms)) return no_answer(kCurrencyRateUnavailable);
+    conversion.account_per_symbol = account_currency_fx_at(at_ms);
+    return conversion;
+}
+
+double source::PineStrategyHost::strategy_convert_to_account(
+        double value, const std::string& account_currency, std::int64_t at_ms) {
+    // An amount in the symbol's currency, wanted in the account's.
+    const CurrencyConversion conversion = currency_conversion(
+        "convert_to_account", "strategy.convert_to_account", syminfo_.currency,
+        account_currency, account_currency, at_ms);
+    if (conversion.reason != nullptr) conversion.refuse();
+    return conversion.identity ? value : value * conversion.account_per_symbol;
+}
+
+double source::PineStrategyHost::strategy_convert_to_symbol(
+        double value, const std::string& account_currency, std::int64_t at_ms) {
+    // An amount in the account's currency, wanted in the symbol's.
+    const CurrencyConversion conversion = currency_conversion(
+        "convert_to_symbol", "strategy.convert_to_symbol", account_currency,
+        syminfo_.currency, account_currency, at_ms);
+    if (conversion.reason != nullptr) conversion.refuse();
+    return conversion.identity ? value : value / conversion.account_per_symbol;
+}
+
+double source::PineStrategyHost::request_currency_rate(
+        const std::string& from, const std::string& to, const std::string& account_currency,
+        std::int64_t at_ms, bool ignore_invalid_currency) {
+    const CurrencyConversion conversion = currency_conversion(
+        "currency_rate", "request.currency_rate", from, to, account_currency, at_ms);
+    if (conversion.reason != nullptr) {
+        if (!ignore_invalid_currency) conversion.refuse();
+        // na instead of a stop, and never silently: the run's warnings name the
+        // request that had no rate.
+        conversion.warn(*this);
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    if (conversion.identity) return 1.0;
+    return conversion.to_account ? conversion.account_per_symbol
+                                 : 1.0 / conversion.account_per_symbol;
+}
+
+}  // namespace pineforge

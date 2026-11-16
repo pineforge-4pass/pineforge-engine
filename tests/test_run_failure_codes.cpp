@@ -1881,8 +1881,10 @@ void report_channel_vocabulary_rows() {
           {"reason", "vocab", false, {"exit", "signal", "claim"}},
           {"signal", "integer", true, {}}}},
     };
+    // expectation corrected: 89 -> 90, because the catalog adds
+    // currency_conversion_rate_unavailable (1.13.0).
     CHECK_EQ("report-channel registry count including none",
-             std::to_string(pineforge::kRunFailureCodeCount), "89");
+             std::to_string(pineforge::kRunFailureCodeCount), "90");
     for (const auto& row : rows) {
         const std::string at = std::string("report-channel ") + row.name;
         CHECK_EQ(at + " name", code_name(row.code), row.name);
