@@ -1678,12 +1678,8 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
     return result.label
 
 
-# 2026-11-16 (#836/#883): allow only this measured Moderate state through the
-# aggregate reference floor; its grade and trades remain unchanged. The exception
-# ends when #883 closes: https://github.com/pineforge-4pass/pineforge-engine/issues/883.
-REFERENCE_FLOOR_EXCEPTIONS = {
-    "validation/mtf-triple-tf-macd-hist-confluence-01": "moderate",
-}
+# Exceptions to the aggregate reference floor are named explicitly.
+REFERENCE_FLOOR_EXCEPTIONS = {}
 
 
 def main() -> int:
