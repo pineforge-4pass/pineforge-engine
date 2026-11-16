@@ -568,7 +568,7 @@ set(TEST_SOURCES
 # drove that owner (or mutated its book/seams outside a native callback), so
 # they have no truthful switched-route observation. Native adapter/oracle twins
 # cover their public behavior; the L3b disposition ledger records each mapping.
-set(L3A_LEGACY_OWNER_TEST_SOURCES
+set(SUPERSEDED_TEST_SOURCES
     test_unbounded_margin_admission
     test_settlement_observation_boundary
     test_placement_facts
@@ -733,7 +733,7 @@ set(L3A_LEGACY_OWNER_TEST_SOURCES
 # A24: these source-host security/timeframe/admission tests are behavioral
 # coverage, not approved legacy-owner inventory removals.  They run unchanged
 # against the switched route.
-list(REMOVE_ITEM L3A_LEGACY_OWNER_TEST_SOURCES
+list(REMOVE_ITEM SUPERSEDED_TEST_SOURCES
     test_chart_tf_security_split_feed
     test_get_input_source
     test_htf_chart_close_completion
@@ -753,7 +753,7 @@ list(REMOVE_ITEM L3A_LEGACY_OWNER_TEST_SOURCES
     test_syminfo_metadata
     test_timeframe
 )
-list(REMOVE_ITEM TEST_SOURCES ${L3A_LEGACY_OWNER_TEST_SOURCES})
+list(REMOVE_ITEM TEST_SOURCES ${SUPERSEDED_TEST_SOURCES})
 
 # L3b removes the two remaining direct owner-seam probes. Their behavioural
 # coverage is carried by the registered native settlement and reversal suites.

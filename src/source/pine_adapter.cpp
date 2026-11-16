@@ -92,11 +92,11 @@ namespace {
 // Process totals: 0 = close(""), 1 = close_all(). Count successful transfers
 // of a live, unpriced Entry placed on this script bar, including same-side
 // entries. This does not count batch transfers or prove a later reissue.
-std::atomic<std::uint64_t> cr277_pending_close_pushes[2]{};
+std::atomic<std::uint64_t> pending_close_diagnostic_pushes[2]{};
 }
 extern "C" std::uint64_t pineforge_cr277_diagnostic_hits(int site) noexcept {
     return site >= 0 && site < 2
-        ? cr277_pending_close_pushes[site].load(std::memory_order_relaxed) : 0;
+        ? pending_close_diagnostic_pushes[site].load(std::memory_order_relaxed) : 0;
 }
 #endif
 #ifdef PINEFORGE_VALUE_INVALID_FIXTURES
@@ -10686,7 +10686,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                     const SourceId replacement_key = entry_snapshot.source_id;
                     pending_write(pending_entries_).push_back({std::move(req), std::move(entry_snapshot), replacement_key});
 #ifdef PINEFORGE_CR277_DIAGNOSTIC
-                    cr277_pending_close_pushes[0].fetch_add(1, std::memory_order_relaxed);
+                    pending_close_diagnostic_pushes[0].fetch_add(1, std::memory_order_relaxed);
 #endif
                 }
             }
@@ -11466,7 +11466,7 @@ void PineExecutionAdapter::close_all() {
                     const SourceId replacement_key = entry_snapshot.source_id;
                     pending_write(pending_entries_).push_back({std::move(req), std::move(entry_snapshot), replacement_key});
 #ifdef PINEFORGE_CR277_DIAGNOSTIC
-                    cr277_pending_close_pushes[1].fetch_add(1, std::memory_order_relaxed);
+                    pending_close_diagnostic_pushes[1].fetch_add(1, std::memory_order_relaxed);
 #endif
                 }
             }
