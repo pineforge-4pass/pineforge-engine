@@ -281,8 +281,7 @@ public:
         closed_trade_high_water_ = closed_trade_high_water;
         closed_trade_visits_ += closed_trade_visits;
         scalars_ = std::move(next);
-        if (document_)
-            apply_report_delta(*document_, delta);
+        fold(delta);
         array_sizes_["trades"] = static_cast<std::size_t>(report.trades_len);
         array_sizes_["equity_curve"] = static_cast<std::size_t>(report.equity_curve_len);
         array_sizes_["security_diag"] = static_cast<std::size_t>(report.security_diag_len);
@@ -381,7 +380,7 @@ public:
         closed_trade_high_water_ = patch.closed_trades;
         closed_trade_visits_ += closed_trade_visits;
         scalars_ = std::move(next);
-        if (document_) apply_report_delta(*document_, delta);
+        fold(delta);
         return payload;
     }
     std::string final_ratio_refresh() {
@@ -430,16 +429,102 @@ public:
             {"ratios_as_of_input", report_number(cursor)},
             {"ratio_context", document_->at("ratio_context")}}).dump();
     }
+    // Exactly document_->dump(). Arrays come from array_text_, so a reader of
+    // every version serializes the rows of its newest delta, not the history.
     std::string json() const {
         if (!document_)
             throw std::runtime_error("cumulative report document was not retained");
-        return document_->dump();
+        if (document_->kind != Json::Kind::Object) return document_->dump();
+        if (!array_text_current_) array_text_.clear();
+        const auto array = [this](std::string& out, const std::string& name, const Json& values) {
+            auto& text = array_text_[name];
+            if (text.ends.size() != values.items.size()) {
+                text = {};
+                for (const auto& item : values.items) text.append(item);
+            }
+            out += '[';
+            out += text.bytes;
+            out += ']';
+        };
+        std::string out;
+        out.reserve(text_size_ + 4096);
+        out += '{';
+        bool first = true;
+        for (const auto& [key, value] : document_->members) {
+            if (!first) out += ',';
+            first = false;
+            out += Json::quote(key);
+            out += ':';
+            if (key == "closed_trades" && value.kind == Json::Kind::Array) {
+                array(out, key, value);
+            } else if (key == "report" && value.kind == Json::Kind::Object) {
+                out += '{';
+                bool first_field = true;
+                for (const auto& [name, field] : value.members) {
+                    if (!first_field) out += ',';
+                    first_field = false;
+                    out += Json::quote(name);
+                    out += ':';
+                    if (field.kind == Json::Kind::Array && name != "closed_trades") array(out, name, field);
+                    else out += field.dump();
+                }
+                out += '}';
+            } else {
+                out += value.dump();
+            }
+        }
+        out += '}';
+        array_text_current_ = true;
+        read_version_ = version_;
+        text_size_ = out.size();
+        return out;
     }
     std::string full_json() const {
         return json();
     }
     std::size_t closed_trade_visits() const noexcept { return closed_trade_visits_; }
 private:
+    // One retained array as text: each item's dump, joined by commas.
+    struct ArrayText {
+        std::string bytes;
+        std::vector<std::size_t> ends; // bytes.size() after each item
+        void keep(std::size_t count) {
+            if (count >= ends.size()) return;
+            bytes.resize(count ? ends[count - 1] : 0);
+            ends.resize(count);
+        }
+        void append(const Json& item) {
+            if (!ends.empty()) bytes += ',';
+            bytes += item.dump();
+            ends.push_back(bytes.size());
+        }
+    };
+    static bool carries_array(const Json& value) {
+        if (value.kind == Json::Kind::Array) return true;
+        for (const auto& member : value.members)
+            if (carries_array(member.second)) return true;
+        return false;
+    }
+    // The one place the retained document changes. The array text follows the
+    // same suffix replacement while each version is read as a document; any
+    // other consumer drops it, so no mode pays for text it does not print.
+    void fold(const Json& delta) {
+        if (!document_) return;
+        const bool streamed = array_text_current_ && read_version_ == version_;
+        array_text_current_ = false; // stays dropped if the fold throws part-way
+        apply_report_delta(*document_, delta);
+        ++version_;
+        if (!streamed || carries_array(delta.at("fields"))) {
+            array_text_.clear();
+            return;
+        }
+        for (const auto& [name, patch] : delta.at("arrays").members) {
+            auto& text = array_text_[name];
+            text.keep(patch.at("offset").integer<std::size_t>());
+            for (const auto& item : patch.at("items").items) text.append(item);
+        }
+        array_text_current_ = true;
+    }
     Json ratio_metadata(std::uint64_t cursor, std::uint64_t as_of) const {
         return Json::object({{"as_of_input", report_number(as_of)},
             {"chart_timezone", Json::string(chart_timezone_)},
@@ -480,6 +565,12 @@ private:
     bool delta_v2_ = false;
     std::string chart_timezone_;
     std::uint64_t ratios_cursor_ = 0;
+    // closed_trades and the arrays of report, by name, as of read_version_.
+    mutable std::map<std::string, ArrayText> array_text_;
+    mutable bool array_text_current_ = false;
+    mutable std::uint64_t read_version_ = 0;
+    mutable std::size_t text_size_ = 0;
+    std::uint64_t version_ = 0;
 };
 
 }
