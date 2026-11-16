@@ -42,7 +42,37 @@ void hash_source_series(BrokerStateHashSink& f, const Series<double>& series) {
     for (int i = 0; i < series.size(); ++i) f.d(series[i]);
 }
 
+void hash_request_delivery(BrokerStateHashSink& f,
+                           const source::PineRequestDelivery& delivery) {
+    f.b(delivery.caller_valid);
+    f.b(delivery.eligible);
+    f.b(delivery.actual_complete);
+    f.b(delivery.publication_present);
+    f.b(delivery.publication);
+    f.u(delivery.caller);
+    f.i(delivery.requested_slot);
+    f.b(delivery.replay);
+    f.u(delivery.replay_caller);
+    f.i(delivery.replay_slot);
+}
+
 } // namespace
+
+void source::PineRuntimeSecurityCursor::hash_request_state(BrokerStateHashSink& f) const {
+    f.s(kSourceSecurityDomain);
+    f.s("pineforge-source-runtime-request/v1");
+    f.u(request_instance);
+    f.u(caller);
+    f.u(chart_caller);
+    f.u(parent_caller);
+    f.b(request_selection_enabled);
+    f.b(selected_request_available);
+    hash_request_delivery(f, last_request_delivery);
+    hash_request_delivery(f, selected_request_delivery);
+    // request_owner_ and request_run_ only reject foreign/stale bindings.
+    // Neither the host's address nor its monotonic run generation is state
+    // identity. The source instance number is reset with the real run.
+}
 
 namespace {
 
@@ -1006,6 +1036,9 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     f.b(deferred_boundary_input_.calling_bar_complete);
     f.b(deferred_boundary_input_.all_security_states);
     f.b(deferred_boundary_input_.active);
+    f.u(deferred_boundary_input_.input_caller);
+    f.u(deferred_boundary_input_.release_after_body);
+    f.u(deferred_boundary_input_.chart_caller);
 }
 
 namespace {
@@ -1237,7 +1270,39 @@ void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const
                 f.d(held.bar.close); f.d(held.bar.volume); f.i(held.bar.timestamp);
                 f.i(held.next_input_ms);
                 f.b(held.calling_bar_complete);
+                f.u(held.input_caller);
+                f.u(held.release_after_body);
+                f.u(held.chart_caller);
             }
+            f.b(pine.request_selection_enabled);
+            f.b(pine.selected_request_available);
+            hash_request_delivery(f, pine.last_request_delivery);
+            hash_request_delivery(f, pine.selected_request_delivery);
+        }
+    }
+    if (!request_caller_ids_.empty() || !request_chart_callers_.empty()
+        || request_next_runtime_instance_ != 1) {
+        f.s(kSourceSecurityDomain);
+        f.s("pineforge-source-request-callers/v2");
+        f.u(request_next_caller_);
+        f.u(request_next_runtime_instance_);
+        f.u(request_caller_ids_.size());
+        for (const auto& entry : request_caller_ids_) {
+            f.i(entry.first.kind);
+            f.i(entry.first.first);
+            f.i(entry.first.second);
+            f.i(entry.first.third);
+            f.u(entry.first.occurrence);
+            f.s(entry.first.text);
+            f.u(entry.second);
+        }
+        f.u(request_chart_callers_.size());
+        for (const auto& entry : request_chart_callers_) {
+            f.i(entry.first);
+            f.u(entry.second.caller);
+            f.i(entry.second.interval_index);
+            f.i(entry.second.input_interval_index);
+            f.i(entry.second.close_ms);
         }
     }
     // Lane XSYM-D: the request sites of other symbols -- registration and

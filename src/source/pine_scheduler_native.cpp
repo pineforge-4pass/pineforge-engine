@@ -531,6 +531,14 @@ void PineScheduler::input(
             : host(value), previous(value.bar_index_) { host.bar_index_ = index; }
         ~InputBarIndexScope() { host.bar_index_ = previous; }
     } input_bar_index(host, context.input_index);
+    const auto capture_deferred_callers =
+        [&](DeferredBoundaryInput& deferred, std::int64_t release_open_ms) {
+            deferred.input_caller = host.request_active_caller();
+            deferred.chart_caller = host.request_active_chart_caller();
+            deferred.release_after_body =
+                release_open_ms == std::numeric_limits<std::int64_t>::min()
+                ? 0 : host.request_chart_caller_for(release_open_ms);
+        };
     // The auxiliary slice is fed per chart bar (scheduler_feed_aux_security);
     // sites the kernel steps (declare_security_sites_to_kernel) are fed by
     // its own pump, right after this callback returns.
@@ -550,9 +558,17 @@ void PineScheduler::input(
         // new caller's child proceed in timestamp order.
         const std::int64_t completed_script_open =
             deferred_boundary_input_.prior_script_open_ms;
-        (void)host.scheduler_feed_security_input(
-            deferred_boundary_input_.bar, deferred_boundary_input_.next_input_ms,
-            true, false);
+        const std::uint64_t deferred_input_caller =
+            deferred_boundary_input_.input_caller;
+        const std::uint64_t deferred_chart_caller =
+            deferred_boundary_input_.chart_caller;
+        {
+            PineRequestCallerScope deferred_scope(
+                host, deferred_input_caller, deferred_chart_caller);
+            (void)host.scheduler_feed_security_input(
+                deferred_boundary_input_.bar,
+                deferred_boundary_input_.next_input_ms, true, false);
+        }
         // Keep the new caller's first child out of request.security until the
         // completed caller's chart callback has observed the published value.
         deferred_boundary_input_.bar = bar;
@@ -561,6 +577,8 @@ void PineScheduler::input(
         deferred_boundary_input_.calling_bar_complete = false;
         deferred_boundary_input_.all_security_states = true;
         deferred_boundary_input_.active = true;
+        capture_deferred_callers(
+            deferred_boundary_input_, completed_script_open);
         prior_input_script_open_ms_ = context.script_interval.open_ms;
         return;
     }
@@ -577,6 +595,8 @@ void PineScheduler::input(
         deferred_boundary_input_.calling_bar_complete = false;
         deferred_boundary_input_.all_security_states = true;
         deferred_boundary_input_.active = true;
+        capture_deferred_callers(
+            deferred_boundary_input_, awaiting_legacy_script_open_ms_);
         prior_input_script_open_ms_ = context.script_interval.open_ms;
         return;
     }
@@ -618,6 +638,8 @@ void PineScheduler::input(
         deferred_boundary_input_.calling_bar_complete = true;
         deferred_boundary_input_.all_security_states = false;
         deferred_boundary_input_.active = true;
+        capture_deferred_callers(
+            deferred_boundary_input_, context.script_interval.open_ms);
         prior_input_script_open_ms_ = context.script_interval.open_ms;
         return;
     }
@@ -631,6 +653,8 @@ void PineScheduler::input(
         deferred_boundary_input_.calling_bar_complete = false;
         deferred_boundary_input_.all_security_states = false;
         deferred_boundary_input_.active = true;
+        capture_deferred_callers(
+            deferred_boundary_input_, prior_input_script_open_ms_);
     }
     if (calling_bar_complete && !retained_.bar_magnifier) {
         awaiting_legacy_script_open_ms_ = boundary
@@ -761,13 +785,22 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
     if (uses_aux_security_feed_) host.scheduler_feed_deferred_aux_security(chart_index);
     if (deferred_boundary_input_.active
         && deferred_boundary_input_.prior_script_open_ms == context.script_bar_open_ms) {
-        if (deferred_boundary_input_.all_security_states) {
-            (void)host.scheduler_feed_security_input(
-                deferred_boundary_input_.bar, deferred_boundary_input_.next_input_ms,
-                deferred_boundary_input_.calling_bar_complete, false);
-        } else {
-            host.scheduler_feed_deferred_security_input(
-                deferred_boundary_input_.bar, deferred_boundary_input_.next_input_ms);
+        const DeferredBoundaryInput deferred = deferred_boundary_input_;
+        {
+            PineRequestCallerScope deferred_scope(
+                host,
+                deferred.input_caller != 0 ? deferred.input_caller
+                                           : host.request_active_caller(),
+                deferred.chart_caller != 0 ? deferred.chart_caller
+                                           : host.request_active_chart_caller());
+            if (deferred.all_security_states) {
+                (void)host.scheduler_feed_security_input(
+                    deferred.bar, deferred.next_input_ms,
+                    deferred.calling_bar_complete, false);
+            } else {
+                host.scheduler_feed_deferred_security_input(
+                    deferred.bar, deferred.next_input_ms);
+            }
         }
         deferred_boundary_input_ = {};
     }

@@ -8,6 +8,7 @@
 #include <pineforge/source/pine_scheduler.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <map>
 #include <optional>
@@ -27,6 +28,46 @@
 namespace pineforge::source {
 
 class PineStrategyHost;
+
+// The source adapter's by-value request facts. Generated code copies these
+// records during a callback/read and never retains a callback-scope pointer.
+struct PineRequestDelivery {
+    // Explicit source provenance; generated code must not infer it from a key.
+    bool caller_valid = false;
+    // A real, non-replayed first completion for this historical finer ON
+    // caller. eligible implies caller_valid, actual_complete and slot >= 0.
+    bool eligible = false;
+    bool actual_complete = false;
+    bool publication = false;
+    // Runtime cursor delivery has no BASE publication producer.
+    bool publication_present = false;
+    std::uint64_t caller = 0;
+    // Signed until eligibility is granted. Negative means no requested slot
+    // and must never be converted into a selected-cell slot identity.
+    std::int64_t requested_slot = -1;
+    // Replay cannot create another eligible completion. A static
+    // re-publication retains the original caller/slot provenance.
+    bool replay = false;
+    std::uint64_t replay_caller = 0;
+    std::int64_t replay_slot = -1;
+};
+
+enum class PineRequestReadAction : std::uint8_t {
+    BaseCurrent = 0,
+    Selected = 1,
+    BaseCarry = 2,
+};
+
+struct PineRequestReadBinding {
+    bool caller_valid = false;
+    std::uint64_t caller = 0;
+    // Only Selected grants a selected-cell read; both BASE actions read CURRENT.
+    PineRequestReadAction action = PineRequestReadAction::BaseCurrent;
+};
+
+class PineRequestCallerScope;
+class PineRequestDeliveryScope;
+
 // Language publication policy for one runtime context. The generic engine
 // owns its history/handle; the source adapter owns only this request's clock.
 // Late/live/nested language acceptance remains subject to the #310 A-D tapes.
@@ -44,8 +85,30 @@ struct PineRuntimeSecurityCursor {
     std::int64_t slot_open = std::numeric_limits<std::int64_t>::min();
     std::int64_t chart_open = std::numeric_limits<std::int64_t>::min();
     std::int64_t prior_input = std::numeric_limits<std::int64_t>::min();
+    // Runtime caller identity is source-owned and deterministic within a run.
+    // It is separate from RuntimeContextEvent::index/frontier and from the
+    // requested slot, which are validation and aggregation coordinates.
+    std::uint64_t caller = 0;
+    std::uint64_t chart_caller = 0;
+    std::uint64_t parent_caller = 0;
+    std::uint64_t request_instance = 0;
+    bool request_selection_enabled = false;
+    bool selected_request_available = false;
+    PineRequestDelivery last_request_delivery{};
+    PineRequestDelivery selected_request_delivery{};
     using Delivery = std::function<void(const Bar&, bool)>;
     void feed(const RuntimeContextEvent&, const Delivery&, const std::function<void()>& begin_chart);
+    // Generated owners fold this for each LIVE instance, beside its selected
+    // scalar cell, in stable owner/site order. No address or run generation
+    // is a semantic hash identity.
+    void hash_request_state(BrokerStateHashSink&) const;
+private:
+    friend class PineStrategyHost;
+    // Operational bindings established before feed(), which generated code
+    // calls outside PineRuntimeSecurityScope. Copies transfer the same cursor
+    // lifetime; only a fresh factory call creates a new logical instance.
+    PineStrategyHost* request_owner_ = nullptr;
+    std::uint64_t request_run_ = 0;
 };
 
 // Language context metadata only. No result is published through this scope;
@@ -57,10 +120,13 @@ public:
     PineRuntimeSecurityScope(const PineRuntimeSecurityScope&) = delete;
     PineRuntimeSecurityScope& operator=(const PineRuntimeSecurityScope&) = delete;
     static const PineRuntimeSecurityCursor* current(const PineStrategyHost&) noexcept;
+    static PineStrategyHost* current_owner() noexcept;
 private:
     static thread_local const PineStrategyHost* owner_;
+    static thread_local PineStrategyHost* mutable_owner_;
     static thread_local PineRuntimeSecurityCursor* cursor_;
     const PineStrategyHost* previous_owner_;
+    PineStrategyHost* previous_mutable_owner_;
     PineRuntimeSecurityCursor* previous_cursor_;
 };
 
@@ -68,7 +134,7 @@ private:
 // the source extension only when a site is registered, so a run without
 // request.security hashes exactly as before; bumped whenever the folded
 // field set changes.
-inline constexpr char kSourceSecurityDomain[] = "pineforge-source-security/v6";
+inline constexpr char kSourceSecurityDomain[] = "pineforge-source-security/v8";
 
 // Hash domain of the request data of other symbols (lane XSYM-D): the sites
 // that read another symbol's feed, and the facts and recorded series the run
@@ -123,6 +189,12 @@ struct DeferredAuxBar {
     Bar bar;
     int64_t next_input_ms = 0;
     bool calling_bar_complete = false;
+    // The saved input and the body that releases it are different ownership
+    // facts on a deferred path. chart_caller restores the read binding after
+    // the nested/deferred feed.
+    std::uint64_t input_caller = 0;
+    std::uint64_t release_after_body = 0;
+    std::uint64_t chart_caller = 0;
 };
 
 // Pine's publication semantics for ONE request.security site, kept beside the
@@ -330,6 +402,14 @@ struct PineSecurityEvalState {
     // state's current bucket is afterwards.
     int64_t last_published_label = 0;
     std::vector<DeferredAuxBar> deferred_aux;
+
+    // Narrow scalar finer-historical lookahead_on continuation sidecar. The
+    // existing evaluator remains CURRENT/BASE and keeps its publication flag;
+    // this metadata only identifies the first eligible value for SELECTED.
+    bool request_selection_enabled = false;
+    bool selected_request_available = false;
+    PineRequestDelivery last_request_delivery{};
+    PineRequestDelivery selected_request_delivery{};
 };
 
 class PineStrategyHost : public NativeStrategyHost, public BrokerStateHashProvider {
@@ -444,6 +524,17 @@ public:
     bool is_last_tick() const noexcept;
     bool history_advances_new_bar() const noexcept;
     bool security_series_slot_is_new(int) const noexcept;
+    // By-value source facts for the generated scalar CURRENT/SELECTED path.
+    // The delivery record is meaningful during an evaluator callback; the
+    // read binding resolves the current chart/requested body on every use.
+    // A qualifying runtime read without a bound caller key stays invalid /
+    // BaseCarry; a matching timestamp cannot grant Selected.
+    PineRequestDelivery current_request_delivery(int sec_id) const noexcept;
+    PineRequestReadBinding current_request_read(int sec_id) const noexcept;
+    PineRequestDelivery current_request_delivery(
+        const PineRuntimeSecurityCursor&) const noexcept;
+    PineRequestReadBinding current_request_read(
+        const PineRuntimeSecurityCursor&) const noexcept;
     PineRuntimeSecurityCursor make_runtime_security_cursor(
         const std::string& timeframe, bool lookahead, bool gaps, bool lower_array,
         bool heikinashi = false) const;
@@ -935,7 +1026,85 @@ protected:
 private:
     friend class PineScheduler;
     friend class PineExecutionAdapter;
+    friend class PineRequestCallerScope;
+    friend class PineRequestDeliveryScope;
+    friend struct PineRuntimeSecurityCursor;
     friend struct ReportSinkEquityTestAccess;
+
+    struct RequestDeliveryFrame {
+        int sec_id = -1;
+        // Exact operational identity, never a wildcard static sec_id and never
+        // folded as an address. The logical identity is body_caller.
+        const PineRuntimeSecurityCursor* runtime_cursor = nullptr;
+        PineRequestDelivery delivery{};
+        std::uint64_t body_caller = 0;
+        std::int64_t body_open_ms = std::numeric_limits<std::int64_t>::min();
+    };
+    struct RequestCallerKey {
+        std::uint8_t kind = 0;
+        std::int64_t first = 0;
+        std::int64_t second = 0;
+        std::int64_t third = 0;
+        std::uint64_t occurrence = 0;
+        std::string text;
+        bool operator<(const RequestCallerKey& other) const noexcept {
+            if (kind != other.kind) return kind < other.kind;
+            if (first != other.first) return first < other.first;
+            if (second != other.second) return second < other.second;
+            if (third != other.third) return third < other.third;
+            if (occurrence != other.occurrence) return occurrence < other.occurrence;
+            return text < other.text;
+        }
+    };
+    struct RequestChartCaller {
+        std::uint64_t caller = 0;
+        int interval_index = -1;
+        int input_interval_index = -1;
+        std::int64_t close_ms = 0;
+    };
+    struct RequestParentBinding {
+        std::uint64_t caller = 0;
+        std::int64_t open_ms = std::numeric_limits<std::int64_t>::min();
+        std::int64_t close_ms = 0;
+        bool requested_body = false;
+        bool replay = false;
+        // Borrowed only for the synchronous feed/read. It qualifies selection
+        // against the actual parent without changing BASE's aggregation clock.
+        const std::string* timeframe = nullptr;
+    };
+
+    void push_request_delivery(int sec_id, const PineRequestDelivery&,
+                               std::int64_t body_open_ms);
+    void push_request_delivery(const PineRuntimeSecurityCursor&,
+                               const PineRequestDelivery&, std::int64_t body_open_ms);
+    void pop_request_delivery() noexcept;
+    void set_request_caller_scope(std::uint64_t caller,
+                                  std::uint64_t chart_caller) noexcept;
+    void reset_request_delivery_state() noexcept;
+    void dispatch_pine_request(SecurityEvalState&, const Bar&, bool publication,
+                               std::int64_t requested_slot, bool actual_complete);
+    std::uint64_t request_caller_id(const RequestCallerKey&);
+    std::uint64_t request_chart_caller_for(std::int64_t script_open_ms);
+    std::uint64_t request_input_caller(const NativeInputContext&);
+    std::uint64_t request_input_caller(const NativeDecisionContext&);
+    std::uint64_t request_body_caller(const NativeDecisionContext&);
+    std::uint64_t request_foreign_caller(int sec_id, std::int64_t delivered);
+    std::uint64_t request_runtime_caller(std::uint64_t instance,
+                                         std::uint64_t parent_caller);
+    RequestCallerKey request_runtime_caller_key(std::uint64_t instance,
+                                               std::uint64_t parent_caller) const noexcept;
+    RequestParentBinding request_runtime_parent(
+        const PineRuntimeSecurityCursor&) const noexcept;
+    bool request_cursor_is_current(const PineRuntimeSecurityCursor&) const noexcept;
+    bool request_historical_selection_allowed() const noexcept;
+    bool request_runtime_selection_allowed(const PineRuntimeSecurityCursor&,
+                                           const RequestParentBinding&) const noexcept;
+    std::uint64_t request_active_caller() const noexcept {
+        return request_active_caller_;
+    }
+    std::uint64_t request_active_chart_caller() const noexcept {
+        return request_active_chart_caller_;
+    }
     // One request.security site of ANOTHER symbol (register_security_eval with a
     // symbol key). Its payload runs in the requested context: on every bar of the
     // symbol's feed, in order, as the kernel hands the bars over through the
@@ -1013,7 +1182,8 @@ private:
     void prepare_foreign_security_sites(std::vector<NativeTimeframeSubscription>& declared);
     // The site's payload on the next bar of its feed, in the requested
     // context: `bar` and `close_ms` are that bar's own.
-    void run_foreign_site_bar(ForeignSecuritySite& site, const Bar& bar, std::int64_t close_ms);
+    void run_foreign_site_bar(int sec_id, ForeignSecuritySite& site,
+                              const Bar& bar, std::int64_t close_ms);
     // On a calendar chart, every foreign bar TradingView's merge rule makes
     // visible at `chart_bar` that the kernel has not handed over yet, run in
     // feed order after the input's deliveries (pine_security_eval.cpp).
@@ -1244,6 +1414,16 @@ protected:
     // The accepted input being processed, as on_native_input last saw it; a
     // foreign site's deliveries are stamped with it.
     std::int64_t foreign_input_index_ = -1;
+    // Source-owned caller catalog. Keys are actual producer coordinates
+    // (input/body/foreign/runtime); no pointer, label, or rescan-cache
+    // position is used as a caller identity.
+    std::map<RequestCallerKey, std::uint64_t> request_caller_ids_;
+    std::map<std::int64_t, RequestChartCaller> request_chart_callers_;
+    std::uint64_t request_next_caller_ = 1;
+    mutable std::uint64_t request_next_runtime_instance_ = 1;
+    std::uint64_t request_active_caller_ = 0;
+    std::uint64_t request_active_chart_caller_ = 0;
+    std::vector<RequestDeliveryFrame> request_delivery_stack_;
     // @source-state end
     // The foreign site whose payload is being evaluated: its requested
     // context answers pine_bar_index(), time_close() and syminfo_ for the
@@ -1409,6 +1589,32 @@ public:
     // for a negative price. Observation only: no order is placed and no driver
     // point advances.
     double default_entry_qty(double fill_price) const;
+};
+
+class PineRequestCallerScope {
+public:
+    PineRequestCallerScope(PineStrategyHost&, std::uint64_t caller,
+                           std::uint64_t chart_caller) noexcept;
+    ~PineRequestCallerScope();
+    PineRequestCallerScope(const PineRequestCallerScope&) = delete;
+    PineRequestCallerScope& operator=(const PineRequestCallerScope&) = delete;
+private:
+    PineStrategyHost& host_;
+    std::uint64_t previous_caller_;
+    std::uint64_t previous_chart_caller_;
+};
+
+class PineRequestDeliveryScope {
+public:
+    PineRequestDeliveryScope(PineStrategyHost&, int sec_id,
+                             const PineRequestDelivery&, std::int64_t body_open_ms);
+    PineRequestDeliveryScope(PineStrategyHost&, const PineRuntimeSecurityCursor&,
+                             const PineRequestDelivery&, std::int64_t body_open_ms);
+    ~PineRequestDeliveryScope();
+    PineRequestDeliveryScope(const PineRequestDeliveryScope&) = delete;
+    PineRequestDeliveryScope& operator=(const PineRequestDeliveryScope&) = delete;
+private:
+    PineStrategyHost& host_;
 };
 
 using PineNativeHost = PineStrategyHost;

@@ -754,6 +754,7 @@ void source::PineStrategyHost::on_native_run_begin() {
     foreign_security_sites_.clear();
     foreign_security_series_.clear();
     foreign_input_index_ = -1;
+    reset_request_delivery_state();
     try {
         install_symbol_calendar_metadata();
         scheduler_.run_begin(*this);
@@ -892,6 +893,10 @@ void source::PineStrategyHost::on_native_input(
     if (source_prepare_failed_) return;
     if (detail::run_phase(*this) == NativeRunPhase::Realtime)
         stream_warmup_mode_ = false;
+    const std::uint64_t input_caller = request_input_caller(context);
+    const std::uint64_t chart_caller = input_caller != 0
+        ? request_chart_caller_for(context.script_interval.open_ms) : 0;
+    PineRequestCallerScope caller_scope(*this, input_caller, chart_caller);
     foreign_input_index_ = context.input_index;
     scheduler_.input(bar, context, *this);
     // Aggregation can deliver leftover input after the last script callback.
@@ -905,6 +910,10 @@ void source::PineStrategyHost::on_native_tick(
     if (source_prepare_failed_) return;
     if (detail::run_phase(*this) == NativeRunPhase::Realtime)
         stream_warmup_mode_ = false;
+    const std::uint64_t input_caller = request_input_caller(context.decision);
+    const std::uint64_t chart_caller = input_caller != 0
+        ? request_chart_caller_for(context.decision.script_interval.open_ms) : 0;
+    PineRequestCallerScope caller_scope(*this, input_caller, chart_caller);
     scheduler_.tick(tick, context, *this);
     adapter_.on_tick(tick, context);
 }
@@ -944,6 +953,8 @@ void source::PineStrategyHost::on_native_sub_bar(
 void source::PineStrategyHost::on_native_bar(
         const Bar& bar, const NativeDecisionContext& context) {
     if (source_prepare_failed_) return;
+    const std::uint64_t body_caller = request_body_caller(context);
+    PineRequestCallerScope caller_scope(*this, body_caller, body_caller);
     bar_magnifier_enabled_ = scheduler_.bar_magnifier_enabled();
     diag_magnifier_sub_bars_processed_ = bar_magnifier_enabled_
         ? static_cast<std::int64_t>(context.driver_statistics.sub_bars_processed) : 0;
@@ -1179,6 +1190,8 @@ void source::PineStrategyHost::on_native_recalculate(
     // grouped-stop sibling, a replayed ordinal) still spends a kernel
     // recalculation slot; it publishes nothing and books nothing.
     if (!scheduler_.coof_recalculation_due(*cause, context, *this)) return;
+    const std::uint64_t body_caller = request_body_caller(context);
+    PineRequestCallerScope caller_scope(*this, body_caller, body_caller);
     scheduler_.recalculate(*cause, context, *this);
     record_applied_range_end();
 }
@@ -1874,20 +1887,330 @@ void source::PineStrategyHost::scheduler_prepare_script_run(
 }
 
 thread_local const source::PineStrategyHost* source::PineRuntimeSecurityScope::owner_ = nullptr;
+thread_local source::PineStrategyHost* source::PineRuntimeSecurityScope::mutable_owner_ = nullptr;
 thread_local source::PineRuntimeSecurityCursor* source::PineRuntimeSecurityScope::cursor_ = nullptr;
 
 source::PineRuntimeSecurityScope::PineRuntimeSecurityScope(
         const PineStrategyHost& owner, PineRuntimeSecurityCursor& cursor) noexcept
-    : previous_owner_(owner_), previous_cursor_(cursor_) {
-    owner_ = &owner; cursor_ = &cursor;
+    : previous_owner_(owner_), previous_mutable_owner_(mutable_owner_),
+      previous_cursor_(cursor_) {
+    owner_ = &owner;
+    mutable_owner_ = const_cast<PineStrategyHost*>(&owner);
+    cursor_ = &cursor;
 }
 source::PineRuntimeSecurityScope::~PineRuntimeSecurityScope() {
-    owner_ = previous_owner_; cursor_ = previous_cursor_;
+    owner_ = previous_owner_;
+    mutable_owner_ = previous_mutable_owner_;
+    cursor_ = previous_cursor_;
 }
 const source::PineRuntimeSecurityCursor* source::PineRuntimeSecurityScope::current(
         const PineStrategyHost& owner) noexcept {
     return owner_ == &owner ? cursor_ : nullptr;
 }
+source::PineStrategyHost* source::PineRuntimeSecurityScope::current_owner() noexcept {
+    return mutable_owner_;
+}
+
+source::PineRequestCallerScope::PineRequestCallerScope(
+        PineStrategyHost& host, std::uint64_t caller,
+        std::uint64_t chart_caller) noexcept
+    : host_(host), previous_caller_(host.request_active_caller_),
+      previous_chart_caller_(host.request_active_chart_caller_) {
+    host_.set_request_caller_scope(caller, chart_caller);
+}
+
+source::PineRequestCallerScope::~PineRequestCallerScope() {
+    host_.set_request_caller_scope(previous_caller_, previous_chart_caller_);
+}
+
+source::PineRequestDeliveryScope::PineRequestDeliveryScope(
+        PineStrategyHost& host, int sec_id,
+        const PineRequestDelivery& delivery, std::int64_t body_open_ms)
+    : host_(host) {
+    host_.push_request_delivery(sec_id, delivery, body_open_ms);
+}
+
+source::PineRequestDeliveryScope::PineRequestDeliveryScope(
+        PineStrategyHost& host, const PineRuntimeSecurityCursor& cursor,
+        const PineRequestDelivery& delivery, std::int64_t body_open_ms)
+    : host_(host) {
+    host_.push_request_delivery(cursor, delivery, body_open_ms);
+}
+
+source::PineRequestDeliveryScope::~PineRequestDeliveryScope() {
+    host_.pop_request_delivery();
+}
+
+std::uint64_t source::PineStrategyHost::request_caller_id(
+        const RequestCallerKey& key) {
+    const auto found = request_caller_ids_.find(key);
+    if (found != request_caller_ids_.end()) return found->second;
+    const std::uint64_t caller = request_next_caller_++;
+    request_caller_ids_.emplace(key, caller);
+    return caller;
+}
+
+std::uint64_t source::PineStrategyHost::request_chart_caller_for(
+        std::int64_t script_open_ms) {
+    if (script_open_ms == std::numeric_limits<std::int64_t>::min()) return 0;
+    auto found = request_chart_callers_.find(script_open_ms);
+    return found == request_chart_callers_.end() ? 0 : found->second.caller;
+}
+
+std::uint64_t source::PineStrategyHost::request_input_caller(
+        const NativeInputContext& context) {
+    if (pine_security_states_.empty() && foreign_security_sites_.empty()
+        && !runtime_contexts().history_enabled()) return 0;
+    auto chart_row = request_chart_callers_.find(context.script_interval.open_ms);
+    if (chart_row == request_chart_callers_.end()) {
+        RequestCallerKey chart_key;
+        chart_key.kind = 2; // chart caller admitted from a real input
+        chart_key.first = context.script_interval.open_ms;
+        chart_key.second = context.input_index;
+        chart_key.third = context.input_interval.open_ms;
+        RequestChartCaller record;
+        record.caller = request_caller_id(chart_key);
+        record.input_interval_index = context.input_index;
+        record.close_ms = context.script_interval.last_traded_close_ms;
+        chart_row = request_chart_callers_.emplace(
+            context.script_interval.open_ms, record).first;
+    } else {
+        chart_row->second.input_interval_index = context.input_index;
+        chart_row->second.close_ms = context.script_interval.last_traded_close_ms;
+    }
+    RequestCallerKey key;
+    key.kind = 1; // accepted native input occurrence
+    key.first = context.input_index;
+    key.second = context.input_interval.open_ms;
+    key.third = context.script_interval.open_ms;
+    return request_caller_id(key);
+}
+
+std::uint64_t source::PineStrategyHost::request_input_caller(
+        const NativeDecisionContext& context) {
+    if (pine_security_states_.empty() && foreign_security_sites_.empty()
+        && !runtime_contexts().history_enabled()) return 0;
+    auto chart_row = request_chart_callers_.find(context.script_interval.open_ms);
+    if (chart_row == request_chart_callers_.end()) {
+        RequestCallerKey chart_key;
+        chart_key.kind = 2;
+        chart_key.first = context.script_interval.open_ms;
+        chart_key.second = context.coordinate.interval_index;
+        chart_key.third = context.coordinate.input_interval_index;
+        RequestChartCaller record;
+        record.caller = request_caller_id(chart_key);
+        record.interval_index = context.coordinate.interval_index;
+        record.input_interval_index = context.coordinate.input_interval_index;
+        record.close_ms = context.script_interval.last_traded_close_ms;
+        chart_row = request_chart_callers_.emplace(
+            context.script_interval.open_ms, record).first;
+    } else {
+        chart_row->second.input_interval_index =
+            context.coordinate.input_interval_index;
+        chart_row->second.close_ms = context.script_interval.last_traded_close_ms;
+    }
+    RequestCallerKey key;
+    key.kind = 1;
+    key.first = context.coordinate.input_interval_index;
+    key.second = context.input_interval.open_ms;
+    key.third = context.script_interval.open_ms;
+    return request_caller_id(key);
+}
+
+std::uint64_t source::PineStrategyHost::request_body_caller(
+        const NativeDecisionContext& context) {
+    if (pine_security_states_.empty() && foreign_security_sites_.empty()
+        && !runtime_contexts().history_enabled()) return 0;
+    auto chart_row = request_chart_callers_.find(context.script_interval.open_ms);
+    if (chart_row == request_chart_callers_.end()) {
+        RequestCallerKey chart_key;
+        chart_key.kind = 2; // quiet/body caller with an actual coordinate
+        chart_key.first = context.script_interval.open_ms;
+        chart_key.second = context.coordinate.interval_index;
+        chart_key.third = context.coordinate.input_interval_index;
+        RequestChartCaller record;
+        record.caller = request_caller_id(chart_key);
+        record.interval_index = context.coordinate.interval_index;
+        record.input_interval_index = context.coordinate.input_interval_index;
+        record.close_ms = context.script_interval.last_traded_close_ms;
+        chart_row = request_chart_callers_.emplace(
+            context.script_interval.open_ms, record).first;
+    } else {
+        chart_row->second.interval_index = context.coordinate.interval_index;
+        chart_row->second.input_interval_index =
+            context.coordinate.input_interval_index;
+        chart_row->second.close_ms = context.script_interval.last_traded_close_ms;
+    }
+    return chart_row->second.caller;
+}
+
+std::uint64_t source::PineStrategyHost::request_foreign_caller(
+        int sec_id, std::int64_t delivered) {
+    RequestCallerKey key;
+    key.kind = 3; // foreign feed occurrence
+    key.first = sec_id;
+    key.second = delivered;
+    return request_caller_id(key);
+}
+
+std::uint64_t source::PineStrategyHost::request_runtime_caller(
+        std::uint64_t instance, std::uint64_t parent_caller) {
+    return request_caller_id(request_runtime_caller_key(instance, parent_caller));
+}
+
+source::PineStrategyHost::RequestCallerKey
+source::PineStrategyHost::request_runtime_caller_key(
+        std::uint64_t instance, std::uint64_t parent_caller) const noexcept {
+    RequestCallerKey key;
+    key.kind = 4; // actual runtime instance in an actual enclosing body
+    key.first = static_cast<std::int64_t>(instance);
+    key.second = static_cast<std::int64_t>(parent_caller);
+    const auto phase = detail::run_phase(*this);
+    key.third = static_cast<std::int64_t>(phase);
+    if (phase == NativeRunPhase::Realtime) {
+        if (const auto* point = detail::callback_point(*this))
+            key.occurrence = point->decision.coordinate.ordinal;
+    }
+    return key;
+}
+
+source::PineStrategyHost::RequestParentBinding
+source::PineStrategyHost::request_runtime_parent(
+        const PineRuntimeSecurityCursor& cursor) const noexcept {
+    // A callback's requested slot is its nested body's identity, even if its
+    // outer chart caller has not changed. Do not freeze this at construction.
+    for (auto it = request_delivery_stack_.rbegin();
+         it != request_delivery_stack_.rend(); ++it) {
+        if (it->runtime_cursor == &cursor) continue;
+        const std::string* timeframe = nullptr;
+        if (it->runtime_cursor) {
+            timeframe = &it->runtime_cursor->timeframe;
+        } else {
+            for (const auto& state : security_eval_states_) {
+                if (state.sec_id == it->sec_id) {
+                    timeframe = state.tf.empty() ? &script_tf_ : &state.tf;
+                    break;
+                }
+            }
+            if (timeframe == nullptr) {
+                const auto foreign = foreign_security_sites_.find(it->sec_id);
+                if (foreign != foreign_security_sites_.end())
+                    timeframe = &foreign->second.tf;
+            }
+        }
+        return {it->body_caller, it->body_open_ms, 0, true,
+                it->delivery.replay || security_history_publication_replay_,
+                timeframe};
+    }
+    const auto current = request_chart_callers_.find(current_bar_.timestamp);
+    if (current != request_chart_callers_.end()
+        && current->second.caller == request_active_chart_caller_
+        && request_active_chart_caller_ != 0) {
+        return {current->second.caller, current->first, current->second.close_ms,
+                false, security_history_publication_replay_, &script_tf_};
+    }
+    for (const auto& entry : request_chart_callers_) {
+        if (entry.second.caller == request_active_chart_caller_
+            && request_active_chart_caller_ != 0) {
+            return {entry.second.caller, entry.first, entry.second.close_ms,
+                    false, security_history_publication_replay_, &script_tf_};
+        }
+    }
+    return {};
+}
+
+bool source::PineStrategyHost::request_cursor_is_current(
+        const PineRuntimeSecurityCursor& cursor) const noexcept {
+    return cursor.request_owner_ == this
+        && cursor.request_run_ == adapter_.run_counter_
+        && cursor.request_instance != 0;
+}
+
+bool source::PineStrategyHost::request_historical_selection_allowed() const noexcept {
+    return detail::run_phase(*this) != NativeRunPhase::Realtime;
+}
+
+bool source::PineStrategyHost::request_runtime_selection_allowed(
+        const PineRuntimeSecurityCursor& cursor,
+        const RequestParentBinding& parent) const noexcept {
+    if (!cursor.request_selection_enabled || parent.caller == 0
+        || parent.timeframe == nullptr || !request_historical_selection_allowed())
+        return false;
+    // These are the source-validated clocks. Keep malformed/undetected clocks
+    // outside selection without changing their existing BASE validation.
+    try {
+        const int requested_seconds = tf_to_seconds(cursor.timeframe);
+        const int calling_seconds = tf_to_seconds(*parent.timeframe);
+        return requested_seconds > 0 && calling_seconds > requested_seconds
+            && calling_seconds % requested_seconds == 0;
+    } catch (const std::invalid_argument&) {
+        return false;
+    } catch (const std::out_of_range&) {
+        return false;
+    }
+}
+
+void source::PineStrategyHost::set_request_caller_scope(
+        std::uint64_t caller, std::uint64_t chart_caller) noexcept {
+    request_active_caller_ = caller;
+    request_active_chart_caller_ = chart_caller;
+}
+
+void source::PineStrategyHost::push_request_delivery(
+        int sec_id, const PineRequestDelivery& delivery, std::int64_t body_open_ms) {
+    RequestDeliveryFrame frame;
+    frame.sec_id = sec_id;
+    frame.delivery = delivery;
+    frame.body_open_ms = body_open_ms;
+    if (delivery.caller_valid && delivery.requested_slot >= 0) {
+        RequestCallerKey key;
+        key.kind = 5; // a static evaluator's real requested body/phase
+        key.first = sec_id;
+        key.second = delivery.requested_slot;
+        key.third = static_cast<std::int64_t>(detail::run_phase(*this));
+        frame.body_caller = request_caller_id(key);
+    }
+    request_delivery_stack_.push_back(frame);
+}
+
+void source::PineStrategyHost::push_request_delivery(
+        const PineRuntimeSecurityCursor& cursor,
+        const PineRequestDelivery& delivery, std::int64_t body_open_ms) {
+    RequestDeliveryFrame frame;
+    frame.runtime_cursor = &cursor;
+    frame.delivery = delivery;
+    frame.body_open_ms = body_open_ms;
+    if (delivery.caller_valid && delivery.requested_slot >= 0) {
+        RequestCallerKey key;
+        key.kind = 6; // a live runtime instance's real requested body/phase
+        key.first = static_cast<std::int64_t>(cursor.request_instance);
+        key.second = delivery.requested_slot;
+        key.third = static_cast<std::int64_t>(detail::run_phase(*this));
+        frame.body_caller = request_caller_id(key);
+    }
+    request_delivery_stack_.push_back(frame);
+}
+
+void source::PineStrategyHost::pop_request_delivery() noexcept {
+    if (!request_delivery_stack_.empty()) request_delivery_stack_.pop_back();
+}
+
+void source::PineStrategyHost::reset_request_delivery_state() noexcept {
+    request_caller_ids_.clear();
+    request_chart_callers_.clear();
+    request_delivery_stack_.clear();
+    request_next_caller_ = 1;
+    request_next_runtime_instance_ = 1;
+    request_active_caller_ = 0;
+    request_active_chart_caller_ = 0;
+    for (auto& entry : pine_security_states_) {
+        PineSecurityEvalState& pine = entry.second;
+        pine.selected_request_available = false;
+        pine.last_request_delivery = {};
+        pine.selected_request_delivery = {};
+    }
+}
+
 std::string source::PineStrategyHost::runtime_security_timeframe(
         const std::string& selected) const {
     if (!selected.empty()) return selected;
@@ -1957,6 +2280,13 @@ source::PineRuntimeSecurityCursor source::PineStrategyHost::make_runtime_securit
     cursor.aggregator = TimeframeAggregator(timeframe, input_tf_,
                                             cursor.timezone, cursor.session);
     cursor.aggregator.set_early_close_completes(runtime_context_early_close_completes());
+    cursor.request_selection_enabled = lookahead && !gaps && !lower_array
+        && !heikinashi && !cursor.no_loaded_bars && !cursor.subdivision;
+    // The generated evaluator invokes feed before opening its callback's TLS
+    // scope. Bind the real owner for the entire cursor/feed/read lifetime.
+    cursor.request_owner_ = const_cast<PineStrategyHost*>(this);
+    cursor.request_run_ = adapter_.run_counter_;
+    cursor.request_instance = request_next_runtime_instance_++;
     return cursor;
 }
 
@@ -1971,11 +2301,81 @@ std::uint64_t source::PineStrategyHost::runtime_security_frontier() const {
 void source::PineRuntimeSecurityCursor::feed(
         const RuntimeContextEvent& event, const Delivery& deliver,
         const std::function<void()>& begin_chart) {
+    PineStrategyHost* const owner = request_owner_
+        && request_owner_->request_cursor_is_current(*this) ? request_owner_ : nullptr;
+    // The enclosing body may change while the cursor survives. In particular,
+    // nested requested slots and COOF re-entry are not construction metadata.
+    const auto parent = owner ? owner->request_runtime_parent(*this)
+                              : PineStrategyHost::RequestParentBinding{};
+    parent_caller = parent.caller;
+    caller = owner && parent.caller != 0
+        ? owner->request_runtime_caller(request_instance, parent.caller) : 0;
+    chart_caller = caller;
+    const auto begin = [&] {
+        if (owner == nullptr) {
+            begin_chart();
+            return;
+        }
+        PineRequestCallerScope caller_scope(*owner, caller, chart_caller);
+        begin_chart();
+    };
+    const auto deliver_one = [&](const Bar& bar, bool complete) {
+        if (owner == nullptr) {
+            deliver(bar, complete);
+            return;
+        }
+        PineRequestCallerScope caller_scope(*owner, caller, chart_caller);
+        PineRequestDelivery facts;
+        facts.caller_valid = parent.caller != 0;
+        facts.actual_complete = complete;
+        facts.caller = caller;
+        facts.requested_slot = requested_index;
+        facts.replay = parent.replay;
+        if (facts.replay) {
+            facts.actual_complete = false;
+            facts.replay_caller = facts.caller;
+            facts.replay_slot = facts.requested_slot;
+        }
+        // Timestamps only check that this real completed slot belongs to the
+        // active body; identity comes from instance + source parent/body/phase.
+        // Catch-up from older bodies and a previous bucket's boundary tail
+        // still execute CURRENT/TA/history, but cannot replace SELECTED.
+        const bool belongs_to_parent = facts.caller_valid
+            && (parent.requested_body
+                ? parent.timeframe != nullptr
+                    && !tf_change(parent.open_ms, bar.timestamp, *parent.timeframe,
+                                  timezone, session)
+                : bar.timestamp >= parent.open_ms && bar.timestamp < parent.close_ms);
+        facts.eligible = owner->request_runtime_selection_allowed(*this, parent)
+            && facts.caller_valid
+            && facts.actual_complete && facts.requested_slot >= 0 && !facts.replay
+            && belongs_to_parent
+            && (!selected_request_available
+                || selected_request_delivery.caller != facts.caller);
+        // The runtime cursor has no BASE publication producer.
+        const bool previous_selected = selected_request_available;
+        const PineRequestDelivery previous_delivery = selected_request_delivery;
+        if (facts.eligible) {
+            selected_request_available = true;
+            selected_request_delivery = facts;
+        }
+        try {
+            PineRequestDeliveryScope delivery_scope(*owner, *this, facts, bar.timestamp);
+            // Preserve BASE's actual completion forwarding independently of
+            // the selection descriptor (including a replay's ineligibility).
+            deliver(bar, complete);
+        } catch (...) {
+            selected_request_available = previous_selected;
+            selected_request_delivery = previous_delivery;
+            throw;
+        }
+        last_request_delivery = facts;
+    };
     if (prior_input == std::numeric_limits<std::int64_t>::min()
         || tf_change(prior_input, event.bar.timestamp, chart_timeframe, timezone, session)) {
         chart_open = event.bar.timestamp;
         sub_bar_index = 0;
-        begin_chart();
+        begin();
     }
     prior_input = event.bar.timestamp;
     if (no_loaded_bars) return;
@@ -1984,7 +2384,7 @@ void source::PineRuntimeSecurityCursor::feed(
             slot_new = true;
             ++requested_index;
             ta::BarContextScope context(requested_index, 0);
-            deliver(sub_bar, true);
+            deliver_one(sub_bar, true);
             ++sub_bar_index;
         }
         return;
@@ -2005,7 +2405,7 @@ void source::PineRuntimeSecurityCursor::feed(
         if (aggregate.is_complete) { ha_open = open; ha_close = close; ha_seeded = true; }
     }
     ta::BarContextScope context(requested_index, 0);
-    deliver(aggregate.bar, aggregate.is_complete);
+    deliver_one(aggregate.bar, aggregate.is_complete);
     if (lower_array) ++sub_bar_index;
 }
 
@@ -2117,6 +2517,7 @@ void source::PineStrategyHost::scheduler_prepare_security_sequence(
         return;
     }
     init_security_eval_states_for_run(security_input_tf_);
+    reset_request_delivery_state();
     prepare_native_security_feeds(
         bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()));
     // An N-day request's bars are TradingView's (make_multi_day_period_source),

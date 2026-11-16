@@ -309,8 +309,8 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
         internal::AmbientEmaSeedingScope warmup_scope(
             NativeExecutionConsumer::bound(*this).pump_ambient(),
             security_range_start_na_warmup_);
-        dispatch_security_eval(state, *calling_bar, true,
-                               state.eval_complete_count - 1);
+        dispatch_pine_request(state, *calling_bar, true,
+                              state.eval_complete_count - 1, true);
     }
     const std::size_t missing = std::numeric_limits<std::size_t>::max();
     if (begin == missing || end == missing) return;
@@ -378,8 +378,17 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
                             internal::AmbientEmaSeedingScope tail_warmup_scope(
                                 NativeExecutionConsumer::bound(*this).pump_ambient(),
                                 security_range_start_na_warmup_);
-                            dispatch_security_eval(state, tail.bar, true,
-                                                   state.eval_complete_count - 1);
+                            const std::uint64_t prior_caller =
+                                pine.last_request_delivery.caller;
+                            PineRequestCallerScope tail_scope(
+                                *this,
+                                prior_caller != 0 ? prior_caller
+                                                  : request_active_caller_,
+                                prior_caller != 0 ? prior_caller
+                                                  : request_active_chart_caller_);
+                            dispatch_pine_request(state, tail.bar, true,
+                                                  state.eval_complete_count - 1,
+                                                  true);
                         }
                     }
                     pine.first_bucket_published = true;
@@ -392,7 +401,9 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
                     // body (feed_deferred_aux_security_for_chart_bar).
                     pine.deferred_aux.push_back(
                         {aux_bar, security_next_input_ms_,
-                         calling_bar_complete});
+                         calling_bar_complete, request_active_caller_,
+                         request_active_chart_caller_,
+                         request_active_chart_caller_});
                     continue;
                 }
                 const int64_t published_before = state.eval_complete_count;
@@ -480,8 +491,8 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
             state.current_bar = bar;
             state.current_sub_bar_count = 1;
             state.eval_complete_count++;
-            dispatch_security_eval(state, bar, true,
-                                   state.eval_complete_count - 1);
+            dispatch_pine_request(state, bar, true,
+                                  state.eval_complete_count - 1, true);
             pine.lower_tf_sub_bar_index++;
         }
         pine.lower_tf_input_buffer.clear();
@@ -512,6 +523,11 @@ void source::PineStrategyHost::feed_deferred_aux_security_for_chart_bar(int char
         held.swap(pine.deferred_aux);
         for (const auto& d : held) {
             security_next_input_ms_ = d.next_input_ms;
+            PineRequestCallerScope caller_scope(
+                *this,
+                d.input_caller != 0 ? d.input_caller : request_active_caller_,
+                d.chart_caller != 0 ? d.chart_caller
+                                    : request_active_chart_caller_);
             pine_feed_security_eval_state(state, d.bar,
                                           d.calling_bar_complete);
         }
