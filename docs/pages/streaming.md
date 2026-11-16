@@ -174,9 +174,13 @@ Some split-session charts are refused conservatively until calendar-aware chart 
 Other calendars use their actual session openings, not a timezone-name allowlist. Unsupported bars refuse by name
 and explain which chart clock to use. Passing intraday ticks-mode paths remain
 admitted. These restrictions lift when the engine supports the corresponding
-session-aware chart-bar delivery. Daily/weekly chart delivery is refused in
-both bars and ticks modes on daylight-saving calendars from warmup onward;
-standard-offset changes can also make a chart unsupported. UTC daily and weekly charts are supported. Unsupported
+session-aware chart-bar delivery. Confirmed count-1 daily and weekly bars are
+supported on daylight-saving calendars; openings follow the session calendar.
+Other counts and tick/clock delivery on those calendars are refused with
+"daily/weekly chart delivery on a daylight-saving calendar is not supported yet;
+only confirmed count-1 daily/weekly bars are supported." Exchange holidays and
+early closes are not covered by this change. Standard-offset changes can also
+make a chart unsupported. UTC daily and weekly charts are supported. Unsupported
 daily/weekly calendars are refused by name. This runner policy does not
 change the direct engine API's independently configured input clock.
 Keep the configured session/timezone when choosing a supported chart.

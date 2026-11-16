@@ -290,7 +290,18 @@ void native_identity_changes() {
 
 void chart_calendar_admission() {
     constexpr std::int64_t start = 1735689600000;
-    for (const auto* timeframe : {"D", "W", "2D", "2W"}) {
+    // expectation corrected: confirmed D/W DST refusal -> admission, because
+    // civil session successors handle NY/Paris's 71/73 h weekday weekends
+    // and 167/169 h weeks (24x7 days: 23/25 h), including NY aliases/POSIX
+    // rules; Lord Howe moves 30 minutes (24x7 days: 23.5/24.5 h).
+    for (const auto* timeframe : {"D", "1D", "W", "1W"}) {
+        for (const auto* timezone : {"UTC", "Etc/UTC", "UTC+05:30", "EST5", "Asia/Taipei", "Asia/Kolkata"})
+            require_chart_calendar(timeframe, timezone, start);
+        for (const auto* timezone : {"America/New_York", "US/Eastern", "Europe/Paris", "Australia/Lord_Howe",
+                                     "EST5EDT", "EST5EDT,M3.2.0,M11.1.0"})
+            require_chart_calendar(timeframe, timezone, start); // Calendar successors, not elapsed-day/week tiling.
+    }
+    for (const auto* timeframe : {"2D", "2W"}) {
         for (const auto* timezone : {"UTC", "Etc/UTC", "UTC+05:30", "EST5", "Asia/Taipei", "Asia/Kolkata"})
             require_chart_calendar(timeframe, timezone, start);
         for (const auto* timezone : {"America/New_York", "US/Eastern", "Europe/Paris", "Australia/Lord_Howe",
@@ -320,7 +331,9 @@ void chart_calendar_admission() {
     CHECK(throws_containing([&] { require_chart_calendar("60", "Australia/Lord_Howe", start); },
                             "its bars do not tile the calendar's trading days"));
     CHECK(throws_containing([&] { require_chart_calendar("D", "Invalid/Timezone", start); }, "timezone"));
-    CHECK(throws_containing([&] { require_chart_calendar("D", "America/New_York", 2208988800000); }, "daylight-saving"));
+    // expectation corrected: 2040 D refusal -> admission, because future civil
+    // session successors also follow DST (23/25 h 24x7 days; 71/73 h weekday weekends).
+    require_chart_calendar("D", "America/New_York", 2208988800000);
     CHECK(throws_containing([&] { require_chart_calendar("60", "UTC", start, "0930-1130,1300-1500:23456"); },
                            "its bars do not tile the calendar's trading days"));
     require_chart_calendar("30", "UTC", start, "0930-1130,1300-1500:23456");
@@ -350,6 +363,13 @@ void chart_calendar_admission() {
     CHECK(throws_containing([&] {
         require_chart_calendar("D", "Asia/Almaty", 1546300800000, "24x7", false, 1735689600000);
     }, "its bars do not tile the calendar's trading days"));
+    for (const auto* timeframe : {"2D", "2W"})
+        CHECK(throws_containing([&] {
+            require_chart_calendar(timeframe, "America/New_York", start, "0930-1600:23456", true);
+        }, "only confirmed count-1 daily/weekly bars are supported"));
+    CHECK(throws_containing([&] {
+        require_chart_calendar("D", "America/New_York", start, "0930-1600:23456", false);
+    }, "tick/clock delivery"));
 }
 
 }  // namespace
