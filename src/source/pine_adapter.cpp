@@ -12456,6 +12456,11 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         if (finite_positive(units)) pending_parent_units += units;
     };
     for (const auto& handle : live_handles_) {
+        // Relative exits materialize inside their parent's applied callback,
+        // before that opening handle retires. Its units already belong to
+        // the physical book and source cohort, so adding them as pending
+        // again doubles a same-bar percentage's basis.
+        if (handle == materializing_parent_) continue;
         const auto parent = placement_.find(handle.incarnation);
         if (parent != placement_.end()) observe_pending_parent(parent->second);
     }
@@ -18193,7 +18198,8 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         // candidate preserves the same observable trade roster.
         if (!view.account.would_open && !(view.inspected_closed_units > 0.0))
             return NativePrecommitVerdict::Refuse;
-        if (PF_RARE(((std::isfinite(source.requested_qty) && source.requested_qty > 0.0)
+        if (PF_RARE(source.bracket_origin.incarnation == 0
+                    && ((std::isfinite(source.requested_qty) && source.requested_qty > 0.0)
                      || (std::isfinite(source.qty_percent) && source.qty_percent < 100.0 - 1e-9))
                     && exit_tombstoned(source.source_id, source.from_entry))) {
             return NativePrecommitVerdict::Refuse;
@@ -26210,6 +26216,18 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         // ab9714be pine_orders.cpp:330-337: execute_partial_exit_qty recognizes explicit requested quantity reductions
         && ((std::isfinite(placement_snapshot->requested_qty) && placement_snapshot->requested_qty > 0.0)
             || (std::isfinite(placement_snapshot->qty_percent) && placement_snapshot->qty_percent < 100.0 - 1e-9))) {
+        if (!placement_snapshot->from_entry.empty()
+            && placement_snapshot->bracket_origin.incarnation != 0) {
+            auto& family = bracket_family(key_for(
+                placement_snapshot->source_id, placement_snapshot->from_entry));
+            // One priced fill consumes this bracket's share for its bound
+            // origin, even if a later call changes which price leg it uses.
+            for (const auto leg : {PineOrderFamily::ExitLimit, PineOrderFamily::ExitStop,
+                                   PineOrderFamily::ExitTrail})
+                family.record_consumed(static_cast<std::uint8_t>(leg),
+                                       placement_snapshot->bracket_origin.incarnation);
+            invalidate_retirement();
+        }
         // The exit tombstones (exit_child_tombstones): a partial strategy.exit
         // child that filled is never revived for the entry incarnation it
         // filled under -- the newest opening of its from_entry then -- by a
@@ -26220,6 +26238,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         // for the unreserved two shares). An exit armed for a later opening
         // of the id fills as before (test_exit_bracket_pending_entry_leg).
         if (detail::margin_rule_switches().exit_child_tombstones
+            && placement_snapshot->bracket_origin.incarnation == 0
             && !placement_snapshot->from_entry.empty() && pinned_lot_grid()) {
             const std::uint64_t origin = entry_incarnation_of(placement_snapshot->from_entry);
             if (origin != 0)

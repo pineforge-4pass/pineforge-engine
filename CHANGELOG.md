@@ -8,6 +8,9 @@ version number follows semantic versioning over the surfaces the
 ## Unreleased
 
 - Checkpoints for `ta.sma`, biased `ta.stdev`, `ta.bb`, `math.sum` and `ta.change` now copy contiguous owning window buffers and reuse them on restore, preserving the arithmetic and rewind rules (#809).
+- The JSON harness and live runner now forward the symbol's quantity-step metadata for default `strategy.entry(..., qty=na)` sizing (#716 item 1).
+- The same quantity-step metadata is now forwarded for explicit `strategy.entry(..., qty=...)` quantities (#716 item 2).
+
 - Explicit `strategy.order()` quantities now floor executable units at declared decimal quantity steps while preserving the source quantity; the boundary control is not measured against TradingView (#716 item 2).
 - Corrected the parity grading for the historical population reported in [#836](https://github.com/pineforge-4pass/pineforge-engine/issues/836) on 2026-11-11: counting unmatched trades net instead of gross overstated the excellent tier by 10 of 312 reference probes (311 instead of 301) and by 24 of 7,989 graded probes. The trade data is unchanged.
 - The corpus grader counts every unmatched gated trade on either side as a gross mismatch. One engine-only trade and one TradingView-only trade count as two mismatches, so equal list sizes cannot satisfy the excellent count gate. The same gross count, divided by the larger gated trade count (zero for two empty pools), supplies the percentage for strong-tier grading and fragmented-FIFO eligibility; thresholds are unchanged (#836).
@@ -36,6 +39,11 @@ version number follows semantic versioning over the surfaces the
   `path_order` modes outside 0, 1 and 2, now produce typed refusals instead of
   being ignored or reset to AUTO. An invalid `mintick` is refused as `symbol_feeds_refused` with reason
   `syminfo_mintick_invalid`; an invalid point value uses the existing symbol metadata error, `symbol_metadata_rejected` with field `point_value`.
+- The JSON harness now honors explicit `qty_step`; both `qty_step` and
+  `mincontract` require positive finite JSON numbers. The explicit step takes
+  precedence while the minimum retains its own value, and minimum-only inputs
+  keep their previous behavior. `pineforge-live` also accepts
+  `--syminfo mincontract=...`.
 - `strategy_get_run_warnings` exposes one named warning per `request.security` call site whose requested timeframe is not a multiple of its evaluator's feed timeframe; values, trades and run acceptance are unchanged (#718).
 - The Docker report and `scripts/run_strategy.py` now show the engine's run warnings as `diagnostics.warnings` when a run has any, and are unchanged otherwise (#718).
 - A percent-of-equity default quantity above 100 percent is now capped at 100 percent of equity when `margin_long` and `margin_short` are both 0 (#805).
