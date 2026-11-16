@@ -10,7 +10,9 @@ namespace pineforge {
 // math.sum (see the note above its implementation in
 // src/ta_moving_averages.cpp for the tapes that pin each piece):
 //
-//   * a Kahan-compensated running sum S with compensation c;
+//   * a Kahan-compensated running sum S whose compensation c is the exact
+//     rounding error of each step (two-sum), whatever the magnitudes of S and
+//     the addend (the #731 pulse capture);
 //   * each source enters as y = x - c and, `length` bars later, the SOURCE x
 //     leaves through the same Kahan step -- sub before add. The compensation
 //     is not remembered with the source, so S - c stays the sum of the
