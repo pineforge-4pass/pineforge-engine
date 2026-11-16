@@ -1252,9 +1252,7 @@ class RealTree(unittest.TestCase):
         # deque groups and adds four current groups; every new group is OPEN.
         # The combined tree adds two #858 cache-id site identities inside
         # existing U0307/U0871 OPEN groups. No new group: the union stays1616.
-        # expectation corrected: 1616 -> 1618, because per-origin exit sizing
-        # adds origin_shares/U1860 and reserved_by_origin/U1861, both OPEN.
-        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2
+        expected_open = 1356 + 76 + 184 + 2 - 6 + 4
         self.assertEqual(c['OPEN'], expected_open)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])

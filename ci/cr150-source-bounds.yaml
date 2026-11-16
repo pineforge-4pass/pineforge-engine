@@ -131,9 +131,7 @@ ceilings:
   # #809 retires six groups, adds four OPEN groups, and reclassifies three
   # changed mixed-shape groups as unreviewed. Total OPEN: 1618 -> 1616.
   # No group is claimed bounded; window length remains an input-dependent axis.
-  # expectation corrected: 1437 -> 1439, because per-origin partial exit
-  # reservations add an origin-share vector and a reserved-unit map. Both OPEN.
-  unreviewed: 1439
+  unreviewed: 1437
   pending-flat-memory: 179
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1806,5 +1804,3 @@ entries:
   - {id: "U1857", file: "src/ta_moving_averages.cpp", symbol: "replacement", ops: ["decl"], container: "std::vector<Entry>", owner: "ta-series", phase: "unclassified", state: "unreviewed", line: 100}
   - {id: "U1858", file: "src/ta_oscillators.cpp", symbol: "replacement", ops: ["decl"], container: "std::vector<double>", owner: "ta-series", phase: "unclassified", state: "unreviewed", line: 192}
   - {id: "U1859", file: "src/ta_volatility_trend.cpp", symbol: "buffer", ops: ["grow"], container: "unresolved by the index: buffer.push_back(...)", owner: "ta-series", phase: "unclassified", state: "unreviewed", line: 190}
-  - {id: "U1860", file: "src/source/pine_adapter.cpp", symbol: "origin_shares", ops: ["decl", "grow"], container: "std::vector<std::pair<std::uint64_t, double>>", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "Per-origin shares of a partial exit reservation. Its size follows live entry origins; no fixed-input bound established. OPEN.", line: 5792}
-  - {id: "U1861", file: "src/source/pine_adapter.cpp", symbol: "reserved_by_origin", ops: ["decl", "subscript"], container: "std::map<std::uint64_t, double>", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "Per-origin units already reserved while reconciling exit families. Live origins determine its size; no fixed-input bound established. OPEN.", line: 6094}

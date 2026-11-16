@@ -510,7 +510,23 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         f.s(exit.oca_name); f.d(exit.profit_ticks); f.d(exit.loss_ticks);
         // Folded only when set, like PlacementSnapshot::void_global_issue.
         if (exit.void_global) f.u(0x766f6964676cULL);
-        if (exit.reservation_sequence != 0) {
+        // The queue slot is folded only while it can order this definition:
+        // it is set, it is not already the source_sequence of the pair's
+        // projection (which the shadow fold above carries), and a placed
+        // exit of another id of the same entry holds a later place in the
+        // queue. Without such an exit every slot orders the definition the
+        // same way: after each exit placed before it, before each one issued
+        // later, and among the unresolved definitions in their list order,
+        // which is folded above.
+        if (exit.reservation_sequence != 0
+            && std::none_of(source_shadow_pending_.begin(), source_shadow_pending_.end(),
+                [&](const auto& shadow) {
+                    return shadow.snapshot.source_id == exit.exit_id
+                        && shadow.snapshot.from_entry == exit.from_entry
+                        && shadow.snapshot.source_sequence == exit.reservation_sequence;
+                })
+            && exit_ranked_between(exit.exit_id, exit.from_entry, exit.reservation_sequence,
+                                   ~std::uint64_t{0}, false)) {
             f.s("relative-exit-reservation/v1"); f.u(exit.reservation_sequence);
         }
     }

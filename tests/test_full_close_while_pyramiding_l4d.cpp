@@ -176,10 +176,19 @@ static void test_full_close_reexpands_while_pyramiding() {
 // ─────────────────────────────────────────────────────────────────────
 // Guard: a genuine PARTIAL (qty_percent < 100) re-issue must STILL honour
 // the preserved reserved qty so it does not double-reserve against the same
-// from_entry as the position grows. Here a 50% exit is issued once (on the
-// first long bar, capturing 50% of 10 = 5), then re-issued every bar; the
-// preserved 5 must be carried even though the position later grows to 30,
-// so the partial closes 5 units at its limit — not 50% of the grown stack.
+// from_entry as the position grows. Here a 50% exit is issued on the first
+// long bar (capturing 50% of 10 = 5), then re-issued every bar while two
+// more entries of the same id fill.
+//
+// TradingView places one exit order for every entry of the id, each sized
+// from its own entry (Pine documentation, "Exits for multiple entries";
+// TradingView table in issue #810, case C: one take-profit order per entry,
+// each for 50% of its own entry). Each of the three 10-unit entries
+// therefore holds its own preserved 5-unit order, and no order is resized to
+// 50% of the grown stack (15).
+// expectation corrected: 1 -> 3 trades and 25 -> 15 units left open, because
+// the exit is one order per entry (3 x 5 = 15 closed at the limit) rather
+// than one shared order frozen at the first entry's 5.
 // ─────────────────────────────────────────────────────────────────────
 static void test_partial_reissue_keeps_preserved_qty() {
     std::printf("test_partial_reissue_keeps_preserved_qty\n");
@@ -220,14 +229,19 @@ static void test_partial_reissue_keeps_preserved_qty() {
     };
     p.run(bars, 6);
 
-    // The partial preserved its original reserved qty (5), not 50% of the
-    // grown 30 (=15). One partial trade closes 5 at 106; position stays open.
-    CHECK(p.trade_count() == 1);
-    if (p.trade_count() < 1) return;
+    // Each entry's order preserved its own reserved qty (50% of 10 = 5), not
+    // 50% of the grown 30 (=15) on one order. The three orders fill at 106 on
+    // bar 4: three partial trades of 5 each; the position stays open.
+    CHECK(p.trade_count() == 3);
+    if (p.trade_count() < 3) return;
     CHECK(near(p.get_trade(0).exit_price, 106.0));
     CHECK(near(p.get_trade(0).qty, 5.0));
-    // 30 - 5 = 25 remain open.
-    CHECK(near(p.pos_size(), 25.0));
+    CHECK(near(p.get_trade(1).exit_price, 106.0));
+    CHECK(near(p.get_trade(1).qty, 5.0));
+    CHECK(near(p.get_trade(2).exit_price, 106.0));
+    CHECK(near(p.get_trade(2).qty, 5.0));
+    // 30 - 3 * 5 = 15 remain open.
+    CHECK(near(p.pos_size(), 15.0));
 }
 
 int main() {

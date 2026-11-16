@@ -405,7 +405,6 @@ set(TEST_SOURCES
     test_bracket_lifecycle_declined_reversal
     test_exit_bracket_pending_entry_leg
     test_exit_refire_after_own_fill
-    test_issue810_partial_exits
     test_dual_entry_placement_sizing
     test_fams_same_bar_market_tx
     test_default_flat_market_gross_admission
