@@ -4,6 +4,7 @@
 #include "global_allocation_replacement.hpp"
 #include "../src/source/pine_position_tail_summary.hpp"
 #include "../src/source/pine_position_tail_binding.hpp"
+#include <pineforge/source/pine_strategy_host.hpp>
 
 #include <array>
 #include <cassert>
@@ -22,6 +23,7 @@ using source::detail::PositionTailSummary;
 using source::detail::PositionTailSpill;
 using source::detail::PositionTailBinding;
 using Live = std::unordered_map<std::string, std::unordered_map<std::uint64_t, double>>;
+using Parts = std::unordered_map<std::uint64_t, double>;
 
 struct Directory {
     char path[64] = "/tmp/pineforge-r11-summary-XXXXXX";
@@ -170,7 +172,431 @@ struct Fixture {
                     for (const char* name : {"reused", "other", "absent"})
                         query({ancestry, fifo, is_long, name}, fast);
     }
+    Parts parts_query(const Query& query, bool expect_fast) {
+        sync();
+        Parts parts;
+        const auto select = [&](const auto& include) {
+            for (const auto& cohort : live)
+                if (!query.fifo || cohort.first == query.name)
+                    for (const auto& origin : cohort.second)
+                        include(origin.first, parts[origin.first]);
+        };
+        const auto before = summary.work;
+        double actual = 0.0;
+        using Diagnostics = source::detail::PositionTailDiagnostics;
+        const bool fast = query.ancestry
+            ? summary.ancestry_parts(query.is_long, select, actual, Diagnostics{})
+            : summary.margin_parts(query.is_long, query.fifo ? &query.name : nullptr,
+                                   select, actual, Diagnostics{});
+        assert(fast == expect_fast);
+        assert(summary.work.queries == before.queries + 1);
+        assert(summary.work.certified_queries == before.certified_queries + (fast ? 1 : 0));
+        assert(summary.work.fallback_queries == before.fallback_queries + (fast ? 0 : 1));
+        std::uint64_t verdicts = 0;
+        for (std::size_t i = 0; i < static_cast<std::size_t>(
+                 source::PineExecutionAdapter::PositionTailGuard::Count); ++i)
+            verdicts += summary.work.guard_reasons[i] - before.guard_reasons[i];
+        assert(verdicts == 1);
+        assert(fast == (summary.work.guard_reason
+                        == source::PineExecutionAdapter::PositionTailGuard::None));
+        if (!fast) {
+            parts.clear();
+            select([](std::uint64_t, double& part) { part = 0.0; });
+            actual = source::detail::replay_position_tail_split(
+                resident.size(), resident.base(),
+                [&](std::size_t i) -> Trade { return resident[i]; },
+                spill.get(), barrier,
+                [&](bool is_long, std::uint64_t origin, bool margin, const auto& matches) {
+                    if (is_long != query.is_long) return false;
+                    if (!query.ancestry) return margin && (!query.fifo || matches());
+                    for (const auto& cohort : live)
+                        if ((!query.fifo || cohort.first == query.name)
+                            && cohort.second.count(origin)) return true;
+                    return false;
+                },
+                [&](bool is_long, std::uint64_t origin, bool margin, double quantity) {
+                    if (is_long != query.is_long || (!query.ancestry && !margin)) return;
+                    const auto part = parts.find(origin);
+                    if (part != parts.end()) part->second += quantity;
+                }, query.name, summary.work, Diagnostics{});
+            std::uint64_t reads = 0;
+            for (auto trade = reference.rbegin(); trade != reference.rend(); ++trade) {
+                ++reads;
+                if (trade->exit_time < barrier) break;
+            }
+            assert(summary.work.replay_rows == before.replay_rows + reads);
+            assert(summary.work.replay_rows - before.replay_rows
+                   == summary.work.replay_host_rows - before.replay_host_rows
+                      + summary.work.spill_rows - before.spill_rows);
+        } else {
+            assert(summary.work.replay_rows == before.replay_rows);
+        }
+        const double expected = old_walk(reference, barrier, live, query);
+        assert(std::memcmp(&expected, &actual, sizeof actual) == 0);
+        for (const auto& cohort : live)
+            if (!query.fifo || cohort.first == query.name)
+                for (const auto& origin : cohort.second) assert(parts.count(origin.first) == 1);
+        for (const auto& part : parts) {
+            double expected_part = 0.0;
+            for (auto trade = reference.rbegin(); trade != reference.rend(); ++trade) {
+                if (trade->exit_time < barrier) break;
+                if (trade->is_long == query.is_long
+                    && trade->entry_incarnation == part.first
+                    && (query.ancestry || trade->exit_id == source::kMarginCallLabel))
+                    expected_part += trade->qty;
+            }
+            assert(std::memcmp(&expected_part, &part.second, sizeof expected_part) == 0);
+        }
+        return parts;
+    }
 };
+
+void live_parts_and_historical_margin_totals() {
+    for (std::size_t split = 0; split <= 6; ++split) {
+        Fixture f;
+        f.add_origin(1);
+        f.add_origin(2);
+        f.add_origin(3, true, "other");
+        f.append(row(1, 4, 10, true, true));
+        f.append(row(2, 0.5, 10, true, true));
+        f.append(row(3, 8, 11, true, true, "other"));
+        f.append(row(2, 2, 12)); // ancestry and margin parts must stay distinct
+        f.append(row(1, 0.25, 13));
+        f.append(row(2, 0.125, 14, true, true));
+        const auto updates = f.summary.work.update_rows;
+        f.seal(split);
+        for (bool ancestry : {false, true})
+            for (bool fifo : {false, true})
+                for (const char* name : {"reused", "other", "absent"}) {
+                    const auto parts = f.parts_query({ancestry, fifo, true, name}, true);
+                    if (fifo && std::string(name) == "reused") {
+                        assert(parts.at(1) == (ancestry ? 4.25 : 4.0));
+                        assert(parts.at(2) == (ancestry ? 2.625 : 0.625));
+                    }
+                }
+        f.retire(1);
+        f.add_origin(4); // the same entry name, a fresh incarnation
+        f.append(row(4, 0.0625, 15, true, true));
+        const auto named = f.parts_query({false, true, true, "reused"}, true);
+        assert(named.count(1) == 0 && named.at(4) == 0.0625);
+        // The retired origin's 4 units remain in the scalar margin totals.
+        assert(f.query({false, true, true, "reused"}, true) == 4.6875);
+        assert(f.query({false, false, true, "reused"}, true) == 12.6875);
+        f.parts_query({false, false, true, "reused"}, true);
+        f.parts_query({true, false, true, "reused"}, true);
+        assert(f.summary.work.update_rows == updates + 1);
+        assert(f.summary.resident_origins() == 3);
+        f.retire(2);
+        f.retire(3);
+        f.retire(4);
+        assert(f.summary.resident_origins() == 0);
+        f.parts_query({false, false, true, "reused"}, true);
+    }
+}
+
+void combined_parts_reject_and_keep_order() {
+    for (std::size_t split = 0; split <= 3; ++split) {
+        Fixture f;
+        f.add_origin(1);
+        f.add_origin(2);
+        f.append(row(1, 0x1p53, 10, true, true));
+        f.append(row(2, 1, 11, true, true));
+        f.append(row(2, 1, 12, true, true));
+        f.seal(split);
+        for (bool ancestry : {false, true}) {
+            const auto parts = f.parts_query({ancestry, true, true, "reused"}, false);
+            assert(parts.at(1) == 0x1p53 && parts.at(2) == 2);
+        }
+    }
+    Fixture reused;
+    reused.add_origin(1);
+    reused.append(row(1, 2, 10, true, true));
+    reused.retire(1);
+    reused.add_origin(1);
+    // Scalar margin alone is exact; the reactivated part is uncertified.
+    assert(reused.query({false, true, true, "reused"}, true) == 2);
+    reused.parts_query({false, true, true, "reused"}, false);
+    reused.summary.retire_origin(1); // current membership with a missing old cache row
+    reused.parts_query({false, true, true, "reused"}, false);
+
+    Fixture sides;
+    sides.add_origin(1);
+    sides.append(row(1, 2, 10, false, true));
+    sides.parts_query({false, true, false, "reused"}, false);
+
+    Fixture margin_only;
+    margin_only.add_origin(1);
+    margin_only.append(row(1, 0x1p53, 10));
+    margin_only.append(row(1, 0.5, 11, true, true));
+    margin_only.parts_query({false, true, true, "reused"}, true);
+    margin_only.parts_query({true, true, true, "reused"}, false);
+
+    Fixture decimal;
+    decimal.add_origin(1);
+    decimal.add_origin(2);
+    decimal.append(row(1, 0.0028, 10, true, true));
+    decimal.append(row(1, 1.6712, 11, true, true));
+    decimal.append(row(2, 0.125, 12, true, true));
+    decimal.seal(2);
+    decimal.parts_query({false, true, true, "reused"}, false);
+
+    Fixture boundary;
+    boundary.add_origin(1);
+    boundary.append(row(1, 4, 10, true, true));
+    boundary.retire(1);
+    boundary.live.clear();
+    boundary.open(10);
+    boundary.add_origin(2, false);
+    boundary.append(row(2, 0.5, 10, false, true));
+    boundary.parts_query({false, true, true, "reused"}, true);
+    boundary.parts_query({false, true, false, "reused"}, true);
+    boundary.retire(2);
+    boundary.live.clear();
+    boundary.open(11);
+    boundary.add_origin(3);
+    boundary.append(row(3, 1, 11, true, true));
+    boundary.parts_query({false, true, true, "reused"}, true);
+    boundary.summary.invalidate();
+    boundary.parts_query({false, true, true, "reused"}, false);
+}
+
+void combined_parts_publication_guards() {
+    Fixture fresh;
+    fresh.add_origin(1);
+    fresh.summary.retire_origin(1); // missing, but newer than every completed row
+    assert(fresh.parts_query({false, true, true, "reused"}, true).at(1) == 0.0);
+    fresh.parts_query({true, true, true, "reused"}, true);
+
+    Fixture missed;
+    missed.add_origin(1);
+    const auto trade = row(1, 0.5, 10, true, true);
+    missed.reference.push_back(trade);
+    missed.resident.push_back(trade);
+    PositionTailBinding::preserve(missed.spill, missed.resident, 1,
+                                 missed.barrier, missed.directory.path);
+    missed.resident.seal(1); // deliberately no observer before sealing
+    missed.parts_query({false, true, true, "reused"}, false);
+    missed.parts_query({true, true, true, "reused"}, false);
+
+    Fixture rewind;
+    rewind.add_origin(1);
+    rewind.append(trade);
+    rewind.reference.clear();
+    rewind.resident.resize(0);
+    rewind.parts_query({false, true, true, "reused"}, false);
+
+    Fixture amended;
+    amended.add_origin(1);
+    amended.append(trade);
+    amended.parts_query({false, true, true, "reused"}, true);
+    amended.reference.back().qty = 0.375;
+    amended.resident.modify(amended.resident.size() - 1, [](Trade& t) { t.qty = 0.375; });
+    amended.summary.invalidate(source::PineExecutionAdapter::PositionTailGuard::Amendment);
+    amended.parts_query({false, true, true, "reused"}, false);
+
+    Fixture order;
+    order.add_origin(1);
+    order.append(row(1, 4, 10, true, true));
+    order.append(row(1, 8, 9, true, true)); // strict barrier cuts off older rows
+    order.append(row(1, 0.125, 12, true, true));
+    order.parts_query({false, true, true, "reused"}, false);
+    order.parts_query({true, true, true, "reused"}, false);
+
+    Fixture aliases;
+    aliases.add_origin(1);
+    aliases.append(trade);
+    aliases.live["other"][1] = 1.0;
+    aliases.summary.live_cohort(&*aliases.live.find("other"), true);
+    aliases.parts_query({false, false, true, "reused"}, true);
+    aliases.parts_query({true, false, true, "reused"}, true);
+}
+
+void incremental_margin_parts_work() {
+    Fixture f;
+    f.add_origin(1);
+    std::uint64_t rotating = 2;
+    f.add_origin(rotating);
+    constexpr std::uint64_t count = 1024;
+    for (std::uint64_t i = 0; i < count; ++i) {
+        f.append(row(1, 0.5, 10 + static_cast<std::int64_t>(i), true, true));
+        f.append(row(rotating, i % 2 ? 0.25 : 0.125,
+                     10 + static_cast<std::int64_t>(i), true, true));
+        f.parts_query({false, true, true, "reused"}, true);
+        f.parts_query({false, false, true, "reused"}, true);
+        assert(f.summary.resident_origins() == 2);
+        f.retire(rotating);
+        f.add_origin(++rotating);
+        if (i % 64 == 63) f.seal(f.resident.size() - 2);
+    }
+    assert(f.summary.work.queries == 2 * count);
+    assert(f.summary.work.certified_queries == f.summary.work.queries);
+    assert(f.summary.work.fallback_queries == 0 && f.summary.work.replay_rows == 0);
+    assert(f.summary.work.update_rows == 2 * count);
+    assert(f.summary.work.origin_visits == 2 * f.summary.work.queries);
+    f.retire(1);
+    f.retire(rotating);
+    assert(f.summary.resident_origins() == 0);
+}
+
+// Native command-boundary regression: the first FIFO stop publishes rows
+// before submit_one sizes the added origin. The old predicate is a label
+// comparison, so an admitted user exit can itself publish a matching row.
+class IntraCallPartsHost final : public source::PineStrategyHost {
+public:
+    static constexpr std::int64_t start = INT64_C(1704067200000);
+    static constexpr std::int64_t interval = 60000;
+    IntraCallPartsHost(std::string label, double first, double added)
+        : label_(std::move(label)), first_(first), added_(added) {
+        source::PineStrategyConfig config;
+        config.initial_capital = 1000000;
+        config.pyramiding = 2;
+        config.calc_on_order_fills = true;
+        config.close_entries_rule_any = false;
+        config.margin_long = config.margin_short = 0;
+        attach_pine_execution_adapter();
+        configure_pine_strategy(config);
+        set_syminfo_session("24x7");
+        set_syminfo_timezone("Etc/UTC");
+        set_syminfo_mintick(0.01);
+        set_syminfo_metadata("qty_step", 0.125);
+    }
+    bool checked = false;
+
+    void on_source_bar(const Bar& bar) override {
+        const double missing = std::numeric_limits<double>::quiet_NaN();
+        if (bar.timestamp == start && !sent_) {
+            sent_ = true;
+            strategy_entry("entry", false, missing, missing, first_);
+            strategy_exit(label_, "entry", missing, 110, missing, missing, missing, 50);
+        }
+        if (first_origin_ != 0 && !seeded_) {
+            seeded_ = true;
+            native_order::Request seed;
+            seed.intent = native_order::Reduce{native_order::ExplicitUnits{first_ - 1}};
+            seed.label = source::kMarginCallLabel;
+            seed.trigger = native_order::Market{};
+            const auto accepted = submit(seed);
+            assert(accepted.handle);
+            const auto outcome = execute_current(
+                {*accepted.handle, NativeCurrentPriceRule::AsPresented});
+            assert(std::holds_alternative<native_order::ExecutionAppliedEvent>(outcome));
+        }
+        if (bar.timestamp == start + 2 * interval && !add_sent_) {
+            add_sent_ = true;
+            strategy_entry("entry", false, missing, missing, added_);
+        }
+        if (added_origin_ == 0 || checked) return;
+        checked = true;
+        const auto rows_before = closed_trade_count();
+        const auto before = adapter_.position_tail_work();
+        inside_exit_ = true;
+        strategy_exit(label_, "entry", missing, 90, missing, missing, missing, 50);
+        inside_exit_ = false;
+        assert(closed_trade_count() > rows_before); // execution really occurred within this call
+        double part = 0, crossed = 0;
+        for (std::size_t i = closed_trade_count(); i != 0;) {
+            const auto trade = get_trade(static_cast<int>(--i));
+            if (trade.exit_time < barrier_) break;
+            if (!trade.is_long && trade.entry_incarnation == added_origin_) {
+                if (i >= rows_before) crossed += trade.qty;
+                if (trade.exit_id == source::kMarginCallLabel) part += trade.qty;
+            }
+        }
+        assert(crossed > 0); // FIFO crossed from the carried origin into the add
+        if (label_ == source::kMarginCallLabel) assert(part > 0);
+        else assert(part == 0); // an ordinary stop row is irrelevant to the old predicate
+        const double expected_units = (added_ + part) * 50 / 100;
+        std::size_t matched = 0;
+        for (const auto& pending : adapter_.fixture_pending_snapshots()) {
+            const auto& leg = pending.snapshot;
+            if (leg.source_id != label_ || leg.per_entry_origin != added_origin_) continue;
+            ++matched;
+            assert(std::memcmp(&leg.per_entry_units, &expected_units, sizeof expected_units) == 0);
+        }
+        assert(matched == 1);
+        const auto after = adapter_.position_tail_work();
+        assert(after.queries == before.queries + 1);
+        assert(after.certified_queries == before.certified_queries + 1);
+        assert(after.fallback_queries == before.fallback_queries);
+        assert(after.replay_rows == before.replay_rows);
+        assert(after.update_rows - before.update_rows == closed_trade_count() - rows_before);
+    }
+
+protected:
+    void on_native_applied_event(const native_order::ExecutionAppliedEvent& event,
+                                 const NativeDecisionContext& context) override {
+        assert(!inside_exit_); // notifications/recalculation do not nest into submit_one
+        if (event.opened_units == 0) return;
+        if (first_origin_ == 0) {
+            first_origin_ = event.handle().incarnation;
+            barrier_ = context.script_bar_open_ms;
+        } else added_origin_ = event.handle().incarnation;
+    }
+
+private:
+    std::string label_;
+    double first_, added_;
+    std::uint64_t first_origin_ = 0, added_origin_ = 0;
+    std::int64_t barrier_ = 0;
+    bool sent_ = false, seeded_ = false, add_sent_ = false, inside_exit_ = false;
+};
+
+void intra_call_parts_follow_publication() {
+    for (const auto& quantities : {std::pair<double, double>{4, 8}, {8, 12}})
+        for (const char* label : {source::kMarginCallLabel, "ordinary-stop"}) {
+            IntraCallPartsHost host(label, quantities.first, quantities.second);
+            std::array<Bar, 5> bars{};
+            for (std::size_t i = 0; i != bars.size(); ++i)
+                bars[i] = {100, 100, 99, 100, 1000,
+                           IntraCallPartsHost::start + static_cast<std::int64_t>(i)
+                               * IntraCallPartsHost::interval};
+            host.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+            assert(host.last_error().empty());
+            assert(host.checked);
+        }
+}
+
+void refreshed_part_rejection_finishes_once() {
+    Fixture f;
+    f.add_origin(1);
+    f.append(row(1, 1, 10, true, true));
+    f.append(row(1, 1, 11, true, true));
+    Parts parts;
+    const auto select = [&](const auto& include) { include(1, parts[1]); };
+    using Diagnostics = source::detail::PositionTailDiagnostics;
+    const auto before = f.summary.work;
+    double scalar = 0;
+    auto query = f.summary.margin_parts_result(true, nullptr, select, scalar, Diagnostics{});
+    assert(query.certified && scalar == 2 && parts.at(1) == 2);
+    assert(f.summary.work.queries == before.queries);
+    f.append(row(1, 0x1p53, 12, true, true));
+    const auto refresh = f.summary.parts_result(true, false, select, Diagnostics{});
+    assert(!refresh.certified);
+    query.merge(refresh);
+    parts.at(1) = 0;
+    source::detail::replay_position_tail_split(
+        f.resident.size(), f.resident.base(),
+        [&](std::size_t i) -> Trade { return f.resident[i]; }, nullptr, f.barrier,
+        [](bool, std::uint64_t, bool, const auto&) { return false; },
+        [&](bool is_long, std::uint64_t origin, bool margin, double qty) {
+            if (is_long && origin == 1 && margin) parts.at(1) += qty;
+        }, std::string{}, f.summary.work, Diagnostics{});
+    const double expected = old_walk(f.reference, f.barrier, f.live,
+                                     {false, false, true, "reused"});
+    assert(std::memcmp(&parts.at(1), &expected, sizeof expected) == 0);
+    assert(scalar == 2); // the scalar keeps its original publication version
+    assert(!f.summary.complete_query(query, Diagnostics{}));
+    assert(f.summary.work.queries == before.queries + 1);
+    assert(f.summary.work.certified_queries == before.certified_queries);
+    assert(f.summary.work.fallback_queries == before.fallback_queries + 1);
+    assert(f.summary.work.replay_rows == before.replay_rows + f.reference.size());
+    assert(f.summary.work.guard_reason != source::PineExecutionAdapter::PositionTailGuard::None);
+    std::uint64_t verdicts = 0;
+    for (std::size_t i = 0; i != static_cast<std::size_t>(
+             source::PineExecutionAdapter::PositionTailGuard::Count); ++i)
+        verdicts += f.summary.work.guard_reasons[i] - before.guard_reasons[i];
+    assert(verdicts == 1);
+}
 
 void exact_and_current_membership() {
     Fixture f;
@@ -475,6 +901,12 @@ void historical_margin_id_bound() {
 } // namespace
 
 int main() {
+    live_parts_and_historical_margin_totals();
+    combined_parts_reject_and_keep_order();
+    combined_parts_publication_guards();
+    incremental_margin_parts_work();
+    intra_call_parts_follow_publication();
+    refreshed_part_rejection_finishes_once();
     exact_and_current_membership();
     certified_splits_and_nested_visibility();
     barriers_reversals_and_amendments();

@@ -11,11 +11,11 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
-#include <utility>
 #include <vector>
 
 namespace pineforge::source::detail {
@@ -147,14 +147,36 @@ static_assert(sizeof(PositionTailExact) == 16, "compact dyadic certificate");
 static_assert(std::numeric_limits<double>::is_iec559
               && std::numeric_limits<double>::digits == 53, "binary64 proof");
 
+struct PositionTailQueryResult {
+    bool certified = true;
+    PositionTailGuard reason = PositionTailGuard::None;
+    void merge(const PositionTailQueryResult& other) noexcept {
+        if (certified && !other.certified) reason = other.reason;
+        certified = certified && other.certified;
+    }
+};
+
+// A source exit can synchronously publish rows while submitting its legs.
+// Keep its query open until all leg-time parts have been read, including
+// early returns. The test observer may throw its independent-oracle failure.
+template<class Complete>
+struct PositionTailQueryScope {
+    Complete complete;
+    ~PositionTailQueryScope() noexcept(false) { complete(); }
+};
+
 class PositionTailSummary {
     struct Origin {
         PositionTailExact completed;
+        PositionTailExact margin;
         std::uint32_t visited = 0;
         bool is_long = false;
     };
     using Origins = std::unordered_map<std::uint64_t, Origin>;
-    static_assert(sizeof(Origins::value_type) == 32, "32 bytes per origin, excluding map overhead");
+    // expectation corrected: 32 -> 48, because each live origin now owns
+    // a second 16-byte exact certificate for its completed margin units.
+    static_assert(sizeof(Origins::value_type) == 48,
+                  "key, two certificates and membership: 48 bytes, excluding map overhead");
     struct Margins {
         PositionTailExact side[2];
     };
@@ -248,15 +270,22 @@ public:
             // rows. An old/reactivated incarnation whose subtotal was
             // retired is uncertain and must replay instead of starting at 0.
             row.completed.valid = incarnation > high_closed_origin_;
+            row.margin.valid = row.completed.valid;
             if constexpr (Diagnostics::enabled)
-                if (!row.completed.valid)
+                if (!row.completed.valid) {
                     row.completed.reason = PositionTailGuard::ReactivatedOrigin;
+                    row.margin.reason = PositionTailGuard::ReactivatedOrigin;
+                }
             origins_.emplace(incarnation, row);
         } else if (found->second.is_long != is_long) {
-            if constexpr (Diagnostics::enabled)
+            if constexpr (Diagnostics::enabled) {
                 if (found->second.completed.reason == PositionTailGuard::None)
                     found->second.completed.reason = PositionTailGuard::SideMismatch;
+                if (found->second.margin.reason == PositionTailGuard::None)
+                    found->second.margin.reason = PositionTailGuard::SideMismatch;
+            }
             found->second.completed.valid = false;
+            found->second.margin.valid = false;
         }
     }
 
@@ -311,26 +340,40 @@ public:
 
     template<class Select, class Diagnostics = PositionTailNoDiagnostics>
     bool ancestry(bool is_long, Select&& select, double& result, Diagnostics diagnostics = {}) {
-        return ancestry_parts(is_long, std::forward<Select>(select), result,
-                              [](std::uint64_t, const PositionTailExact&) {}, diagnostics);
+        return ancestry_parts(is_long, [&](const auto& include) {
+            select([&](std::uint64_t incarnation) {
+                double part = 0.0;
+                include(incarnation, part);
+            });
+        }, result, diagnostics);
     }
 
-    // ancestry(), also handing every origin it merges, once, with its exact
-    // completed certificate to `part`: the same query answers each origin's
-    // own completed units, with the same work.
-    template<class Select, class Part, class Diagnostics = PositionTailNoDiagnostics>
-    bool ancestry_parts(bool is_long, Select&& select, double& result, Part&& part,
+    // select supplies current live membership and a destination for each
+    // requested part. A part and the scalar share one final verdict: callers
+    // must discard all outputs if any required proof fails.
+    template<class Select, class Diagnostics = PositionTailNoDiagnostics>
+    bool ancestry_parts(bool is_long, Select&& select, double& result,
                         Diagnostics diagnostics = {}) {
-        ++work.queries;
-        if (!safe_ || !active_) return finish(false, unsafe_reason_, diagnostics);
+        return complete_query(ancestry_parts_result(is_long, select, result, diagnostics),
+                              diagnostics);
+    }
+
+    template<class Select, class Diagnostics = PositionTailNoDiagnostics>
+    PositionTailQueryResult ancestry_parts_result(bool is_long, Select&& select, double& result,
+                                                 Diagnostics = {}) {
+        if (!safe_ || !active_) return {false, unsafe_reason_};
         if (++query_generation_ == 0) {
-            for (auto& row : origins_) row.second.visited = 0;
+            for (auto& row : origins_) {
+                ++work.origin_visits;
+                row.second.visited = 0;
+            }
             ++query_generation_;
         }
         PositionTailExact total;
         PositionTailRejection<Diagnostics> rejection;
-        select([&](std::uint64_t incarnation) {
+        select([&](std::uint64_t incarnation, double& part) {
             ++work.origin_visits;
+            part = 0.0;
             const auto found = origins_.find(incarnation);
             if (found == origins_.end()) {
                 // No row for a fresh incarnation means an exact zero.
@@ -342,20 +385,19 @@ public:
                 return;
             }
             auto& row = found->second;
-            if (row.visited == query_generation_) return; // duplicate cohort membership
-            row.visited = query_generation_;
             if (!row.completed.valid) {
                 if constexpr (Diagnostics::enabled)
                     rejection.reject(row.completed.reason == PositionTailGuard::None
                         ? PositionTailGuard::InvalidCertificate : row.completed.reason);
                 total.valid = false;
             } else if (row.is_long == is_long) {
-                total.merge(row.completed, rejection);
-                part(incarnation, row.completed);
+                if (!row.completed.read(part, rejection)) total.valid = false;
+                if (row.visited != query_generation_) total.merge(row.completed, rejection);
             }
+            row.visited = query_generation_; // duplicate membership contributes only once
         });
         const bool certified = total.read(result, rejection);
-        return finish(certified, rejection.value(), diagnostics);
+        return {certified, rejection.value()};
     }
 
     template<class Diagnostics = PositionTailNoDiagnostics>
@@ -363,26 +405,96 @@ public:
                 Diagnostics diagnostics = {}) {
         ++work.queries;
         if (!safe_ || !active_) return finish(false, unsafe_reason_, diagnostics);
-        const auto side = is_long ? 1 : 0;
         PositionTailRejection<Diagnostics> rejection;
+        const bool certified = read_margin(is_long, named_entry, result, rejection);
+        return finish(certified, rejection.value(), diagnostics);
+    }
+
+    template<class Select, class Diagnostics = PositionTailNoDiagnostics>
+    bool margin_parts(bool is_long, const std::string* named_entry, Select&& select,
+                      double& result, Diagnostics diagnostics = {}) {
+        return complete_query(margin_parts_result(is_long, named_entry, select, result, diagnostics),
+                              diagnostics);
+    }
+
+    template<class Select, class Diagnostics = PositionTailNoDiagnostics>
+    PositionTailQueryResult margin_parts_result(bool is_long, const std::string* named_entry,
+                                               Select&& select, double& result, Diagnostics = {}) {
+        if (!safe_ || !active_) return {false, unsafe_reason_};
+        PositionTailRejection<Diagnostics> rejection;
+        // These historical totals include drained origins. They are not a
+        // sum of today's live parts and are never reduced on retirement.
+        bool certified = read_margin(is_long, named_entry, result, rejection);
+        if (!read_parts(is_long, false, select, rejection)) certified = false;
+        return {certified, rejection.value()};
+    }
+
+    // Refresh only the requested parts at the current publication version.
+    // The exit's scalar deliberately keeps its original placement-time value.
+    template<class Select, class Diagnostics = PositionTailNoDiagnostics>
+    PositionTailQueryResult parts_result(bool is_long, bool ancestry, Select&& select,
+                                        Diagnostics = {}) {
+        if (!safe_ || !active_) return {false, unsafe_reason_};
+        PositionTailRejection<Diagnostics> rejection;
+        const bool certified = read_parts(is_long, ancestry, select, rejection);
+        return {certified, rejection.value()};
+    }
+
+    template<class Diagnostics = PositionTailNoDiagnostics>
+    bool complete_query(const PositionTailQueryResult& result, Diagnostics diagnostics = {}) {
+        ++work.queries;
+        return finish(result.certified, result.reason, diagnostics);
+    }
+
+private:
+    template<class Select, class Diagnostics>
+    bool read_parts(bool is_long, bool ancestry, Select&& select,
+                    PositionTailRejection<Diagnostics>& rejection) {
+        bool certified = true;
+        select([&](std::uint64_t incarnation, double& part) {
+            ++work.origin_visits;
+            part = 0.0;
+            const auto found = origins_.find(incarnation);
+            if (found == origins_.end()) {
+                if (incarnation <= high_closed_origin_) {
+                    rejection.reject(PositionTailGuard::MissingOrigin);
+                    certified = false;
+                }
+                return;
+            }
+            const auto& row = found->second;
+            const auto& certificate = ancestry ? row.completed : row.margin;
+            if (!certificate.valid) {
+                if constexpr (Diagnostics::enabled)
+                    rejection.reject(certificate.reason == PositionTailGuard::None
+                        ? PositionTailGuard::InvalidCertificate : certificate.reason);
+                certified = false;
+            } else if (row.is_long == is_long && !certificate.read(part, rejection)) {
+                certified = false;
+            }
+        });
+        return certified;
+    }
+
+    template<class Diagnostics>
+    bool read_margin(bool is_long, const std::string* named_entry, double& result,
+                     PositionTailRejection<Diagnostics>& rejection) const {
+        const auto side = is_long ? 1 : 0;
         if (!named_entry) {
             if constexpr (Diagnostics::enabled)
                 rejection.reject(all_margins_.side[side].reason);
-            const bool certified = all_margins_.side[side].read(result, rejection);
-            return finish(certified, rejection.value(), diagnostics);
+            return all_margins_.side[side].read(result, rejection);
         }
         const auto offset = margins_.find(*named_entry);
         if (!offset) {
             result = 0.0;
-            return finish(true, PositionTailGuard::None, diagnostics);
+            return true;
         }
         const auto value = margins_.get(*offset);
         if constexpr (Diagnostics::enabled) rejection.reject(value.side[side].reason);
-        const bool certified = value.side[side].read(result, rejection);
-        return finish(certified, rejection.value(), diagnostics);
+        return value.side[side].read(result, rejection);
     }
 
-private:
     template<class Diagnostics>
     bool finish(bool certified, PositionTailGuard reason, Diagnostics) noexcept {
         if (certified) ++work.certified_queries;
@@ -399,15 +511,24 @@ private:
         high_closed_origin_ = std::max(high_closed_origin_, trade.entry_incarnation);
         const auto origin = origins_.find(trade.entry_incarnation);
         if (origin != origins_.end()) {
-            PositionTailRejection<Diagnostics> rejection;
-            if constexpr (Diagnostics::enabled) rejection.reason = origin->second.completed.reason;
+            PositionTailRejection<Diagnostics> rejection, margin_rejection;
+            if constexpr (Diagnostics::enabled) {
+                rejection.reason = origin->second.completed.reason;
+                margin_rejection.reason = origin->second.margin.reason;
+            }
             if (origin->second.is_long != trade.is_long) {
                 rejection.reject(PositionTailGuard::SideMismatch);
+                margin_rejection.reject(PositionTailGuard::SideMismatch);
                 origin->second.completed.valid = false;
+                origin->second.margin.valid = false;
             }
             origin->second.completed.add(trade.qty, rejection);
-            if constexpr (Diagnostics::enabled)
+            if (trade.exit_id == kMarginCallLabel)
+                origin->second.margin.add(trade.qty, margin_rejection);
+            if constexpr (Diagnostics::enabled) {
                 origin->second.completed.reason = rejection.reason;
+                origin->second.margin.reason = margin_rejection.reason;
+            }
         }
         if (trade.exit_id != kMarginCallLabel) return;
         const auto side = trade.is_long ? 1 : 0;
@@ -444,15 +565,11 @@ private:
 // The predicate and the additions have the same evaluation/order as L18:
 // resident newest-to-oldest, then external newest-to-oldest, first strict
 // timestamp barrier terminates the entire walk. It remains O(history).
-// replay_position_tail_split also hands every included row's entry
-// incarnation and quantity to `part`: the one walk answers the total and each
-// origin's part, with the same rows, work and addition order.
 template<class Read, class Include, class Part, class Diagnostics = PositionTailNoDiagnostics>
 double replay_position_tail_split(std::size_t end, std::size_t base, Read&& read,
                                   const PositionTailSpill* spill, std::int64_t barrier,
                                   Include&& include, Part&& part, const std::string& from_entry,
-                                  PineExecutionAdapter::PositionTailWork& work,
-                                  Diagnostics = {}) {
+                                  PineExecutionAdapter::PositionTailWork& work, Diagnostics = {}) {
     double result = 0.0;
     for (std::size_t index = end; index > base;) {
         const Trade& trade = read(--index);
@@ -463,10 +580,8 @@ double replay_position_tail_split(std::size_t end, std::size_t base, Read&& read
         }
         if (trade.exit_time < barrier) return result;
         if (include(trade.is_long, trade.entry_incarnation, trade.exit_id == kMarginCallLabel,
-                    [&] { return trade.entry_id == from_entry; })) {
-            result += trade.qty;
-            part(trade.entry_incarnation, trade.qty);
-        }
+                    [&] { return trade.entry_id == from_entry; })) result += trade.qty;
+        part(trade.is_long, trade.entry_incarnation, trade.exit_id == kMarginCallLabel, trade.qty);
     }
     if (spill) {
         auto cursor = spill->size_bytes();
@@ -476,10 +591,8 @@ double replay_position_tail_split(std::size_t end, std::size_t base, Read&& read
             if constexpr (Diagnostics::enabled) ++work.spill_rows;
             if (trade.exit_time < barrier) break;
             if (include(trade.is_long, trade.entry_incarnation, trade.margin_call,
-                        [&] { return spill->entry_id_equals(trade, from_entry); })) {
-                result += trade.qty;
-                part(trade.entry_incarnation, trade.qty);
-            }
+                        [&] { return spill->entry_id_equals(trade, from_entry); })) result += trade.qty;
+            part(trade.is_long, trade.entry_incarnation, trade.margin_call, trade.qty);
         }
     }
     return result;
@@ -489,12 +602,9 @@ template<class Read, class Include, class Diagnostics = PositionTailNoDiagnostic
 double replay_position_tail(std::size_t end, std::size_t base, Read&& read,
                             const PositionTailSpill* spill, std::int64_t barrier,
                             Include&& include, const std::string& from_entry,
-                            PineExecutionAdapter::PositionTailWork& work,
-                            Diagnostics diagnostics = {}) {
-    return replay_position_tail_split(end, base, std::forward<Read>(read), spill, barrier,
-                                      std::forward<Include>(include),
-                                      [](std::uint64_t, double) {}, from_entry, work,
-                                      diagnostics);
+                            PineExecutionAdapter::PositionTailWork& work, Diagnostics diagnostics = {}) {
+    return replay_position_tail_split(end, base, read, spill, barrier, include,
+        [](bool, std::uint64_t, bool, double) {}, from_entry, work, diagnostics);
 }
 
 // Source-only extension of the position-tail summary: every allocation uses it.

@@ -12601,20 +12601,52 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
     // entry's margin slices (tests/fixtures/margin_v6 w5-qp-*; 35% of 62.3911
     // despite prior slices of 0.0028 and 1.6712; lane W5-ENG-MARGIN-V6).
     double completed_entry_units = 0.0;
-    // A per-entry percentage sizes each opening from its own completed units:
-    // the per-origin parts of this same tracked query (the certificates it
-    // merges, or its one ordered walk), never a second walk. The rows are
-    // the entry's live openings in incarnation order, written before the
-    // query runs, so a part is found by binary search and the query inserts
-    // nothing.
-    std::vector<std::pair<std::uint64_t, double>> completed_parts;
-    const auto completed_part = [&](std::uint64_t incarnation) -> double* {
-        const auto found = std::lower_bound(completed_parts.begin(), completed_parts.end(),
-            incarnation, [](const std::pair<std::uint64_t, double>& part, std::uint64_t key) {
-                return part.first < key;
-            });
-        return found != completed_parts.end() && found->first == incarnation
-            ? &found->second : nullptr;
+    struct CompletedPart {
+        double units = 0.0;
+        std::uint64_t version = 0;
+    };
+    static_assert(sizeof(CompletedPart) == 16, "query-local units and publication version");
+    std::unordered_map<std::uint64_t, CompletedPart> completed_parts;
+    std::uint64_t parts_version = 1;
+    detail::PositionTailQueryResult tail_query;
+    detail::PositionTailSummary* tail_summary = nullptr;
+    std::size_t parts_end = 0, parts_base = 0;
+    std::int64_t parts_barrier = position_open_script_bar_;
+#ifdef PINEFORGE_POSITION_TAIL_OBSERVE
+    std::size_t scalar_end = 0, scalar_base = 0;
+#endif
+    const auto complete_tail_query = [&] {
+        if (!tail_summary) return;
+        const bool certified = tail_summary->complete_query(
+            tail_query, PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
+#ifdef PINEFORGE_POSITION_TAIL_OBSERVE
+        // Observe the final work/path once. The scalar oracle still reads
+        // the publication prefix at which the original scalar was computed;
+        // later synchronous rows belong only to the leg-time parts.
+        struct ScalarRows {
+            const NativeStrategyHost& source;
+            std::size_t end;
+            std::size_t closed_trade_count() const { return end; }
+            Trade get_trade(int index) const { return source.get_trade(index); }
+        } host{require_host(), scalar_end};
+        const std::size_t base = scalar_base;
+        if (std::uncaught_exceptions() == 0)
+            PINEFORGE_POSITION_TAIL_OBSERVE(completed_entry_units, certified);
+#else
+        (void)certified;
+#endif
+    };
+    detail::PositionTailQueryScope<decltype(complete_tail_query)> tail_query_scope{
+        complete_tail_query};
+    const auto select_entry_parts = [&](const auto& include) {
+        if (!percent_by_origin) return;
+        const auto cohort = cohorts_by_id_.find(from_entry);
+        if (cohort != cohorts_by_id_.end())
+            for (const auto& origin : cohort->second.live_units_by_origin) {
+                auto& part = completed_parts[origin.first];
+                part.version = parts_version;
+                include(origin.first, part.units);
+            }
     };
     if (std::isnan(qty) && std::isfinite(requested_qty_percent)
         && requested_qty_percent < 100.0 && physical.signed_units != 0.0
@@ -12629,46 +12661,38 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
 #ifdef PINEFORGE_POSITION_TAIL_BEFORE_QUERY
         PINEFORGE_POSITION_TAIL_BEFORE_QUERY(summary);
 #endif
-        if (percent_by_origin) {
-            // Only a live opening of this entry is sized from its part; a
-            // spilled cohort holds none.
-            const auto sized = cohorts_by_id_.find_resident(from_entry);
-            if (sized != cohorts_by_id_.end()) {
-                completed_parts.reserve(sized->second.live_units_by_origin.size());
-                for (const auto& origin : sized->second.live_units_by_origin)
-                    completed_parts.emplace_back(origin.first, 0.0);
-                std::sort(completed_parts.begin(), completed_parts.end());
-            }
-        }
-        // Parts accumulate in the query's own row order.
-        const auto add_part = [&](std::uint64_t incarnation, double units) {
-            if (!percent_by_origin) return;
-            if (auto* part = completed_part(incarnation)) *part += units;
-        };
-        bool certified = ancestry_sized_target
-            ? summary.ancestry_parts(physical.signed_units > 0.0, [&](const auto& include) {
-                // Membership is the CURRENT live map, not the opening
-                // roster or a subtotal minus the most recently drained lot.
+        // Select current live membership through the name lookup or the
+        // existing live-cohort index, never the historical opening roster.
+        const auto select_ancestry = [&](const auto& include) {
+            const auto visit = [&](const auto& cohort) {
+                for (const auto& origin : cohort.second.live_units_by_origin) {
+                    double unused = 0.0;
+                    if (percent_by_origin) {
+                        auto& part = completed_parts[origin.first];
+                        part.version = parts_version;
+                        include(origin.first, part.units);
+                    } else include(origin.first, unused);
+                }
+            };
+            if (fifo_named_entry) {
+                const auto cohort = cohorts_by_id_.find(from_entry);
+                if (cohort != cohorts_by_id_.end()) visit(*cohort);
+            } else {
                 using CohortRow = std::remove_reference_t<decltype(*cohorts_by_id_.begin())>;
                 summary.for_each_live_cohort([&](const void* row) {
-                    const auto& cohort = *static_cast<const CohortRow*>(row);
-                    if (fifo_named_entry && cohort.first != from_entry) return;
-                    for (const auto& origin : cohort.second.live_units_by_origin)
-                        include(origin.first);
+                    visit(*static_cast<const CohortRow*>(row));
                 });
-              }, completed_entry_units, [&](std::uint64_t incarnation, const auto& certificate) {
-                double units = 0.0;
-                if (percent_by_origin && certificate.read(units)) add_part(incarnation, units);
-              }, PINEFORGE_POSITION_TAIL_DIAGNOSTICS{})
-            : summary.margin(physical.signed_units > 0.0,
-                             fifo_named_entry ? &from_entry : nullptr, completed_entry_units,
-                             PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
-        // A margin certificate holds no per-origin parts: per-entry sizing
-        // takes this query's ordered walk instead.
-        if (certified && percent_by_origin && !ancestry_sized_target
-            && completed_entry_units > 0.0) {
-            certified = false;
-        }
+            }
+        };
+        tail_query = ancestry_sized_target
+            ? summary.ancestry_parts_result(physical.signed_units > 0.0, select_ancestry,
+                                            completed_entry_units,
+                                            PINEFORGE_POSITION_TAIL_DIAGNOSTICS{})
+            : summary.margin_parts_result(physical.signed_units > 0.0,
+                                          fifo_named_entry ? &from_entry : nullptr,
+                                          select_entry_parts, completed_entry_units,
+                                          PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
+        tail_summary = &summary;
         const auto include_completed = [&](bool is_long, std::uint64_t incarnation,
                                             bool margin_call, const auto& named_entry_matches) {
             if (is_long != (physical.signed_units > 0.0)) return false; const auto held = cohorts_by_id_.held_rows(); // one range: one exactness assert
@@ -12681,22 +12705,88 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
                     })
                 : margin_call && (!fifo_named_entry || named_entry_matches());
         };
-        if (!certified) {
-            // An uncertified query's parts come from its own walk alone.
-            for (auto& part : completed_parts) part.second = 0.0;
+        if (!tail_query.certified) {
+            // Discard every tentative part on rejection. All legs share this
+            // one ordered fold, including when the live index was invalidated.
+            completed_parts.clear();
+            select_entry_parts([&](std::uint64_t, double& part) {
+                ++summary.work.origin_visits;
+                part = 0.0;
+            });
             completed_entry_units = detail::replay_position_tail_split(
                 host.closed_trade_count(), base,
                 [&](std::size_t index) -> Trade {
                     return host.get_trade(static_cast<int>(index));
                 }, position_tail_spill_.get(), position_open_script_bar_,
-                include_completed, add_part, from_entry, summary.work,
+                include_completed,
+                [&](bool is_long, std::uint64_t incarnation, bool margin_call, double units) {
+                    if (is_long != (physical.signed_units > 0.0)
+                        || (!ancestry_sized_target && !margin_call)) return;
+                    const auto part = completed_parts.find(incarnation);
+                    if (part != completed_parts.end()) part->second.units += units;
+                }, from_entry, summary.work,
                 PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
         }
+        parts_end = host.closed_trade_count();
+        parts_base = base;
 #ifdef PINEFORGE_POSITION_TAIL_OBSERVE
-        // Test-TU observer: the reference walk is never linked into runtime.
-        PINEFORGE_POSITION_TAIL_OBSERVE(completed_entry_units, certified);
+        scalar_end = parts_end;
+        scalar_base = base;
 #endif
     }
+    const auto completed_part_at_leg = [&](std::uint64_t origin) -> double {
+        if (!tail_summary) return 0.0;
+        const auto& host = require_host();
+        const auto* pine = pine_view_of(host_);
+        const auto end = host.closed_trade_count();
+        const std::size_t base = pine ? pine->trades_.base() : 0;
+        if (end != parts_end || base != parts_base
+            || position_open_script_bar_ != parts_barrier) {
+            // execute_current can publish rows before Applied. Observe the
+            // suffix once; refresh each needed origin lazily by this version,
+            // without rescanning all live parts after every publication.
+            observe_position_tail_rows();
+            if (++parts_version == 0) {
+                for (auto& part : completed_parts) {
+                    ++tail_summary->work.origin_visits;
+                    part.second.version = 0;
+                }
+                ++parts_version;
+            }
+            parts_end = end;
+            parts_base = base;
+            parts_barrier = position_open_script_bar_;
+        }
+        auto& current_part = completed_parts[origin];
+        if (current_part.version == parts_version) return current_part.units;
+        const auto refresh = tail_summary->parts_result(
+            physical.signed_units > 0.0, ancestry_sized_target,
+            [&](const auto& include) { include(origin, current_part.units); },
+            PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
+        tail_query.merge(refresh);
+        if (refresh.certified) {
+            current_part.version = parts_version;
+            return current_part.units;
+        }
+        select_entry_parts([&](std::uint64_t, double& part) {
+            ++tail_summary->work.origin_visits;
+            part = 0.0;
+        });
+        // One ordered fold per rejected publication version, shared by
+        // every leg at that version. Never append to a rounded subtotal.
+        detail::replay_position_tail_split(
+            end, base,
+            [&](std::size_t index) -> Trade { return host.get_trade(static_cast<int>(index)); },
+            position_tail_spill_.get(), position_open_script_bar_,
+            [](bool, std::uint64_t, bool, const auto&) { return false; },
+            [&](bool is_long, std::uint64_t incarnation, bool margin_call, double units) {
+                if (is_long != (physical.signed_units > 0.0)
+                    || (!ancestry_sized_target && !margin_call)) return;
+                const auto part = completed_parts.find(incarnation);
+                if (part != completed_parts.end()) part->second.units += units;
+            }, from_entry, tail_summary->work, PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
+        return completed_parts.at(origin).units;
+    };
     const double book_basis = (fifo_named_entry
         ? std::min(std::abs(physical.signed_units), cohort_exposure_for(from_entry))
         : std::abs(physical.signed_units)) + (ancestry_sized_target ? 0.0 : completed_entry_units);
@@ -13119,8 +13209,7 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
                 if (completed_entry_units > 0.0 && basis > 0.0
                     && cohort != cohorts_by_id_.end()
                     && cohort->second.live_units_by_origin.count(origin) != 0) {
-                    // This opening's part of the tracked query above.
-                    if (const auto* part = completed_part(origin)) completed = *part;
+                    completed = completed_part_at_leg(origin);
                 }
                 // A same-bar close owns held units before these exits.
                 // Pending parents supply their own capacity, including an
