@@ -1220,6 +1220,79 @@ void TimeframeAggregator::merge_into_current(const Bar& bar) {
     ++sub_bar_count_;
 }
 
+bool TimeframeAggregator::supports_fixed_completion() const {
+    return mode_ == Mode::RATIO && input_seconds_ > 0
+        && target_seconds_ > input_seconds_;
+}
+
+void TimeframeAggregator::observe_fixed(
+        FixedPeriodClock& clock, const Bar& bar) const {
+    if (!supports_fixed_completion() || !clock.cursor_ms) return;
+    const auto prefix = clock.observed_count > 0
+        ? clock.observed.timestamp : bar.timestamp;
+    const auto pending = intraday_bucket(*clock.cursor_ms, target_seconds_,
+        anchor_tz_, anchor_session_, &native_late_opens_, prefix);
+    const auto incoming = intraday_bucket(bar.timestamp, target_seconds_,
+        anchor_tz_, anchor_session_, &native_late_opens_, prefix);
+    if (incoming.key != pending.key) return;
+    if (clock.observed_count == 0) {
+        clock.observed = bar;
+    } else {
+        clock.observed.high = std::max(clock.observed.high, bar.high);
+        clock.observed.low = std::min(clock.observed.low, bar.low);
+        clock.observed.close = bar.close;
+        clock.observed.volume += bar.volume;
+    }
+    ++clock.observed_count;
+}
+
+std::optional<AggregatedBar> TimeframeAggregator::next_fixed_completion(
+        FixedPeriodClock& clock, int64_t horizon_ms) const {
+    if (!supports_fixed_completion() || !clock.cursor_ms) return std::nullopt;
+    while (*clock.cursor_ms < horizon_ms) {
+        const auto cursor = *clock.cursor_ms;
+        if (clock.observed_count == 0 && has_trading_session(anchor_session_)) {
+            auto next_open = session_covered_instant_ms(cursor, anchor_tz_, anchor_session_);
+            SessionDaySchedule windows;
+            if (next_open == cursor && parse_session_breaks(anchor_session_, windows)) {
+                const auto origin = session_day_open_nominal_ms(
+                    session_day_index_nominal(cursor, anchor_tz_, anchor_session_),
+                    anchor_session_);
+                const auto at = calendar_clock_ms(cursor, anchor_tz_) - origin;
+                for (int i = 0; i + 1 < windows.count; ++i) {
+                    if (at >= static_cast<int64_t>(windows.closes()[i]) * 60000
+                        && at < static_cast<int64_t>(windows.opens()[i + 1]) * 60000) {
+                        next_open = nominal_to_real_ms(
+                            origin + static_cast<int64_t>(windows.opens()[i + 1]) * 60000,
+                            anchor_tz_);
+                        break;
+                    }
+                }
+            }
+            if (next_open > cursor) {
+                clock.cursor_ms = next_open;
+                continue;
+            }
+        }
+        const auto prefix = clock.observed_count > 0
+            ? clock.observed.timestamp : cursor;
+        const auto bucket = intraday_bucket(cursor, target_seconds_,
+            anchor_tz_, anchor_session_, &native_late_opens_, prefix);
+        auto close = bucket.end_ms;
+        if (target_seconds_ < kSecPerDay && has_trading_session(anchor_session_))
+            close = std::min(close, session_window_close_ms(cursor, anchor_tz_, anchor_session_));
+        if (close <= cursor || close > horizon_ms) return std::nullopt;
+        AggregatedBar completed{clock.observed, true, clock.observed_count};
+        completed.bar.timestamp = bucket.open_ms;
+        // Keep the grid successor when a split-session window clips a bucket.
+        clock.cursor_ms = bucket.end_ms;
+        clock.observed = Bar{};
+        clock.observed_count = 0;
+        return completed;
+    }
+    return std::nullopt;
+}
+
 // ─── feed() per-mode helpers (file-local) ─────────────────────────────────────
 //
 // Three mode branches (PASSTHROUGH / RATIO / CALENDAR) are independent state

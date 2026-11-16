@@ -42,12 +42,14 @@
 // this TU is source-free and runs in the kernel-only profile.
 
 #include "native_htf_subscriptions_fixture.hpp"
+#include "native_fixed_period_fixture.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <map>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -1012,6 +1014,303 @@ void test_lazy_seal_precedes_the_pump() {
     CHECK(bare.log == bare_log);
 }
 
+// Retained chart-clock facts are replayed through the actual subscription
+// callback and pull accessor. All TV assertions below cite:
+// Retained TradingView capture: decoded.json
+// SHA256 9dd2b5b17e428532d1280c0151330d715949610304a74e849bbefd22f86ba12c
+// A.bars[0..95] and B.bars[0..47]; the data header records the member mapping.
+void test_fixed_period_native_subscription_replays() {
+    namespace fact = tv_fixed_period_75_fact;
+    for (int chart : {30, 60}) {
+        for (bool changed : {false, true}) {
+            // Auxiliary lookahead has the FIRST FEED contributor contract,
+            // checked separately below; it is not the chart-clock B mapping.
+            for (int aux : {0, 10, 5, 1}) {
+                if (chart == 60 && changed && aux != 0) continue;
+                scenario = "native fixed-period retained replay";
+                auto bars = native_fixed_period_fixture::input(chart);
+                NativeRunSpec spec = base_spec(
+                    std::to_string(chart).c_str(), std::to_string(chart).c_str(),
+                    "native-fixed-period-replay");
+                NativeTimeframeSubscription series;
+                series.tf = "75";
+                series.authoritative_bars = native_fixed_period_fixture::native();
+                series.lookahead = chart == 60 && changed;
+                series.gaps = chart == 30 && changed;
+                if (aux != 0) {
+                    NativeAuxiliaryFeed feed;
+                    feed.tf = std::to_string(aux);
+                    feed.bars = native_fixed_period_fixture::input(aux);
+                    spec.auxiliary_feed = feed;
+                    series.source = NativeSeriesSource::AuxiliaryFeed;
+                }
+                spec.subscriptions.push_back(series);
+                SeriesHost host;
+                host.probes = 1;
+                const auto setup = host.configure_native(spec);
+                CHECK(setup.status == NativeSetupStatus::Applied);
+                // A setup refusal is distinct from a behavior failure; keep
+                // trying every other form instead of terminating this target.
+                if (setup.status != NativeSetupStatus::Applied) continue;
+                host.run(bars.data(), static_cast<int>(bars.size()), spec.input_tf,
+                         spec.script_tf, false, 4, MagnifierDistribution::ENDPOINTS);
+                CHECK(host.last_error().empty());
+                const int count = chart == 30 ? fact::kChart30Bars : fact::kChart60Bars;
+                CHECK(host.series_at_bar.size() == static_cast<std::size_t>(count));
+                const int* tape = chart == 30
+                    ? (changed ? fact::kChart30GapsOn : fact::kChart30GapsOff)
+                    : (changed ? fact::kChart60LookaheadOn : fact::kChart60LookaheadOff);
+                for (int i = 0; i < count &&
+                     i < static_cast<int>(host.series_at_bar.size()); ++i) {
+                    CHECK(host.series_at_bar[i].size() == 1);
+                    if (host.series_at_bar[i].size() != 1) continue;
+                    const auto& got = host.series_at_bar[i][0];
+                    CHECK(got.has_value() == (tape[i] >= 0));
+                    if (!got || tape[i] < 0) continue;
+                    const auto& want = fact::kBars[tape[i]];
+                    CHECK(got->close == want.value);
+                    CHECK(got->timestamp == fact::kOriginMs +
+                          want.open_minute * fact::kMinuteMs);
+                    check_bucket(*got, series.authoritative_bars[tape[i]], "native payload");
+                }
+                CHECK(!host.deliveries.empty());
+                for (const auto& delivery : host.deliveries) {
+                    CHECK(delivery.accessor_matches);
+                    // Callback interval is independently checked against the
+                    // capture's requested close, not derived from the engine.
+                    for (const auto& row : fact::kBars) {
+                        if (delivery.bar.timestamp != fact::kOriginMs +
+                            row.open_minute * fact::kMinuteMs) continue;
+                        CHECK(delivery.context.interval.last_traded_close_ms ==
+                              fact::kOriginMs + row.close_minute * fact::kMinuteMs);
+                    }
+                }
+            }
+        }
+    }
+}
+
+void test_fixed_period_first_feed_contributor() {
+    scenario = "fixed period first contributing feed input";
+    namespace fact = tv_fixed_period_75_fact;
+    for (int aux : {0, 10, 5, 1}) {
+        NativeRunSpec spec = base_spec("60", "60", "native-fixed-first-contributor");
+        NativeTimeframeSubscription series;
+        series.tf = "75"; series.lookahead = true;
+        series.authoritative_bars = native_fixed_period_fixture::native();
+        if (aux != 0) {
+            NativeAuxiliaryFeed feed;
+            feed.tf = std::to_string(aux);
+            feed.bars = native_fixed_period_fixture::input(aux, 360);
+            spec.auxiliary_feed = feed;
+            series.source = NativeSeriesSource::AuxiliaryFeed;
+        }
+        spec.subscriptions.push_back(series);
+        SeriesHost host;
+        const auto setup = host.configure_native(spec);
+        CHECK(setup.status == NativeSetupStatus::Applied);
+        if (setup.status != NativeSetupStatus::Applied) continue;
+        const auto bars = native_fixed_period_fixture::input(60, 360);
+        host.run(bars.data(), static_cast<int>(bars.size()), "60", "60",
+                 false, 4, MagnifierDistribution::ENDPOINTS);
+        CHECK(host.last_error().empty());
+        bool saw_second = false;
+        for (const auto& delivery : host.deliveries) {
+            if (delivery.bar.timestamp != fact::kOriginMs + 75 * fact::kMinuteMs) continue;
+            saw_second = true;
+            // Native contract, not uncaptured TV prices: primary 60m first
+            // contributes at 120; auxiliary first contributes at 75 (1/5m)
+            // or 80 (10m), in the slice of primary [60,120).
+            const int expected_input = aux == 0 ? 120 : 60;
+            CHECK(delivery.context.delivered_at_ms ==
+                  fact::kOriginMs + expected_input * fact::kMinuteMs);
+            CHECK(delivery.bars_before == expected_input / 60);
+            CHECK(delivery.accessor_matches);
+        }
+        CHECK(saw_second);
+    }
+    for (int fine : {10, 5, 1}) {
+        NativeRunSpec spec = base_spec(
+            std::to_string(fine).c_str(), "60", "native-fixed-first-fine-primary");
+        NativeTimeframeSubscription series;
+        series.tf = "75"; series.lookahead = true;
+        series.authoritative_bars = native_fixed_period_fixture::native();
+        spec.subscriptions.push_back(series);
+        const auto bars = native_fixed_period_fixture::input(fine, 360);
+        SeriesHost host;
+        const auto setup = host.configure_native(spec);
+        CHECK(setup.status == NativeSetupStatus::Applied);
+        if (setup.status != NativeSetupStatus::Applied) continue;
+        host.run(bars.data(), static_cast<int>(bars.size()), spec.input_tf, "60",
+                 false, 4, MagnifierDistribution::ENDPOINTS);
+        CHECK(host.last_error().empty());
+        bool saw_second = false;
+        for (const auto& delivery : host.deliveries) {
+            if (delivery.bar.timestamp != fact::kOriginMs + 75 * fact::kMinuteMs) continue;
+            saw_second = true;
+            // Native first-contributor contract, rather than TV's chart-open
+            // merge: this fine input belongs to the observable chart at 60.
+            const int first = ((75 + fine - 1) / fine) * fine;
+            CHECK(delivery.context.delivered_at_ms ==
+                  fact::kOriginMs + first * fact::kMinuteMs);
+            CHECK(delivery.bars_before == 1);
+        }
+        CHECK(saw_second);
+    }
+}
+
+void test_fixed_period_fine_primary_retained_carry() {
+    // All TV value/NA/timestamp assertions use A.control and B.control in:
+    // Retained TradingView capture: decoded.json
+    // SHA256 9dd2b5b17e428532d1280c0151330d715949610304a74e849bbefd22f86ba12c
+    namespace fact = tv_fixed_period_75_fact;
+    scenario = "fixed period fine primary retained carry";
+    for (int chart : {30, 60}) {
+        for (int fine : {10, 5, 1}) {
+            NativeRunSpec spec = base_spec(
+                std::to_string(fine).c_str(), std::to_string(chart).c_str(),
+                "native-fixed-fine-retained");
+            NativeTimeframeSubscription series;
+            series.tf = "75";
+            series.authoritative_bars = native_fixed_period_fixture::native();
+            spec.subscriptions.push_back(series);
+            const auto bars = native_fixed_period_fixture::input(fine);
+            SeriesHost host; host.probes = 1;
+            const auto setup = host.configure_native(spec);
+            CHECK(setup.status == NativeSetupStatus::Applied);
+            if (setup.status != NativeSetupStatus::Applied) continue;
+            host.run(bars.data(), static_cast<int>(bars.size()), spec.input_tf, spec.script_tf,
+                     false, 4, MagnifierDistribution::ENDPOINTS);
+            CHECK(host.last_error().empty());
+            const auto count = chart == 30 ? fact::kChart30Bars : fact::kChart60Bars;
+            const auto* tape = chart == 30 ? fact::kChart30GapsOff : fact::kChart60LookaheadOff;
+            CHECK(host.series_at_bar.size() == static_cast<std::size_t>(count));
+            for (int i = 0; i < count && i < static_cast<int>(host.series_at_bar.size()); ++i) {
+                CHECK(host.series_at_bar[i].size() == 1);
+                if (host.series_at_bar[i].size() != 1) continue;
+                const auto& got = host.series_at_bar[i][0];
+                CHECK(got.has_value() == (tape[i] >= 0));
+                if (got && tape[i] >= 0)
+                    check_bucket(*got, series.authoritative_bars[tape[i]], "retained fine carry");
+            }
+        }
+    }
+}
+
+void test_fixed_period_fine_primary_and_sparse_boundary() {
+    scenario = "fixed period fine primary and sparse boundary";
+    namespace fact = tv_fixed_period_75_fact;
+    for (int fine : {10, 5, 1}) {
+        auto bars = native_fixed_period_fixture::input(fine, 420);
+        NativeRunSpec spec = base_spec(std::to_string(fine).c_str(), "30", "native-fixed-sparse");
+        NativeTimeframeSubscription series;
+        series.tf = "65";
+        for (int m = 0; m < 420; m += 65) {
+            const double v = 900.5 + m;
+            series.authoritative_bars.push_back(
+                {v - 1, v + 2, v - 2, v, 40, fact::kOriginMs + m * fact::kMinuteMs});
+        }
+        spec.subscriptions.push_back(series);
+        // Held twin; gaps follows accepted INPUT, not source chart merging.
+        auto gapped = series; gapped.gaps = true;
+        spec.subscriptions.push_back(gapped);
+        SeriesHost full, sparse;
+        full.probes = sparse.probes = 2;
+        CHECK(full.configure_native(spec).status == NativeSetupStatus::Applied);
+        CHECK(sparse.configure_native(spec).status == NativeSetupStatus::Applied);
+        full.run(bars.data(), static_cast<int>(bars.size()), spec.input_tf, "30",
+                 false, 4, MagnifierDistribution::ENDPOINTS);
+        // Drop the final child of [30,60). First input of [60,90) closes
+        // request [0,65); the old observable chart must never consume it.
+        auto holed = bars;
+        const auto missing = fact::kOriginMs + (60 - fine) * fact::kMinuteMs;
+        holed.erase(std::remove_if(holed.begin(), holed.end(),
+                                  [missing](const Bar& b) { return b.timestamp == missing; }),
+                    holed.end());
+        sparse.run(holed.data(), static_cast<int>(holed.size()), spec.input_tf, "30",
+                   false, 4, MagnifierDistribution::ENDPOINTS);
+        CHECK(full.last_error().empty() && sparse.last_error().empty());
+        CHECK(full.series_at_bar.size() == sparse.series_at_bar.size());
+        for (std::size_t i = 0; i < sparse.series_at_bar.size(); ++i) {
+            const auto& held = sparse.series_at_bar[i][0];
+            const auto chart_close = fact::kOriginMs +
+                static_cast<std::int64_t>(i + 1) * 30 * fact::kMinuteMs;
+            if (held) CHECK(held->timestamp + 65 * fact::kMinuteMs <= chart_close);
+            if (i < full.series_at_bar.size())
+                check_series(held, full.series_at_bar[i][0], "same emitted chart context");
+            // The native gaps contract clears per accepted primary input.
+            // Pin its positive case too (65m closes at chart close 390m),
+            // separately from Pine's once-per-observable-chart merge.
+            std::optional<Bar> expected_gap;
+            for (const auto& row : series.authoritative_bars) {
+                const auto close = row.timestamp + 65 * fact::kMinuteMs;
+                if (close > chart_close - fine * fact::kMinuteMs && close <= chart_close)
+                    expected_gap = row;
+            }
+            check_series(sparse.series_at_bar[i][1], expected_gap, "accepted-input gaps");
+            if (i < full.series_at_bar.size())
+                check_series(full.series_at_bar[i][1], expected_gap, "dense accepted-input gaps");
+        }
+        CHECK(full.stream_is_realtime() == false);
+    }
+    NativeRunSpec unbacked = base_spec("60", "60", "native-fixed-unbacked");
+    NativeTimeframeSubscription missing;
+    missing.tf = "75";
+    unbacked.subscriptions.push_back(missing);
+    SeriesHost refused;
+    CHECK(refused.configure_native(unbacked).status == NativeSetupStatus::Failed);
+    auto enormous = unbacked;
+    enormous.subscriptions[0].tf = std::to_string(std::numeric_limits<int>::max() / 60 + 2);
+    enormous.subscriptions[0].authoritative_bars = native_fixed_period_fixture::native();
+    CHECK(refused.configure_native(enormous).status == NativeSetupStatus::Failed);
+    auto malformed = unbacked;
+    malformed.subscriptions[0].authoritative_bars = native_fixed_period_fixture::native();
+    malformed.subscriptions[0].authoritative_bars[0].close =
+        std::numeric_limits<double>::quiet_NaN();
+    CHECK(refused.configure_native(malformed).status == NativeSetupStatus::Failed);
+}
+
+void test_fixed_period_confirmed_stream_and_tick_contract() {
+    scenario = "native fixed period confirmed stream and tick contract";
+    auto bars = native_fixed_period_fixture::input(60, 720);
+    NativeRunSpec spec = base_spec("60", "60", "native-fixed-stream");
+    NativeTimeframeSubscription series;
+    series.tf = "75";
+    series.authoritative_bars = native_fixed_period_fixture::native();
+    spec.subscriptions.push_back(series);
+    SeriesHost stream, batch;
+    const auto configured = stream.configure_native(spec);
+    CHECK(configured.status == NativeSetupStatus::Applied);
+    if (configured.status != NativeSetupStatus::Applied) return;
+    CHECK(batch.configure_native(spec).status == NativeSetupStatus::Applied);
+    CHECK(stream.stream_begin(bars.data(), 4, "60", "60"));
+    // This is the admitted kernel stream, not the source host's explicitly
+    // refused native-feed begin. The tick reaches its subscription contract.
+    const TradeTick tick{bars[4].timestamp + 1, 1, 234.5, 1};
+    CHECK(!stream.stream_push_tick(tick));
+    CHECK(stream.last_error() ==
+          "native timeframe subscriptions require confirmed-bar stream input");
+    CHECK(stream.native_state().kind == NativeLifecycleKind::Running);
+    const auto pending = stream.native_continuation_hash();
+    for (std::size_t i = 4; i < bars.size(); ++i) CHECK(stream.stream_push_bar(bars[i]));
+    CHECK(stream.native_continuation_hash() != pending);
+    CHECK(stream.stream_end(false));
+    batch.run(bars.data(), static_cast<int>(bars.size()), "60", "60",
+              false, 4, MagnifierDistribution::ENDPOINTS);
+    CHECK(batch.last_error().empty());
+    CHECK(batch.deliveries.size() == stream.deliveries.size());
+    for (std::size_t i = 0; i < batch.deliveries.size() && i < stream.deliveries.size(); ++i) {
+        check_bucket(stream.deliveries[i].bar, batch.deliveries[i].bar, "confirmed continuation");
+        CHECK(stream.deliveries[i].context.delivered_at_ms ==
+              batch.deliveries[i].context.delivered_at_ms);
+    }
+    const auto first_hash = batch.native_continuation_hash();
+    batch.run(bars.data(), static_cast<int>(bars.size()), "60", "60",
+              false, 4, MagnifierDistribution::ENDPOINTS);
+    CHECK(batch.last_error().empty());
+    CHECK(batch.native_continuation_hash() == first_hash);
+}
+
 }  // namespace
 
 int main() {
@@ -1026,6 +1325,11 @@ int main() {
     test_finer_than_input_is_refused();
     test_hash_neutrality();
     test_lazy_seal_precedes_the_pump();
+    test_fixed_period_native_subscription_replays();
+    test_fixed_period_first_feed_contributor();
+    test_fixed_period_fine_primary_retained_carry();
+    test_fixed_period_fine_primary_and_sparse_boundary();
+    test_fixed_period_confirmed_stream_and_tick_contract();
     std::printf("native HTF subscriptions: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

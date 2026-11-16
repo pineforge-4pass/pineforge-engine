@@ -27,9 +27,11 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "native_fixed_period_fixture.hpp"
 
 using namespace pineforge;
 
@@ -460,6 +462,322 @@ void test_tuple_request_without_the_feed_is_the_aggregate() {
     assert(probe.native_security_substitutions() == 0);
 }
 
+namespace {
+int fixed_failures = 0;
+#define FIXED_CHECK(condition) do { if (!(condition)) { \
+    ++fixed_failures; std::fprintf(stderr, "fixed-period line %d: %s\n", \
+                                 __LINE__, #condition); } } while (false)
+
+class FixedPeriodProbe final : public pineforge::source::PineStrategyHost {
+public:
+    struct Read {
+        Bar bar{};
+        std::int64_t requested_close = 0;
+        bool present = false;
+    };
+    std::string requested = "75";
+    bool ahead = false;
+    bool gaps = false;
+    Read latest;
+    std::vector<Read> reads;
+    std::vector<Bar> charts;
+    std::vector<std::int64_t> chart_ends;
+    std::vector<source::PineRequestDelivery> deliveries;
+    std::vector<Bar> evaluated_bars;
+    int evaluated = 0;
+    int clears = 0;
+    std::vector<int> clears_at_chart;
+    void configure_security_evaluators() override {
+        latest = {}; reads.clear(); charts.clear(); chart_ends.clear();
+        deliveries.clear(); evaluated_bars.clear();
+        evaluated = 0; clears = 0; clears_at_chart.clear();
+        security_eval_states_.clear();
+        register_security_eval(0, requested, input_tf_, ahead, gaps);
+    }
+    void evaluate_security(int, const Bar& bar, bool) override {
+        ++evaluated;
+        evaluated_bars.push_back(bar);
+        latest = {bar, session_intraday_bucket_end_ms(
+            bar.timestamp, tf_to_seconds(requested), syminfo_.timezone, syminfo_.session), true};
+        deliveries.push_back(current_request_delivery(0));
+    }
+    void clear_security(int) override { latest = {}; ++clears; }
+    void on_source_bar(const Bar& bar) override {
+        reads.push_back(latest); charts.push_back(bar);
+        chart_ends.push_back(time_close());
+        clears_at_chart.push_back(clears);
+        // The original reporter's quantity expression and decision cadence.
+        if (bar_index_ > 6 && bar_index_ % 7 == 3 && latest.present)
+            strategy_entry("L", true, 1 + static_cast<int>(latest.bar.close) % 5);
+        if (bar_index_ > 6 && bar_index_ % 7 == 5) strategy_close_all();
+    }
+};
+
+void install_fixed_native(FixedPeriodProbe& host, const std::vector<Bar>& rows) {
+    FIXED_CHECK(strategy_set_native_security_feed(
+        static_cast<pf_strategy_t>(&host), host.requested.c_str(),
+        reinterpret_cast<const pf_bar_t*>(rows.data()),
+        static_cast<int>(rows.size())) == 0);
+}
+
+void check_fixed_source_tape(int chart_minutes, int input_minutes,
+                             int auxiliary_minutes, bool ahead, bool gaps) {
+    using namespace tv_fixed_period_75_fact;
+    auto bars = native_fixed_period_fixture::input(input_minutes);
+    const auto rows = native_fixed_period_fixture::native();
+    FixedPeriodProbe host;
+    host.ahead = ahead; host.gaps = gaps;
+    install_fixed_native(host, rows);
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    if (auxiliary_minutes != 0) {
+        const auto aux = native_fixed_period_fixture::input(auxiliary_minutes);
+        FIXED_CHECK(strategy_set_aux_security_feed(
+            static_cast<pf_strategy_t>(&host),
+            reinterpret_cast<const pf_bar_t*>(aux.data()),
+            static_cast<int>(aux.size()), std::to_string(auxiliary_minutes).c_str()) == 0);
+    }
+#else
+#error "fixed-period source replay requires the actual auxiliary-feed path"
+#endif
+    host.run(bars.data(), static_cast<int>(bars.size()),
+             std::to_string(input_minutes), std::to_string(chart_minutes),
+             false, 4, MagnifierDistribution::ENDPOINTS);
+    FIXED_CHECK(host.last_error().empty());
+    const int count = chart_minutes == 30 ? kChart30Bars : kChart60Bars;
+    FIXED_CHECK(host.reads.size() == static_cast<std::size_t>(count));
+    // Every value, NA and timestamp below cites decoded.json:
+    // Retained TradingView capture: decoded.json
+    // SHA256 9dd2b5b17e428532d1280c0151330d715949610304a74e849bbefd22f86ba12c
+    // A.bars[i].changed/control; B.bars[i].changed/control.
+    const int* expected = chart_minutes == 30
+        ? (gaps ? kChart30GapsOn : kChart30GapsOff)
+        : (ahead ? kChart60LookaheadOn : kChart60LookaheadOff);
+    for (int i = 0; i < count && i < static_cast<int>(host.reads.size()); ++i) {
+        const auto& got = host.reads[static_cast<std::size_t>(i)];
+        FIXED_CHECK(host.charts[i].timestamp == kOriginMs + i * chart_minutes * kMinuteMs);
+        FIXED_CHECK(host.chart_ends[i] == kOriginMs + (i + 1) * chart_minutes * kMinuteMs);
+        FIXED_CHECK(got.present == (expected[i] >= 0));
+        if (!got.present || expected[i] < 0) continue;
+        const auto& want = kBars[expected[i]];
+        FIXED_CHECK(got.bar.close == want.value);
+        FIXED_CHECK(got.bar.timestamp == kOriginMs + want.open_minute * kMinuteMs);
+        FIXED_CHECK(got.requested_close == kOriginMs + want.close_minute * kMinuteMs);
+        // Native payload, independent synthetic O/H/L/V sentinels.
+        const auto& payload = rows[static_cast<std::size_t>(expected[i])];
+        FIXED_CHECK(got.bar.open == payload.open && got.bar.high == payload.high);
+        FIXED_CHECK(got.bar.low == payload.low && got.bar.volume == payload.volume);
+        if (!ahead) FIXED_CHECK(got.requested_close <= host.chart_ends[i]);
+    }
+    FIXED_CHECK(host.evaluated > 0);
+    FIXED_CHECK(host.native_security_substitutions() > 0);
+    if (ahead) {
+        // Native-context invariant: a short requested bar with no chart-open
+        // contributor still advances expression history before the next
+        // selected bar. The body must retain B's publication mapping above.
+        // The payloads are supplied input; no uncaptured TV TA is asserted.
+        FIXED_CHECK(host.evaluated_bars.size() == rows.size() - 1);
+        for (std::size_t i = 0; i < host.evaluated_bars.size() && i + 1 < rows.size(); ++i) {
+            FIXED_CHECK(host.evaluated_bars[i].timestamp == rows[i].timestamp);
+            FIXED_CHECK(host.evaluated_bars[i].close == rows[i].close);
+        }
+    }
+    if (gaps) {
+        for (std::size_t i = 0; i < host.clears_at_chart.size(); ++i)
+            FIXED_CHECK(host.clears_at_chart[i] == static_cast<int>(i + 1));
+    }
+    for (const auto& delivery : host.deliveries) {
+        FIXED_CHECK(delivery.caller_valid);
+        FIXED_CHECK(delivery.actual_complete && !delivery.replay);
+        FIXED_CHECK(delivery.requested_slot >= 0);
+    }
+    if (chart_minutes == 60 && !ahead) {
+        int trade = 0;
+        for (int i = 7; i + 3 < count; ++i) {
+            if (i % 7 != 3) continue;
+            FIXED_CHECK(trade < host.trade_count());
+            if (trade >= host.trade_count()) break;
+            // Reporter quantity, derived solely from B's retained value.
+            FIXED_CHECK(host.get_trade(trade).qty ==
+                        1 + static_cast<int>(kBars[expected[i]].value) % 5);
+            ++trade;
+        }
+        FIXED_CHECK(trade > 0);
+    }
+}
+
+void test_native_fixed_period_retained_source_replays() {
+    // The same observable chart under chart input, fine primary, and auxiliary
+    // routes. 1m/5m divide 75: selecting only evaluator remainders misses them.
+    for (int chart : {30, 60}) {
+        for (int fine : {chart, 10, 5, 1}) {
+            for (bool mode : {false, true}) {
+                check_fixed_source_tape(chart, fine, 0,
+                                        chart == 60 && mode, chart == 30 && mode);
+            }
+        }
+        for (int aux : {10, 5, 1}) {
+            for (bool mode : {false, true}) {
+                check_fixed_source_tape(chart, chart, aux,
+                                        chart == 60 && mode, chart == 30 && mode);
+            }
+        }
+    }
+}
+
+void test_native_fixed_period_sparse_chart_attribution() {
+    using namespace tv_fixed_period_75_fact;
+    // Native-control invariant only: no uncaptured TV values/NA are invented.
+    // Remove 00:50 so chart [00:30,01:00) seals on the 01:00 input. Its
+    // 01:10 close must not publish the 65m requested close to that old chart.
+    auto dense = native_fixed_period_fixture::input(10, 240);
+    auto sparse = dense;
+    sparse.erase(sparse.begin() + 5);
+    std::vector<Bar> native;
+    for (int m = 0; m < 240; m += 65) {
+        const double v = 900.5 + m;
+        native.push_back({v - 1, v + 2, v - 2, v, 40.0, kOriginMs + m * kMinuteMs});
+    }
+    for (bool gaps : {false, true}) {
+        FixedPeriodProbe full, holed;
+        full.requested = holed.requested = "65";
+        full.gaps = holed.gaps = gaps;
+        install_fixed_native(full, native); install_fixed_native(holed, native);
+        full.run(dense.data(), static_cast<int>(dense.size()), "10", "30", false,
+                 4, MagnifierDistribution::ENDPOINTS);
+        holed.run(sparse.data(), static_cast<int>(sparse.size()), "10", "30", false,
+                  4, MagnifierDistribution::ENDPOINTS);
+        FIXED_CHECK(full.last_error().empty() && holed.last_error().empty());
+        FIXED_CHECK(full.reads.size() == holed.reads.size());
+        for (std::size_t i = 0; i < holed.reads.size(); ++i) {
+            FIXED_CHECK(!holed.reads[i].present ||
+                        holed.reads[i].requested_close <= holed.chart_ends[i]);
+            if (i >= full.reads.size()) continue;
+            FIXED_CHECK(full.charts[i].timestamp == holed.charts[i].timestamp);
+            FIXED_CHECK(full.chart_ends[i] == holed.chart_ends[i]);
+            FIXED_CHECK(full.reads[i].present == holed.reads[i].present);
+            if (full.reads[i].present && holed.reads[i].present)
+                FIXED_CHECK(full.reads[i].bar.close == holed.reads[i].bar.close);
+        }
+    }
+}
+
+void test_native_fixed_period_tick_admission_and_reset() {
+    auto bars = native_fixed_period_fixture::input(60, 360);
+    const auto rows = native_fixed_period_fixture::native();
+    FixedPeriodProbe refused;
+    install_fixed_native(refused, rows);
+    // Existing admission contract. This setup is NOT a behavior RED.
+    FIXED_CHECK(!refused.stream_begin(bars.data(), static_cast<int>(bars.size()), "60", "60"));
+    FIXED_CHECK(refused.last_error().find("native request.security feed") != std::string::npos);
+    FixedPeriodProbe live;
+    FIXED_CHECK(live.stream_begin(bars.data(), static_cast<int>(bars.size()), "60", "60"));
+    const TradeTick tick{bars.back().timestamp + 60 * kMinute + 1, 1, 222.5, 1.0};
+    FIXED_CHECK(live.stream_push_tick(tick)); // reaches the real on_native_tick
+    FIXED_CHECK(live.last_error().empty());
+    FIXED_CHECK(live.stream_push_tick({tick.timestamp + 60 * kMinute, 2, 223.5, 2.0}));
+    FIXED_CHECK(live.last_error().empty());
+    FIXED_CHECK(live.stream_end(false));
+
+    FixedPeriodProbe rerun, fresh;
+    install_fixed_native(rerun, rows); install_fixed_native(fresh, rows);
+    rerun.run(bars.data(), static_cast<int>(bars.size()), "60", "60", false,
+              4, MagnifierDistribution::ENDPOINTS);
+    const auto first_hash = rerun.broker_state_hash();
+    const auto first_reads = rerun.reads;
+    rerun.run(bars.data(), static_cast<int>(bars.size()), "60", "60", false,
+              4, MagnifierDistribution::ENDPOINTS);
+    fresh.run(bars.data(), static_cast<int>(bars.size()), "60", "60", false,
+              4, MagnifierDistribution::ENDPOINTS);
+    FIXED_CHECK(rerun.last_error().empty() && fresh.last_error().empty());
+    FIXED_CHECK(rerun.broker_state_hash() == first_hash);
+    FIXED_CHECK(rerun.broker_state_hash() == fresh.broker_state_hash());
+    FIXED_CHECK(rerun.reads.size() == first_reads.size());
+    for (std::size_t i = 0; i < rerun.reads.size() && i < first_reads.size(); ++i) {
+        FIXED_CHECK(rerun.reads[i].present == first_reads[i].present);
+        if (rerun.reads[i].present && first_reads[i].present)
+            FIXED_CHECK(rerun.reads[i].bar.close == first_reads[i].bar.close);
+    }
+}
+
+void test_native_fixed_period_unbacked_and_divisible_controls() {
+    const auto bars = native_fixed_period_fixture::input(60, 360);
+    for (bool ahead : {false, true}) {
+        FixedPeriodProbe unbacked;
+        unbacked.ahead = ahead;
+        unbacked.run(bars.data(), static_cast<int>(bars.size()), "60", "60",
+                     false, 4, MagnifierDistribution::ENDPOINTS);
+        FIXED_CHECK(unbacked.last_error().empty());
+        FIXED_CHECK(unbacked.reads.size() == bars.size());
+        for (std::size_t i = 0; i < unbacked.reads.size() && i < bars.size(); ++i) {
+            // Established unbacked fractional-ratio passthrough, not TV data.
+            FIXED_CHECK(unbacked.reads[i].present);
+            FIXED_CHECK(unbacked.reads[i].bar.close == bars[i].close);
+        }
+        FIXED_CHECK(unbacked.native_security_substitutions() == 0);
+    }
+    FixedPeriodProbe divisible;
+    divisible.requested = "120";
+    std::vector<Bar> native;
+    for (int i = 0; i < 3; ++i) {
+        const double v = 2000.125 + i;
+        native.push_back({v - 1, v + 1, v - 2, v, 33.0,
+                          bars[static_cast<std::size_t>(i * 2)].timestamp});
+    }
+    install_fixed_native(divisible, native);
+    divisible.run(bars.data(), static_cast<int>(bars.size()), "60", "60",
+                  false, 4, MagnifierDistribution::ENDPOINTS);
+    FIXED_CHECK(divisible.last_error().empty());
+    FIXED_CHECK(divisible.reads.size() == bars.size());
+    for (std::size_t i = 0; i < divisible.reads.size() && i < bars.size(); ++i) {
+        FIXED_CHECK(divisible.reads[i].present == (i >= 1));
+        if (i >= 1 && divisible.reads[i].present)
+            FIXED_CHECK(divisible.reads[i].bar.close == native[(i - 1) / 2].close);
+    }
+}
+
+void test_native_fixed_period_grid_and_session_controls() {
+    namespace fact = tv_fixed_period_75_fact;
+    auto bars = native_fixed_period_fixture::input(60, 360);
+    auto shifted = native_fixed_period_fixture::native();
+    for (auto& bar : shifted) bar.timestamp += fact::kMinuteMs;
+    FixedPeriodProbe wrong_grid;
+    install_fixed_native(wrong_grid, shifted);
+    wrong_grid.run(bars.data(), static_cast<int>(bars.size()), "60", "60",
+                   false, 4, MagnifierDistribution::ENDPOINTS);
+    FIXED_CHECK(!wrong_grid.last_error().empty());
+    FIXED_CHECK(wrong_grid.last_error().find("native fixed-period bar is off the requested grid")
+                != std::string::npos);
+
+    // Native invariant, not a TV price/NA assertion. A raw label outside the
+    // session supplies no positive accepted close; it must not abort the run.
+    FixedPeriodProbe session;
+    session.set_syminfo_timezone("UTC");
+    session.set_syminfo_session("0930-1600");
+    std::vector<Bar> native;
+    for (int minute = 570; minute < 960; minute += 75) {
+        const double value = 700.5 + minute;
+        native.push_back({value - 1, value + 1, value - 2, value, 50.0,
+                          fact::kOriginMs + minute * fact::kMinuteMs});
+    }
+    install_fixed_native(session, native);
+    std::vector<Bar> sparse;
+    for (int minute : {510, 570, 630, 810, 870, 930}) {
+        const double value = 100.5 + minute;
+        sparse.push_back({value, value + 1, value - 1, value, 1,
+                          fact::kOriginMs + minute * fact::kMinuteMs});
+    }
+    session.run(sparse.data(), static_cast<int>(sparse.size()), "60", "60",
+                false, 4, MagnifierDistribution::ENDPOINTS);
+    FIXED_CHECK(session.last_error().empty());
+    FIXED_CHECK(session.reads.size() == sparse.size());
+    for (std::size_t i = 0; i < session.reads.size(); ++i) {
+        if (session.reads[i].present)
+            FIXED_CHECK(session.reads[i].requested_close <= session.chart_ends[i]);
+    }
+}
+#undef FIXED_CHECK
+} // namespace
+
 int main() {
     test_completed_daily_bucket_carries_the_native_bar();
     test_a_bucket_without_a_native_bar_keeps_its_aggregate();
@@ -469,7 +787,12 @@ int main() {
     test_overnight_cme_session_labels_by_session_day();
     test_tuple_request_reads_the_native_daily_row();
     test_tuple_request_without_the_feed_is_the_aggregate();
-    return 0;
+    test_native_fixed_period_retained_source_replays();
+    test_native_fixed_period_sparse_chart_attribution();
+    test_native_fixed_period_tick_admission_and_reset();
+    test_native_fixed_period_unbacked_and_divisible_controls();
+    test_native_fixed_period_grid_and_session_controls();
+    return fixed_failures == 0 ? 0 : 1;
 }
 
 #undef coof_cursor_is_bar_close_

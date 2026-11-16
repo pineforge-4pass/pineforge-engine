@@ -219,6 +219,9 @@ struct PineSecurityEvalState {
     // barmerge.gaps_on: the site reads na on every input that completes no
     // requested bucket (clear_security on the generated series).
     bool gaps_on = false;
+    // Native fixed-period publication clears once per observable chart,
+    // independently of how many finer evaluator inputs that chart contains.
+    std::optional<std::int64_t> native_gap_chart_open;
     // Plain ``request.security`` (not ``_lower_tf``) with a requested TF
     // STRICTLY FINER than script_tf (e.g. so2TF="5" read from a 15m
     // chart) under ``lookahead=barmerge.lookahead_ON``: the security's
@@ -1251,6 +1254,10 @@ private:
     // (src/source/pine_security_eval.cpp).
     void pine_feed_security_eval_state(SecurityEvalState& state, const Bar& input_bar,
                                        bool calling_bar_complete = false);
+    bool pine_native_fixed_security_clock(const SecurityEvalState&) const;
+    void pine_begin_native_fixed_chart(SecurityEvalState&, std::int64_t chart_open);
+    void pine_drain_native_fixed_security(SecurityEvalState&, std::int64_t horizon_ms);
+    void scheduler_finish_native_fixed_security(const Bar& chart_bar);
     // The site's Pine semantics; a sec_id registered outside this host's
     // register_security_eval (none today) reads as a plain site.
     PineSecurityEvalState& pine_security_state(int sec_id) {

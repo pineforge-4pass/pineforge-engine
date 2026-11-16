@@ -784,6 +784,7 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
             !language_.coof_checkpoint_contains_current_bar_;
     }
     publish_series(script_bar, host);
+    host.scheduler_finish_native_fixed_security(script_bar);
     // The session flags belong to the script bar, not to a callback: a
     // calc_on_order_fills recalculation that already published this bar set
     // them (recalculate below) and its close reads the same answer (lane F1).

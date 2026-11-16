@@ -799,6 +799,75 @@ bool source::PineStrategyHost::aux_security_traded_between(int64_t from_ms,
 #endif
 
 
+bool source::PineStrategyHost::pine_native_fixed_security_clock(
+        const SecurityEvalState& state) const {
+    // A finer evaluator cadence may divide the request even though the
+    // observable chart does not. The merge class is a property of the chart.
+    if (!native_fixed_security_clock(state) || script_tf_seconds_ <= 0
+        || calendar_period_for(script_tf_) != CalendarPeriod::NONE) return false;
+    const auto& pine = pine_security_state(state.sec_id);
+    if (pine.lookahead_on
+        && (stream_warmup_mode_ || realtime_tail_ || probe_suppress_tail_logic_)) return false;
+    const int requested = tf_to_seconds(state.tf);
+    return requested > script_tf_seconds_ && requested % script_tf_seconds_ != 0;
+}
+
+void source::PineStrategyHost::pine_begin_native_fixed_chart(
+        SecurityEvalState& state, std::int64_t chart_open) {
+    auto& pine = pine_security_state(state.sec_id);
+    if (pine.native_gap_chart_open == chart_open) return;
+    pine.native_gap_chart_open = chart_open;
+    if (pine.gaps_on) clear_security(state.sec_id);
+}
+
+void source::PineStrategyHost::pine_drain_native_fixed_security(
+        SecurityEvalState& state, std::int64_t horizon_ms) {
+    auto& pine = pine_security_state(state.sec_id);
+    internal::AmbientEmaSeedingScope warmup(
+        NativeExecutionConsumer::bound(*this).pump_ambient(), security_range_start_na_warmup_);
+    while (auto completed = next_native_fixed_security_bar(state, horizon_ms)) {
+        Bar bar = completed->bar;
+        if (pine.heikinashi) {
+            const double close = (bar.open + bar.high + bar.low + bar.close) / 4.0;
+            const double open = pine.ha_seeded
+                ? (pine.ha_prev_open + pine.ha_prev_close) / 2.0 : (bar.open + bar.close) / 2.0;
+            bar.high = std::max(bar.high, std::max(open, close));
+            bar.low = std::min(bar.low, std::min(open, close));
+            bar.open = open; bar.close = close;
+            pine.ha_prev_open = open; pine.ha_prev_close = close; pine.ha_seeded = true;
+        }
+        state.current_bar = bar;
+        state.current_sub_bar_count = 1;
+        ++state.eval_complete_count;
+        pine.last_published_label = bar.timestamp;
+        dispatch_pine_request(state, bar, true, state.eval_complete_count - 1, true);
+    }
+}
+
+void source::PineStrategyHost::scheduler_finish_native_fixed_security(const Bar& chart_bar) {
+    if (std::none_of(security_eval_states_.begin(), security_eval_states_.end(),
+            [this](const auto& state) {
+                return pine_native_fixed_security_clock(state)
+                    && !pine_security_state(state.sec_id).lookahead_on
+                    && state.fixed_clock.cursor_ms.has_value();
+            })) return;
+    const auto& consumer = NativeExecutionConsumer::bound(*this);
+    const auto accepted = consumer.accepted_completion_interval();
+    if (!accepted) return;
+    const auto chart_close = chart_bar_close_ms(chart_bar.timestamp);
+    const auto horizon = std::min(chart_close, std::min(
+        accepted->last_traded_close_ms, accepted->next_period_open_ms));
+    for (auto& state : security_eval_states_) {
+        const auto& pine = pine_security_state(state.sec_id);
+        if (!pine_native_fixed_security_clock(state) || pine.lookahead_on
+            || pine.no_loaded_bars || !state.fixed_clock.cursor_ms) continue;
+        pine_begin_native_fixed_chart(state, chart_bar.timestamp);
+        // In a lazy seal the accepted frontier belongs to a later input.
+        // Its close must never replace this observable chart's own close.
+        pine_drain_native_fixed_security(state, horizon);
+    }
+}
+
 void source::PineStrategyHost::pine_feed_security_eval_state(
         SecurityEvalState& state, const Bar& input_bar,
         bool calling_bar_complete) {
@@ -985,6 +1054,78 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
             pine.lower_tf_sub_bar_index++;
         }
         return;
+    }
+
+    if (pine_native_fixed_security_clock(state)) {
+        const auto& consumer = NativeExecutionConsumer::bound(*this);
+        const Bar* calling = nullptr;
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+        if (aux_security_feed_enabled()) calling = scheduler_.current_script_bar();
+#endif
+        const auto chart = consumer.script_calendar_interval(
+            calling ? calling->timestamp : input_bar.timestamp);
+        if (!chart) return;
+        pine_begin_native_fixed_chart(state, chart->open_ms);
+        if (pine.lookahead_on) {
+            // Historical publication follows the chart OPEN, even when its
+            // finer inputs have already entered the next requested period.
+            // It must not project that next period back onto this chart.
+            const auto label = state.aggregator.bucket_open_ms(chart->open_ms);
+            const auto native = state.native_bars_by_label.find(label);
+            if (native != state.native_bars_by_label.end()) {
+                ++state.feed_count;
+                if (state.eval_complete_count > 0 && pine.last_published_label == label) return;
+                const auto& bars = native_security_feeds_[
+                    static_cast<std::size_t>(state.native_feed_index)].bars;
+                auto next = state.fixed_clock.cursor_ms
+                    ? std::upper_bound(bars.begin(), bars.end(), *state.fixed_clock.cursor_ms,
+                        [](std::int64_t stamp, const Bar& bar) { return stamp < bar.timestamp; })
+                    : std::lower_bound(bars.begin(), bars.end(), label,
+                        [](const Bar& bar, std::int64_t stamp) { return bar.timestamp < stamp; });
+                // Advance the requested expression through every authoritative
+                // period, including a session tail no chart OPEN selected.
+                // Only after the selected period is evaluated can the body
+                // observe the value; its history must include those tails.
+                for (; next != bars.end() && next->timestamp <= label; ++next) {
+                    Bar projected = *next;
+                    substitute_native_security_bar(state, projected);
+                    state.fixed_clock.cursor_ms = projected.timestamp;
+                    if (pine.heikinashi) apply_ha(projected, true);
+                    state.current_bar = projected;
+                    state.current_sub_bar_count = 1;
+                    ++state.eval_complete_count;
+                    pine.last_published_label = projected.timestamp;
+                    dispatch_pine_request(state, projected, true, state.eval_complete_count - 1, true);
+                }
+                return;
+            }
+            // No authoritative row for this period: retain the established
+            // progressive aggregate rather than manufacturing a final price.
+        } else {
+            std::optional<native_calendar::NativeInterval> input;
+            if (calling) {
+                const auto calendar = native_calendar::parse_session(syminfo_.session, syminfo_.timezone);
+                const auto tf = native_calendar::parse_timeframe(security_input_tf_);
+                if (calendar && tf)
+                    input = native_calendar::interval_containing(*calendar, *tf, input_bar.timestamp);
+            } else {
+                input = consumer.accepted_input_interval(input_bar.timestamp);
+            }
+            // Tick observations and out-of-session raw labels supply no
+            // completed input. They cannot advance this confirmed clock.
+            if (!input) return;
+            auto horizon = std::min(std::min(input->last_traded_close_ms, input->next_period_open_ms),
+                                    std::min(chart->last_traded_close_ms, chart->next_period_open_ms));
+            if (security_next_input_ms_ > input_bar.timestamp)
+                horizon = std::min(horizon, security_next_input_ms_);
+            if (horizon <= input_bar.timestamp) return;
+            if (!state.fixed_clock.cursor_ms) state.fixed_clock.cursor_ms = input_bar.timestamp;
+            pine_drain_native_fixed_security(state, std::min(input_bar.timestamp, horizon));
+            state.aggregator.observe_fixed(state.fixed_clock, input_bar);
+            ++state.feed_count;
+            pine_drain_native_fixed_security(state, horizon);
+            return;
+        }
     }
 
     if (historical_security_lookahead_projection_active_

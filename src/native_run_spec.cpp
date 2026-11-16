@@ -453,6 +453,40 @@ Result subscription_pairings(const std::vector<NativeTimeframeSubscription>& sub
             return {from_feed ? Error::SubscriptionFinerThanAuxiliaryFeed
                               : Error::SubscriptionFinerThanInput,
                     active_field};
+        case native_calendar::TimeframePairing::IndivisibleFixed: {
+            const auto& built_from = from_feed ? *auxiliary : input;
+            // Validate the legacy fixed-seconds representation without
+            // constructing an aggregator (or overflowing its int parser).
+            const auto seconds = [](const native_calendar::Timeframe& tf) -> std::int64_t {
+                const std::int64_t unit = tf.unit() == native_calendar::TimeframeUnit::Minute
+                    ? 60 : tf.unit() == native_calendar::TimeframeUnit::Second ? 1 : 0;
+                return unit != 0 && tf.count() > 0
+                    && static_cast<std::int64_t>(tf.count()) <=
+                        std::numeric_limits<int>::max() / unit
+                    ? static_cast<std::int64_t>(tf.count()) * unit : 0;
+            };
+            const auto input_seconds = seconds(built_from);
+            const auto requested_seconds = seconds(*requested);
+            if (input_seconds <= 0 || requested_seconds <= input_seconds)
+                return {Error::InvalidSubscriptionTimeframe, active_field};
+            // Several instances can share one declared authoritative feed.
+            // A non-multiple with no such payload retains its refusal.
+            bool supplied = false;
+            const auto requested_key = subscription_period_key(*requested);
+            for (const auto& other : subscriptions) {
+                if (other.source == NativeSeriesSource::InstrumentFeed
+                    || other.authoritative_bars.empty()) continue;
+                const auto period = native_calendar::parse_timeframe(other.tf);
+                if (!period || subscription_period_key(*period) != requested_key) continue;
+                for (const auto& bar : other.authoritative_bars) {
+                    if (!native_bar_structurally_valid(bar))
+                        return {Error::NotFinitePositive, Field::SubscriptionBars};
+                }
+                supplied = true;
+            }
+            if (!supplied) return {Error::InvalidSubscriptionTimeframe, active_field};
+            break;
+        }
         default:
             return {Error::InvalidSubscriptionTimeframe, active_field};
         }

@@ -11,6 +11,8 @@ void PineStrategyHost::init_security_eval_states_for_run(
     security_next_input_ms_ = 0;
     security_calling_close_ms_ = 0;
     for (auto& state : security_eval_states_) {
+        state.evaluator_input_tf = effective_input_tf;
+        state.fixed_clock = FixedPeriodClock{};
         state.feed_count = 0;
         state.eval_complete_count = 0;
         state.eval_partial_count = 0;
@@ -23,6 +25,7 @@ void PineStrategyHost::init_security_eval_states_for_run(
         pine.deferred_aux.clear();
         pine.slice_open_label = 0;
         pine.last_published_label = 0;
+        pine.native_gap_chart_open.reset();
         pine.historical_projections.clear();
         pine.historical_projection_cursor = 0;
         pine.historical_projection_dispatched = false;

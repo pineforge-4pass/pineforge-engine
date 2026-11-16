@@ -176,6 +176,26 @@ public:
     // execution uses raw passthrough labels. Does not change that partition.
     std::optional<native_calendar::NativeInterval> script_calendar_interval(
         std::int64_t stamp) const;
+    // Only accepted CONFIRMED input supplies a completion horizon. A tick
+    // callback cannot turn its still-open slot into a completed observation.
+    std::optional<native_calendar::NativeInterval> accepted_input_interval(
+        std::int64_t stamp) const {
+        const auto* latest = accepted_input_context_
+            ? &accepted_input_context_->input_interval
+            : input_callback_context_ ? &input_callback_context_->input_interval
+            : last_accepted_input_ ? &*last_accepted_input_ : nullptr;
+        if (!latest || stamp > latest->open_ms) return std::nullopt;
+        if (stamp == latest->open_ms || stamp == latest->eligible_open_ms)
+            return completion_input_interval(*latest);
+        const auto interval = input_interval_at(stamp);
+        return interval ? completion_input_interval(*interval) : std::nullopt;
+    }
+    std::optional<native_calendar::NativeInterval> accepted_completion_interval() const {
+        const auto* latest = accepted_input_context_
+            ? &accepted_input_context_->input_interval
+            : last_accepted_input_ ? &*last_accepted_input_ : nullptr;
+        return latest ? completion_input_interval(*latest) : std::nullopt;
+    }
 
     void run_simple(BacktestEngine& engine, const Bar* bars, int n) override;
     void run_tf(BacktestEngine& engine,
@@ -1239,6 +1259,22 @@ private:
         if (uses_raw_label_partition()) return timestamp_partition(timestamp);
         return input_interval_resolved(timestamp);
     }
+    std::optional<native_calendar::NativeInterval> completion_input_interval(
+        const native_calendar::NativeInterval& interval) const {
+        const auto stamp = interval.open_ms;
+        if (!uses_raw_label_partition() || interval.eligible_open_ms != stamp
+            || interval.last_traded_close_ms != stamp
+            || interval.next_period_open_ms != stamp
+            || interval.next_input_open_ms != stamp) return interval;
+        if (has_undetected_timeframe()) return std::nullopt;
+        const auto resolved = native_calendar::interval_containing(
+            calendar_, input_tf_, day_label_origin(stamp), calendar_memo_);
+        // A raw out-of-session label has no positive completion span. Leave
+        // its established transport intact without inventing one or aborting.
+        if (!resolved || resolved->last_traded_close_ms <= stamp
+            || resolved->next_period_open_ms <= stamp) return std::nullopt;
+        return resolved;
+    }
     std::optional<native_calendar::NativeInterval> script_interval_at(std::int64_t timestamp) const {
         if (interval_cache_.script_ts == timestamp) return interval_cache_.script_interval;
         if (uses_raw_label_partition()) return timestamp_partition(timestamp);
@@ -1317,8 +1353,12 @@ private:
     // AuxiliaryFeed series and hand each completed bucket to `completed`.
     template <typename Completed>
     bool feed_auxiliary_slice(BacktestEngine& engine, TimeframeSubscription& subscription,
-                              int index, std::int64_t input_period_end_ms,
+                              int index, const native_calendar::NativeInterval& input_interval,
                               Completed&& completed);
+    template <typename Completed>
+    bool feed_fixed_subscription(BacktestEngine&, TimeframeSubscription&, int index,
+                                 const Bar* feed_bar, std::int64_t horizon_ms,
+                                 Completed&& completed);
     // A declared series is fed by accepted CONFIRMED input only, because that
     // is the only input a batch of the same bars also has. True (refused)
     // exactly when a stream that declares one is asked for tick-driven input.
@@ -2113,6 +2153,9 @@ private:
     std::size_t driver_mark_count_ = 0;
     std::uint64_t applied_events_ = 0;
     NativeDecisionContext callback_context_{};
+    // Stack-borrowed after validation until all delayed source work for this
+    // accepted input returns. Never durable state or a borrowed input array.
+    const NativeInputContext* accepted_input_context_ = nullptr;
     std::optional<NativeInputContext> input_callback_context_;
     std::optional<Bar> input_callback_bar_;
     std::optional<NativeTickContext> tick_callback_context_;

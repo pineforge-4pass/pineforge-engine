@@ -1493,6 +1493,11 @@ protected:
         // span, label and completion bar are the native bar's own.
         int native_feed_index = -1;
         std::unordered_map<int64_t, Bar> native_bars_by_label;
+        // Registration cadence, retained even when the legacy integer ratio
+        // chose passthrough. Native preparation can then distinguish e.g.
+        // a strictly coarser fractional ratio from an equal/finer request.
+        std::string evaluator_input_tf;
+        FixedPeriodClock fixed_clock;
     };
 
     std::vector<SecurityEvalState> security_eval_states_;
@@ -1620,6 +1625,10 @@ protected:
     // contributing bars, independently of the primary input's timeframe.
     void feed_security_eval_state(SecurityEvalState& state, const Bar& input_bar,
                                   const std::string& feed_tf);
+    bool native_fixed_security_clock(const SecurityEvalState&) const;
+    std::optional<AggregatedBar> next_native_fixed_security_bar(
+        SecurityEvalState&, int64_t horizon_ms);
+    bool hash_fixed_security_clocks(BrokerStateHashSink&) const noexcept;
 
     // A new batch run (including stream_begin's historical warmup) starts a
     // fresh script lifecycle. Called once after broker reset, before any

@@ -181,6 +181,7 @@ void BacktestEngine::prepare_native_security_feeds(const Bar* input_bars,
         for (auto& state : security_eval_states_) {
             state.native_feed_index = -1;
             state.native_bars_by_label.clear();
+            state.fixed_clock = FixedPeriodClock{};
         }
         return;
     }
@@ -240,6 +241,24 @@ void BacktestEngine::prepare_native_security_feeds(const Bar* input_bars,
     for (auto& state : security_eval_states_) {
         state.native_feed_index = -1;
         state.native_bars_by_label.clear();
+        state.fixed_clock = FixedPeriodClock{};
+        // Integer division used to erase a fractional HTF with ratio < 2.
+        // Repair that routing only when authoritative bars opt into it; the
+        // unbacked evaluator retains its established aggregate/passthrough.
+        if (!state.aggregator.is_active() && !state.evaluator_input_tf.empty()
+            && calendar_period_for(state.tf) == CalendarPeriod::NONE) {
+            const auto requested = tf_to_seconds(state.tf);
+            const auto input = tf_to_seconds(state.evaluator_input_tf);
+            if (input > 0 && requested > input) {
+                for (const auto& feed : native_security_feeds_) {
+                    if (feed.seconds != requested) continue;
+                    state.aggregator = TimeframeAggregator(
+                        state.tf, state.evaluator_input_tf, syminfo_.timezone, syminfo_.session);
+                    state.aggregator.set_early_close_completes(session_template_knows_early_close());
+                    break;
+                }
+            }
+        }
         // Only an aggregating (coarser-than-input) evaluator has buckets to
         // substitute; one without an active aggregator reads the feed itself.
         if (!state.aggregator.is_active()) {
@@ -280,8 +299,15 @@ void BacktestEngine::prepare_native_security_feeds(const Bar* input_bars,
             const auto& bars = native_security_feeds_[i].bars;
             state.native_bars_by_label.reserve(bars.size());
             for (const Bar& bar : bars) {
-                state.native_bars_by_label[label_of(session_covered_instant_ms(
-                    bar.timestamp, syminfo_.timezone, syminfo_.session))] = bar;
+                const auto label = label_of(session_covered_instant_ms(
+                    bar.timestamp, syminfo_.timezone, syminfo_.session));
+                if (native_fixed_security_clock(state) && bar.timestamp != label) {
+                    throw coded<std::runtime_error>(
+                        RunFailureCode::security_feed_refused,
+                        {{"reason", "native_feed_grid"}, {"requested_tf", state.tf}},
+                        "native fixed-period bar is off the requested grid");
+                }
+                state.native_bars_by_label[label] = bar;
             }
             break;
         }

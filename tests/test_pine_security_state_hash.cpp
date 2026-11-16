@@ -73,6 +73,7 @@ public:
     void set_sub_bar_count(std::size_t index, int count) {
         security_eval_states_[index].current_sub_bar_count = count;
     }
+    FixedPeriodClock& clock() { return security_eval_states_[0].fixed_clock; }
 };
 
 Bar literal_bar(std::int64_t ts, double close) {
@@ -95,6 +96,9 @@ struct Mutation {
 // records. scripts/check_broker_state_hash_coverage.py enumerates the same
 // structs statically.
 const Mutation kMutations[] = {
+    {"native_gap_chart_open", [](source::PineSecurityEvalState& s) {
+         s.native_gap_chart_open = 1000;
+     }},
     {"lookahead_on", [](source::PineSecurityEvalState& s) { s.lookahead_on = true; }},
     {"gaps_on", [](source::PineSecurityEvalState& s) { s.gaps_on = true; }},
     {"publish_gate_tf_seconds",
@@ -301,6 +305,45 @@ int main() {
         host.set_sub_bar_count(0, 1);
         CHECK(host.slot_is_new(0));
         CHECK(host.slot_is_new(99));
+    }
+
+    // Native completion carries a bounded cursor and fallback payload. Every
+    // leaf must move the continuation identity even before another delivery.
+    {
+        const auto seed = [](Probe& p) {
+            p.add_site(0, "75");
+            p.clock().cursor_ms = 1000;
+            p.clock().observed = literal_bar(1000, 100.0);
+            p.clock().observed_count = 1;
+        };
+        using Change = void (*)(FixedPeriodClock&);
+        const Change changes[] = {
+            [](FixedPeriodClock& c) { c.cursor_ms.reset(); },
+            [](FixedPeriodClock& c) { c.cursor_ms = 1001; },
+            [](FixedPeriodClock& c) { c.observed_count = 2; },
+            [](FixedPeriodClock& c) { c.observed.open += 1; },
+            [](FixedPeriodClock& c) { c.observed.high += 1; },
+            [](FixedPeriodClock& c) { c.observed.low -= 1; },
+            [](FixedPeriodClock& c) { c.observed.close += 1; },
+            [](FixedPeriodClock& c) { c.observed.volume += 1; },
+            [](FixedPeriodClock& c) { c.observed.timestamp += 1; },
+        };
+        for (const auto change : changes) {
+            Probe base, changed;
+            seed(base); seed(changed);
+            CHECK(base.broker_state_hash() == changed.broker_state_hash());
+            change(changed.clock());
+            CHECK(base.broker_state_hash() != changed.broker_state_hash());
+        }
+        Probe cleared, fresh;
+        seed(cleared);
+        cleared.site(0).native_gap_chart_open = 1000;
+        cleared.clear_registry();
+        cleared.add_site(0, "75");
+        fresh.add_site(0, "75");
+        CHECK(!cleared.clock().cursor_ms);
+        CHECK(!cleared.site(0).native_gap_chart_open);
+        CHECK(cleared.broker_state_hash() == fresh.broker_state_hash());
     }
 
     std::printf("pine security state hash: %d checks, %d failures\n", g_checks, g_failures);

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 #include <memory>
+#include <optional>
 #include "bar.hpp"
 #include <pineforge/detail/feed_projection.hpp>
 #include <pineforge/owned_storage.hpp>
@@ -19,6 +20,14 @@ struct AggregatedBar {
     Bar bar;
     bool is_complete;
     int sub_bar_count;
+};
+
+// Bounded completion state for an authoritative fixed-period series.
+// Observations supply the fallback OHLCV; time alone never creates a price.
+struct FixedPeriodClock {
+    std::optional<int64_t> cursor_ms;
+    Bar observed{};
+    int observed_count = 0;
 };
 
 // ─── TF string helpers ─────────────────────────────────────────────────────────
@@ -421,6 +430,13 @@ public:
     AggregatedBar feed(const Bar& input_bar, int64_t next_input_ms,
                        int64_t calling_close_ms, const std::string& input_tf,
                        const std::string& target_tf);
+
+    bool supports_fixed_completion() const;
+    void observe_fixed(FixedPeriodClock&, const Bar&) const;
+    // The caller supplies an accepted, session-clipped completion horizon.
+    // A later input/session cannot complete a bucket beyond that horizon.
+    std::optional<AggregatedBar> next_fixed_completion(
+        FixedPeriodClock&, int64_t horizon_ms) const;
 
     /// Current in-progress bar.
     Bar current() const;
