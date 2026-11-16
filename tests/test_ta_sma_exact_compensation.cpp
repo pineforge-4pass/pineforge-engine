@@ -201,6 +201,41 @@ void test_captured_rows() {
     CHECK_TRUE(mismatches == 0, "ta.sma reproduces every captured row");
 }
 
+// CAP-731-FOLD: observed SMA and math.sum/3 codes for a clean 0.5,0.3 pulse.
+// decoded.tsv sha256 4359b6bb47de5780b2d799a71e0dd3321bc158d5f98eaf671071ad97192b2eee
+// checks.json sha256 e0de1449850ed35857e24661d295e241c5a4fdbf1b9b42f02e7bbe061136934a
+// strategy.pine sha256 776a0add5887f44e5e3e5e578b8b4a97b7763c6d4a80483f8fc3cb6c03c1640b
+// Both probes returned these four codes; their NA/unsupported flags were false.
+// Bars 0 and 1 supplied source values but exported no codes, so are not pinned.
+// This differs from the earlier capture: on eviction, -0.5 - 2^-54 can round
+// back to -0.5 and lose the compensation before the next addition sees it.
+void test_captured_fold_rows() {
+    const double x[] = {0.5, 0.3, 0.0, 0.0, 0.0, 0.0};
+    const Row captured[] = {
+        {2, 50000000}, {3, 50000000}, {4, 50000000}, {5, 10000000},
+    };
+    ta::SMA sma(3);
+    math::Sum sum(3);
+    double s[6], m[6];
+    for (int b = 0; b < 6; ++b) {
+        s[b] = sma.compute(x[b]);
+        m[b] = sum.compute(x[b]) / 3.0;
+    }
+    for (const Row& row : captured) {
+        const int b = row.bar;
+        const double e = ((x[b] + x[b - 1]) + x[b - 2]) / 3.0;
+        const double s_code = pulse_code(b, s[b], e);
+        const double m_code = pulse_code(b, m[b], e);
+        const double observed = static_cast<double>(row.code);
+        if (s_code != observed || m_code != observed) {
+            std::printf("  fold bar %d: SMA %.17g code %.0f, sum/3 %.17g code %.0f, TV %lld\n",
+                        b, s[b], s_code, m[b], m_code, row.code);
+        }
+        CHECK_TRUE(s_code == observed, "CAP-731-FOLD: ta.sma matches the captured code");
+        CHECK_TRUE(m_code == observed, "CAP-731-FOLD: math.sum/3 matches the captured code");
+    }
+}
+
 // What the rows resolve: arithmetic on the script's encoding only.
 void test_rows_hold_the_last_bit() {
     const double e = ((0.0 + 0.0) + 0.3) / 3.0;
@@ -676,6 +711,7 @@ void test_non_finite_sources_rewind() {
 
 int main() {
     test_captured_rows();
+    test_captured_fold_rows();
     test_rows_hold_the_last_bit();
     test_fold_rows_exclude_a_carried_remainder();
     test_control_pairs_meet_their_conditions();
