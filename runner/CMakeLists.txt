@@ -207,6 +207,22 @@ if(PINEFORGE_BUILD_TESTS)
     add_test(NAME test_native_live_transport_progress_under_ledger_stall
         COMMAND test_native_live_transport_progress_under_ledger_stall)
     set_tests_properties(test_native_live_transport_progress_under_ledger_stall PROPERTIES TIMEOUT 0)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # Work per new input against 1,000 and 100,000 prior inputs. GNU --wrap
+        # observes the support library's SQLite statements; nothing is replaced.
+        add_executable(test_native_live_work_scale
+            ${PROJECT_SOURCE_DIR}/tests/test_native_live_work_scale.cpp)
+        target_link_libraries(test_native_live_work_scale PRIVATE pineforge_live_support)
+        target_compile_options(test_native_live_work_scale PRIVATE -UNDEBUG -ffp-contract=off)
+        target_link_options(test_native_live_work_scale PRIVATE
+            "LINKER:--wrap=sqlite3_step" "LINKER:--wrap=sqlite3_finalize")
+        add_test(NAME test_native_live_work_scale_ledger
+            COMMAND test_native_live_work_scale ledger 1000 100000)
+        add_test(NAME test_native_live_work_scale_report
+            COMMAND test_native_live_work_scale report 1000 100000)
+        set_tests_properties(test_native_live_work_scale_ledger test_native_live_work_scale_report
+            PROPERTIES LABELS "live_ledger" TIMEOUT 0)
+    endif()
     add_executable(test_native_live_report_cli ${PROJECT_SOURCE_DIR}/tests/test_native_live_report_cli.cpp)
     target_link_libraries(test_native_live_report_cli PRIVATE pineforge_live_startup ${CMAKE_DL_LIBS})
     target_compile_options(test_native_live_report_cli PRIVATE -UNDEBUG -ffp-contract=off)
