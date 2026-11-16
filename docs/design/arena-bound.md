@@ -340,15 +340,15 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 | --- | --- | --- |
 | Equity writer / selected hold-back / SpillCurve | 24*E | `pf_equity_point_t` size assertion `include/pineforge/metrics_stream.hpp:16`; `src/report_scratch.cpp:238` |
 | Position tail | (30+L)*T | `src/source/pine_position_tail.hpp:20`; footer packing at `src/source/pine_position_tail.cpp:94` |
-| Cohort AVL and five-word summary | (96+L)*D + 1[D>0] | `Links` at `include/pineforge/detail/disk_id_table.hpp:165-182`, `end_` at `:352`; `CohortFacts::Record` at `include/pineforge/source/pine_adapter.hpp:2061-2064` |
-| Entry-rank AVL | (60+L)*J + 1[J>0] | `exit_rank_keys_` at `src/source/pine_adapter.cpp:6989-6990`; `Links` at `include/pineforge/detail/disk_id_table.hpp:165-182`, `end_` at `:352` |
-| Erased minima data | (40+L)*D + (40+2*L)*Q | `erased_minima_` at `include/pineforge/source/pine_adapter.hpp:962`; 40-byte header at `include/pineforge/detail/id_pair_store.hpp:69` |
+| Cohort AVL and five-word summary | (96+L)*D + 1[D>0] | `Links` at `include/pineforge/detail/disk_id_table.hpp:165-182`, `end_` at `:352`; `CohortFacts::Record` at `include/pineforge/source/pine_adapter.hpp:2080-2083` |
+| Entry-rank AVL | (60+L)*J + 1[J>0] | `exit_rank_keys_` at `src/source/pine_adapter.cpp:7048-7049`; `Links` at `include/pineforge/detail/disk_id_table.hpp:165-182`, `end_` at `:352` |
+| Erased minima data | (40+L)*D + (40+2*L)*Q | `erased_minima_` at `include/pineforge/source/pine_adapter.hpp:965`; 40-byte header at `include/pineforge/detail/id_pair_store.hpp:69` |
 | Erased minima index | indexPeak(D+Q) | 16-byte slot at `include/pineforge/detail/id_pair_store.hpp:69`; replacement at `:642` |
 | Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2852`; joined key at `src/source/pine_adapter.cpp:26024` |
 | Consumed partial-cycle index | indexPeak(Q) | `include/pineforge/detail/id_pair_store.hpp:642` |
 | Ordered consumed-cycle fold | 136*leaves + 2088*branches + 2096*savedPath | `include/pineforge/detail/id_pair_ordered_fold.hpp:161`, `:165`, `:172`, size assertion for `Leaf`, `Branch` and `Snapshot` at `:183` |
 | Successor-root rows | 16*R | `src/native_order.cpp:8220`, row assertion for `Row` at `:8281`, 64-row tail bound `kTailRows` at `:8286` |
-| Frozen external openings | **0 in this certified profile** | Stock source builds owned `BindOpenings` vectors at `src/source/pine_adapter.cpp:7279`, `:7272`, `:9940-9956`; generic external owners are excluded below |
+| Frozen external openings | **0 in this certified profile** | Stock source builds owned `BindOpenings` vectors at `src/source/pine_adapter.cpp:7338`, `:7331`, `:9999-10015`; generic external owners are excluded below |
 
 The AVL node is seven uint64 words = 56 bytes, then its value and exact key
 bytes. CohortFacts::Record is handle, cycle, origin_count, origin_digest and
@@ -437,7 +437,7 @@ and its authority. Duplicate input and failed reads publish no new owner.
 The certified **stock-source EngineRecorded** profile excludes external
 `OpeningReadback` owners: the source paths cited in the table build vectors.
 `ExitScratchVersionsProduction::freeze_openings`
-(`src/source/exit_scratch_versions_production.cpp:603`) likewise builds an owned
+(`src/source/exit_scratch_versions_production.cpp:605`) likewise builds an owned
 vector rather than an external readback, as does the C-ABI translator's
 `BindOpenings` (`src/native_c_host.cpp:2356`).
 Consequently `per_user_bytes` explicitly emits `openings=0`, with that
@@ -558,7 +558,7 @@ non-command certificates exactly.
 These formulas apply to the EngineRecorded streamed invocation. The
 selected recorder appends its anchor and selected observations in one
 writer (`equity_scratch` append at `src/engine_report.cpp:1563`), and capture transfers that writer as `metric_curve`
-instead of copying its prefix (`src/native_execution_consumer.cpp:13523`).
+instead of copying its prefix (`src/native_execution_consumer.cpp:13570`).
 HostRecorded array presentation and a second full curve are outside this
 profile. Adding another persistent scratch user requires another term and
 rounding region.
