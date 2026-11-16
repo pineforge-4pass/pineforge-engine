@@ -13483,11 +13483,12 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
                 }
                 return origin_leg_consumed(family_key, family, origin);
             };
-            // A call admitted only for a fresh origin arms no leg kind for an
-            // opening whose bracket of this exit already left the book.
+            // A spent kind never re-arms on the same opening. A partial call
+            // also arms no new kind for an opening whose bracket was spent;
+            // only a full-residual call can introduce an unspent kind there.
             if (origin.incarnation != 0 && !has_live_leg && !origin_is_pending(origin)
                 && (!origin_opened || consumed_origin_leg()
-                    || (requires_fresh_origin && consumed_origin(origin)))) {
+                    || (partial_reissue && consumed_origin(origin)))) {
                 continue;
             }
             native_order::Owner owner = !void_issue && origin_opened
@@ -26220,17 +26221,29 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 exit_tombstones_[placement_snapshot->source_id + "\x1f"
                                  + placement_snapshot->from_entry] = origin;
         }
-        // A bound opening has consumed this bracket, including its price
-        // siblings. Percentage legs carry NaN requested_qty and retain the
-        // same facts as explicit legs while that opening is askable.
+        // A bound opening has consumed this definition, including its
+        // requested price siblings. Do not spend an absent kind: a later
+        // full-residual call can introduce it, while partial calls still
+        // reject any consumed opening. Percentage legs carry NaN
+        // requested_qty and retain the same facts as explicit legs.
         if (!placement_snapshot->from_entry.empty()
             && placement_snapshot->bracket_origin.incarnation != 0) {
             auto& family = bracket_family(key_for(placement_snapshot->source_id,
                                                  placement_snapshot->from_entry));
+            const auto& levels = placement_snapshot->exit_levels;
             for (const auto kind : {PineOrderFamily::ExitLimit, PineOrderFamily::ExitStop,
                                     PineOrderFamily::ExitTrail}) {
-                family.record_consumed(static_cast<std::uint8_t>(kind),
-                                       placement_snapshot->bracket_origin.incarnation);
+                const bool requested_kind = kind == placement_snapshot->family
+                    || (kind == PineOrderFamily::ExitLimit
+                        && (!std::isnan(levels.limit) || !std::isnan(levels.profit_ticks)))
+                    || (kind == PineOrderFamily::ExitStop
+                        && (!std::isnan(levels.stop) || !std::isnan(levels.loss_ticks)))
+                    || (kind == PineOrderFamily::ExitTrail
+                        && (!std::isnan(levels.trail_points) || !std::isnan(levels.trail_price)));
+                if (requested_kind) {
+                    family.record_consumed(static_cast<std::uint8_t>(kind),
+                                           placement_snapshot->bracket_origin.incarnation);
+                }
             }
         }
         // ab9714be pine_fills.cpp:7012-7024: other pending orders with this
