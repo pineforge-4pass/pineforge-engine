@@ -39,41 +39,12 @@ void PineStrategyHost::init_security_eval_states_for_run(
     }
 }
 
-bool PineStrategyHost::uses_historical_security_lookahead_projection(
-        const SecurityEvalState& state) const {
-    const PineSecurityEvalState& pine = pine_security_state(state.sec_id);
-    // Historical-only projection prevents forming-bar future leaks in
-    // realtime and suppressed probe tails for both registration paths.
-    const bool metadata_historical_path = historical_security_lookahead_projection_
-        && !stream_warmup_mode_ && !realtime_tail_ && !probe_suppress_tail_logic_;
-    // The per-site selector's live/probe behavior remains progressive.
-    const bool per_site_historical_path = pine.historical_lookahead_projection
-        && !stream_warmup_mode_ && !realtime_tail_ && !probe_suppress_tail_logic_;
-    if (!historical_security_lookahead_projection_active_
-        || !(metadata_historical_path || per_site_historical_path)
-        || pine.lower_tf_requested || pine.lower_tf_emulation
-        || pine.lower_tf_use_input || !pine.lookahead_on || pine.gaps_on
-        || pine.heikinashi) {
-        return false;
-    }
-    const int requested_seconds = tf_to_seconds(state.tf);
-    return requested_seconds > script_tf_seconds_
-        || (requested_seconds == -1
-            && calendar_period_for(state.tf) == CalendarPeriod::MONTH);
-}
-
 void PineStrategyHost::prepare_historical_security_lookahead_projections(
         const Bar* input_bars, int n_input, const std::string& effective_input_tf) {
     clear_historical_security_lookahead_projections();
     const int input_seconds = tf_to_seconds(effective_input_tf);
     const int script_seconds = script_tf_seconds_;
-    const bool metadata_historical_requested = historical_security_lookahead_projection_
-        && !stream_warmup_mode_ && !realtime_tail_ && !probe_suppress_tail_logic_;
-    const bool per_site_historical_requested = !stream_warmup_mode_
-        && !realtime_tail_ && !probe_suppress_tail_logic_
-        && std::any_of(pine_security_states_.begin(), pine_security_states_.end(),
-            [](const auto& site) { return site.second.historical_lookahead_projection; });
-    if (!(metadata_historical_requested || per_site_historical_requested)
+    if (!historical_security_lookahead_projection_ || stream_warmup_mode_
         || effective_input_tf != script_tf_ || input_bars == nullptr || n_input <= 0
         || input_seconds <= 0 || script_seconds <= 0) {
         return;
@@ -85,8 +56,12 @@ void PineStrategyHost::prepare_historical_security_lookahead_projections(
         const int requested_seconds = tf_to_seconds(state.tf);
         const bool calendar_month = requested_seconds == -1
             && calendar_period_for(state.tf) == CalendarPeriod::MONTH;
-        if (!uses_historical_security_lookahead_projection(state)) continue;
         PineSecurityEvalState& pine = pine_security_state(state.sec_id);
+        const bool eligible = !pine.lower_tf_requested && !pine.lower_tf_emulation
+            && !pine.lower_tf_use_input && pine.lookahead_on && !pine.gaps_on
+            && !pine.heikinashi
+            && (calendar_month || requested_seconds > script_seconds);
+        if (!eligible) continue;
 
         auto child_instant_ms = [&](int child) -> std::int64_t {
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
@@ -121,15 +96,6 @@ void PineStrategyHost::prepare_historical_security_lookahead_projections(
                     return state.aggregator.period_changes(from_ms, to_ms);
                 return tf_change(from_ms, to_ms, state.tf,
                                  syminfo_.timezone, syminfo_.session);
-            }
-            if (pine.historical_lookahead_projection) {
-                // Both instants come from actual inputs; zero is a valid
-                // Unix timestamp, not tf_change's unknown-time sentinel.
-                if (state.aggregator.has_native_periods()
-                    || state.aggregator.calendar_period() != CalendarPeriod::NONE)
-                    return state.aggregator.period_changes(from_ms, to_ms);
-                return state.aggregator.bucket_open_ms(from_ms)
-                    != state.aggregator.bucket_open_ms(to_ms);
             }
             const std::int64_t requested_ms =
                 static_cast<std::int64_t>(requested_seconds) * 1000;

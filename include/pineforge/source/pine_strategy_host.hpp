@@ -133,10 +133,8 @@ private:
 // Hash domain of the per-site request.security semantics below. Folded into
 // the source extension only when a site is registered, so a run without
 // request.security hashes exactly as before; bumped whenever the folded
-// field set changes. v9 adds the per-site historical projection selector to
-// v8's caller/cursor folds. Its tagged contribution is emitted only when
-// enabled; the domain distinguishes this field set for every registered site.
-inline constexpr char kSourceSecurityDomain[] = "pineforge-source-security/v9";
+// field set changes.
+inline constexpr char kSourceSecurityDomain[] = "pineforge-source-security/v8";
 
 // Hash domain of the request data of other symbols (lane XSYM-D): the sites
 // that read another symbol's feed, and the facts and recorded series the run
@@ -212,10 +210,6 @@ struct PineSecurityEvalState {
     // second one, and generated TA sites take their recompute path on every
     // sub-bar after a bucket's first (security_series_slot_is_new).
     bool lookahead_on = false;
-    // Opt this site into completed-bucket lookahead for a finite historical
-    // batch. Expression offsets still belong to the generated evaluator.
-    // Streams and live batch tail modes retain progressive evaluation.
-    bool historical_lookahead_projection = false;
     // barmerge.gaps_on: the site reads na on every input that completes no
     // requested bucket (clear_security on the generated series).
     bool gaps_on = false;
@@ -968,16 +962,6 @@ protected:
     void register_security_eval(int sec_id, const std::string& requested_tf,
                                 const std::string& input_tf, bool lookahead_on,
                                 bool gaps_on = false, bool heikinashi = false);
-    // Additive generated-code contract: the final argument opts only this
-    // same-symbol site into historical projection. It applies to a coarser
-    // timeframe with lookahead_on, gaps_off and ordinary OHLC bars; the
-    // first clipped bucket is omitted when the clock or supplied native bars prove
-    // it was already open. Explicit range selectors retain their own cut.
-    // The existing overload retains its progressive default.
-    void register_security_eval(int sec_id, const std::string& requested_tf,
-                                const std::string& input_tf, bool lookahead_on,
-                                bool gaps_on, bool heikinashi,
-                                bool historical_lookahead_projection);
     // request.security of ANOTHER symbol (lane XSYM-D): `symbol` is the
     // run-time string the script passes. The site reads the feed installed
     // for (symbol, requested_tf) through a kernel InstrumentFeed series: its
@@ -994,13 +978,12 @@ protected:
                                 const std::string& requested_tf, const std::string& input_tf,
                                 bool lookahead_on, bool gaps_on = false,
                                 bool ignore_invalid_symbol = false);
-    // A string literal where input_tf stands, in five to seven arguments, would
+    // A string literal where input_tf stands, in five or six arguments, would
     // bind the same-symbol overload above (a pointer converts to bool ahead of
     // std::string) and read the symbol as its timeframe; it does not compile.
     void register_security_eval(int sec_id, const std::string& symbol,
                                 const std::string& requested_tf, const char* input_tf,
-                                bool lookahead_on, bool gaps_on = false,
-                                bool ignore_invalid_symbol = false) = delete;
+                                bool lookahead_on, bool gaps_on = false) = delete;
     // The named column (strategy_set_symbol_feed_column) of the context bar a
     // foreign site is evaluating, or last evaluated; NaN when the site, the
     // column or the bar is unknown. Generated payload code reads it.
@@ -1230,10 +1213,6 @@ private:
     // them and the scheduler feeds nothing.
     bool security_sites_kernel_routed() const noexcept;
     void init_security_eval_states_for_run(const std::string& effective_input_tf);
-    // Shared by preparation and the input cut for finite historical batches.
-    // Streams and both live tail modes always return false.
-    bool uses_historical_security_lookahead_projection(
-        const SecurityEvalState& state) const;
     void prepare_historical_security_lookahead_projections(
         const Bar* input_bars, int n_input, const std::string& effective_input_tf);
     void clear_historical_security_lookahead_projections();
@@ -1269,11 +1248,8 @@ private:
     // bar for a coarser-than-chart / chart-timeframe evaluator
     // (security_first_chart_bar_ms_, split-feed runs with the auxiliary feed
     // proving prior trading, or single-feed historical intraday forex/cfd D
-    // requests keyed to their session's actual open; false for lower TFs).
-    // Per-site projections also omit a clipped first single-feed bucket when
-    // a continuous clock or supplied native bars prove it opened before the input.
-    // Metadata-only projections and explicit epochs keep their existing cut.
-    // The progressive feed and the historical lookahead projection builder must
+    // requests keyed to their session's actual open; false for lower TFs). The
+    // progressive feed and the historical lookahead projection builder must
     // agree on this predicate so projected child indexes line up with the
     // per-state feed cursor.
     bool security_input_precedes_range_start(const SecurityEvalState& state,
@@ -1558,11 +1534,10 @@ protected:
     // and the first chart bar? the NSE week whose Monday was a holiday opens
     // on Tuesday and is kept). Historical intraday single-feed forex/cfd D
     // requests also omit their partial first session, using its actual trading
-    // open rather than its label. Per-site historical projections also cut
-    // clipped single-feed buckets on continuous clocks or supplied native bars.
-    // Other single-feed series keep their feed-start behavior.
-    // Lower-TF evaluators are untouched (their slices begin at the first chart
-    // bar anyway); the flag above keeps its epoch and EMA na-warmup semantics.
+    // open rather than its label. Other single-feed series keep their feed-start
+    // behavior; native feeds retain their own rules. Lower-TF evaluators are
+    // untouched (their slices begin at the first chart bar anyway), and the
+    // flag above keeps its explicit epoch plus the EMA na-warmup semantics.
     int64_t security_first_chart_bar_ms_ = 0;
 
     // Nominal close (TradingView's time_close) of the CALLING chart bar the
@@ -1577,8 +1552,8 @@ protected:
     // Opt-in historical-only request.security lookahead projection. TradingView
     // can merge a completed higher-timeframe bar onto the first chart child
     // when a finite historical batch is already known. The normal path
-    // remains progressive; streams, realtime tails and suppressed probe tails
-    // ignore this selector so forming bars cannot leak into earlier values.
+    // remains progressive, and stream warmup/realtime deliberately ignore this
+    // selector so future data can never leak into a live continuation.
     bool historical_security_lookahead_projection_ = false;
     bool historical_security_lookahead_projection_active_ = false;
 

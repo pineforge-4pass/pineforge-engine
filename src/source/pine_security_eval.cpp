@@ -16,7 +16,6 @@
 #include "../native_execution_consumer.hpp"
 #include "pine_run_failure.hpp"
 
-#include <pineforge/native_calendar.hpp>
 #include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
 
@@ -24,7 +23,6 @@
 #include <cmath>
 #include <iterator>
 #include <limits>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -82,14 +80,6 @@ void ensure_supported_lower_tf_emulation_flags(bool lookahead_on, bool gaps_on) 
 void source::PineStrategyHost::register_security_eval(
         int sec_id, const std::string& requested_tf, const std::string& input_tf,
         bool lookahead_on, bool gaps_on, bool heikinashi) {
-    register_security_eval(sec_id, requested_tf, input_tf, lookahead_on, gaps_on,
-                           heikinashi, false);
-}
-
-void source::PineStrategyHost::register_security_eval(
-        int sec_id, const std::string& requested_tf, const std::string& input_tf,
-        bool lookahead_on, bool gaps_on, bool heikinashi,
-        bool historical_lookahead_projection) {
     const std::string& evaluator_input_tf =
         security_input_tf_.empty() ? input_tf : security_input_tf_;
     // Match the kernel's parse condition. With no input yet, validation
@@ -110,7 +100,6 @@ void source::PineStrategyHost::register_security_eval(
     pine.gaps_on = gaps_on;
     pine.lookahead_on = lookahead_on;
     pine.heikinashi = heikinashi;
-    pine.historical_lookahead_projection = historical_lookahead_projection;
 
     if (evaluator_input_tf.empty()) return;
     int lower_ratio = 0;
@@ -592,41 +581,6 @@ void source::PineStrategyHost::publish_security_eval_state_at_calling_boundary(
 }
 
 
-// Requested-bucket opens on a continuous clock, independent of supplied or
-// generated period labels. N-day requests count every date from January 1,
-// restarting each year, as the continuous branch of the multi-day producer.
-static std::optional<int64_t> continuous_security_bucket_open(
-        const std::string& tf, int64_t input_ts,
-        const std::string& timezone, const std::string& session) {
-    NativeDayPartitionScope nominal(nullptr);
-    const auto requested = native_calendar::parse_timeframe(tf);
-    if (!requested) return std::nullopt;
-    if (requested->unit() == native_calendar::TimeframeUnit::Day
-        && requested->count() > 1) {
-        const auto calendar = native_calendar::parse_session(session, timezone);
-        if (!calendar) return std::nullopt;
-        const auto ordinal = native_calendar::session_day_ordinal(
-            *calendar, session_covered_instant_ms(input_ts, timezone, session));
-        if (!ordinal) return std::nullopt;
-        const auto year = native_calendar::native_civil_date(*ordinal).year;
-        const auto year_begin = native_calendar::native_civil_days(year, 1, 1);
-        const auto count = requested->count();
-        const auto first_day = year_begin + (*ordinal - year_begin) / count * count;
-        const auto date = native_calendar::native_civil_date(first_day);
-        const auto noon = native_calendar::resolve_civil(
-            timezone.empty() ? "UTC" : timezone, static_cast<int>(date.year),
-            date.month, date.day, 12, 0);
-        if (!noon) return std::nullopt;
-        return session_period_open_ms(
-            noon->epoch_ms, timezone, session, CalendarPeriod::DAY);
-    }
-    const auto period = calendar_period_for(tf);
-    return period != CalendarPeriod::NONE
-        ? session_period_open_ms(input_ts, timezone, session, period)
-        : session_intraday_bucket_open_ms(
-            input_ts, tf_to_seconds(tf), timezone, session);
-}
-
 bool source::PineStrategyHost::security_input_precedes_range_start(
         const SecurityEvalState& state, int64_t input_ts) const {
     const PineSecurityEvalState& pine = pine_security_state(state.sec_id);
@@ -684,39 +638,6 @@ bool source::PineStrategyHost::security_input_precedes_range_start(
         }
 #endif
         return state.aggregator.bucket_open_ms(input_ts) < security_range_start_ms_;
-    }
-    if (pine.historical_lookahead_projection
-        && uses_historical_security_lookahead_projection(state)
-#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
-        && !aux_security_feed_enabled()
-#endif
-        ) {
-        // A partition alone is not trading evidence: the N-day producer
-        // can generate nominal opens without any earlier observed bar.
-        // Continuous clocks use requested boundaries, not partition labels.
-        // Other clocks require a bar from an explicitly supplied feed.
-        const int64_t first_input = session_covered_instant_ms(
-            security_first_chart_bar_ms_, syminfo_.timezone, syminfo_.session);
-        if (symbol_calendar_.empty()
-            && (syminfo_.session.empty() || syminfo_.session == "24x7")) {
-            const auto open = continuous_security_bucket_open(
-                state.tf, input_ts, syminfo_.timezone, syminfo_.session);
-            if (open && *open < first_input) return true;
-        } else if (state.native_feed_index >= 0
-            && static_cast<std::size_t>(state.native_feed_index)
-                < native_security_feeds_.size()) {
-            // Preparation has already popped any implicit chart feed.
-            // A surviving index names an explicitly installed feed; use
-            // its supplied bar's stamp, never a nominal fallback open.
-            // The bucket key only locates that bar in the prepared map.
-            const auto bar = state.native_bars_by_label.find(
-                state.aggregator.bucket_open_ms(input_ts));
-            if (bar != state.native_bars_by_label.end()
-                && session_covered_instant_ms(bar->second.timestamp,
-                    syminfo_.timezone, syminfo_.session) < first_input) {
-                return true;
-            }
-        }
     }
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     // R19 OTC daily pins: a historical intraday chart beginning mid-session
