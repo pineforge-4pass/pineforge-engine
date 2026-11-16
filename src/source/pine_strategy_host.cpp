@@ -2858,10 +2858,10 @@ void source::PineStrategyHost::present_report(ReportC* out) const {
 
 void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_bar) {
     range_end_trades_.clear();
-    // The scheduler omits its suppressed-tail mark, but on_native_bar and
-    // fill notifications can also reach this producer. Enforce the same
-    // no-range-end policy at their shared entry.
-    if (stream_warmup_mode_ || realtime_tail_ || probe_suppress_tail_logic_
+    // On the chart timeframe a probe's suppressed tail is the array's last bar and keeps the rows
+    // ab9714be wrote (pine_scheduler.cpp:796); an aggregated run keeps its pending bars: no rows.
+    if (stream_warmup_mode_ || realtime_tail_
+        || (probe_suppress_tail_logic_ && native_aggregates_input_bars())
         || position_side_ == PositionSide::FLAT || !last_equity_point()
         || !std::isfinite(terminal_bar.close)) return;
     const double fill_price = bar_fill_price(terminal_bar.close);
