@@ -1,4 +1,4 @@
-// CR-295: count real closed-row folds during a burst of deferred applied
+// Count real closed-row folds during a burst of deferred applied
 // notifications and the normal run-end verification. No clock measurements.
 #include <pineforge/native_host.hpp>
 
