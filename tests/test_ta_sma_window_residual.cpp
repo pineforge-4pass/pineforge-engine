@@ -65,15 +65,25 @@ static int tests_failed = 0;
 struct Obs { int bar; long long qty; };
 
 // 361 observations from sma-pulse-n3-even/odd-from-20250401 (bar_index, TradingView qty)
+// expectation corrected within b2..45 only: nonzero residue codes -> the current
+// CAP-731-PULSE codes below; all observations outside that captured window remain historical.
 static const Obs kPulseN3[] = {
-    {2, 50000000}, {3, 49999999}, {4, 50000000}, {5, 10000019}, {6, 10000009}, {7, 10000009},
-    {8, 10000009}, {9, 10000009}, {10, 10000009}, {11, 10000009}, {12, 10000009}, {13, 10000009},
-    {14, 10000009}, {15, 10000009}, {16, 10000009}, {17, 10000009}, {18, 10000009}, {19, 10000009},
-    {20, 10000009}, {21, 10000009}, {22, 10000009}, {23, 10000009}, {24, 10000009}, {25, 10000009},
-    {26, 10000009}, {27, 10000009}, {28, 10000009}, {29, 10000009}, {30, 10000009}, {31, 10000009},
-    {32, 10000009}, {33, 10000009}, {34, 10000009}, {35, 10000009}, {36, 10000009}, {37, 10000009},
-    {38, 10000009}, {39, 10000009}, {40, 50000001}, {41, 50000000}, {42, 50000000}, {43, 50000003},
-    {44, 50000002}, {45, 10000000}, {46, 10000000}, {47, 10000000}, {48, 10000000}, {49, 10000000},
+    // CAP-731-PULSE tv_trades.csv sha256 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28.
+    {2, 50000000}, {3, 50000000}, {4, 50000000}, {5, 10000000}, {6, 10000000}, {7, 10000000},
+    // CAP-731-PULSE tv_trades.csv sha256 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28.
+    {8, 10000000}, {9, 10000000}, {10, 10000000}, {11, 10000000}, {12, 10000000}, {13, 10000000},
+    // CAP-731-PULSE tv_trades.csv sha256 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28.
+    {14, 10000000}, {15, 10000000}, {16, 10000000}, {17, 10000000}, {18, 10000000}, {19, 10000000},
+    // CAP-731-PULSE tv_trades.csv sha256 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28.
+    {20, 10000000}, {21, 10000000}, {22, 10000000}, {23, 10000000}, {24, 10000000}, {25, 10000000},
+    // CAP-731-PULSE tv_trades.csv sha256 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28.
+    {26, 10000000}, {27, 10000000}, {28, 10000000}, {29, 10000000}, {30, 10000000}, {31, 10000000},
+    // CAP-731-PULSE tv_trades.csv sha256 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28.
+    {32, 10000000}, {33, 10000000}, {34, 10000000}, {35, 10000000}, {36, 10000000}, {37, 10000000},
+    // CAP-731-PULSE tv_trades.csv sha256 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28.
+    {38, 10000000}, {39, 10000000}, {40, 50000000}, {41, 50000000}, {42, 50000000}, {43, 50000000},
+    // CAP-731-PULSE tv_trades.csv sha256 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28.
+    {44, 50000000}, {45, 10000000}, {46, 10000000}, {47, 10000000}, {48, 10000000}, {49, 10000000},
     {50, 10000000}, {51, 10000000}, {52, 10000000}, {53, 10000000}, {54, 10000000}, {55, 10000000},
     {56, 10000000}, {57, 10000000}, {58, 10000000}, {59, 10000000}, {60, 10000000}, {61, 10000000},
     {62, 10000000}, {63, 10000000}, {64, 10000000}, {65, 10000000}, {66, 10000000}, {67, 10000000},
@@ -382,19 +392,27 @@ static void test_named_events() {
     ta::SMA sma(3);
     std::vector<double> v;
     for (int t = 0; t < 45; ++t) v.push_back(sma.compute(pulse_x(t, 40)));
-    // bar 3: the fold of a zero addend -> S = 0.4 - 2^-54 -> (S - 0.1) / 3
-    CHECK_TRUE(v[3] == 0.09999999999999998, "bar 3: 0.29999999999999993 / 3 (zero addend folds c)");
-    // bar 4: exact 0; bar 5: the residue 2^-54 (the compensated addend of bar 2 leaves);
-    // bar 6..39: 2^-55 (the compensated addend of bar 3 leaves) -- an all-zero window that is not 0.
+    // expectation corrected: 0.09999999999999998 -> 0.3 / 3; current TV code is 50000000.
+    // CAP-731-PULSE tv_trades.csv sha256 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28.
+    CHECK_TRUE(v[3] == 0.3 / 3, "bar 3: current TV equals the newest-first reference");
+    // The current capture contradicts the September residue at bars 5..39.
     CHECK_TRUE(v[4] == 0.0, "bar 4: exact 0");
-    CHECK_TRUE(v[5] * 3 == std::ldexp(1.0, -54), "bar 5: residue 2^-54 (n bars after the pulse's zero addend)");
+    // expectation corrected: 2^-54 -> 0; current TV b5 code is 10000000.
+    // CAP-731-PULSE tv_trades.csv sha256 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28.
+    CHECK_TRUE(v[5] * 3 == 0.0, "bar 5: current TV has no carried pulse residue");
     for (int t = 6; t < 40; ++t) {
-        CHECK_TRUE(v[(std::size_t)t] * 3 == std::ldexp(1.0, -55), "bars 6..39: residue 2^-55 held across the zero window");
+        // expectation corrected: 2^-55 -> 0; current TV b6..39 codes are 10000000.
+        // CAP-731-PULSE tv_trades.csv sha256 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28.
+        CHECK_TRUE(v[(std::size_t)t] * 3 == 0.0, "bars 6..39: current TV has no carried pulse residue");
     }
-    // bar 40: the residue enters the next pulse: (0.2 + 2^-55) / 3
-    CHECK_TRUE(v[40] == 0.20000000000000004 / 3, "bar 40: the carried residue rides into the next pulse");
-    // block 1 (0.2, 0.3): the residue returns to exactly 0 from bar 45 on
-    CHECK_TRUE(v[44] * 3 == std::ldexp(1.0, -54), "bar 44: 2^-54");
+    // Bar 40 starts the next captured pulse with no preceding zero-window residue.
+    // expectation corrected: 0.20000000000000004 / 3 -> 0.2 / 3; current TV b40 code is 50000000.
+    // CAP-731-PULSE tv_trades.csv sha256 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28.
+    CHECK_TRUE(v[40] == 0.2 / 3, "bar 40: current TV equals the newest-first reference");
+    // Block 1 (0.2, 0.3): bar 44 is also a captured zero-window cell.
+    // expectation corrected: 2^-54 -> 0; current TV b44 code is 50000000.
+    // CAP-731-PULSE tv_trades.csv sha256 1e1a715be44e964f7db4475c6ce6074b98fcadc7db564737b63ad10662710a28.
+    CHECK_TRUE(v[44] * 3 == 0.0, "bar 44: current TV zero window");
 
     // The block-63 re-sum (n = 3): S carries +18 * 2^-54 into the pulse (0.1, 0.3, 0.7);
     // the 0.7 swallows c = 2^-54, so the window is re-summed: exactly 1.1 / 3.
