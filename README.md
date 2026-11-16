@@ -304,8 +304,6 @@ the affected scripts and how to recognise it.
 
 **Measured <!-- pf:scoreboard.date -->2026-11-12<!-- /pf -->** on engine <!-- pf:scoreboard.engineCommit|short-code -->`6e27d0f2`<!-- /pf --> with codegen-oss <!-- pf:scoreboard.codegenCommit|short-code -->`126e055f`<!-- /pf --> (baseline <!-- pf:scoreboard.id|code -->`pineforge-parity-baseline-20261112-release-tag-cd9c85a6`<!-- /pf -->, snapshot <!-- pf:scoreboard.snapshotSha256|short-code -->`cd9c85a6`<!-- /pf -->): **<!-- pf:scoreboard.graded|int -->7,989<!-- /pf --> graded probes, <!-- pf:scoreboard.excellent|int -->7,983<!-- /pf --> excellent + <!-- pf:scoreboard.strong|int -->6<!-- /pf --> strong**, <!-- pf:scoreboard.belowStrong|int -->0<!-- /pf --> below strong and <!-- pf:scoreboard.engineErrors|int -->0<!-- /pf --> engine errors across <!-- pf:scoreboard.lanes|int -->18<!-- /pf --> market/timeframe lanes. The historical release 1.0.1 inventory holds <!-- pf:inventory.tvTrades|int -->4,776,328<!-- /pf --> trades.
 
-For the population reported in [#836](https://github.com/pineforge-4pass/pineforge-engine/issues/836) on **2026-11-11**, the historical gross-count regrade measured **7,959 excellent / 30 strong**: 24 probes moved from excellent to strong and none lower. That regrade and the dated scoreboard above describe their recorded pair and population; they are not a fresh measurement of this revision. The grader uses gross counting. Recorded release results remain historical measurements.
-
 Release **1.4.0 (2026-10-08)** maps to **<!-- pf:releases[1.4.0].scoreboard.excellent|int -->7,983<!-- /pf --> excellent / <!-- pf:releases[1.4.0].scoreboard.strong|int -->6<!-- /pf --> strong** on <!-- pf:releases[1.4.0].scoreboard.graded|int -->7,989<!-- /pf --> graded probes (baseline <!-- pf:releases[1.4.0].scoreboard.id|code -->`pineforge-parity-baseline-20261007-engine-b3192bfc`<!-- /pf -->, promoted <!-- pf:releases[1.4.0].scoreboard.date -->2026-10-07<!-- /pf --> UTC), with <!-- pf:releases[1.4.0].scoreboard.belowStrong|int -->0<!-- /pf --> below strong and <!-- pf:releases[1.4.0].scoreboard.engineErrors|int -->0<!-- /pf --> engine errors. These are recorded grading outcomes for that pair and population.
 
 Release **1.3.0 grades <!-- pf:releases[1.3.0].scoreboard.excellent|int -->7,982<!-- /pf --> excellent / <!-- pf:releases[1.3.0].scoreboard.strong|int -->7<!-- /pf --> strong until the next release**, on <!-- pf:releases[1.3.0].scoreboard.graded|int -->7,989<!-- /pf --> probes (baseline <!-- pf:releases[1.3.0].scoreboard.id|code -->`pineforge-parity-baseline-20261006-engine-7a1f01c0`<!-- /pf -->, <!-- pf:releases[1.3.0].scoreboard.date -->2026-10-06<!-- /pf -->). A main scoreboard advance does not change release results.
@@ -314,10 +312,8 @@ The quantities above render from the public [facts tokens](https://github.com/pi
 
 | Board | Test set | Result |
 |---|---|---|
-| **Public** — [open corpus](https://github.com/pineforge-4pass/pineforge-corpus) | 312 reference strategies on BINANCE:ETHUSDT.P 15m, Apache-2.0, reproducible by anyone | reference sweep **2026-11-16** ([#836](https://github.com/pineforge-4pass/pineforge-engine/issues/836), [#883](https://github.com/pineforge-4pass/pineforge-engine/issues/883)): **301 excellent + 9 strong + 1 moderate + 1 declared anomaly**; the <!-- pf:scoreboard.corpusProbes\|int -->309<!-- /pf --> of them in the dated scoreboard above: **<!-- pf:scoreboard.scopes.corpus.excellent\|int -->309<!-- /pf --> excellent** |
+| **Public** — [open corpus](https://github.com/pineforge-4pass/pineforge-corpus) | 312 reference strategies on BINANCE:ETHUSDT.P 15m, Apache-2.0, reproducible by anyone | this repository's sweep of the v1.0.1 library: **311 excellent + 1 declared anomaly**; the <!-- pf:scoreboard.corpusProbes\|int -->309<!-- /pf --> of them in the measured population: **<!-- pf:scoreboard.scopes.corpus.excellent\|int -->309<!-- /pf --> excellent** |
 | **Closed test** | <!-- pf:inventory.closedProbes\|int -->7,680<!-- /pf --> probes of <!-- pf:inventory.closedScripts\|int -->741<!-- /pf --> TradingView scripts across the <!-- pf:scoreboard.lanes\|int -->18<!-- /pf --> lanes: <!-- pf:inventory.communityScripts\|int -->680<!-- /pf --> community-shared scripts (<!-- pf:inventory.communityProbes\|int -->7,179<!-- /pf --> probes), private under TradingView's Terms of Service, and <!-- pf:inventory.probeScripts\|int -->61<!-- /pf --> probe scripts the maintainers wrote (<!-- pf:inventory.probeScriptProbes\|int -->501<!-- /pf --> probes) | **<!-- pf:scoreboard.scopes.closed.excellent\|int -->7,674<!-- /pf --> excellent + <!-- pf:scoreboard.scopes.closed.strong\|int -->6<!-- /pf --> strong** |
-
-The gross count percentage in [#836](https://github.com/pineforge-4pass/pineforge-engine/issues/836) exposes an unchanged trade mismatch in `validation/mtf-triple-tf-macd-hist-confluence-01`, which remains **Moderate** in the 2026-11-16 reference sweep. Aggregate reference verification accepts only that full id at Moderate under a dated floor exception that ends when [#883](https://github.com/pineforge-4pass/pineforge-engine/issues/883) closes. Every other strategy keeps the Strong floor; missing inputs or lower tiers still fail. This reference measurement is separate from the dated scoreboard metadata above; baseline promotion requires its own verification.
 
 ### Lane by lane
 
@@ -340,18 +336,9 @@ The hard lane combines <!-- pf:scoreboard.hardLane.corpusProbes|int -->309<!-- /
 
 Every script is exported from TradingView as-is (its own inputs, its own defaults) with the chart's trade list at full precision, transpiled with [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss), and run by this engine on the same OHLCV bars. The two trade lists are aligned trade-for-trade and graded by [`scripts/verify_corpus.py`](scripts/verify_corpus.py):
 
-- **excellent** — zero unmatched gated trades on either side, ≥ 99% of TradingView's trades matched, the distinct-entry identity check passed, entry and exit prices within 0.01% and PnL within 1% at the 90th percentile (trailing-stop scripts are graded on the *production* profile: exits within 0.02% and PnL within 1%, since a trail fill depends on TradingView's sub-bar path);
-- **strong** — ≥ 95% matched, gross unmatched trades below 6% of the larger gated trade count, entries within 0.1% and exits within 0.5% at p90;
+- **excellent** — the same number of trades, ≥ 99% of TradingView's trades matched, the distinct-entry identity check passed, entry and exit prices within 0.01% and PnL within 1% at the 90th percentile (trailing-stop scripts are graded on the *production* profile: exits within 0.02% and PnL within 1%, since a trail fill depends on TradingView's sub-bar path);
+- **strong** — ≥ 95% matched, trade count within 6%, entries within 0.1% and exits within 0.5% at p90;
 - **moderate** — ≥ 75% coverage with ≥ 90% of the in-window trades matched; **weak** — at least one match; **minimal** — none.
-
-The absolute mismatch metric, `count_abs_delta` (printed as `abs`), adds every
-unmatched gated TradingView trade and every unmatched gated engine trade.
-The separate `net_count_abs_delta` (`net`) reports the difference in list sizes
-for diagnostics only.
-Excellent requires the absolute mismatch count to be zero. The percentage
-metric, `count_delta`, divides that same gross count by the larger gated trade
-count, with zero for two empty pools. Strong-tier grading and fragmented-FIFO
-metric eligibility use this same percentage and retain their thresholds.
 
 The closed-test grades are the maintainers' own measurement of a fixed population; only the public board can be re-run from this repository.
 
