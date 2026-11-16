@@ -180,6 +180,18 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+    // The last redelivery scan that selected nothing: its cursor and the
+    // newest request it covered. What a request selects can only shrink
+    // (requests, routes and the log rows at or below a request's snapshot are
+    // immutable, later events lie above every accepted through_ordinal, and a
+    // completed delivery stays completed), so those requests select nothing
+    // for any cursor at or after this one, and only later requests are read.
+    // Guarded by the ledger mutex; forgotten when the ledger is reopened.
+    struct RedeliveryExhausted {
+        bool known = false;
+        std::uint64_t order = 0, after = 0, through = 0;
+    };
+    mutable RedeliveryExhausted redelivery_exhausted_;
 };
 
 class LedgerView {

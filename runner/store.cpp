@@ -1477,17 +1477,51 @@ std::uint64_t Ledger::request_redelivery(const std::string& request_id, const st
 std::optional<RequestedDelivery> Ledger::next_redelivery_event(std::uint64_t request_order,
                                                              std::uint64_t after) const {
     std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
-    Statement query(impl_->db, "SELECT e.ordinal,e.event_id,e.payload,e.attempts,r.target_id,r.delivery_id,"
-        "q.request_order,q.request_id FROM redelivery_requests q JOIN event_routes r ON r.target_id=q.target_id "
-        "JOIN events e ON e.ordinal=r.ordinal WHERE e.ordinal>=q.from_ordinal AND e.ordinal<=q.through_ordinal "
-        "AND (q.request_order>? OR (q.request_order=? AND e.ordinal>?)) "
-        "AND (q.failed_only=0 OR (SELECT success FROM delivery_log d WHERE d.event_id=e.event_id "
-        "AND d.phase='completed' AND d.log_id<=q.snapshot_log ORDER BY d.log_id DESC LIMIT 1)=0) "
-        "AND NOT EXISTS(SELECT 1 FROM delivery_log d WHERE d.event_id=e.event_id "
-        "AND d.request_id=q.request_id AND d.phase='completed') ORDER BY q.request_order,e.ordinal LIMIT 1");
-    query.bind(1, request_order); query.bind(2, request_order); query.bind(3, after);
-    if (!query.row()) return std::nullopt;
-    return RequestedDelivery{read_routed_event(query), query.integer(6), query.text(7)};
+    constexpr auto top = static_cast<std::uint64_t>(std::numeric_limits<sqlite3_int64>::max());
+    if (request_order > top || after > top)
+        throw std::runtime_error("native ledger ordinal exceeds SQLite range");
+    // The first (request_order, ordinal) after the cursor, read as two rowid
+    // range scans. As one join of requests, routes and events it had no index
+    // for the target and no bound at the cursor, so every delivery poll could
+    // read each route again.
+    auto& exhausted = redelivery_exhausted_;
+    const bool resumed = exhausted.known && exhausted.through >= request_order &&
+        (request_order > exhausted.order ||
+         (request_order == exhausted.order && after >= exhausted.after));
+    if (resumed && exhausted.through == top) return std::nullopt;
+    Statement requests(impl_->db, "SELECT request_order,request_id,target_id,from_ordinal,through_ordinal,"
+        "failed_only,snapshot_log FROM redelivery_requests WHERE request_order>=? ORDER BY request_order");
+    requests.bind(1, resumed ? exhausted.through + 1 : request_order);
+    std::optional<std::uint64_t> newest;
+    while (requests.row()) {
+        const auto order = requests.integer(0);
+        newest = order;
+        auto first = requests.integer(3);
+        const auto last = requests.integer(4);
+        if (order == request_order) {
+            if (after == top) continue;
+            first = std::max(first, after + 1);
+        }
+        if (first > last) continue;
+        const auto request_id = requests.text(1);
+        // NOT INDEXED leaves the rowid range as the only access to the routes
+        // (no automatic index on target_id); the scan ends at the first match.
+        Statement event(impl_->db, "SELECT e.ordinal,e.event_id,e.payload,e.attempts,r.target_id,r.delivery_id "
+            "FROM event_routes r NOT INDEXED CROSS JOIN events e ON e.ordinal=r.ordinal "
+            "WHERE r.ordinal>=? AND r.ordinal<=? AND r.target_id=? "
+            "AND (?=0 OR (SELECT success FROM delivery_log d WHERE d.event_id=e.event_id "
+            "AND d.phase='completed' AND d.log_id<=? ORDER BY d.log_id DESC LIMIT 1)=0) "
+            "AND NOT EXISTS(SELECT 1 FROM delivery_log d WHERE d.event_id=e.event_id "
+            "AND d.request_id=? AND d.phase='completed') ORDER BY r.ordinal LIMIT 1");
+        event.bind(1, first); event.bind(2, last); event.bind(3, requests.text(2));
+        event.bind(4, requests.integer(5)); event.bind(5, requests.integer(6)); event.bind(6, request_id);
+        if (event.row()) return RequestedDelivery{read_routed_event(event), order, request_id};
+    }
+    if (!resumed)
+        exhausted = {true, request_order, after, newest.value_or(request_order ? request_order - 1 : 0)};
+    else if (newest)
+        exhausted.through = *newest;
+    return std::nullopt;
 }
 
 struct LedgerView::Impl {
