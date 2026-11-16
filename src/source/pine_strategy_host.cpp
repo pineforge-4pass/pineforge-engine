@@ -1941,10 +1941,78 @@ source::PineRequestDeliveryScope::~PineRequestDeliveryScope() {
     host_.pop_request_delivery();
 }
 
+bool source::PineStrategyHost::RequestCallerIds::same_series(
+        const RequestCallerKey& a, const RequestCallerKey& b) noexcept {
+    return a.kind == b.kind && a.first == b.first && a.third == b.third
+        && a.occurrence == b.occurrence && a.text == b.text;
+}
+
+std::uint64_t source::PineStrategyHost::RequestCallerIds::caller_at(
+        const RequestCallerKey& first, const Run& run, std::int64_t second) noexcept {
+    const std::uint64_t offset = static_cast<std::uint64_t>(second)
+        - static_cast<std::uint64_t>(first.second);
+    return run.caller + offset * run.stride;
+}
+
+std::optional<std::uint64_t> source::PineStrategyHost::RequestCallerIds::find(
+        const RequestCallerKey& key) const noexcept {
+    auto next = runs_.upper_bound(key);
+    if (next == runs_.begin()) return std::nullopt;
+    const auto& entry = *std::prev(next);
+    if (!same_series(entry.first, key) || key.second > entry.second.last)
+        return std::nullopt;
+    return caller_at(entry.first, entry.second, key.second);
+}
+
+void source::PineStrategyHost::RequestCallerIds::emplace(
+        const RequestCallerKey& key, std::uint64_t caller) {
+    auto next = runs_.upper_bound(key);
+    if (next != runs_.begin()) {
+        auto& entry = *std::prev(next);
+        const RequestCallerKey& first = entry.first;
+        Run& run = entry.second;
+        if (same_series(first, key)) {
+            if (key.second <= run.last) return;
+            if (run.last != std::numeric_limits<std::int64_t>::max()
+                && key.second == run.last + 1) {
+                const std::uint64_t stride = first.second == run.last
+                    ? caller - run.caller : run.stride;
+                if (caller == caller_at(first, run, run.last) + stride) {
+                    run.last = key.second;
+                    run.stride = stride;
+                    ++size_;
+                    return;
+                }
+            }
+        } else if (first.kind == key.kind && first.first == key.first
+                   && key.second <= run.last) {
+            // A different suffix can sort between two occurrences of this
+            // run. Split before inserting it, so logical traversal still has
+            // exactly the original dictionary's key order.
+            RequestCallerKey right = first;
+            right.second = key.second;
+            bool split = true;
+            if (right < key) {
+                if (right.second == run.last) split = false;
+                else ++right.second;
+            }
+            if (split) {
+                const Run tail{caller_at(first, run, right.second), run.last, run.stride};
+                const std::int64_t left_last = right.second - 1;
+                // Allocate the tail before changing the old run. A failed
+                // insertion must retain every previously assigned identity.
+                runs_.emplace(std::move(right), tail);
+                run.last = left_last;
+            }
+        }
+    }
+    if (runs_.emplace(key, Run{caller, key.second, 0}).second) ++size_;
+}
+
 std::uint64_t source::PineStrategyHost::request_caller_id(
         const RequestCallerKey& key) {
     const auto found = request_caller_ids_.find(key);
-    if (found != request_caller_ids_.end()) return found->second;
+    if (found) return *found;
     const std::uint64_t caller = request_next_caller_++;
     request_caller_ids_.emplace(key, caller);
     return caller;

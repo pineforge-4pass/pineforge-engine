@@ -225,8 +225,8 @@ source::PineRequestReadBinding source::PineStrategyHost::current_request_read(
         binding.action = PineRequestReadAction::BaseCarry;
     const auto found = request_caller_ids_.find(
         request_runtime_caller_key(cursor.request_instance, parent.caller));
-    if (found == request_caller_ids_.end()) return binding;
-    binding.caller = found->second;
+    if (!found) return binding;
+    binding.caller = *found;
     binding.caller_valid = true;
     const auto& selected = cursor.selected_request_delivery;
     if (selection_allowed

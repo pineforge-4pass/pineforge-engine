@@ -1056,6 +1056,44 @@ private:
             return text < other.text;
         }
     };
+    // Consecutive occurrences share their key's fixed fields and an ID
+    // stride. Keep those runs without discarding any logical dictionary row.
+    // Runs remain disjoint in RequestCallerKey order, including when a later
+    // insertion with different fixed fields splits an existing run.
+    class RequestCallerIds {
+    public:
+        std::optional<std::uint64_t> find(const RequestCallerKey&) const noexcept;
+        void emplace(const RequestCallerKey&, std::uint64_t caller);
+        bool empty() const noexcept { return size_ == 0; }
+        std::size_t size() const noexcept { return size_; }
+        void clear() noexcept { runs_.clear(); size_ = 0; }
+
+        template <typename Visit>
+        void for_each(Visit&& visit) const {
+            for (const auto& entry : runs_) {
+                std::int64_t second = entry.first.second;
+                std::uint64_t caller = entry.second.caller;
+                for (;;) {
+                    visit(entry.first, second, caller);
+                    if (second == entry.second.last) break;
+                    ++second;
+                    caller += entry.second.stride;
+                }
+            }
+        }
+
+    private:
+        struct Run {
+            std::uint64_t caller = 0;
+            std::int64_t last = 0;
+            std::uint64_t stride = 0;
+        };
+        static bool same_series(const RequestCallerKey&, const RequestCallerKey&) noexcept;
+        static std::uint64_t caller_at(const RequestCallerKey&, const Run&,
+                                        std::int64_t second) noexcept;
+        std::map<RequestCallerKey, Run> runs_;
+        std::size_t size_ = 0;
+    };
     struct RequestChartCaller {
         std::uint64_t caller = 0;
         int interval_index = -1;
@@ -1417,7 +1455,7 @@ protected:
     // Source-owned caller catalog. Keys are actual producer coordinates
     // (input/body/foreign/runtime); no pointer, label, or rescan-cache
     // position is used as a caller identity.
-    std::map<RequestCallerKey, std::uint64_t> request_caller_ids_;
+    RequestCallerIds request_caller_ids_;
     std::map<std::int64_t, RequestChartCaller> request_chart_callers_;
     std::uint64_t request_next_caller_ = 1;
     mutable std::uint64_t request_next_runtime_instance_ = 1;

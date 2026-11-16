@@ -1311,15 +1311,16 @@ void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const
         f.u(request_next_caller_);
         f.u(request_next_runtime_instance_);
         f.u(request_caller_ids_.size());
-        for (const auto& entry : request_caller_ids_) {
-            f.i(entry.first.kind);
-            f.i(entry.first.first);
-            f.i(entry.first.second);
-            f.i(entry.first.third);
-            f.u(entry.first.occurrence);
-            f.s(entry.first.text);
-            f.u(entry.second);
-        }
+        request_caller_ids_.for_each(
+            [&f](const RequestCallerKey& key, std::int64_t second, std::uint64_t caller) {
+                f.i(key.kind);
+                f.i(key.first);
+                f.i(second);
+                f.i(key.third);
+                f.u(key.occurrence);
+                f.s(key.text);
+                f.u(caller);
+            });
         f.u(request_chart_callers_.size());
         for (const auto& entry : request_chart_callers_) {
             f.i(entry.first);
