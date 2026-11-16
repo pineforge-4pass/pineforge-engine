@@ -397,47 +397,25 @@ kernel values as TradingView values.
 
 ### EMA-family adapter contract details
 
-The same header holds `ta.ema`, `ta.tsi`, `ta.kc`, `ta.kcw` and `ta.macd` as a
-script calls them, whatever the qualifier of their lengths (`PineEma`,
-`PineTsi`, `PineKc`, `PineKcw`, `PineMacd`;
-`PINEFORGE_HAS_TA_EMA_FAMILY_CALLS`). Each class checks its lengths on every
-execution, before the source is read, so a length of 0, a negative length or
-`na` stops the run even where the kernel class would have answered `na`: an
-`na` source, the first bar of `ta.tsi`, an unready `ta.macd` stage
-(`tests/test_pine_ta_length_stop.cpp`). Each publishes the kernel class's
-value only once its inputs are ready, by one rule for every EMA stage: a stage
-has a value once `length` defined inputs have reached it, and a stage fed by
-another stage counts only that stage's ready values. That gives `ta.ema` after
-`length` defined sources; `ta.tsi` after `long_length` defined changes and
-then `short_length` ready long-stage values; `ta.kc`'s middle band after
-`length` defined sources and its bands once the range stage has also seen
-`length` defined ranges; `ta.kcw` where the bands are; `ta.macd` as `MACD`
-already does (`tests/test_pine_ta_ready_publication.cpp`). Apart from that
-stop, only the publication differs from the kernel class. The numbers are the
-kernel's, the seeding is the one the instance latches, and under the average
-seeding of a declared series origin the two agree on every bar.
+The same header holds `ta.ema`, `ta.tsi`, `ta.kc`, `ta.kcw` and `ta.macd` as a script calls them, whatever the qualifier of their lengths (`PineEma`, `PineTsi`, `PineKc`, `PineKcw`, `PineMacd`).
 
-Measured against TradingView: the warm-up of `ta.ema` without `na` sources
-(`na` for its first `length - 1` values), the first bars of
-`ta.macd(close, 12, 26, 9)` (line 25, histogram 33) and the stop text of
-`ta.ema`'s length. Not measured: the first bars of `ta.tsi`, `ta.kc` and
-`ta.kcw`; the bar a stage becomes ready on when an `na` input falls inside its
-warm-up; whether and with which text TradingView stops `ta.tsi`, `ta.kc`,
-`ta.kcw` and `ta.macd` on a bad length, and which of several bad lengths it
-names; and the values of the first bars of a run without a declared series
-origin, whose seeding this change does not choose. A generated strategy
-reaches these classes only with a codegen release that emits them; until then
-its calls keep the kernel classes and their behaviour.
+Each class checks its lengths on every execution, before the source is read, so a length of 0, a negative length or `na` stops the run even where the kernel class would have answered `na`: an `na` source, the first bar of `ta.tsi`, an unready `ta.macd` stage (`tests/test_pine_ta_length_stop.cpp`).
 
-`TSI::ready()` answers whether both smoothing chains have their observations
-(`long_length` defined changes, then `short_length` ready long-stage values);
-it does not change what `compute` publishes (`PF_TA_HAS_STAGE_READY`,
-`tests/test_ta_stage_readiness.cpp`).
+`ta.macd` as `MACD` already does (`tests/test_pine_ta_ready_publication.cpp`).
 
-`KC::basis_ready()` and `KC::range_ready()` answer whether each smoothing
-stage has seen `length` defined inputs, and `KCW::ready()` whether both have;
-none of them changes what `compute` publishes (`PF_TA_HAS_STAGE_READY`,
-`tests/test_ta_stage_readiness.cpp`).
+The numbers are the kernel's, the seeding is the one the instance latches, and under the average seeding of a declared series origin the two agree on every bar.
+
+Existing declared-origin reference observations:
+
+Measured against TradingView: the warm-up of `ta.ema` without `na` sources (`na` for its first `length - 1` values), the first bars of `ta.macd(close, 12, 26, 9)` (line 25, histogram 33) and the stop text of `ta.ema`'s length.
+
+Not measured: the first bars of `ta.tsi`, `ta.kc` and `ta.kcw`; the bar a stage becomes ready on when an `na` input falls inside its warm-up; whether and with which text TradingView stops `ta.tsi`, `ta.kc`, `ta.kcw` and `ta.macd` on a bad length, and which of several bad lengths it names; and the values of the first bars of a run without a declared series origin, whose seeding this change does not choose.
+
+A generated strategy reaches these classes only with a codegen release that emits them; until then its calls keep the kernel classes and their behaviour.
+
+`TSI::ready()` answers whether both smoothing chains have their observations (`long_length` defined changes, then `short_length` ready long-stage values); it does not change what `compute` publishes (`tests/test_ta_stage_readiness.cpp`).
+
+`KC::basis_ready()` and `KC::range_ready()` answer whether each smoothing stage has seen `length` defined inputs, and `KCW::ready()` whether both have; none of them changes what `compute` publishes (`tests/test_ta_stage_readiness.cpp`).
 
 ### Tuple-returning TA classes
 
