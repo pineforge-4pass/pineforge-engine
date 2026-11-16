@@ -583,8 +583,14 @@ double TSI::compute(double src) {
     if (is_na(prev_src_)) { prev_src_ = src; return na<double>(); }
     double pc = src - prev_src_;
     prev_src_ = src;
-    double ds = ema_short_.compute(ema_long_.compute(pc));
-    double ads = ema_abs_short_.compute(ema_abs_long_.compute(std::abs(pc)));
+    // Each short stage consumes its long stage's value exactly as before;
+    // only its availability clock is told whether that value was ready, so
+    // the numbers are unchanged and ready() names the first bar on which
+    // both chains have their observations.
+    const double long_pc = ema_long_.compute(pc);
+    double ds = ema_short_.compute(long_pc, ema_long_.ready());
+    const double long_abs_pc = ema_abs_long_.compute(std::abs(pc));
+    double ads = ema_abs_short_.compute(long_abs_pc, ema_abs_long_.ready());
     // Degenerate denominator: the double-smoothed EMA of |change| reaches
     // exactly 0.0 only when the source is flat from bar 0, so the oracle's
     // all-constant construction is not a special case — it is the ONLY

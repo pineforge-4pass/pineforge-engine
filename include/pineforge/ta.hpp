@@ -682,6 +682,12 @@ public:
     KC(int length, double mult, bool use_true_range = true);
     KCResult compute(double src, double high, double low, double close);
     KCResult recompute(double src, double high, double low, double close);
+    // Availability of the two smoothing stages, independent of the numerical
+    // seeding: the basis has seen its length of defined sources, the range
+    // stage its length of defined ranges. Reading them changes nothing:
+    // compute and recompute publish as they did.
+    bool basis_ready() const noexcept { return ema_.ready(); }
+    bool range_ready() const noexcept { return range_ema_.ready(); }
 public:
     void observe_owned_storage(OwnedStorage& out) const noexcept {
         observe_owned_members(out, ema_, range_ema_);
@@ -1090,6 +1096,12 @@ public:
     TSI(int short_length, int long_length);
     double compute(double src);
     double recompute(double src);
+    // Availability of both smoothing chains, independent of the numerical
+    // seeding: each long stage has seen its length of defined changes, and
+    // each short stage its length of long-stage values that were themselves
+    // ready. Reading it changes nothing: compute and recompute publish as
+    // they did.
+    bool ready() const noexcept { return ema_short_.ready() && ema_abs_short_.ready(); }
 public:
     void observe_owned_storage(OwnedStorage& out) const noexcept {
         observe_owned_members(out, ema_long_, ema_short_, ema_abs_long_, ema_abs_short_);
@@ -1152,6 +1164,9 @@ public:
     KCW(int length, double mult, bool use_true_range = true);
     double compute(double src, double high, double low, double close);
     double recompute(double src, double high, double low, double close);
+    // Both stages of the channel are ready (KC::basis_ready and
+    // KC::range_ready). Reading it changes nothing.
+    bool ready() const noexcept { return kc_.basis_ready() && kc_.range_ready(); }
 public:
     void observe_owned_storage(OwnedStorage& out) const noexcept {
         observe_owned_members(out, kc_);
@@ -1161,6 +1176,10 @@ public:
 // Feature macro: KC and KCW take the range choice (a third constructor
 // argument, use_true_range).
 #define PF_KC_HAS_USE_TRUE_RANGE 1
+
+// Feature macro: TSI, KC and KCW answer whether their smoothing stages are
+// ready (TSI::ready, KC::basis_ready, KC::range_ready, KCW::ready).
+#define PF_TA_HAS_STAGE_READY 1
 
 // --- BarsSince ---
 
