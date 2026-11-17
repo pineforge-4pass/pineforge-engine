@@ -4,6 +4,8 @@
 //   exit's quantity, whether fixed or a qty_percent of the whole open
 //   position, is capped at the quantity other working exits have not
 //   reserved. An exit left nothing does not become active and never fills.
+//   An exit id that has filled on an opening, fully or in part, does not
+//   fill again on that opening.
 //
 // Rows and where their expectations come from. Each captured row is the
 // TradingView capture's order sequence replayed at this file's own prices;
@@ -37,6 +39,31 @@
 //    first exit was refused as a partial exit behind a full one (the older
 //    exit's one unit was all its entry held when it was last sized), one unit
 //    stayed open, and the later exits no longer matched the trade list.
+// 6. partial-fill-spent [b61aa352]: a 4-unit entry, a qty-2 exit at a far
+//    stop, and a limit exit "x" that asks for 3 and fills the 2 unreserved
+//    units. The far exit is then re-issued with qty 1, which frees a unit,
+//    and "x" is re-issued as a qty-1 stop. The bar that crosses that stop
+//    fills nothing: "x" has filled on this opening. (The capture's twin, the
+//    same stop under another id, fills the freed unit.)
+// 7. held-reissue-after-fill: not a captured cell; the last sentence of the
+//    rule applied to an exit re-issued while it works. With the script run
+//    again after every fill, a 3-unit entry has two qty-1 limit exits, "X_A"
+//    at 104 and "X_B" at 108, and one bar passes both levels. The run after
+//    X_A's fill calls "X_B" again with a limit the price has already passed;
+//    that call is held for the next bar's open while the standing order
+//    stays on the book and fills at 108. "X_B" has then filled on the
+//    opening: it does not fill again at the next open. Before the correction
+//    the held call was placed there as a new order and closed a second unit.
+//    Where a re-issue at a passed level should itself fill is not this row's
+//    subject; the row keeps the standing order's fill as it is.
+// 8. cancelled-stop-placed-again: TradingView's order sequence for a 130-share
+//    short (NYSE:F 15m, the script run again after every fill): a bracket
+//    "first" (65, limit and stop) and a stop "runner" (65), both called on
+//    every run; once "first" has closed its half the script cancels "runner"
+//    and calls it again at a nearer stop. TradingView fills the stop placed
+//    again when the price reaches it. Before the correction it was never
+//    placed: the calls of the earlier runs had each replaced the order, and
+//    every replaced order still counted as a spent exit of that opening.
 //
 // No market data or fixture is read.
 
@@ -79,6 +106,9 @@ struct Setup {
     int pyramiding = 1;
     bool close_any = false;
     double margin = 100.0;
+    // calc_on_order_fills: the script runs again after every fill.
+    bool recalculate_on_fills = false;
+    bool orders_on_close = false;
 };
 
 class Probe final : public source::PineStrategyHost {
@@ -88,8 +118,8 @@ public:
     Probe(const Setup& setup, Script script) : script_(std::move(script)) {
         attach_pine_execution_adapter();
         source::PineStrategyConfig cfg{};
-        cfg.calc_on_order_fills = false;
-        cfg.process_orders_on_close = false;
+        cfg.calc_on_order_fills = setup.recalculate_on_fills;
+        cfg.process_orders_on_close = setup.orders_on_close;
         cfg.pyramiding = setup.pyramiding;
         cfg.initial_capital = 1'000'000.0;
         cfg.default_qty_type = static_cast<int>(QtyType::FIXED);
@@ -109,12 +139,14 @@ public:
     void on_source_bar(const Bar&) override { script_(*this, pine_bar_index()); }
 
     void entry(const char* id, double qty) { strategy_entry(id, true, kNaN, kNaN, qty); }
+    void entry_short(const char* id, double qty) { strategy_entry(id, false, kNaN, kNaN, qty); }
     void exit_units(const char* id, const char* from, double limit, double stop, double qty) {
         strategy_exit(id, from, limit, stop, kNaN, kNaN, kNaN, 100.0, {}, qty);
     }
     void exit_percent(const char* id, const char* from, double limit, double percent) {
         strategy_exit(id, from, limit, kNaN, kNaN, kNaN, kNaN, percent);
     }
+    void cancel(const char* id) { strategy_cancel(id); }
     void close_all() { strategy_close_all(); }
     double position() const { return signed_position_size(); }
 
@@ -278,6 +310,67 @@ Probe::Script resize(double percent) {
     };
 }
 
+// The captured partial fill: a limit at 108 first reached inside bar 4, a stop
+// at 103 that only bar 6 crosses, a far stop at 50, close_all at bar 9.
+const std::vector<Ohlc> kPartialTape{
+    {100, 101, 99, 100}, {100, 101, 99, 100}, {100, 102, 99, 101}, {101, 103, 100, 102},
+    {102, 109, 101, 105}, {105, 107, 104, 106}, {106, 107, 102, 104}, {104, 106, 104, 105},
+    {105, 106, 104, 105}, {105, 106, 104, 105}, {105, 106, 104, 105}, {105, 106, 104, 105}};
+
+void partial_fill(Probe& probe, int bar) {
+    if (bar == 0) probe.entry("entry", 4);
+    if (bar == 1) {
+        probe.exit_units("holder", "entry", kNaN, 50, 2);
+        probe.exit_units("x", "entry", 108, kNaN, 3);
+    }
+    if (bar == 5) {
+        probe.exit_units("holder", "entry", kNaN, 50, 1);
+        probe.exit_units("x", "entry", kNaN, 103, 1);
+    }
+    if (bar == 9) probe.close_all();
+}
+
+// The cancelled stop: the short opens at 172; the bracket's limit at 164 is
+// passed inside bar 3; the stop placed again at 169 is first reached inside
+// bar 6. The stops at 176 are never reached.
+const std::vector<Ohlc> kCancelTape{
+    {172, 174, 170, 172}, {172, 174, 170, 172}, {172, 173, 169, 170}, {170, 171, 163, 166},
+    {166, 168, 165, 167}, {167, 168, 166, 167}, {167, 170, 166, 169}, {169, 170, 168, 169},
+    {169, 170, 168, 170}, {170, 171, 169, 170}, {170, 171, 169, 170}};
+
+void cancelled_stop(Probe& probe, int bar) {
+    if (bar == 0 && probe.position() == 0.0 && probe.trade_count() == 0)
+        probe.entry_short("ticket", 130);
+    if (probe.position() < 0.0) {
+        const bool half_closed = -probe.position() < 130.0;
+        probe.exit_units("first", "ticket", 164, 176, 65);
+        if (half_closed) probe.cancel("runner");
+        probe.exit_units("runner", "ticket", kNaN, half_closed ? 169 : 176, 65);
+    }
+    if (bar >= 8) probe.close_all();
+}
+
+// The held re-issue: the long opens at 100; bar 3 runs 101, 100, 110, 109 and
+// so passes 104 and then 108; no level is reached afterwards.
+const std::vector<Ohlc> kHeldTape{
+    {100, 101, 99, 100}, {100, 101, 99, 100}, {100, 101, 99, 100}, {101, 110, 100, 109},
+    {109, 110, 108, 109}, {109, 110, 108, 109}, {109, 110, 108, 109}, {109, 110, 108, 109}};
+
+void held_reissue(Probe& probe, int bar) {
+    if (bar == 0 && probe.position() == 0.0 && probe.trade_count() == 0) probe.entry("L", 3);
+    if (probe.position() > 0.0) {
+        if (probe.trade_count() == 0) {
+            probe.exit_units("X_A", "L", 104, kNaN, 1);
+            probe.exit_units("X_B", "L", 108, kNaN, 1);
+        } else if (probe.trade_count() == 1) {
+            // The recalculation after X_A's fill, at 104: the price has
+            // already passed a limit of 102.
+            probe.exit_units("X_B", "L", 102, kNaN, 1);
+        }
+    }
+    if (bar >= 6) probe.close_all();
+}
+
 std::vector<Row> rows() {
     Setup capture{};
     Setup resize_one{};
@@ -287,6 +380,11 @@ std::vector<Row> rows() {
     resize_two.pyramiding = 2;
     Setup two_slots{};
     two_slots.pyramiding = 2;
+    Setup recalculating_two_slots = two_slots;
+    recalculating_two_slots.recalculate_on_fills = true;
+    Setup recalculating_no_slots{};
+    recalculating_no_slots.pyramiding = 0;
+    recalculating_no_slots.recalculate_on_fills = true;
     return {
         {"stop-alone", capture, kStopTape, later_stop(0, 2),
          {Fill{4, "entry", "later", 2, 95}}},
@@ -310,6 +408,13 @@ std::vector<Row> rows() {
           Fill{11, "LongAdd", "LongAddT2", 1, 113},
           Fill{13, "Long", "LongT1", 1, 117}, Fill{13, "Long", "LongT2", 1, 117},
           Fill{17, "LongAdd", "LongAddT1", 1, 117}, Fill{17, "LongAdd", "LongAddT2", 1, 117}}},
+        {"partial-fill-spent", resize_one, kPartialTape, partial_fill,
+         {Fill{4, "entry", "x", 2, 108}, Fill{10, "entry", kCloseAll, 2, 105}}},
+        {"held-reissue-after-fill", recalculating_two_slots, kHeldTape, held_reissue,
+         {Fill{3, "L", "X_A", 1, 104}, Fill{3, "L", "X_B", 1, 108},
+          Fill{7, "L", kCloseAll, 1, 109}}},
+        {"cancelled-stop-placed-again", recalculating_no_slots, kCancelTape, cancelled_stop,
+         {Fill{3, "ticket", "first", 65, 164}, Fill{6, "ticket", "runner", 65, 169}}},
     };
 }
 

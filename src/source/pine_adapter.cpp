@@ -2401,6 +2401,53 @@ void PineExecutionAdapter::retire_cancelled_exits(
         if (id && candidate.source_id != *id) continue;
         retire_legs(candidate, live->decision.coordinate.ordinal);
     }
+    // strategy.cancel_all drops every family's members, and their facts with
+    // them (cancel_all).
+    if (!id) return;
+    // A working exit order the script cancels by id was never filled, however
+    // often the script re-issued it first. Each re-issue replaced the order's
+    // request, and the request it replaced has answered "consumed" for its
+    // opening ever since (origin_leg_consumed): through its row while the
+    // table holds it -- a row with no lifecycle left to withdraw above, its
+    // successor took it (submit_or_replace) -- and through the member fact
+    // that row leaves when it is erased (sweep_retired_rows). Neither is a
+    // fill, so neither outlives the order: the same exit placed again after
+    // the cancel is a new order for the same opening. TradingView fills it:
+    // a 65-share stop re-issued on every bar beside a 65-share bracket,
+    // cancelled once the bracket has closed its half and placed again at
+    // another level, closes the other half there. Only the binding of an
+    // order this cancel took off the book is released -- its exit id, entry
+    // id, leg kind and opening. A fill's own fact stays (record_filled): an
+    // exit that did fill on the opening is not placed on it again.
+    for (const auto& [incarnation, event] : cancelled) {
+        const auto found = placement_.find(incarnation);
+        if (found == placement_.end()) continue;
+        const PineOrderFamily kind = found->second.family;
+        const native_order::RequestHandle origin = found->second.bracket_origin;
+        const bool exit = kind == PineOrderFamily::ExitLimit || kind == PineOrderFamily::ExitStop
+            || kind == PineOrderFamily::ExitTrail;
+        if (!exit || origin.incarnation == 0 || found->second.from_entry.empty()) continue;
+        const auto family = bracket_families_.find(
+            key_for(found->second.source_id, found->second.from_entry));
+        if (family == bracket_families_.end()) continue;
+        family->second.drop_member_fact(static_cast<std::uint8_t>(kind), origin.incarnation);
+        for (const auto& member : family->second.working_tail()) {
+            if (member.incarnation == incarnation || !placement_.contains(member.incarnation))
+                continue;
+            const auto prior = placement_.find(member.incarnation);
+            if (prior == placement_.end() || prior->second.family != kind
+                || prior->second.bracket_origin != origin
+                || prior->second.legs.target().incarnation != 0
+                || std::find(live_handles_.begin(), live_handles_.end(), member)
+                    != live_handles_.end()) {
+                continue;
+            }
+            // The replaced request is withdrawn under its own identity.
+            prior->second.legs.attach(member.incarnation,
+                std::max<std::int64_t>(0, prior->second.placement_cycle));
+            retire_legs(prior->second, event);
+        }
+    }
 }
 
 void PineExecutionAdapter::purge_brackets_after_applied_reversal(
@@ -26276,6 +26323,35 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     }
     current_position_sign_ = next_sign;
     per_entry_exits_after_fill(placement_snapshot, event);
+    // An exit that has filled on an opening does not fill again on that
+    // opening, and a re-issue of it that still waits off the book is that
+    // same exit. A recalculation after a fill can leave one there: its
+    // re-issue at a level the price has already passed is held for the next
+    // open (exit_with_reservation_sequence) while the leg it would replace
+    // stays on the book. When that leg, or its bracket sibling, then fills,
+    // the held re-issue has nothing left to replace; released, it was
+    // accepted as a new order for the opening the exit had just filled on,
+    // and closed a unit again -- of the next position, where the fill had
+    // closed this one. It leaves the queue with the fill instead. Only an
+    // exit bound to an opening is concerned.
+    if (placement_snapshot && event.closed_units > 0.0 && !delayed_market_orders_.empty()
+        && (placement_snapshot->family == PineOrderFamily::ExitLimit
+            || placement_snapshot->family == PineOrderFamily::ExitStop
+            || placement_snapshot->family == PineOrderFamily::ExitTrail)
+        && !placement_snapshot->from_entry.empty()
+        && placement_snapshot->bracket_origin.incarnation != 0) {
+        delayed_market_orders_.erase(std::remove_if(
+            delayed_market_orders_.begin(), delayed_market_orders_.end(),
+            [&](const DelayedMarketOrder& order) {
+                const auto family = order.snapshot.family;
+                return (family == PineOrderFamily::ExitLimit
+                        || family == PineOrderFamily::ExitStop
+                        || family == PineOrderFamily::ExitTrail)
+                    && order.snapshot.bracket_origin == placement_snapshot->bracket_origin
+                    && order.snapshot.source_id == placement_snapshot->source_id
+                    && order.snapshot.from_entry == placement_snapshot->from_entry;
+            }), delayed_market_orders_.end());
+    }
     if (placement_snapshot
         && (placement_snapshot->family == PineOrderFamily::ExitLimit
             || placement_snapshot->family == PineOrderFamily::ExitStop

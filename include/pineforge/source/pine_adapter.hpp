@@ -1319,6 +1319,13 @@ public:
         consumed_.erase(kept, consumed_.end());
         return dropped;
     }
+    // Drops one member's fact and keeps a fill's: the script cancelled the
+    // working leg whose earlier re-issues left it
+    // (PineExecutionAdapter::retire_cancelled_exits).
+    void drop_member_fact(std::uint8_t leg_kind, std::uint64_t origin) noexcept {
+        consumed_.erase(std::remove(consumed_.begin(), consumed_.end(),
+                                    std::make_pair(leg_kind, origin)), consumed_.end());
+    }
     // Drops the facts whose origin can no longer be asked about.
     template<class Keep>
     void prune_consumed(Keep&& keep) {
