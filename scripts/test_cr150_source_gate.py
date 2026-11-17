@@ -1263,7 +1263,12 @@ class RealTree(unittest.TestCase):
         # one percentage exit's sizing query. All remain OPEN.
         # expectation corrected: 1626 -> 1625, because moving the #810/#716
         # partial-exit reservation rework to the follow-up PR retires U1866.
-        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1
+        # expectation corrected: 1625 -> 1629, because U1870-U1873 add four
+        # unreviewed groups: the native calendar's kept session days of one
+        # calendar set, the per-thread list of those sets and each set's zone
+        # root, and the insertions of the request caller catalog's run map.
+        # U1862 follows the catalog's storage into that run map. All remain OPEN.
+        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4
         self.assertEqual(c['OPEN'], expected_open)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])

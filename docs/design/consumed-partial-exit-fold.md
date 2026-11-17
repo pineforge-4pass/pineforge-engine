@@ -58,7 +58,7 @@ hash request would put the work on the per-bar path. The scheduler calls
 its quiet carried-callback branch
 (`src/source/pine_scheduler_native.cpp:743`,
 `src/source/pine_scheduler_native.cpp:772`). With recording enabled this
-calls `broker_state_hash` (`src/source/pine_strategy_host.cpp:3914`).
+calls `broker_state_hash` (`src/source/pine_strategy_host.cpp:3981`).
 `on_native_bar` then refreshes the recorded row after the adapter's close
 (`src/source/pine_strategy_host.cpp:953`); its `recording` guard
 (`src/source/pine_strategy_host.cpp:971`) enables

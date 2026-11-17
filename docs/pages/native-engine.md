@@ -1045,7 +1045,7 @@ cannot receive a fresh partial bracket merely because the caller changes
 its percentage or cancels its members. Unfilled withdrawals remain
 replaceable. The
 family keeps consumed facts separately from members
-(`record_consumed`, `include/pineforge/source/pine_adapter.hpp:1286`), refuses
+(`record_consumed`, `include/pineforge/source/pine_adapter.hpp:1300`), refuses
 to archive a fact-only family, and drops its facts at the opening's lifetime
 boundary. This policy uses native opening/fill provenance; native hosts
 continue to choose their own bracket policy.
@@ -1506,7 +1506,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:18978-19011`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:19051-19084`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
@@ -3160,7 +3160,7 @@ These are existing refusals, not implied future features:
 - In-session gaps on a realtime stream, and in a `Canonical` stream warmup
 - Source `calc_on_every_tick` / `calc_on_order_fills` enabled (the runner
   rejects an explicit true override, and the Pine host refuses a stream begin
-  with `calc_on_order_fills`, `pine_strategy_host.cpp:609-612`). This is a
+  with `calc_on_order_fills`, `pine_strategy_host.cpp:611-614`). This is a
   **source-route** refusal, not a limit on the native hooks: `on_native_tick`
   and `on_native_applied` are delivered on a stream, and a native host's own
   `NativeRunSpec::calculation` is accepted there, where `EveryModeledPoint`
