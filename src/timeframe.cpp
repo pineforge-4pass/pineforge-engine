@@ -1814,24 +1814,24 @@ AggregatedBar TimeframeAggregator::feed(const Bar& input_bar,
     return result;
 }
 
-AggregatedBar TimeframeAggregator::feed(const Bar& input_bar,
-                                        int64_t next_input_ms,
-                                        int64_t calling_close_ms,
-                                        const std::string& input_tf,
+AggregatedBar TimeframeAggregator::feed(const Bar& input_bar, int64_t next_input_ms,
+                                        int64_t calling_close_ms, const std::string& input_tf,
                                         const std::string& target_tf) {
     if (mode_ != Mode::CALENDAR || has_native_periods()) {
         return feed(input_bar, next_input_ms, calling_close_ms);
     }
     const auto input = native_calendar::parse_timeframe(input_tf);
     const auto target = native_calendar::parse_timeframe(target_tf);
-    const auto calendar = native_calendar::parse_session(anchor_session_, anchor_tz_);
-    if (!input || !target || !calendar || !target->is_calendar()) {
+    // One period from fixed-duration bars keeps the existing path and its last-traded-bar close.
+    if (!input || !target || !target->is_calendar()
+        || (input_seconds_ > 0 && target->count() == 1)) {
         return feed(input_bar, next_input_ms, calling_close_ms);
     }
+    const auto calendar = native_calendar::parse_session(anchor_session_, anchor_tz_);
+    if (!calendar) return feed(input_bar, next_input_ms, calling_close_ms);
     const int64_t instant = session_covered_instant_ms(
         input_bar.timestamp, anchor_tz_, anchor_session_);
-    const auto input_interval = native_calendar::interval_containing(
-        *calendar, *input, instant);
+    const auto input_interval = native_calendar::interval_containing(*calendar, *input, instant);
     const auto target_interval = native_calendar::interval_containing(
         *calendar, *target, *input, instant);
     if (!input_interval || !target_interval) {
