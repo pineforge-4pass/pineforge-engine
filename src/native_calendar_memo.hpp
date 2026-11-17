@@ -25,7 +25,12 @@
 //     "the last day resolved holds this instant": where the cycles do not
 //     tile (America/Sitka and America/Juneau in October 1867 under a
 //     "2330-2300" session, measured on macOS) that shortcut answers another
-//     session day than the memo-free lookup does;
+//     session day than the memo-free lookup does. A zoned calendar's lookup
+//     is short-cut in one case only, a cycle the zone CERTIFIES
+//     (cycle_certificate below): there the algorithm finds that cycle's day
+//     for every instant of it and no other, so once it has found it the memo
+//     answers a later instant of the cycle with that day and reads no local
+//     date for it;
 //   * an interval is a pure function of the calendar value, the instant and
 //     each timeframe's unit and count, so the last few answered are kept;
 //   * whether the calendar is valid, and whether its zone is UTC, is decided
