@@ -16,12 +16,43 @@
 #include <cmath>
 #include <numeric>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace pineforge {
 
 // --- KahanWindowSum (window_sum.hpp): ta.sma / math.sum arithmetic ---
-// TradingView's sliding-window sum (ta.sma, math.sum), fitted 2026-09-05 on
+// TradingView's sliding-window sum (ta.sma, math.sum) is the exact sum of the
+// sources in the window, rounded once. Nothing of a source that has left the
+// window stays in it: an all-zero window reads exactly 0 and a window of one
+// repeated value reads its exact multiple, whatever passed through before.
+// ta.sma divides that sum by `length`.
+//
+// Pinned 2026-11-17 on TradingView's own exact doubles (a capture
+// of a stochRSI strategy on OANDA:EURUSD 15 and OANDA:XAUUSD 15, k =
+// ta.sma(stoch, 3) and d = ta.sma(k, 3) on 23 bars): every k and every d is
+// the exact sum of its three sources, rounded once, divided by 3. Among them
+// d = 0 over k = 0, 0, 0 on the bar where the last non-zero k left the window,
+// and d = 100 over k = 100, 100, 100. A window re-added from zero, newest first
+// or oldest first, misses some of them by one unit in the last place, and a
+// running sum that keeps a rounding of what left the window misses most of
+// them. The pulse capture of
+// tests/test_ta_sma_window_residual.cpp says the same on synthetic series: its
+// all-zero windows read 0.
+//
+// How it is carried: sum_ is the exact sum rounded to nearest and comp_ is what
+// that rounding left out, so sum_ + comp_ is the exact sum (add_exact below
+// keeps it so with error-free additions). When the exact sum needs more than
+// two doubles the pair can not hold it; the window is then summed exactly from
+// its own sources (resum below) on every bar until two doubles suffice again.
+// Either way the emitted sum is a function of the window alone.
+//
+// The rule this replaces is kept below as the record of what TradingView read
+// in September 2026. TradingView's own values changed between the two
+// captures: its earlier trade lists of the two charts above follow the
+// September rule row for row, its lists of 2026-11-17 do not.
+//
+// The September rule (ta.sma, math.sum), fitted 2026-09-05 on
 // the round-7 synthetic pins (scratchpad r7/pins/sma-pulse-*, sma-ident-*:
 // OANDA:EURUSD 15, pulse series of known doubles, lengths 3 and 20, three
 // range starts; 14,194 pulse decisions and 31,140 identity checks reproduced
@@ -75,15 +106,32 @@ namespace pineforge {
 // resolves each tie by this arithmetic's residue and ta.crossover fires on its
 // exact sign. The previous exact-order window re-sum (round 6) kept every such
 // tie exact and could never fire; a plain running sum fires on the wrong
-// half. Any other arithmetic is a guess; this one is the pinned rule.
+// half. In the captures of 2026-11-17 those ties are exact and neither cross
+// fires on them.
 //
-// Reference (Python, r7/sma/sma-model.py):
+// Reference of the September rule (Python):
 //   c_pre = c
 //   if t >= n: y = -y[t-n] - c; T = S + y; c = (T - S) - y; S = T
 //   y = x - c; T = S + y; c = (T - S) - y; S = T; store y
 //   if c_pre != 0 and |fl(x + |c_pre|) - x| < |c_pre|:
 //       S = (x + x[1]) + ... + x[n-1]; c = 0; store x instead of y
 //   sma = S / n
+//
+// Reference of the rule in force (Python):
+//   sma = math.fsum(x[t-n+1 .. t]) / n
+
+namespace {
+
+// a + b == s + e exactly, for finite a and b whose sum does not overflow
+// (Knuth's two-sum; it needs no ordering of the magnitudes).
+inline void two_sum(double a, double b, double& s, double& e) {
+    s = a + b;
+    const double b_seen = s - a;
+    const double a_seen = s - b_seen;
+    e = (a - a_seen) + (b - b_seen);
+}
+
+}  // namespace
 
 KahanWindowSum::KahanWindowSum(int length)
     : length_(length), count_(0), sum_(0.0), comp_(0.0),
@@ -105,49 +153,94 @@ void KahanWindowSum::ensure_room() {
     head_ = 0;
 }
 
-void KahanWindowSum::kahan_add(double v) {
-    double y = v - comp_;
-    double t = sum_ + y;
-    comp_ = (t - sum_) - y;
-    sum_ = t;
+// Adds v (a source entering, or minus a source leaving) to the carried pair,
+// keeping sum_ + comp_ the exact sum and sum_ its rounding. Returns false, and
+// leaves the pair as it was, when the new sum does not fit two doubles or is
+// not finite.
+bool KahanWindowSum::add_exact(double v) {
+    double t;
+    double e;
+    two_sum(sum_, v, t, e);             // sum_ + v == t + e
+    if (!std::isfinite(t)) return false;
+    double low;
+    double lost;
+    two_sum(comp_, e, low, lost);       // comp_ + e == low + lost
+    if (lost != 0.0) return false;
+    two_sum(t, low, sum_, comp_);       // t + low == sum_ + comp_
+    return true;
 }
 
-// The source enters the sum (its evicted predecessor already left), then the
-// swallowed-compensation re-sum. `comp_before` is c as the bar found it --
-// the rule reads the compensation carried INTO the bar, not the one left by
-// the eviction (pinned: the block-63 re-sum happens although the eviction of
-// a zero addend had just folded c to 0).
-void KahanWindowSum::enter(double src, double comp_before) {
-    double y = src - comp_;
-    double t = sum_ + y;
-    comp_ = (t - sum_) - y;
-    sum_ = t;
-    head_ = head_ ? head_ - 1 : window_.size() - 1;
-    window_[head_] = {src, y};
-    ++size_;
-    if (comp_before != 0.0) {
-        // Round-10 pin (family W, stage 2): the re-sum fires whenever the
-        // MAGNITUDE of the carried compensation, ADDED to the incoming source,
-        // is under-applied -- fl(src + |c|) landed closer to src than the exact
-        // src + |c| would have (fully swallowed, the round-7 case; rounded
-        // toward src, the round-9 case; or, on residue-only sources, the
-        // rounding of src + |c| that the src - c form does not see). An exact
-        // add, or one that rounds away from src, continues. Note the sign:
-        // TradingView tests |c| added to src, whatever the sign of c, while the
-        // arithmetic itself subtracts c -- the two agree except when src - c
-        // and src + |c| round differently (residue-only sources, sources within
-        // |c| of a power of two, negative sources).
-        const double z = src + std::fabs(comp_before);
-        if (std::fabs(z - src) < std::fabs(comp_before)) {
-            double total = 0.0;
-            for (std::size_t i = 0; i < size_; ++i) {   // newest first
-                total += window_[index(i)].value;
-            }
-            sum_ = total;
-            comp_ = 0.0;
-            window_[head_].addend = src; // the re-summed bar stores its raw source
+// The exact sum of the window's sources, rounded once, from the sources
+// themselves (Shewchuk's expansion sum, the algorithm of Python's math.fsum).
+// The partial sums are non-overlapping doubles, smallest first; there is at
+// most one per source, so they live in the ring's spare slots. Returns true
+// when the sum fits sum_ + comp_ exactly.
+bool KahanWindowSum::resum() {
+    std::size_t parts = 0;
+    bool finite = true;
+    for (std::size_t i = 0; i < size_ && finite; ++i) {
+        double x = window_[index(i)].value;
+        std::size_t kept = 0;
+        for (std::size_t j = 0; j < parts; ++j) {
+            double y = window_[index(j)].addend;
+            if (std::fabs(x) < std::fabs(y)) std::swap(x, y);
+            const double high = x + y;
+            const double low = y - (high - x);  // exact: |x| >= |y|
+            if (low != 0.0) window_[index(kept++)].addend = low;
+            x = high;
+        }
+        window_[index(kept++)].addend = x;
+        parts = kept;
+        finite = std::isfinite(x);
+    }
+    if (!finite) {
+        // An infinite source, or a sum beyond the largest double: there is
+        // no rounding to carry, and the sum is what IEEE addition gives.
+        double total = 0.0;
+        for (std::size_t i = 0; i < size_; ++i) {   // newest first
+            total += window_[index(i)].value;
+        }
+        sum_ = total;
+        comp_ = 0.0;
+        return false;
+    }
+    double high = 0.0;
+    double low = 0.0;
+    std::size_t rest = parts;
+    if (rest > 0) {
+        high = window_[index(--rest)].addend;
+        while (rest > 0) {
+            const double x = high;
+            const double y = window_[index(--rest)].addend;
+            high = x + y;
+            low = y - (high - x);
+            if (low != 0.0) break;
+        }
+        // Exactly halfway between two doubles, the partial sums still below
+        // decide the direction (round half to even otherwise).
+        if (rest > 0 && ((low < 0.0 && window_[index(rest - 1)].addend < 0.0)
+                         || (low > 0.0 && window_[index(rest - 1)].addend > 0.0))) {
+            const double twice = low * 2.0;
+            const double up = high + twice;
+            if (twice == up - high) high = up;
         }
     }
+    sum_ = high;
+    comp_ = low;
+    return rest == 0;
+}
+
+// The source takes the front slot of the ring (its evicted predecessor has
+// already left) and joins the sum. `carried` says the pair still holds the
+// exact sum of the other sources; if it does not, or the source does not fit,
+// the window is summed from its sources, and comp_ is na while two doubles do
+// not hold that sum.
+void KahanWindowSum::enter(double src, bool carried) {
+    head_ = head_ ? head_ - 1 : window_.size() - 1;
+    window_[head_] = {src, src};
+    ++size_;
+    if (carried && add_exact(src)) return;
+    if (!resum()) comp_ = na<double>();
 }
 
 double KahanWindowSum::push(double src) {
@@ -158,20 +251,20 @@ double KahanWindowSum::push(double src) {
     saved_comp_ = comp_;
     saved_count_ = count_;
     saved_pushed_ = true;
-    const double comp_before = comp_;
+    bool carried = !is_na(comp_);
     if (count_ >= length_) {
-        // The window is full: the oldest compensated addend leaves before the
-        // new source enters (sub-then-add order, pinned).
+        // The window is full: the oldest source leaves, as the double it
+        // entered as, before the new source enters.
         const auto& evicted = window_[index(size_ - 1)];
         saved_evicted_value_ = evicted.value;
         saved_evicted_addend_ = evicted.addend;
         --size_;
-        kahan_add(-saved_evicted_addend_);
+        carried = carried && add_exact(-saved_evicted_value_);
     } else {
         saved_evicted_value_ = na<double>();
         saved_evicted_addend_ = na<double>();
     }
-    enter(src, comp_before);
+    enter(src, carried);
     count_++;
     return sum_;
 }
@@ -183,7 +276,9 @@ void KahanWindowSum::note_no_push() {
 void KahanWindowSum::unpush() {
     if (!saved_pushed_) return;
     pop_front();
-    if (!is_na(saved_evicted_addend_)) {
+    // A source is never na, so the saved source says whether the bar evicted
+    // one (the spare slot beside it may hold anything).
+    if (!is_na(saved_evicted_value_)) {
         window_[index(size_)] = {saved_evicted_value_, saved_evicted_addend_};
         ++size_;
     }
@@ -197,18 +292,18 @@ double KahanWindowSum::repush(double src) {
     if (!saved_pushed_) {
         return push(src);
     }
-    // Rewind to the pre-bar (S, c) and replay the bar with the new source
-    // against the same evicted addend; the ring fronts are overwritten in
+    // Rewind to the pre-bar pair and replay the bar with the new source
+    // against the same evicted source; the ring fronts are overwritten in
     // place so the window shape is untouched.
     pop_front();
     sum_ = saved_sum_;
     comp_ = saved_comp_;
     count_ = saved_count_;
-    const double comp_before = comp_;
-    if (!is_na(saved_evicted_addend_)) {
-        kahan_add(-saved_evicted_addend_);
+    bool carried = !is_na(comp_);
+    if (!is_na(saved_evicted_value_)) {
+        carried = carried && add_exact(-saved_evicted_value_);
     }
-    enter(src, comp_before);
+    enter(src, carried);
     count_++;
     return sum_;
 }
@@ -299,6 +394,28 @@ double SMA::compute(double src) {
 
 // --- EMA ---
 
+namespace {
+
+// One step of ta.ema's recursion, shared by both seedings:
+//     ema := ema[1] + alpha * (src - ema[1])
+// in plain double arithmetic. The algebraically equal
+//     alpha * src + (1 - alpha) * ema[1]
+// is a different double on many bars, one unit in the last place away, and
+// the difference stays in the series.
+//
+// Pinned 2026-11-17 on TradingView's own exact doubles (a capture
+// on OANDA:EURUSD 15 and OANDA:XAUUSD 15 of macd = ta.ema(close, 12) -
+// ta.ema(close, 26) and signal = ta.ema(macd, 9)): this form gives the logged
+// signal from the logged previous signal and macd on all 20 single steps, and
+// macd and signal on every logged bar from the start of the series. The other
+// form misses 8 of the 20 steps; the same step with the product fused into the
+// addition misses one.
+inline double ema_step(double alpha, double src, double previous) {
+    return previous + alpha * (src - previous);
+}
+
+}  // namespace
+
 EMA::EMA(int length)
     : output_val(na<double>()), alpha(2.0 / (length + 1)), sum(0.0),
       bar_count(0), length_(length),
@@ -356,13 +473,13 @@ double EMA::compute(double src, bool input_ready) {
             output_val = sum / static_cast<double>(length_);
             return output_val;
         }
-        output_val = alpha * src + (1.0 - alpha) * output_val;
+        output_val = ema_step(alpha, src, output_val);
         bar_count++;
         return output_val;
     }
 
     // EmaSeeding::FirstValue (the default):
-    //   ema := na(ema[1]) ? src : alpha * src + (1 - alpha) * ema[1]
+    //   ema := na(ema[1]) ? src : ema[1] + alpha * (src - ema[1])
     // Seed from the first finite source value, so the output is never na.
     if (is_na(output_val)) {
         output_val = src;
@@ -371,7 +488,7 @@ double EMA::compute(double src, bool input_ready) {
         return output_val;
     }
 
-    output_val = alpha * src + (1.0 - alpha) * output_val;
+    output_val = ema_step(alpha, src, output_val);
     bar_count++;
     return output_val;
 }
