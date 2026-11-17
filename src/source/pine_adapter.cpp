@@ -797,10 +797,10 @@ std::optional<double> decimal_floor_lot(double units, double grid) noexcept {
 // trades 3124, 1562 + 1562 after a 50% leg; literal 3124.9999995 trades 3124,
 // 3125.0000000000005 trades 3125; tests/fixtures/explicit_qty_floor). Only that
 // snap changes: an on-grid request, a floor below the request and a non-decimal
-// grid keep the grid floor's result. close(), exit(), and explicit
-// strategy.order() quantities floor their executable units with it; source
-// quantities remain verbatim. TradingView tapes cover close, while the
-// strategy.order boundary is a native control rather than a TV measurement.
+// grid keep the grid floor's result. close(), exit(), and explicit strategy.order() quantities floor their
+// executable units with it; source quantities remain verbatim. TradingView tapes cover close; the strategy.order
+// boundary is a native control, not a TV measurement. order() spares a request for exactly the opposite book's held
+// total, on the grid but for binary64 residue: TradingView closes it whole (tests/fixtures/margin_residual w5b-pc-seen-size).
 double explicit_entry_quantity_floor(double units, const std::optional<double>& grid) noexcept {
     const double floored = floor_quantity_grid(units, grid);
     if (!detail::script_rule_switches().explicit_qty_decimal_floor || floored != units
@@ -16142,10 +16142,10 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
         ? native_order::OrderIntent{native_order::HostSized{native_order::HostSizedKind::Open,
             is_long ? native_order::Side::Long : native_order::Side::Short}}
         : native_order::OrderIntent{native_order::Transact{is_long ? normalized_qty : -normalized_qty}};
-    // The epsilon floor can return an off-grid literal just below a lot boundary.
-    // Apply the entry floor to executable RAW units; retain qty in the source snapshot.
+    // Apply the entry floor to executable RAW units, sparing the opposite book's own held total; retain qty in the snapshot.
     if (auto* transact = std::get_if<native_order::Transact>(&request.intent)) {
-        const double units = explicit_entry_quantity_floor(std::abs(qty), staged_.quantity_grid);
+        double units = explicit_entry_quantity_floor(std::abs(qty), staged_.quantity_grid);
+        if (units != normalized_qty && std::abs(qty) == (is_long ? -1.0 : 1.0) * detail::run_position(require_host()).signed_units) units = normalized_qty;
         *transact = native_order::Transact{is_long ? units : -units};
     }
     request.label = id;
