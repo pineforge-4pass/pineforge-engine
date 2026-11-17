@@ -11960,20 +11960,18 @@ void PineExecutionAdapter::rearm_id_bound_exits(const SourceId& entry_id) {
 }
 
 // A strategy.exit that names a quantity is one order for each opening of its
-// entry id (exit_with_reservation_sequence), and an opening that fills while
-// the exit stands gets its order then, whether or not the script calls the
-// exit again: at the levels and quantity the exit was last placed with.
-// TradingView, BINANCE:BTCUSDT 15, pyramiding 2, first in first out: "L"
-// opens 2 units, a qty-1 limit exit of "L" is called once and fills 1, and
-// "L" opens 2 more. With no further call the exit fills 1 again at its limit,
-// nine bars after the second opening, from the older lot. With another exit
-// id called for both openings instead, that id fills 1 and 1 and the first
-// exit still fills 1 at its limit afterwards. Called again after the second
-// opening at another level, the first exit fills 1 there and nothing at its
-// old limit: the call replaced the second opening's order, and the first
-// opening's had filled. The same rule on the add's own bar is the same-id
-// cover tape (tests/fixtures/ki62_same_id_cover, t3): one exit call, a later
-// add of the id, and the exit fills once for each.
+// entry id (exit_with_reservation_sequence). An opening that fills after the
+// exit's order has filled on every opening before it gets its order then,
+// whether or not the script calls the exit again, at the levels and quantity
+// the exit was last placed with. TradingView, BINANCE:BTCUSDT 15, pyramiding
+// 2, first in first out: "L" opens 2 units, a qty-1 limit exit of "L" is
+// called once and fills 1, and "L" opens 2 more. With no further call the
+// exit fills 1 again at its limit, nine bars after the second opening, from
+// the older lot. With another exit id called for both openings instead, that
+// id fills 1 and 1 and the first exit still fills 1 at its limit afterwards.
+// Called again after the second opening at another level, the first exit
+// fills 1 there and nothing at its old limit: the call replaced the second
+// opening's order, and the first opening's had filled.
 //
 // The exit stands for the id while a leg of it is still a member of its
 // bracket and is bound to an opening the id holds: a bracket cancellation, a
@@ -11983,17 +11981,19 @@ void PineExecutionAdapter::rearm_id_bound_exits(const SourceId& entry_id) {
 // compaction keeps (sweep_retired_rows, K1: an unwithdrawn, non-dormant
 // lifecycle bound to an opened origin), and an erased row is no member.
 //
-// That definition is the one the script last named in two cases, the two the
-// captures hold. A leg of the exit is still working: every call re-issues it.
-// Or none is, and the script has not called the exit since. Where it has, the
-// call placed no order -- each opening's order of the exit had filled -- and
-// its levels were kept nowhere. No capture says which levels a later
-// opening's order takes then, so that opening gets its order at the script's
-// next call, as before.
+// The order is placed in the captured case only: no leg of the exit works,
+// and the script has not called the exit since its last order (such a call
+// places nothing and keeps its levels nowhere; that opening gets its order
+// at the script's next call, as before). An exit still working when the
+// opening fills places nothing here either: its one capture is the same-id
+// cover tape, where it fills for the add on the bar the add opens, the
+// cover's fill (on_applied). Whether the add keeps an order after that bar
+// is not captured; the engine's long-standing answer is that it does not,
+// and an exit called before a second entry of its id stays the first lot's
+// (tests/test_k1_closed_origin_margin_revival.cpp).
 //
-// Also left as they were, for want of a capture: the any-entry close rule
-// and calc_on_order_fills, an exit whose last order names a tick distance or
-// a trail, and a quantity below one lot step.
+// Also left as they were, for want of a capture: the any-entry close rule,
+// calc_on_order_fills, tick-distance or trailing levels, a sub-step quantity.
 void PineExecutionAdapter::arm_standing_exits_for_opening(
         const PlacementSnapshot& opening, const native_order::ExecutionAppliedEvent& event) {
     if (config_.close_entries_rule_any || config_.calc_on_order_fills || coof_recalc_active_
@@ -12032,12 +12032,12 @@ void PineExecutionAdapter::arm_standing_exits_for_opening(
         double qty = kNaN;
         std::string comment;
         std::string oca_name;
-        // A leg of the exit is on the book: every call re-issues it, so its
-        // levels are the ones the script last named.
+        // A leg of the exit is on the book: the exit is still the order of the
+        // openings it was called for, and gives this one none.
         bool working = false;
-        // No leg works, and a command was issued since the exit's last order
-        // that may be a call of the exit naming other levels.
-        bool followed = false;
+        // No order is placed: a leg works, or a command was issued since the
+        // exit's last order that may be a call of it naming other levels.
+        bool withheld = false;
     };
     std::vector<Definition> definitions;
     // Read through the const table: this scan changes nothing a pending-order
@@ -12074,7 +12074,7 @@ void PineExecutionAdapter::arm_standing_exits_for_opening(
     // Decided for all of them before the first order below takes a number.
     const std::uint64_t issued = source_command_sequence_;
     for (auto& definition : definitions) {
-        if (definition.working) continue;
+        if (definition.working) { definition.withheld = true; continue; }
         std::uint64_t accounted = 0;
         const auto since = [&](std::uint64_t command) {
             return command > definition.command && command <= issued;
@@ -12082,7 +12082,7 @@ void PineExecutionAdapter::arm_standing_exits_for_opening(
         if (since(opening.command_sequence)) ++accounted;
         for (const auto& other : definitions)
             if (since(other.command)) ++accounted;
-        definition.followed = issued - definition.command != accounted;
+        definition.withheld = issued - definition.command != accounted;
     }
     // In the order the script last placed them.
     std::sort(definitions.begin(), definitions.end(),
@@ -12118,7 +12118,7 @@ void PineExecutionAdapter::arm_standing_exits_for_opening(
             && std::isnan(levels.profit_ticks) && std::isnan(levels.loss_ticks)
             && std::isnan(levels.trail_points) && std::isnan(levels.trail_price)
             && std::isnan(levels.trail_offset);
-        if (!absolute || definition.followed || has_order(definition.exit_id)) continue;
+        if (!absolute || definition.withheld || has_order(definition.exit_id)) continue;
         if (staged_.quantity_grid
             && !(explicit_entry_quantity_floor(definition.qty, staged_.quantity_grid) > 0.0)) {
             continue;
@@ -28059,10 +28059,10 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     // pyramiding 2, first in first out). The cover is that order for an add
     // the script did not call the exit for: one exit call, a later add of
     // the same id, and the exit fills once for each
-    // (tests/fixtures/ki62_same_id_cover, t3). Where the add was given that
-    // order when it filled (arm_standing_exits_for_opening), the cover has
-    // nothing left to stand for; it remains for the adds that function
-    // leaves without one.
+    // (tests/fixtures/ki62_same_id_cover, t3). It is the only order such an
+    // add gets of an exit that is still working: the add's fill itself places
+    // one only where no leg of the exit works any more
+    // (arm_standing_exits_for_opening).
     //
     // An add that has that order already -- working, waiting for the add's
     // fill, or filled -- is not covered as well, whether the script's call or

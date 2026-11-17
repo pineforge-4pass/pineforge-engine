@@ -13,9 +13,9 @@
 //   id, each for that quantity. Whichever of those orders fills takes its
 //   units from the oldest lots, first in first out. Each opening's order
 //   fills at most once, fully or in part: an opening whose order has filled
-//   gets none. An opening that fills later gets an order of its own, at the
-//   level and quantity the exit was last placed with, whether or not the
-//   script calls the exit again.
+//   gets none. An opening that fills once the exit has filled on every one
+//   before it gets an order of its own, at the exit's last level and
+//   quantity, whether or not the script calls the exit again.
 //
 // Rows and where their expectations come from. Each captured row is the
 // TradingView capture's order sequence replayed at this file's own prices;
