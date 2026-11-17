@@ -4513,15 +4513,20 @@ void PineExecutionAdapter::sweep_retired_rows(const NativeDecisionContext& conte
     }
     // Every family settles the members whose rows would be gone (or are gone),
     // and keeps a consumed-leg fact only while its origin is live or opened.
-    for (auto& family : bracket_families_) {
+    // A family that nothing but its fill facts kept ends with the last of
+    // them; it has no prefix to archive.
+    for (auto family = bracket_families_.begin(); family != bracket_families_.end();) {
         ++work.family_visits; PINEFORGE_TAIL_WORK("settle_families", 1);
-        family.second.settle([&](std::uint64_t incarnation) {
+        family->second.settle([&](std::uint64_t incarnation) {
             return retain_rows ? contains(doomed, incarnation)
                                : !placement_.contains(incarnation);
         });
-        family.second.prune_consumed([&](std::uint64_t origin) {
+        const bool kept_by_fill_facts = family->second.size() == 0 && !family->second.empty();
+        family->second.prune_consumed([&](std::uint64_t origin) {
             return contains(askable_origins, origin);
         });
+        if (kept_by_fill_facts && family->second.empty()) family = bracket_families_.erase(family);
+        else ++family;
     }
     // The existing every-row-retained reference also keeps family records
     // in their old table; normal runs archive only immutable prefixes.
@@ -5918,11 +5923,14 @@ bool PineExecutionAdapter::compute_exit_reservation(
     for (const auto& pending : pending_bracket_legs_) observe(pending.snapshot);
     for (const auto& pending : pending_coof_requests_) observe(pending.snapshot);
     for (const auto& delayed : delayed_market_orders_) observe(delayed.snapshot);
-    // An unresolved level still owns a share in the source queue, and a place
-    // when a slot was reserved for it. Its definition survives the transient
-    // shadow projection until the parent's fill supplies the level.
+    // An unresolved level owns a place and a share in the source queue only
+    // when a slot was reserved for its definition, which survives the
+    // transient shadow projection until the parent's fill supplies the level.
+    // Without a slot it has no place, so it holds nothing ahead of the exits
+    // that do: they reserve as they always have.
     for (const auto& pending : pending_relative_exits_) {
-        if (pending.from_entry != from_entry || pending.void_global) continue;
+        if (pending.from_entry != from_entry || pending.void_global
+            || pending.reservation_sequence == 0) continue;
         const auto family = key_for(pending.exit_id, pending.from_entry);
         if (std::any_of(reservations.begin(), reservations.end(),
                 [&](const Reservation& row) { return row.family == family; })) continue;
@@ -12270,8 +12278,8 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         // The definition takes no source sequence of its own: declaring it
         // submits nothing, so the sequences of every later request stay where
         // they were. Its legs queue where they are submitted once the parent's
-        // fill resolves them; until then compute_exit_reservation holds its
-        // share. A slot the caller hands in is kept; no caller reserves one.
+        // fill resolves them. Only a slot the caller hands in gives it a share
+        // before that (compute_exit_reservation); no caller reserves one.
         if (existing == pending_relative_exits_.end()) {
             pending.reservation_sequence = reservation_sequence;
             pending_relative_exits_.push_back(std::move(pending));
@@ -26108,15 +26116,20 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     const int next_sign = live_position > 0.0 ? 1 : (live_position < 0.0 ? -1 : 0);
     const bool flipped_position = current_position_sign_ != 0 && next_sign != 0
         && current_position_sign_ != next_sign;
-    if (next_sign == 0 || flipped_position) {
-        // No opening of the ended physical side remains askable. Drop its
-        // facts before testing emptiness; fact-only families can now expire.
+    // The opening lifetime boundary: no opening of an ended physical side
+    // remains askable, so no fill's fact outlives it, and a family that held
+    // nothing else expires with it. A member's fact is not touched here: it
+    // stays until the retired-row sweep prunes it (sweep_retired_rows) or its
+    // family ends, exactly as long as it always has. A run that never
+    // recorded a fill's fact is left as it was.
+    const auto expire_fill_facts = [&] {
         for (auto family = bracket_families_.begin(); family != bracket_families_.end();) {
-            family->second.prune_consumed([](std::uint64_t) { return false; });
-            if (family->second.empty()) family = bracket_families_.erase(family);
+            if (family->second.drop_fill_facts() && family->second.empty())
+                family = bracket_families_.erase(family);
             else ++family;
         }
-    }
+    };
+    if (next_sign == 0 || flipped_position) expire_fill_facts();
     if (flipped_position && event.closed_units > 0.0) {
         // A reversal retires the complete prior physical side before opening
         // the new one.  The generic settlement event owns that fact; mirror
@@ -26223,8 +26236,8 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                                                  placement_snapshot->from_entry));
             for (const auto kind : {PineOrderFamily::ExitLimit, PineOrderFamily::ExitStop,
                                     PineOrderFamily::ExitTrail}) {
-                family.record_consumed(static_cast<std::uint8_t>(kind),
-                                       placement_snapshot->bracket_origin.incarnation);
+                family.record_filled(static_cast<std::uint8_t>(kind),
+                                     placement_snapshot->bracket_origin.incarnation);
             }
         }
         // ab9714be pine_fills.cpp:7012-7024: other pending orders with this
@@ -27160,11 +27173,8 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 retire(handle);
             }
         }
-        for (auto family = bracket_families_.begin(); family != bracket_families_.end();) {
-            family->second.prune_consumed([](std::uint64_t) { return false; });
-            if (family->second.empty()) family = bracket_families_.erase(family);
-            else ++family;
-        }
+        // A fill recorded while the book was being flattened ends here too.
+        expire_fill_facts();
         bracket_shadowed_openings_.clear();
     }
     if (short_seed_.final_short.incarnation != 0 && event.handle() == short_seed_.final_short
