@@ -2364,7 +2364,7 @@ constexpr std::uint64_t kBrackets_rows[] = {
     16649306735338446826ull, 18297589187638540252ull, 6690212992405822374ull,
     8179979604645926027ull, 5366028569749808206ull, 13168983067587736034ull,
     16964756600669310429ull, 856317744567227442ull, 17525938983930777302ull,
-    3064668732520243069ull, 15422765227706601975ull, 712427412887967223ull,
+    3064668732520243069ull, 15028416115671528602ull, 2771508012501267296ull,
 };
 // expectation corrected (kBrackets_reads, 120 of 120 values), because v19's broker-state hash folds the closed rows as their count and a running digest, each row once when it is final (pineforge-broker-state/v19); this host projects one fixed execution hash, so the continuation does not enter; the trades did not move; re-harvested the same way on the closed-row hashing integration tree; the closed-row hashing commit (6211dc94) gives the same rows:
 //   15220523432559179916ull -> 1676626113542829169ull
@@ -3112,7 +3112,7 @@ constexpr std::uint64_t kBrackets_reads[] = {
     8314108140111730068ull, 201209117861690855ull, 6321417652123279178ull,
     2880959836681083151ull, 17981263528270620627ull, 6277248207902692284ull,
     3867625531669852394ull, 15414507773754214014ull, 11154980644026992871ull,
-    9812612665649105410ull, 5552419586807431080ull, 631000159779047613ull,
+    9812612665649105410ull, 6751994882865176856ull, 8932925976610699942ull,
 };
 // expectation corrected: kBrackets_final 9769255577571703860ull -> 10619878969101331239ull, because v19's broker-state hash folds the closed rows as their count and a running digest, each row once when it is final (pineforge-broker-state/v19); this host projects one fixed execution hash, so the continuation does not enter; the trades did not move; re-harvested the same way on the closed-row hashing integration tree; the closed-row hashing commit (6211dc94) gives the same rows.
 // expectation corrected (v19-E): kBrackets_final 10619878969101331239ull -> 14337296651809392799ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
@@ -3120,7 +3120,7 @@ constexpr std::uint64_t kBrackets_reads[] = {
 // expectation corrected (adapter hash cleanup): kBrackets_final 3288451699475749751ull -> 12419458164604031287ull, because adapter hash cleanup moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and the kernel lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; the trades did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the corrected tree.
 // expectation corrected (integrated source rules v19 hash correction): kBrackets_final 12419458164604031287ull -> 6645823410963443848ull [source hash cleanup], because the integrated tree's picks move v19 hash values inside the unreleased epoch: source hash cleanup's hash step (the Pine host's excursion model leaves the source-layer fold; a FIFO exit reserves its own entry's quantity), the current execution order correction's new transient coof_fill_forced_ fold and the post-fill margin correction's post-fill margin waypoint and cash-fee sizing's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since the pending-entry timestamp correction (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the trades did not move.
 // expectation corrected (scope-allocation hash correction, kBrackets_final, 1 of 1 values): 15409123552216418568ull -> 712427412887967223ull, because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_P7_HARVEST mode on 2cf32840b8, with private fixtures overlaid, using this test's harvest output.
-constexpr std::uint64_t kBrackets_final = 712427412887967223ull;
+constexpr std::uint64_t kBrackets_final = 2771508012501267296ull;
 constexpr Trade kBrackets_trades[] = {
     {1736121900000LL, 1736121960000LL, 105.5, 108.25, 1, 0},
     {1736121900000LL, 1736122860000LL, 105.5, 118.5, 1, 0},
@@ -3135,7 +3135,7 @@ constexpr Trade kBrackets_trades[] = {
     {1736127300000LL, 1736127420000LL, 104.5, 108, 1, 0},
     {1736127300000LL, 1736128140000LL, 104.5, 114.5, 1, 0},
     {1736128380000LL, 1736128440000LL, 118, 120.25, 1, 0},
-    {1736128380000LL, 1736128740000LL, 118, 116, 1, 0},
+    {1736128380000LL, 1736128740000LL, 118, 116.5, 1, 1},
 };
 // expectation corrected (kChains_rows, 160 of 160 values), because v19's broker-state hash folds the closed rows as their count and a running digest, each row once when it is final (pineforge-broker-state/v19); this host projects one fixed execution hash, so the continuation does not enter; the trades did not move; re-harvested the same way on the closed-row hashing integration tree; the closed-row hashing commit (6211dc94) gives the same rows:
 //   6597847061992688946ull -> 9511299810286316393ull
@@ -5939,7 +5939,7 @@ constexpr Trade kMargin_trades[] = {
 // expectation corrected: accepted C1 merged-source cells, 237 values, generated on 6cd8809902cc1573722575774e5fe1f07eed50f8
 // Tool: this TU PINEFORGE_P7_HARVEST; no generated value was entered by hand.
 // Qualified KALL/cancel chain: verdictfc1a0283 checks5c57cea0 decoded8be49a6b.
-// Brackets rows/reads118..119, final and trade13 KEEP MAIN: PENDING-TV stop cell; not a forced PASS.
+// Earlier partial regeneration held Brackets stop/final pins; qualified stop-cross correction below supersedes that hold.
 // Live-state header unchanged; no unclassified digest is adopted.
 // kFlip_rows[35]: 9300031514340647285ull -> 12038229932377985325ull
 // kFlip_rows[36]: 3408857892897765953ull -> 6999659537079237437ull
@@ -6178,3 +6178,12 @@ constexpr Trade kMargin_trades[] = {
 // kBrackets_reads[116]: 5180766469926300250ull -> 11154980644026992871ull
 // kBrackets_reads[117]: 13668804493142696619ull -> 9812612665649105410ull
 // kBrackets_trades[1]: {1736121900000LL, 1736122740000LL, 105.5, 115.5, 1, 0} -> {1736121900000LL, 1736122860000LL, 105.5, 118.5, 1, 0}
+
+// expectation corrected: stop-cross candidate pins, because an own-filled exit does not close the residual through its stop after the cancel chain.
+// Original P7 generator on f5642a42f2d39d43a2280dbf20b011ac5bc1f291; qualified answers97f73bd0 checksbef08e71 decodedce891a82.
+// kBrackets_rows[118]: 15422765227706601975ull -> 15028416115671528602ull
+// kBrackets_rows[119]: 712427412887967223ull -> 2771508012501267296ull
+// kBrackets_reads[118]: 5552419586807431080ull -> 6751994882865176856ull
+// kBrackets_reads[119]: 631000159779047613ull -> 8932925976610699942ull
+// kBrackets_final: 712427412887967223ull -> 2771508012501267296ull
+// kBrackets_trades[13]: {1736128380000LL, 1736128740000LL, 118, 116, 1, 0} -> {1736128380000LL, 1736128740000LL, 118, 116.5, 1, 1}
