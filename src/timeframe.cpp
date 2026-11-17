@@ -1813,7 +1813,7 @@ AggregatedBar TimeframeAggregator::feed(const Bar& input_bar,
     result.sub_bar_count = 1;
     return result;
 }
-
+namespace native_calendar { inline namespace native_calendar_v2 { const SessionCalendar* kept_calendar(std::string_view, std::string_view); } }
 AggregatedBar TimeframeAggregator::feed(const Bar& input_bar, int64_t next_input_ms,
                                         int64_t calling_close_ms, const std::string& input_tf,
                                         const std::string& target_tf) {
@@ -1827,7 +1827,7 @@ AggregatedBar TimeframeAggregator::feed(const Bar& input_bar, int64_t next_input
         || (input_seconds_ > 0 && target->count() == 1)) {
         return feed(input_bar, next_input_ms, calling_close_ms);
     }
-    const auto calendar = native_calendar::parse_session(anchor_session_, anchor_tz_);
+    const auto* calendar = native_calendar::kept_calendar(anchor_session_, anchor_tz_);
     if (!calendar) return feed(input_bar, next_input_ms, calling_close_ms);
     const int64_t instant = session_covered_instant_ms(
         input_bar.timestamp, anchor_tz_, anchor_session_);
