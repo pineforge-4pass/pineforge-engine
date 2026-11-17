@@ -638,13 +638,13 @@ if(PINEFORGE_BUILD_TESTS)
         test_native_live_report_interval_ratio_recovery PROPERTIES TIMEOUT 0)
     add_test(NAME test_native_live_report_memory COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> memory)
-    if(CMAKE_BUILD_TYPE STREQUAL "Debug"
-       AND NOT PINEFORGE_LIVE_TSAN AND NOT PINEFORGE_ENABLE_SANITIZERS)
-        target_compile_definitions(test_native_live_report_cli PRIVATE
-            PINEFORGE_REPORT_MEMORY_DEBUG_BUDGET=1)
+    # The sanitizer and Debug builds run two sizes (PINEFORGE_REPORT_MEMORY_SIZES in the
+    # test); the other builds run its default three. LABELS memory-flat selects the row.
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR PINEFORGE_LIVE_TSAN OR PINEFORGE_ENABLE_SANITIZERS)
+        set_property(TEST test_native_live_report_memory PROPERTY ENVIRONMENT "PINEFORGE_REPORT_MEMORY_SIZES=1000,10000")
     endif()
     set_tests_properties(test_native_live_report_memory PROPERTIES
-        TIMEOUT 0 SKIP_RETURN_CODE 77)
+        TIMEOUT 0 SKIP_RETURN_CODE 77 LABELS memory-flat)
     add_executable(test_native_live_report_curve_staging_work
         ${PROJECT_SOURCE_DIR}/tests/test_native_live_report_curve_staging_work.cpp)
     target_include_directories(test_native_live_report_curve_staging_work PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

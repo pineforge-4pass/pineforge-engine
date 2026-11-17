@@ -1180,10 +1180,36 @@ void ratio_body_replay(Fixture& fixture) {
     }
 }
 
+// The input counts of the memory row, strictly ascending. The default proves
+// flat resident growth over 1000, 10000 and 100000 inputs; the environment
+// variable PINEFORGE_REPORT_MEMORY_SIZES ("1000,10000") replaces the list for
+// the builds that cannot afford the largest size (the sanitizers).
+std::vector<std::uint64_t> memory_sizes() {
+    const char* text = std::getenv("PINEFORGE_REPORT_MEMORY_SIZES");
+    if (!text || !*text) return {1000, 10000, 100000};
+    const std::string list(text);
+    std::vector<std::uint64_t> sizes;
+    std::size_t start = 0;
+    for (;;) {
+        const auto end = list.find(',', start);
+        const auto item = list.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        require(!item.empty() && item.size() < 19 && item.find_first_not_of("0123456789") == std::string::npos,
+                "PINEFORGE_REPORT_MEMORY_SIZES must be a comma-separated list of positive integers");
+        const auto value = std::stoull(item);
+        require(value > 0 && (sizes.empty() || value > sizes.back()),
+                "PINEFORGE_REPORT_MEMORY_SIZES must be strictly ascending positive integers");
+        sizes.push_back(value);
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    require(sizes.size() >= 2, "PINEFORGE_REPORT_MEMORY_SIZES needs at least two sizes");
+    return sizes;
+}
+
 void report_memory(Fixture& fixture) {
     std::uint64_t previous_n = 0, previous_peak = 0, largest_n = 0, largest_peak = 0;
     // Every size must complete; external job control owns hangs.
-    for (const std::uint64_t count : {1000, 10000, 100000}) {
+    for (const std::uint64_t count : memory_sizes()) {
         const auto name = "memory-" + std::to_string(count);
         const auto status = fixture.temporary.path / (name + ".status");
         Runner child(fixture.command(fixture.temporary.path / (name + ".sqlite"), status, "--report-jsonl", 0),
