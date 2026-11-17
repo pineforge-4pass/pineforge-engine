@@ -28145,6 +28145,41 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 const auto family = bracket_families_.find(family_key);
                 return family != bracket_families_.end() && family->second.filled_on(add);
             };
+            // One shape keeps the cover although the add has orders of its own:
+            // a stop fill, where the quantity-named exit orders the entry id
+            // still has at that same stop would close everything the position
+            // holds at this point anyway. The cover then closes the units
+            // those orders would close, on the same bar and at the same
+            // price; only the rows differ (one row for the add's whole lot,
+            // where the orders make one row each). That is the engine's
+            // long-standing outcome there and no capture is of this shape.
+            // Not where the script runs again after every fill: its calls
+            // there can replace those orders before they fill.
+            const double held_now = std::abs(detail::run_position(require_host()).signed_units);
+            double same_stop_units = 0.0;
+            if (placement_snapshot->family == PineOrderFamily::ExitStop
+                && !config_.calc_on_order_fills && !coof_recalc_active_
+                && !config_.close_entries_rule_any
+                && placement_snapshot->bracket_origin.incarnation != 0
+                && finite_positive(placement_snapshot->requested_qty)) {
+                for (const auto& handle : live_handles_) {
+                    if (handle == event.handle()) continue;
+                    const auto row = placement_.find(handle.incarnation);
+                    if (row == placement_.end()) continue;
+                    const auto& other = row->second;
+                    if (other.family == PineOrderFamily::ExitStop
+                        && other.from_entry == placement_snapshot->from_entry
+                        && other.bracket_origin.incarnation != 0 && other.per_entry_origin == 0
+                        && !other.immediately && !other.void_issue
+                        && finite_positive(other.requested_qty)
+                        && same_double_bits(other.exit_levels.stop,
+                                            placement_snapshot->exit_levels.stop)) {
+                        same_stop_units += other.requested_qty;
+                    }
+                }
+            }
+            const bool book_closes_position = held_now > internal::kQtyEpsilon
+                && same_stop_units + internal::kQtyEpsilon >= held_now;
             double units = 0.0;
             // The scratch rows below are written as they always were, every
             // add of the bar and in this order: the scratch store is part of
@@ -28164,7 +28199,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 const native_order::RequestHandle add{adds.context().run, lot.entry_incarnation};
                 adds.push_back(add);
                 selected_adds.put(lot.entry_incarnation, 0);
-                if (has_own_order(lot.entry_incarnation)) {
+                if (!book_closes_position && has_own_order(lot.entry_incarnation)) {
                     every_add_covered = false;
                     continue;
                 }
@@ -28185,7 +28220,8 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                         == detail::ExitScratchIndex::absent);
             }
             if (!covered.empty() && units > 0.0 && drained_older) {
-                const bool own_order = placement_snapshot->bracket_origin.incarnation != 0
+                const bool own_order = !book_closes_position
+                    && placement_snapshot->bracket_origin.incarnation != 0
                     && !config_.close_entries_rule_any
                     && finite_positive(placement_snapshot->requested_qty);
                 if (own_order) {
