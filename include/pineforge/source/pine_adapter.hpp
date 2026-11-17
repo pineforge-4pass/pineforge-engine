@@ -1198,8 +1198,11 @@ public:
     // The members whose rows the table still holds, in roster order, from the
     // first one onward (erased members between them are parked separately).
     const std::vector<native_order::RequestHandle>& working_tail() const noexcept { return hot_; }
+    // No member, and no fill's fact (record_filled), which alone outlives the
+    // members. A member's fact never keeps a family: it goes with the last one.
     bool empty() const noexcept {
-        return settled_count_ == 0 && parked_.empty() && hot_.empty() && consumed_.empty();
+        return settled_count_ == 0 && parked_.empty() && hot_.empty()
+            && std::none_of(consumed_.begin(), consumed_.end(), fill_fact);
     }
     std::size_t size() const noexcept { return settled_count_ + parked_count_ + hot_.size(); }
     const_iterator begin() const { return const_iterator(this, false); }
@@ -1283,14 +1286,38 @@ public:
         hot_.resize(out);
         parked_ = std::move(runs);
     }
+    // A consumed-leg fact is one of two things, told apart by kFillFact in its
+    // kind byte. A member's fact (record_consumed) is the answer an erased
+    // member row gave for its leg kind and origin: it belongs to the
+    // membership, so a bracket cancellation or the family's end takes it. A
+    // fill's fact (record_filled) says a real partial fill spent the
+    // opening's bracket: it outlives the members while the opening can still
+    // be asked about. Both answer consumed(); each is kept once.
+    static constexpr std::uint8_t kFillFact = 0x80U;
+    static bool fill_fact(const std::pair<std::uint8_t, std::uint64_t>& fact) noexcept {
+        return (fact.first & kFillFact) != 0;
+    }
     void record_consumed(std::uint8_t leg_kind, std::uint64_t origin) {
         const auto fact = std::make_pair(leg_kind, origin);
         if (std::find(consumed_.begin(), consumed_.end(), fact) == consumed_.end())
             consumed_.push_back(fact);
     }
+    void record_filled(std::uint8_t leg_kind, std::uint64_t origin) {
+        record_consumed(static_cast<std::uint8_t>(leg_kind | kFillFact), origin);
+    }
     bool consumed(std::uint8_t leg_kind, std::uint64_t origin) const noexcept {
-        return std::find(consumed_.begin(), consumed_.end(),
-                         std::make_pair(leg_kind, origin)) != consumed_.end();
+        return std::any_of(consumed_.begin(), consumed_.end(), [&](const auto& fact) {
+            return fact.second == origin
+                && static_cast<std::uint8_t>(fact.first & ~kFillFact) == leg_kind;
+        });
+    }
+    // Drops every fill's fact, at the end of its opening's lifetime; whether
+    // there was one.
+    bool drop_fill_facts() noexcept {
+        const auto kept = std::remove_if(consumed_.begin(), consumed_.end(), fill_fact);
+        const bool dropped = kept != consumed_.end();
+        consumed_.erase(kept, consumed_.end());
+        return dropped;
     }
     // Drops the facts whose origin can no longer be asked about.
     template<class Keep>
@@ -1302,7 +1329,9 @@ public:
         return consumed_;
     }
     // A bracket cancellation removes membership and its historical outcomes,
-    // but an opening whose leg already filled keeps its consumed facts.
+    // the members' facts among them: a leg that was only re-issued or
+    // cancelled, never filled, leaves nothing that stops the exit being
+    // placed again. An opening whose leg really filled keeps its fill facts.
     void cancel_members() noexcept {
         hot_.clear();
         parked_.clear();
@@ -1312,6 +1341,8 @@ public:
         settled_count_ = 0;
         settled_digest_ = kDigestBasis;
         parked_count_ = 0;
+        consumed_.erase(std::remove_if(consumed_.begin(), consumed_.end(),
+            [](const auto& fact) { return !fill_fact(fact); }), consumed_.end());
     }
     // The settled prefix as the v4 extension fold reads it: its count, and
     // its running digest -- with every parked run's place, count and digest
@@ -1516,7 +1547,8 @@ private:
     // Derived member multiplicity per incarnation over the working tail's
     // handles (never next-decision state).
     std::unordered_map<std::uint64_t, std::size_t> counts_;
-    // (leg kind, opening incarnation), retained while the origin is askable.
+    // (leg kind, opening incarnation), retained while the origin is askable;
+    // kFillFact in the kind marks a fill's fact, which also outlives members.
     std::vector<std::pair<std::uint8_t, std::uint64_t>> consumed_;
 };
 
