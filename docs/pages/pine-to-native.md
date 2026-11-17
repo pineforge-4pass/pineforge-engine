@@ -752,8 +752,9 @@ after multiple calls and requested-context clocks require separate
 qualification. These ordinary C++ API rules do not establish Pine overload
 admission or TradingView parity for those contexts. The 1.13.0 variable-length
 path temporarily uses Neumaier arithmetic.
-Constant-length calls must retain existing `ta::SMA` and its sliding Kahan
-arithmetic with compensated addends; this unwired primitive does not establish
+Constant-length calls must retain existing `ta::SMA` and its window arithmetic
+(the exact sum of the window, rounded once; until November 2026 a sliding
+Kahan sum with compensated addends); this unwired primitive does not establish
 that future codegen route. Alignment of the variable-length arithmetic with
 fixed SMA remains planned after 1.13.0. The ordinary unit target's full
 1441-row feed comparison at N=20 exercises the variable adapter, measures
