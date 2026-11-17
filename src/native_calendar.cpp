@@ -573,26 +573,27 @@ bool same_calendar_value(const SessionCalendar& a, const SessionCalendar& b) {
 }
 
 // The set of this calendar value under the zone database root in force, made
-// on its first question. A question about a new instant first drops the days
-// the questions about the instant before it did not read.
-IntervalDays& interval_days_for(const SessionCalendar& calendar, int64_t ms) {
+// when the calling thread holds none.
+IntervalDays& interval_days_set(const SessionCalendar& calendar) {
     const char* const root_text = std::getenv("TZDIR");
     const std::string_view root(root_text != nullptr ? root_text : "");
-    IntervalDays* kept = nullptr;
     for (const std::unique_ptr<IntervalDays>& held : tl_interval_days) {
         if (std::string_view(held->zone_root) == root
             && same_calendar_value(held->calendar, calendar)) {
-            kept = held.get();
-            break;
+            return *held;
         }
     }
-    if (kept == nullptr) {
-        auto fresh = std::make_unique<IntervalDays>();
-        fresh->calendar = calendar;
-        fresh->zone_root.assign(root.data(), root.size());
-        tl_interval_days.push_back(std::move(fresh));
-        kept = tl_interval_days.back().get();
-    }
+    auto fresh = std::make_unique<IntervalDays>();
+    fresh->calendar = calendar;
+    fresh->zone_root.assign(root.data(), root.size());
+    tl_interval_days.push_back(std::move(fresh));
+    return *tl_interval_days.back();
+}
+
+// That set for one question. A question about a new instant first drops the
+// days the questions about the instant before it did not read.
+IntervalDays& interval_days_for(const SessionCalendar& calendar, int64_t ms) {
+    IntervalDays* const kept = &interval_days_set(calendar);
     if (!kept->asked || kept->instant != ms) {
         kept->asked = true;
         kept->instant = ms;
@@ -1887,6 +1888,39 @@ void forget_interval_days() noexcept {
     if (tl_interval_days_reading.kept != nullptr) return;
     tl_interval_days.clear();
     tl_interval_days.shrink_to_fit();
+}
+
+// Internal, absent from the installed headers and declared by its one caller
+// (timeframe.cpp, the evaluator feed that asks the two memo-free interval
+// lookups above for every input bar): the calendar parse_session makes of
+// (session, timezone), read back from the sets above instead of parsed again
+// for every bar. The calling thread's set of the same session text, the same
+// timezone and the zone database root in force answers with the calendar it
+// was made for. parse_session is asked only when there is none, and the
+// calendar it returns then gets the set its first interval question would
+// have made. So a calendar is parsed once for as long as its days are kept,
+// nothing is kept that the lookups did not keep already, and
+// forget_interval_days ends both together: a run that registers its
+// evaluators parses its calendars itself. A text parse_session refuses keeps
+// nothing and is asked again every time (null). A throw from the parse or
+// from making the set leaves the sets as they were. The zone file is
+// therefore read when the set is made and not again while it is held. The
+// pointer is good until the calling thread's sets are next released.
+const SessionCalendar* kept_calendar(std::string_view session, std::string_view timezone) {
+    const char* const root_text = std::getenv("TZDIR");
+    const std::string_view root(root_text != nullptr ? root_text : "");
+    // parse_session keeps the session text as given and names an empty timezone UTC.
+    const std::string_view zone = timezone.empty() ? std::string_view("UTC") : timezone;
+    for (const std::unique_ptr<IntervalDays>& held : tl_interval_days) {
+        if (std::string_view(held->zone_root) == root
+            && std::string_view(held->calendar.literal()) == session
+            && std::string_view(held->calendar.timezone()) == zone) {
+            return &held->calendar;
+        }
+    }
+    const auto parsed = parse_session(session, timezone);
+    if (!parsed) return nullptr;
+    return &interval_days_set(*parsed).calendar;
 }
 
 // ---------------------------------------------------------------------------
