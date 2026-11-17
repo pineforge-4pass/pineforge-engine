@@ -456,10 +456,177 @@ std::optional<SessionDay> session_day_from_open(const SessionCalendar& cal,
     return day;
 }
 
+// ---------------------------------------------------------------------------
+// Session days kept between memo-free interval lookups
+// ---------------------------------------------------------------------------
+//
+// interval_containing(calendar, script_tf, input_tf, ms) is asked for one
+// instant after another: a bar's own interval and its period's, then the next
+// bar's, for every series that reads the calendar. Each answer reads the few
+// session days the answer before it read, and resolving one of them is
+// several civil conversions through libc, so the lookup keeps those days
+// while its questions go on reading them. A question whose days are held
+// costs arithmetic.
+//
+// What is kept is session_day_from_open's own answer, by the open date's day
+// number. session_day_from_open itself is untouched; the lookups below read
+// every day through read_session_day_from_open, which resolves it unless a
+// memo-free interval lookup is running and already holds it. Days are held
+// per calendar VALUE (every member, compared one by one) and per zone
+// database root (TZDIR as libc reads it), so a day is never answered for
+// another session, timezone or database. Only the memo-free interval lookup
+// reads them, through IntervalDaysScope: every other entry resolves each day
+// as it always did, and a caller-owned memo never comes this way at all.
+//
+// Bound. A day stays while the questions about the newest instant, or the
+// instant before it, read it, and leaves at the first new instant after
+// that. What is held is therefore what two instants' questions read -- a
+// period's first and last days and their neighbours -- however many instants
+// have been asked: it follows what one question reads and never their
+// number, with no capacity to choose or to exceed. Calendars are held side
+// by side, one such set each, until forget_interval_days releases the
+// calling thread's sets. An evaluator's registration does that, so a run
+// that registers and feeds its evaluators on one thread starts with none of
+// an earlier run's days; a caller that registers nothing keeps its sets
+// until its thread ends.
+
+struct KeptSessionDay {
+    int64_t open_day = 0;
+    // IntervalDays::question of the last question that read it.
+    std::uint64_t question = 0;
+    // What session_day_from_open answered, an answer of none included.
+    std::optional<SessionDay> day;
+};
+
+struct IntervalDays {
+    // What the days were resolved for.
+    SessionCalendar calendar;
+    std::string zone_root;
+    // The newest instant asked about, and how many times the instant asked
+    // about has changed: every question about one instant carries one number.
+    bool asked = false;
+    int64_t instant = 0;
+    std::uint64_t question = 0;
+    // Ascending by open day.
+    std::vector<KeptSessionDay> days;
+};
+
+// The set the running memo-free interval lookup reads, and the calendar
+// object it was handed: a day is read from the set for that object alone.
+struct IntervalDaysReading {
+    IntervalDays* kept = nullptr;
+    const SessionCalendar* calendar = nullptr;
+};
+
+// One set per calendar value and zone database root the calling thread's
+// memo-free interval lookups have asked about.
+thread_local std::vector<std::unique_ptr<IntervalDays>> tl_interval_days;
+// Empty outside a memo-free interval lookup.
+thread_local IntervalDaysReading tl_interval_days_reading;
+
+// session_day_from_open as the lookups below read it: from the set a running
+// memo-free interval lookup holds for this very calendar object, resolved and
+// added to it when the set does not hold the date, and plainly resolved
+// everywhere else.
+std::optional<SessionDay> read_session_day_from_open(const SessionCalendar& cal,
+                                                     const CivilDate& open_date) {
+    IntervalDays* const kept = tl_interval_days_reading.kept;
+    if (kept == nullptr || tl_interval_days_reading.calendar != &cal) {
+        return session_day_from_open(cal, open_date);
+    }
+    const int64_t open_day = days_from_civil(open_date.year,
+                                             static_cast<unsigned>(open_date.month),
+                                             static_cast<unsigned>(open_date.day));
+    auto where = std::lower_bound(kept->days.begin(), kept->days.end(), open_day,
+                                  [](const KeptSessionDay& held, int64_t day) {
+                                      return held.open_day < day;
+                                  });
+    if (where == kept->days.end() || where->open_day != open_day) {
+        // Resolved before it is kept, so a throw keeps nothing half-made.
+        KeptSessionDay entry;
+        entry.open_day = open_day;
+        entry.day = session_day_from_open(cal, open_date);
+        where = kept->days.insert(where, std::move(entry));
+    }
+    where->question = kept->question;
+    return where->day;
+}
+
+// Every member parse_session sets. Both sides are valid: a set is made for a
+// valid calendar only, and the lookup refuses any other before it asks.
+bool same_calendar_value(const SessionCalendar& a, const SessionCalendar& b) {
+    if (a.timezone() != b.timezone() || a.literal() != b.literal()) return false;
+    if (a.day_mask() != b.day_mask() || a.origin_minutes() != b.origin_minutes()
+        || a.all_day() != b.all_day()) {
+        return false;
+    }
+    if (a.windows().size() != b.windows().size()) return false;
+    for (std::size_t i = 0; i < a.windows().size(); ++i) {
+        const SessionWindow& x = a.windows()[i];
+        const SessionWindow& y = b.windows()[i];
+        if (x.start_minutes() != y.start_minutes() || x.end_minutes() != y.end_minutes()
+            || x.wraps() != y.wraps() || x.full_day() != y.full_day()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The set of this calendar value under the zone database root in force, made
+// on its first question. A question about a new instant first drops the days
+// the questions about the instant before it did not read.
+IntervalDays& interval_days_for(const SessionCalendar& calendar, int64_t ms) {
+    const char* const root_text = std::getenv("TZDIR");
+    const std::string_view root(root_text != nullptr ? root_text : "");
+    IntervalDays* kept = nullptr;
+    for (const std::unique_ptr<IntervalDays>& held : tl_interval_days) {
+        if (std::string_view(held->zone_root) == root
+            && same_calendar_value(held->calendar, calendar)) {
+            kept = held.get();
+            break;
+        }
+    }
+    if (kept == nullptr) {
+        auto fresh = std::make_unique<IntervalDays>();
+        fresh->calendar = calendar;
+        fresh->zone_root.assign(root.data(), root.size());
+        tl_interval_days.push_back(std::move(fresh));
+        kept = tl_interval_days.back().get();
+    }
+    if (!kept->asked || kept->instant != ms) {
+        kept->asked = true;
+        kept->instant = ms;
+        ++kept->question;
+        const std::uint64_t before = kept->question - 1;
+        kept->days.erase(std::remove_if(kept->days.begin(), kept->days.end(),
+                                        [before](const KeptSessionDay& held) {
+                                            return held.question < before;
+                                        }),
+                         kept->days.end());
+    }
+    return *kept;
+}
+
+// Hands the memo-free interval lookup its calendar's set for one question.
+class IntervalDaysScope {
+public:
+    IntervalDaysScope(const SessionCalendar& calendar, int64_t ms)
+        : previous_(tl_interval_days_reading) {
+        IntervalDays& kept = interval_days_for(calendar, ms);
+        tl_interval_days_reading = IntervalDaysReading{&kept, &calendar};
+    }
+    ~IntervalDaysScope() { tl_interval_days_reading = previous_; }
+    IntervalDaysScope(const IntervalDaysScope&) = delete;
+    IntervalDaysScope& operator=(const IntervalDaysScope&) = delete;
+
+private:
+    IntervalDaysReading previous_;
+};
+
 std::optional<SessionDay> session_day_with_trading(const SessionCalendar& cal,
                                                    const CivilDate& trading) {
     for (int off : {0, -1, 1, -2, 2}) {
-        auto d = session_day_from_open(cal, add_days(trading, off));
+        auto d = read_session_day_from_open(cal, add_days(trading, off));
         if (d && same_civil_date(d->trading_date, trading)) return d;
     }
     return std::nullopt;
@@ -483,11 +650,11 @@ std::optional<SessionDay> session_day_containing(const SessionCalendar& cal, int
     const CivilDate candidates[3] = {local_date, add_days(local_date, -1),
                                      add_days(local_date, 1)};
     for (const CivilDate& open_date : candidates) {
-        auto day = session_day_from_open(cal, open_date);
+        auto day = read_session_day_from_open(cal, open_date);
         if (!day) continue;
         if (day->origin_ms <= ms && ms < day->next_origin_ms) return day;
     }
-    return session_day_from_open(cal, local_date);
+    return read_session_day_from_open(cal, local_date);
 }
 
 bool ms_in_spans(const std::vector<EpochSpan>& spans, int64_t ms) {
@@ -681,7 +848,7 @@ std::optional<int64_t> next_span_start_at_or_after(const SessionCalendar& cal, i
     auto day0 = session_day_containing(cal, after);
     if (!day0) return std::nullopt;
     for (int i = 0; i <= 800; ++i) {
-        auto d = session_day_from_open(cal, add_days(day0->open_date, i));
+        auto d = read_session_day_from_open(cal, add_days(day0->open_date, i));
         if (!d) return std::nullopt;
         for (const EpochSpan& s : d->spans) {
             if (s.end_ms <= after) continue;
@@ -1690,6 +1857,9 @@ std::optional<NativeInterval> interval_containing(const SessionCalendar& calenda
                                                   const Timeframe& input_tf,
                                                   int64_t ms) {
     if (!calendar.valid() || !script_tf.valid() || !input_tf.valid()) return std::nullopt;
+    // Every session day the lookup below reads comes through the days kept
+    // for this calendar, and is resolved only when they do not hold it.
+    const IntervalDaysScope kept_days(calendar, ms);
     auto core = core_containing(calendar, script_tf, ms);
     if (!core) return std::nullopt;
     auto next_in = first_tradable_open(calendar, input_tf, core->last_traded_close_ms);
@@ -1707,6 +1877,16 @@ std::optional<NativeInterval> interval_containing(const SessionCalendar& calenda
                                                   const Timeframe& tf,
                                                   int64_t ms) {
     return interval_containing(calendar, tf, tf, ms);
+}
+
+// Internal, absent from the installed headers and declared by its one caller
+// (engine_security.cpp): releases every set of session days the calling
+// thread's memo-free interval lookups keep. A lookup that is running keeps
+// its own.
+void forget_interval_days() noexcept {
+    if (tl_interval_days_reading.kept != nullptr) return;
+    tl_interval_days.clear();
+    tl_interval_days.shrink_to_fit();
 }
 
 // ---------------------------------------------------------------------------
