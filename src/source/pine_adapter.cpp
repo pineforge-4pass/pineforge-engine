@@ -11981,10 +11981,10 @@ void PineExecutionAdapter::rearm_id_bound_exits(const SourceId& entry_id) {
 // compaction keeps (sweep_retired_rows, K1: an unwithdrawn, non-dormant
 // lifecycle bound to an opened origin), and an erased row is no member.
 //
-// The order is placed in the captured case only: no leg of the exit works,
-// and the script has not called the exit since its last order (such a call
-// places nothing and keeps its levels nowhere; that opening gets its order
-// at the script's next call, as before). An exit still working when the
+// The order is placed in the captured case only: the exit's order has filled
+// on each opening before, and the script has not called the exit since (such
+// a call places nothing and keeps its levels nowhere; that opening gets its
+// order at the script's next call, as before). An exit still working when the
 // opening fills places nothing here either: its one capture is the same-id
 // cover tape, where it fills for the add on the bar the add opens, the
 // cover's fill (on_applied). Whether the add keeps an order after that bar
@@ -12032,12 +12032,8 @@ void PineExecutionAdapter::arm_standing_exits_for_opening(
         double qty = kNaN;
         std::string comment;
         std::string oca_name;
-        // A leg of the exit is on the book: the exit is still the order of the
-        // openings it was called for, and gives this one none.
-        bool working = false;
-        // No order is placed: a leg works, or a command was issued since the
-        // exit's last order that may be a call of it naming other levels.
-        bool withheld = false;
+        bool working = false;   // a leg of the exit is on the book
+        bool withheld = false;  // no order is placed for this opening
     };
     std::vector<Definition> definitions;
     // Read through the const table: this scan changes nothing a pending-order
@@ -12066,15 +12062,19 @@ void PineExecutionAdapter::arm_standing_exits_for_opening(
         known->oca_name = leg.oca_name;
     }
     if (definitions.empty()) return;
-    // A call of the exit that places no order, each opening's order of it
-    // having filled, keeps its levels nowhere; all it leaves is the command
-    // number it took. With no leg working, the definition is therefore the
-    // one last named only while every command number issued since its order
-    // is this opening's own entry or another standing exit's last order.
-    // Decided for all of them before the first order below takes a number.
+    // An order is placed only where the exit's order has filled on every
+    // opening before this one (a leg still on the book has not; one the
+    // reservation left nothing and took off the book never was an order), and
+    // every command issued since its last order is this opening's entry or
+    // another standing exit's last order: a call placing nothing keeps no levels.
     const std::uint64_t issued = source_command_sequence_;
     for (auto& definition : definitions) {
-        if (definition.working) { definition.withheld = true; continue; }
+        const auto fills = bracket_families_.find(key_for(definition.exit_id, opening.source_id));
+        const bool filled = fills != bracket_families_.end() && std::all_of(opened.begin(),
+            opened.end(), [&](const native_order::RequestHandle& origin) {
+                return origin == add || fills->second.filled_on(origin.incarnation);
+            });
+        if (definition.working || !filled) { definition.withheld = true; continue; }
         std::uint64_t accounted = 0;
         const auto since = [&](std::uint64_t command) {
             return command > definition.command && command <= issued;
