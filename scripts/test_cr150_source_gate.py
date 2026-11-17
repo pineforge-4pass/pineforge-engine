@@ -1268,7 +1268,12 @@ class RealTree(unittest.TestCase):
         # calendar set, the per-thread list of those sets and each set's zone
         # root, and the insertions of the request caller catalog's run map.
         # U1862 follows the catalog's storage into that run map. All remain OPEN.
-        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4
+        # expectation corrected: 1629 -> 1633, because U1874-U1877 add four
+        # unreviewed groups in src/source/pine_adapter.cpp: the exits standing
+        # on the book for an opening that fills, the market adds a cover fill
+        # leaves without an order, and the comment and OCA name text those
+        # lists and the file's order copies carry. All remain OPEN.
+        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4
         self.assertEqual(c['OPEN'], expected_open)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])

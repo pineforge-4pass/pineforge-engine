@@ -1506,7 +1506,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:19051-19084`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:19364-19397`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
@@ -4627,7 +4627,7 @@ own features, not only the rows that happened to be source-free.
 `python3 scripts/ci_verify.py kernel` is the profile that verifies the
 kernel-only build (Release, live runner ON, tutorial OFF, source layer OFF);
 CI runs it as the `kernel-only` job. The profile carries a **row floor**, its
-number in the `PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:811 table in
+number in the `PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:812 table in
 `scripts/ci_verify.py`: the count the kernel-only CTest set is
 expected to run with the private overlay present, minus the pinned
 private-fixture rows of `tests/private_fixture_rows.txt` it registers as SKIP
