@@ -57,10 +57,13 @@ finding to report, not a step to take.
    units, and fails on a TradingView-shaped name with no row in ADR 0001's
    residual table. `scripts/check_kernel_seam_rows.py` fails on a kernel
    `source_*` seam, or a kernel member or row field the source layer writes,
-   that no ADR 0001 row names in its first cell. The generated-code language
-   runtime (the indicator, formatting and calendar libraries and the
-   header-only runtime) implements Pine built-ins by definition; ADR 0001
-   rule 1 gives the admission test a new built-in must pass to enter it.
+   that no ADR 0001 row names in its first cell. It also fails on a row's
+   `max_runup` or `max_drawdown` written, in the forms its docstring reads,
+   outside the function `EXCURSION_WRITERS` names for its struct. The
+   generated-code language runtime (the indicator, formatting and calendar
+   libraries and the header-only runtime) implements Pine built-ins by
+   definition; ADR 0001 rule 1 gives the admission test a new built-in must
+   pass to enter it.
 
 2. **A kernel capability is opt-in.** A new `NativeRunSpec` field, a new
    request kind, or a new virtual with an empty default — never a changed

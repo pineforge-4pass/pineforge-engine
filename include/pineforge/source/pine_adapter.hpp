@@ -3461,6 +3461,27 @@ private:
     // Append derived cache storage so existing member offsets remain stable.
     mutable std::array<CohortHandleCacheEntry, 8> cohort_handle_cache_{};
     mutable std::size_t cohort_handle_cache_next_ = 0;
+    // The lot of a qualifying full-margin long as its script bar opened (or
+    // as its own fill opened it there): the bar, the lot's opening request,
+    // its units and the extremes the kernel had sampled for it by then. The
+    // long-tick walk books the calls of a bar's intrabar waypoints from that
+    // bar's calculation, after the kernel has walked the whole path, when the
+    // lot has also sampled the prices printed after the call; the closing row
+    // is booked from these and the path up to its own waypoint instead
+    // (submit_long_tick_margin_units). Not state: read only by a call of the
+    // bar and lot it names, so it is dead at every bar boundary. Appended so
+    // existing member offsets remain stable.
+    struct LongTickOpenLot {
+        std::int64_t bar = std::numeric_limits<std::int64_t>::min();
+        std::uint64_t incarnation = 0;
+        double units = 0.0;
+        double favorable = 0.0;
+        double adverse = 0.0;
+    };
+    LongTickOpenLot long_tick_open_lot_{};
+    void note_long_tick_open_lot(const Bar&);
+    bool submit_long_tick_margin_units(const Bar&, const double* path, int point, double mark,
+                                       const NativeDecisionContext&, double units);
     void invalidate_retirement() noexcept { retirement_gate_.certified = false; }
     bool capture_retirement_inputs(RetirementInputs&) const;
     void observe_retirement_expiry(const PlacementSnapshot&, std::int64_t interval) noexcept;

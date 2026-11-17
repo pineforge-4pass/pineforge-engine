@@ -47,8 +47,95 @@ open_view` is about the kernel's own write, not the adapter's), is not a row.
 A row-struct field's name is often a plain word (`time`, `qty`), so it counts
 only spelled qualified: `Trade::time`, `PyramidEntry::qty`.
 
-Exit 0 when every seam and written member has its row, 1 when one has not,
-2 when a file cannot be read. `--list` prints the inventory.
+The excursion writers
+---------------------
+A row's two excursion fields, `max_runup` and `max_drawdown`, are held to more
+than a row. ADR-0001 rules that the kernel's sampler books every lot's run-up
+and drawdown, with two narrow exceptions in the source layer: the re-cut of a
+global exit's `Trade` rows, and one margin-call booking that sets one
+`PyramidEntry`'s two extremes. Both write a field of the same name, and a
+row's first cell matches a field by its name alone, so a third writer would
+pass under the rows the first two have. EXCURSION_WRITERS therefore names the
+one function per row struct that may write them, and the gate fails on
+
+* a write of either field, in the forms read below, through one of the
+  kernel's rows anywhere else in the source layer, the other struct's writer
+  included;
+* a write of either field through an object it cannot type, because it then
+  cannot tell a kernel row from the source layer's own state;
+* a named writer that writes neither field: the table and the ADR row would
+  name an exception the tree no longer has.
+
+What this check reads. A write is an assignment, a compound assignment or a
+suffix `++` or `--` of the field through `.` or `->`, in a `.cpp`, `.hpp`,
+`.h` or `.cc` file of the source trees, read from the code alone (comments
+and the contents of literals out). The written object is the name before the
+`.` or `->`, or the container an element is taken from with `[i]`, `.back()`,
+`.front()` or `.at(i)`. It is one of the kernel's rows when that name is
+
+* `trades_` or `pyramid_entries_`, however the container is reached (`pine->`,
+  `host.`);
+* a `std::vector<Row>&` parameter or reference declared in that file, or a
+  source-class member declared with a row type;
+* a name whose nearest declaration above it spells a row struct in its type
+  (`PyramidEntry&`, `PyramidEntry*`, `PyramidEntry* const`,
+  `PyramidEntry const&`), or deduces its type with `auto` on a line that reads
+  a row struct or one of those containers (`auto* const lot =
+  &pine->pyramid_entries_.front()`, `auto const lot = ...`). A qualifier
+  between the type and the name, before or after the `*` or `&`, belongs to the
+  declaration and is never its type.
+
+It is the source layer's own when it is any other data member of a source
+class (`risk_.max_drawdown` is the adapter's risk limit) or a name declared
+with any other explicit type. The function a write sits in is the nearest
+enclosing brace whose header reads as a function definition, so a write inside
+a lambda belongs to the function the lambda is written in.
+
+What this check does not read. It reads spellings and compiles nothing, so
+each of these passes it unseen:
+
+* a prefix `++` or `--` of the field;
+* a reference or a pointer taken to the field itself, a library call that
+  takes the field by reference included: `std::exchange(lot.max_runup, v)`,
+  `std::swap`, `std::tie(...) =`, `memcpy`;
+* a whole-row assignment or copy (`lot = other`);
+* a pointer-to-member write (`lot.*field = v`) and a structured binding;
+* for a `Trade`, a write into the row's serialized image: the `header[13]` and
+  `header[14]` words of the re-cut, by which its rows reach the kernel's
+  ledger (`scratch_trade_scalars` in src/source/pine_strategy_host.cpp writes
+  a row's two extremes from them, `scratch_scalar(header[13], row.max_runup)`,
+  a by-reference write this check does not see);
+* a macro defined outside the source trees;
+* a file of any other suffix: `.inc`, `.ipp`, `.inl`
+  (`src/source/exit_payload_codec.inc` is one);
+* a row typed through an alias: an explicit type that does not spell `Trade`
+  or `PyramidEntry` is read as the source layer's own;
+* a declaration it does not parse: an explicit type with its `*` or `&` set
+  against the name (`PyramidEntry *lot`; a `std::vector<Row> &lots` is the
+  exception, the reader of row-vector references reads it), `auto *lot`, a type
+  it cannot spell as one word (a `decltype` type,
+  `std::remove_reference_t<...>* const lot`). The name is then typed by an
+  older declaration of the same name anywhere above it in the file, because the
+  nearest declaration is looked up in the file's text and not in the write's
+  scope; it fails as an object the gate cannot type only when there is none;
+* a template type with more than one argument: the pattern reads its last
+  fragment as the type (`std::array<PyramidEntry, 2> lots` gives `2>`,
+  `std::vector<PyramidEntry, A>& lots` gives `A>`), so, unless that fragment
+  itself names a row struct, the name is the source layer's own whether or not
+  an older declaration stands above it;
+* an overload that has a named writer's name in the same file: a writer is
+  named by its file and its qualified name.
+
+Nor does it read ADR-0001 for the function names: EXCURSION_WRITERS and the
+ADR rows that name its functions are kept in step by hand. And it witnesses
+who writes, not what is written or for how long: the booking itself, and that
+a lot's own extremes are back when it ends, are
+tests/test_margin_call_long_tick_excursion.cpp's to pin. A tree whose rows
+declare neither field has nothing to hold.
+
+Exit 0 when every seam and written member has its row and every excursion
+write is its named writer's, 1 when one is not, 2 when a file cannot be read.
+`--list` prints the inventory.
 
 R5 lane H-DOCGATES (AUDIT4-opus X10).
 """
@@ -61,6 +148,7 @@ import re
 import sys
 
 import check_broker_state_hash_coverage as coverage
+import cxxlex
 
 ROOT = Path(__file__).resolve().parent.parent
 ENGINE = "include/pineforge/engine.hpp"
@@ -74,6 +162,54 @@ ASSIGN = r"(?:\[[^\]\n]*\]\s*)?(?:[-+*/%|&^]|<<|>>)?=(?!=)"
 MUTATE = (r"(?:\.|->)\s*(?:push_back|emplace_back|emplace|insert|erase|clear|assign|"
           r"resize|swap|pop_back|pop_front|push_front|reserve)\s*\(")
 
+#: A row's excursion fields, and the one source-layer function per row struct
+#: that may write them: the two narrow exceptions ADR-0001 rules (the module
+#: docstring, "The excursion writers"). An entry and the ADR-0001 row that
+#: names its function change together, by hand: nothing here reads the ADR for
+#: these names.
+EXCURSION_FIELDS = ("max_runup", "max_drawdown")
+EXCURSION_WRITERS = {
+    "PyramidEntry": ("src/source/pine_adapter.cpp",
+                     "PineExecutionAdapter::submit_long_tick_margin_units"),
+    "Trade": ("src/source/pine_strategy_host.cpp",
+              "source::PineStrategyHost::order_global_exit_children"),
+}
+#: The kernel's own containers of its rows, by the row struct each holds.
+ROW_CONTAINERS = {"trades_": "Trade", "pyramid_entries_": "PyramidEntry"}
+#: What `written_row` answers for an object that is the source layer's own.
+NOT_A_ROW = ""
+#: The object a field is written through, read backwards from the `.` or `->`:
+#: a name, or an element of a named container.
+WRITTEN_OBJECT = re.compile(
+    r"\b(?P<obj>\w+)\s*"
+    r"(?:\[[^\]\n]*\]|\.\s*(?:back|front)\s*\(\s*\)|\.\s*at\s*\([^()\n]*\))?\s*$")
+#: A brace header that is a function definition: `name(parameters)`, then
+#: nothing but qualifiers. A lambda has no name before its parameters, and a
+#: call a lambda is an argument of has not closed its own parenthesis yet.
+FUNCTION_HEAD = re.compile(
+    r"([A-Za-z_~]\w*(?:\s*::\s*[A-Za-z_~]\w*)*)\s*\((?:[^()]|\([^()]*\))*\)\s*"
+    r"(?:(?:const|override|final|noexcept(?:\s*\([^()]*\))?)\s*)*"
+    r"(?:->[\w\s:<>*&,]+)?$")
+#: Words a parenthesis follows in a brace header that is no function's:
+#: `if (...)`, `if constexpr (...)`, `catch (...)`.
+CONTROL_WORDS = frozenset(("if", "constexpr", "for", "while", "switch", "catch", "return",
+                           "sizeof", "alignof", "alignas", "decltype", "noexcept", "requires",
+                           "throw", "static_assert", "defined", "__attribute__"))
+#: Words that can stand where a declaration's type would without declaring
+#: anything: `return lot;`, `else lot = ...`.
+STATEMENT_WORDS = frozenset(("return", "else", "case", "throw", "delete", "new", "goto",
+                             "co_return", "co_yield", "typename", "using", "do"))
+#: Qualifiers a declaration takes between its type and its name: after the type
+#: word (`auto const lot`) or between the declarator's `*` or `&` and the name
+#: (`auto* const lot`). One of them is never a declaration's type: the name it
+#: stands before is typed by the declaration it qualifies, and where that type
+#: cannot be read as one word (`std::remove_reference_t<...>* const lot`) the
+#: name has no declaration here, so a write through it is a name the gate
+#: cannot type, unless an older declaration of the same name stands above it in
+#: the file (the module docstring says so).
+QUALIFIER_WORDS = frozenset(("const", "volatile"))
+BLOCK_MARK = re.compile(r"[{};]")
+
 
 class Unreadable(Exception):
     """A file the gate must read is missing; exit status 2."""
@@ -83,6 +219,25 @@ class Unreadable(Exception):
 class Inventory:
     seams: dict[str, str] = field(default_factory=dict)          # name -> declaring header
     written: dict[str, list[str]] = field(default_factory=dict)  # name -> write sites
+
+
+@dataclass
+class ExcursionWrite:
+    struct: str | None      # the row struct written; None when the gate cannot tell
+    name: str               # the excursion field
+    relative: str
+    line: int
+    function: str | None    # the function definition the write sits in, if it reads as one
+
+    @property
+    def site(self) -> str:
+        return f"{self.relative}:{self.line}"
+
+
+@dataclass
+class Excursions:
+    guarded: list[str] = field(default_factory=list)            # row structs with such a field
+    writes: list[ExcursionWrite] = field(default_factory=list)  # through the kernel's rows
 
 
 def read(root: Path, relative: str) -> str:
@@ -261,6 +416,175 @@ def inventory(root: Path) -> Inventory:
     return result
 
 
+def code_only(text: str) -> str:
+    """The code of a C/C++ text: comments and the contents of string and
+    character literals out, every newline kept, so that a brace, a semicolon or
+    a field name inside either is never read as code."""
+    return "\n".join(part[0] for part in cxxlex.lex_lines(text))
+
+
+def enclosing_function(code: str, offset: int) -> str | None:
+    """The function definition the code at `offset` sits in, by its name as
+    the definition spells it: the nearest enclosing brace whose header reads
+    as one (FUNCTION_HEAD). None outside a function, and for a header this
+    does not read; the gate then fails closed, because no name is a named
+    writer's."""
+    headers: list[str] = []
+    boundary = 0
+    for mark in BLOCK_MARK.finditer(code, 0, offset):
+        if mark.group() == "{":
+            headers.append(code[boundary:mark.start()])
+        elif mark.group() == "}" and headers:
+            headers.pop()
+        boundary = mark.end()
+    for header in reversed(headers):
+        head = FUNCTION_HEAD.search(" ".join(header.split()))
+        if head is None:
+            continue
+        name = re.sub(r"\s*::\s*", "::", head.group(1))
+        if name.rsplit("::", 1)[-1] not in CONTROL_WORDS:
+            return name
+    return None
+
+
+def declaration_of(code: str, name: str, before: int) -> tuple[str | None, str] | None:
+    """`name`'s nearest declaration before offset `before`: its type word
+    (None when the type is deduced with `auto`) and the declaration's line.
+    The reading of nearest_declaration, except that a statement keyword
+    standing where a type would declares nothing (`return lot;`), that a
+    `&&` with a space before it is an operator (`ready && lot`), and that a
+    qualifier after the type word (`auto const lot`) or after the declarator's
+    `*` or `&` (`auto* const lot`, `PyramidEntry* const lot`) belongs to the
+    declaration and is never its type."""
+    pattern = re.compile(
+        r"(?:\b(?P<type>[\w:<>]+)(?:\s+(?:const|volatile)\b)*"
+        r"(?:\s*(?:&|\*+)(?:\s*(?:const|volatile)\b)*|&&)?\s+"
+        r"|\(\s*(?:const\s+)?auto\s*&{0,2}\s*|\bauto\s*&{0,2}\s*)"
+        + re.escape(name) + r"\s*(?=[=:;{(),])")
+    declared = None
+    for found in pattern.finditer(code, 0, before):
+        if found.group("type") not in STATEMENT_WORDS | QUALIFIER_WORDS:
+            declared = found
+    if declared is None:
+        return None
+    start = code.rfind("\n", 0, declared.start()) + 1
+    end = code.find("\n", declared.end())
+    kind = declared.group("type")
+    return (None if kind in (None, "auto") else kind,
+            code[start:end if end >= 0 else len(code)])
+
+
+def row_named(text: str, vectors: dict[str, str]) -> str | None:
+    """The row struct a type or a declaration's line names: by the struct
+    itself, or by the container of rows it reads."""
+    for struct in ROW_STRUCTS:
+        if re.search(r"\b" + struct + r"\b", text):
+            return struct
+    for container, struct in (*ROW_CONTAINERS.items(), *vectors.items()):
+        if re.search(r"\b" + re.escape(container) + r"\b", text):
+            return struct
+    return None
+
+
+def written_row(code: str, start: int, own: set[str], own_rows: dict[str, str],
+                vectors: dict[str, str]) -> str | None:
+    """What the object written at `start` (the `.` or `->` before the field)
+    is: a row struct's name, NOT_A_ROW for an object of the source layer's
+    own, None when this cannot tell."""
+    tail = WRITTEN_OBJECT.search(code, max(0, start - 240), start)
+    if tail is None:
+        return None
+    obj = tail.group("obj")
+    for known in (ROW_CONTAINERS, vectors, own_rows):
+        if obj in known:
+            return known[obj]
+    if obj in own:
+        return NOT_A_ROW
+    declared = declaration_of(code, obj, start)
+    if declared is None:
+        return None
+    kind, line = declared
+    if kind is not None:
+        return row_named(kind, {}) or NOT_A_ROW
+    return row_named(line, vectors)
+
+
+def excursion_writes(root: Path) -> Excursions:
+    """Every source-layer write of a row's excursion field through one of the
+    kernel's rows, with the row struct it writes and the function it sits in
+    (the module docstring, "The excursion writers")."""
+    engine = read(root, ENGINE)
+    result = Excursions()
+    names: set[str] = set()
+    for struct in ROW_STRUCTS:
+        declared = set(EXCURSION_FIELDS) & data_fields(
+            class_body(engine, "struct", struct), trailing_underscore=False)
+        if declared:
+            result.guarded.append(struct)
+            names |= declared
+    if not names:
+        return result
+    own = source_class_members(root)
+    row_types = "|".join(ROW_STRUCTS)
+    own_rows = {held.group(2): held.group(1)
+                for relative in coverage.SOURCE_CLASSES
+                for held in re.finditer(
+                    r"\b(" + row_types + r")\b[^;(){}=]*?\b(\w+_)\s*[;={]",
+                    code_only(read(root, relative)))}
+    write = re.compile(r"(?:\.|->)\s*(?P<name>" + "|".join(sorted(names)) + r")\b\s*(?:"
+                       + ASSIGN + r"|\+\+|--)")
+    for path in source_files(root):
+        raw = path.read_text(encoding="utf-8", errors="replace")
+        if not any(name in raw for name in names):
+            continue
+        relative = path.relative_to(root).as_posix()
+        code = code_only(raw)
+        vectors = {name: struct for struct, name in re.findall(
+            r"vector\s*<\s*(" + row_types + r")\s*>\s*&\s*(\w+)", code)}
+        for match in write.finditer(code):
+            struct = written_row(code, match.start(), own, own_rows, vectors)
+            if struct == NOT_A_ROW:
+                continue
+            result.writes.append(ExcursionWrite(
+                struct, match.group("name"), relative,
+                code.count("\n", 0, match.start()) + 1,
+                enclosing_function(code, match.start())))
+    return result
+
+
+def excursion_findings(excursions: Excursions) -> list[str]:
+    """One message per excursion write that is not its row struct's named
+    writer's, per write the gate cannot type, and per named writer of a
+    guarded struct that writes nothing."""
+    findings: list[str] = []
+    writing: set[str] = set()
+    for write in excursions.writes:
+        place = f"`{write.function}`" if write.function else "no function the gate can name"
+        if write.struct is None:
+            findings.append(
+                f"`{write.name}` is written at {write.site}, in {place}, through an object the "
+                "gate cannot type: spell the object's type, so a kernel row can be told from the "
+                "source layer's own state")
+            continue
+        relative, function = EXCURSION_WRITERS[write.struct]
+        if (write.relative, write.function) == (relative, function):
+            writing.add(write.struct)
+            continue
+        findings.append(
+            f"a row's excursion `{write.struct}::{write.name}` is written at {write.site}, in "
+            f"{place}: ADR-0001 names one source-layer writer of a `{write.struct}`'s run-up and "
+            f"drawdown, `{function}` ({relative}). Book the excursion there, or rule the new "
+            "writer in ADR-0001 and name it in EXCURSION_WRITERS")
+    for struct in excursions.guarded:
+        relative, function = EXCURSION_WRITERS[struct]
+        if struct not in writing:
+            findings.append(
+                f"EXCURSION_WRITERS names `{function}` ({relative}) as the writer of a "
+                f"`{struct}`'s excursion, and the gate sees it write neither field: remove the "
+                "entry and its ADR-0001 row, or restore the write")
+    return findings
+
+
 def first_cells(root: Path) -> str:
     """The first cell of every table row of the ADR, one per line."""
     cells: list[str] = []
@@ -299,6 +623,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         found = inventory(root)
         rows = first_cells(root)
+        excursions = excursion_writes(root)
     except (Unreadable, ValueError) as error:
         print(f"check_kernel_seam_rows: {error}", file=sys.stderr)
         return 2
@@ -320,12 +645,21 @@ def main(argv: list[str] | None = None) -> int:
                            f"({', '.join(sites[:3])}{', ...' if len(sites) > 3 else ''}) and "
                            "has no ADR-0001 row naming it in its first cell: state who writes "
                            "it, whether it is hashed, and its ruling")
-    for message in missing:
+    stray = excursion_findings(excursions)
+    if args.list:
+        for write in excursions.writes:
+            print(f"     excursion {write.struct or '?'}::{write.name} (written at {write.site}, "
+                  f"in {write.function or '?'})")
+    for message in missing + stray:
         print("check_kernel_seam_rows: " + message, file=sys.stderr)
     print(f"kernel seam rows: {len(found.seams)} kernel source_* seams and "
           f"{len(found.written)} kernel members the source layer writes, "
           f"{len(missing)} without a row ... {'FAIL' if missing else 'OK'}")
-    return 1 if missing else 0
+    if excursions.guarded:
+        print(f"row excursions: {len(excursions.writes)} source-layer writes of a row's run-up "
+              f"or drawdown, {len(stray)} findings against the writers ADR-0001 names ... "
+              f"{'FAIL' if stray else 'OK'}")
+    return 1 if missing or stray else 0
 
 
 if __name__ == "__main__":

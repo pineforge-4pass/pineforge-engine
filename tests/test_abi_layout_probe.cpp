@@ -66,13 +66,17 @@ using Scratch = std::remove_reference_t<
 // projection (#694) grow PineStrategyHost by 176 bytes: Linux x86_64 GNU Release
 // and Debug compiler diagnostics on the combined head measured Host=109800,
 // with Adapter unchanged at 90720.
+// The bar-open excursion note of the long-tick lot (one adapter member of
+// five 8-byte fields, appended after the cohort handle cache, so no member
+// offset moves) adds 40 bytes to both. expectation corrected: Adapter
+// 90720 -> 90760 and Host 109800 -> 109840, because that member was added.
 static_assert(sizeof(Scratch) == 672, "RetiredRowScratch size changed");
-static_assert(sizeof(Adapter) == 90720, "PineExecutionAdapter size changed");
+static_assert(sizeof(Adapter) == 90760, "PineExecutionAdapter size changed");
 #ifndef PINEFORGE_RUNTIME_LAYOUT_MEASURE_ONLY
 // Linux x86_64 GNU libstdc++ compiler diagnostics agree in Release and Debug
 // on the integrated tree. Measurement mode skips this pin and is never a
 // passing ABI gate.
-static_assert(sizeof(Host) == 109800, "PineStrategyHost size changed; measure and pin the final layout");
+static_assert(sizeof(Host) == 109840, "PineStrategyHost size changed; measure and pin the final layout");
 #endif
 static_assert(PF_STREAM_ENGINE_LAYOUT_VERSION == 4u, "runtime contexts require layout stamp 4");
 static_assert(!HasRosterRoots<Scratch>::value,
@@ -142,9 +146,9 @@ int main() {
 #if defined(__linux__) && defined(__x86_64__) && defined(__GLIBCXX__)
     bool pins_hold = true;
     pins_hold &= pin("sizeof RetiredRowScratch", sizeof(Scratch), 672);
-    pins_hold &= pin("sizeof PineExecutionAdapter", sizeof(Adapter), 90720);
+    pins_hold &= pin("sizeof PineExecutionAdapter", sizeof(Adapter), 90760);
 #ifndef PINEFORGE_RUNTIME_LAYOUT_MEASURE_ONLY
-    pins_hold &= pin("sizeof PineStrategyHost", sizeof(Host), 109800);
+    pins_hold &= pin("sizeof PineStrategyHost", sizeof(Host), 109840);
 #else
     // A successful measurement command is never a successful layout test.
     pins_hold = false;

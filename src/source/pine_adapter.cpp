@@ -2815,7 +2815,7 @@ void PineExecutionAdapter::reset_for_run() {
     long_tick_margin_active_ = false;
     long_tick_margin_bar_ = std::numeric_limits<std::int64_t>::min();
     long_tick_margin_point_ = -1;
-    long_tick_margin_owed_units_ = 0.0;
+    long_tick_margin_owed_units_ = 0.0; long_tick_open_lot_ = LongTickOpenLot{};
     open_exit_first_bar_ = std::numeric_limits<std::int64_t>::min();
     open_exit_first_origin_ = 0;
     open_exit_first_id_.clear();
@@ -20109,9 +20109,9 @@ bool PineExecutionAdapter::long_tick_margin_scope() const {
     });
 }
 
-void PineExecutionAdapter::observe_long_tick_margin_bar(const Bar&) {
-    if (!long_tick_margin_active_ && long_tick_margin_scope())
-        long_tick_margin_active_ = true;
+void PineExecutionAdapter::observe_long_tick_margin_bar(const Bar& bar) {
+    if (!long_tick_margin_active_ && long_tick_margin_scope()) long_tick_margin_active_ = true;
+    if (long_tick_margin_active_) note_long_tick_open_lot(bar);
 }
 
 bool PineExecutionAdapter::submit_tv_money_long_margin_call(
@@ -20149,7 +20149,7 @@ bool PineExecutionAdapter::submit_tv_money_long_margin_call(
             const double units = own_units > 0.0 ? own_units : long_tick_margin_owed_units_;
             long_tick_margin_owed_units_ = 0.0;
             if (!(units > 0.0)) continue;
-            if (!submit_margin_call_units(money.mark, context, units, true, money.mark))
+            if (!submit_long_tick_margin_units(bar, path, point, money.mark, context, units))
                 continue;
             called = true;
             if (fired_waypoint) *fired_waypoint = point;
@@ -31988,6 +31988,106 @@ bool PlacementTable::compact_old() noexcept {
         base_ = high_water_ + 1U;
     }
     return true;
+}
+
+// Two bodies of the long-tick margin walk (observe_long_tick_margin_bar,
+// submit_tv_money_long_margin_call), kept after the adapter's cited
+// implementation regions as the bodies above are.
+//
+// The lot of an armed full-margin long as its script bar opens, before the
+// kernel walks any of that bar's path: its opening request, the units it
+// holds and the favorable and adverse extremes the kernel has sampled for it
+// so far. A book that is not one long lot leaves no note, and a call of that
+// bar is then booked from the lot as it stands.
+void PineExecutionAdapter::note_long_tick_open_lot(const Bar& bar) {
+    long_tick_open_lot_ = LongTickOpenLot{};
+    const auto* pine = pine_view_of(host_);
+    if (pine == nullptr || pine->position_side_ != PositionSide::LONG
+        || pine->pyramid_entries_.size() != 1
+        || !(pine->pyramid_entries_.front().qty > 0.0)) {
+        return;
+    }
+    long_tick_open_lot_ = LongTickOpenLot{
+        bar.timestamp, pine->pyramid_entries_.front().entry_incarnation,
+        pine->pyramid_entries_.front().qty, pine->pyramid_entries_.front().max_runup,
+        pine->pyramid_entries_.front().max_drawdown};
+}
+
+// A margin call of the long-tick walk at one point of its script bar's path
+// (0 the open, 1 and 2 the extremes in path order, 3 the close). The walk
+// takes the checks inside a bar from that bar's calculation and books each
+// call at its own waypoint's print, but the kernel has walked the whole path
+// by then: the lot has sampled the prices printed after that waypoint too,
+// and a row closed from it would report them. TradingView folds no extreme
+// after a closing fill (tests/test_e19_excursion_tape.cpp, class B), and it
+// does count the bar up to that fill. So the call is booked from the lot's
+// extremes as of its waypoint -- what the lot had sampled as the bar opened,
+// then the path from there to the waypoint, each sample the kernel's own
+// (NativeExecutionConsumer::apply_excursion) -- and the units that stay
+// open, which were open through the whole bar, get the bar's extremes back
+// at their size. The fill, its units and its price are untouched.
+bool PineExecutionAdapter::submit_long_tick_margin_units(
+        const Bar& bar, const double* path, int point, double mark,
+        const NativeDecisionContext& context, double units) {
+    auto* pine = pine_view_of(host_);
+    // A call at the bar's open is booked there, ahead of the path. From the
+    // second extreme on, only the close is still to print, and a close lies
+    // between its bar's extremes: the lot as it stands is the lot at that
+    // waypoint. Without the note of this very lot at this bar's open, the
+    // lot is booked as it stands too.
+    if (context.coordinate.path_phase == NativePathPhase::Open || point > 1 || pine == nullptr
+        || pine->position_side_ != PositionSide::LONG || pine->pyramid_entries_.size() != 1
+        || !(pine->pyramid_entries_.front().qty > 0.0)
+        || long_tick_open_lot_.bar != bar.timestamp
+        || long_tick_open_lot_.incarnation != pine->pyramid_entries_.front().entry_incarnation
+        || !(long_tick_open_lot_.units > 0.0)) {
+        return submit_margin_call_units(mark, context, units, true, mark);
+    }
+    // The one place the source layer writes a lot's extremes, a narrow
+    // exception the boundary table names (docs/adr/0001-kernel-adapter-boundary.md,
+    // the row on the extremes of a lot presented to a late booking): for the
+    // length of this booking only, and only values the kernel sampled.
+    PyramidEntry& booked = pine->pyramid_entries_.front();
+    const double booked_units = booked.qty;
+    const double entry_price = booked.price;
+    const double bar_favorable = booked.max_runup;
+    const double bar_adverse = booked.max_drawdown;
+    // A partial close since the open scaled the lot's extremes with its units.
+    const double carried = booked_units / long_tick_open_lot_.units;
+    double favorable = long_tick_open_lot_.favorable * carried;
+    double adverse = long_tick_open_lot_.adverse * carried;
+    if (point == 1) {
+        // The first extreme itself, as the kernel sampled it.
+        const double gain = (path[1] - entry_price) * booked_units;
+        favorable = std::max(favorable, std::max(0.0, gain));
+        adverse = std::max(adverse, std::max(0.0, -gain));
+    }
+    // A waypoint's extremes are never beyond the whole bar's: where nothing
+    // after the waypoint moved them, the lot is booked exactly as it stands.
+    booked.max_runup = std::min(favorable, bar_favorable);
+    booked.max_drawdown = std::min(adverse, bar_adverse);
+    // The booking replaces the book's rows, so the lot is found again after it.
+    const auto restore = [&]() noexcept {
+        if (pine->pyramid_entries_.size() != 1
+            || pine->pyramid_entries_.front().entry_incarnation
+                != long_tick_open_lot_.incarnation) {
+            return;
+        }
+        PyramidEntry& survivor = pine->pyramid_entries_.front();
+        // The kernel's own scaling of a partly closed lot; 1 where none closed.
+        const double kept_share = survivor.qty / booked_units;
+        survivor.max_runup = bar_favorable * kept_share;
+        survivor.max_drawdown = bar_adverse * kept_share;
+    };
+    bool called = false;
+    try {
+        called = submit_margin_call_units(mark, context, units, true, mark);
+    } catch (...) {
+        restore();
+        throw;
+    }
+    restore();
+    return called;
 }
 
 namespace {
