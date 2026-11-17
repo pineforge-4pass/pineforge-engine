@@ -3,6 +3,7 @@
 
 #include "json.hpp"
 
+#include <pineforge/native_calendar.hpp>
 #include <pineforge/native_run_spec.hpp>
 #include <pineforge/pineforge.h>
 
@@ -48,6 +49,22 @@ pineforge::NativeRunSpec native_run_spec(const NativeConfigValues& native);
 
 std::vector<pf_bar_t> history(const std::string& csv, bool native = false);
 void require_native_warmup(const NativeConfigValues& spec, const std::vector<pf_bar_t>& bars);
+// One step of require_chart_calendar's walk over a daily, multi-day or weekly
+// chart on a calendar without daylight saving: may the chart period `next`,
+// read on the trading day `next_day`, follow `last`, the period read on the
+// trading day before? Yes when both are one period, or when their first
+// trading instants lie a whole number of chart periods apart.
+// A multi-day chart restarts its periods on 1 January, as its history does
+// (#811), so the last period of a year is short when the year's day count is
+// not a multiple of the chart's count. That step is admitted too, in this
+// shape only: `next` opens with the session day of 1 January, at the instant
+// `last` ends, and first trades as that day does, a whole number of days,
+// fewer than the chart's count, after `last` first traded. Every other gap,
+// overlap or short period is refused.
+bool chart_periods_tile(const pineforge::native_calendar::Timeframe& chart,
+                        const pineforge::native_calendar::NativeInterval& last,
+                        const pineforge::native_calendar::NativeInterval& next,
+                        const pineforge::native_calendar::NativeSessionDay& next_day);
 void require_chart_calendar(const std::string& script_tf, const std::string& timezone,
                             std::int64_t first_timestamp, const std::string& session = "24x7",
                             bool confirmed_chart_bars = true,

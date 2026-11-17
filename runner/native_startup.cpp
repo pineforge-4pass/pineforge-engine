@@ -560,6 +560,33 @@ void require_native_warmup(const NativeConfigValues& spec, const std::vector<pf_
     }
 }
 
+bool chart_periods_tile(const pineforge::native_calendar::Timeframe& chart,
+                        const pineforge::native_calendar::NativeInterval& last,
+                        const pineforge::native_calendar::NativeInterval& next,
+                        const pineforge::native_calendar::NativeSessionDay& next_day) {
+    using Unit = pineforge::native_calendar::TimeframeUnit;
+    if (!chart.valid() || (chart.unit() != Unit::Day && chart.unit() != Unit::Week))
+        return false;
+    constexpr std::int64_t day_ms = 86400000;
+    const auto period = static_cast<std::int64_t>(chart.count()) *
+                        (chart.unit() == Unit::Week ? 7 * day_ms : day_ms);
+    const auto elapsed = next.eligible_open_ms - last.eligible_open_ms;
+    if (elapsed % period == 0)
+        return true;
+    if (chart.unit() != Unit::Day || chart.count() < 2)
+        return false;
+    // The year's short last period, and nothing else: a closed 1 January, a
+    // period that runs past 1 January, a part of a day and a short period
+    // anywhere else in the year each fail one of these.
+    const auto opening = pineforge::native_calendar::native_civil_date(next_day.ordinal);
+    return opening.month == 1 && opening.day == 1 &&
+           !next_day.spans.empty() &&
+           next.open_ms == next_day.origin_ms &&
+           next.eligible_open_ms == next_day.spans.front().first &&
+           next.open_ms == last.next_period_open_ms &&
+           elapsed > 0 && elapsed < period && elapsed % day_ms == 0;
+}
+
 void require_chart_calendar(const std::string& script_tf, const std::string& timezone,
                             std::int64_t first_timestamp, const std::string& session,
                             bool confirmed_chart_bars,
@@ -632,10 +659,11 @@ void require_chart_calendar(const std::string& script_tf, const std::string& tim
                         interval->eligible_open_ms != previous_calendar_interval->eligible_open_ms &&
                         interval->eligible_open_ms != previous_calendar_interval->next_input_open_ms)
                         refuse_tiling();
-                    previous_calendar_interval = interval;
-                } else if (previous_origin && (interval->eligible_open_ms - *previous_origin) % period != 0)
+                } else if (previous_calendar_interval &&
+                           !chart_periods_tile(*clock, *previous_calendar_interval,
+                                               *interval, *day))
                     refuse_tiling();
-                previous_origin = interval->eligible_open_ms;
+                previous_calendar_interval = interval;
             } else {
                 if (previous_origin && (day->origin_ms - *previous_origin) % period != 0)
                     refuse_tiling();
