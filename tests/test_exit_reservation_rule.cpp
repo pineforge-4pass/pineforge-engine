@@ -7,6 +7,16 @@
 //   An exit id that has filled on an opening, fully or in part, does not
 //   fill again on that opening.
 //
+// and, where an entry id has more than one opening (pyramiding):
+//
+//   An exit that names a quantity is one order for each opening of its entry
+//   id, each for that quantity. Whichever of those orders fills takes its
+//   units from the oldest lots, first in first out. Each opening's order
+//   fills at most once, fully or in part: an opening whose order has filled
+//   gets none. An opening that fills later gets an order of its own, at the
+//   level and quantity the exit was last placed with, whether or not the
+//   script calls the exit again.
+//
 // Rows and where their expectations come from. Each captured row is the
 // TradingView capture's order sequence replayed at this file's own prices;
 // the quantities, the exit that fills and the bar it fills on are the
@@ -64,6 +74,53 @@
 //    again when the price reaches it. Before the correction it was never
 //    placed: the calls of the earlier runs had each replaced the order, and
 //    every replaced order still counted as a spent exit of that opening.
+//
+// The pyramiding rows (BINANCE:BTCUSDT 15, two pyramiding slots, first in
+// first out). Beside the closed rows they compare the lot each one came from,
+// named by the bar its entry opened on.
+//
+// 9. two-openings-spent and two-openings-other-id [e495b221]: "L" 2 is opened
+//    twice, and with both open a qty-1 limit exit "X" is called once. It
+//    fills 1 and 1, one order for each opening, and both units come from the
+//    first opening's lot. One qty-1 stop is then called. Under the same id
+//    "X" it never fills: each opening's order of "X" has filled, though the
+//    second opening's lot is untouched and nothing reserves it; its 2 units
+//    stay until the script closes them. Under another id "Y", the capture's
+//    twin, it fills 1 and 1, both from the second opening's lot.
+// 10. two-openings-quantity-two [c23310ec]: the same with qty 2. The limit
+//    exit closes 2 and 2, the first opening's lot and then the second's, and
+//    the position is flat. (The capture's twin calls the later stop under
+//    another id; flat, its trade list is the same.)
+// 11. add-with-exit [9f5205f7, cell 1]: "A" 2 with a qty-1 limit exit "X";
+//    with the limit not yet reached, a 1-unit market add of "A" is placed
+//    and "X" is called again in the same calculation. The add opens on the
+//    bar that passes the limit, and "X" fills 1 and 1 there, one order for
+//    each opening, both from the first opening's lot. The add's lot stays
+//    open until the script closes it. Before the correction a third fill of
+//    "X" closed the add's own lot and the book was flat.
+// 12. add-after-fill [9f5205f7, cell 2]: the same with a nearer limit, which
+//    the bar before the add passes: "X" fills 1 before the add is placed.
+//    Called again with the add, at a level the price has already passed, "X"
+//    fills once more where the add opens, at that opening price and from the
+//    first opening's lot; the add's lot stays open until the script closes
+//    it. Before the correction a further fill of "X" closed the add's lot.
+// 13. added-opening-no-call and added-opening-other-id [d7520d72]: "L" 2 with
+//    a qty-1 limit exit "X" called once; "X" fills 1, and "L" 2 is opened
+//    again. With no further exit call, "X" fills 1 again the next time its
+//    limit is reached, nine bars after the second opening, from the first
+//    opening's lot: the second opening has an order of "X" of its own. The 2
+//    units left are the second opening's and stay until the script closes
+//    them. With a qty-1 stop called under another id "Y" after the second
+//    opening, the capture's twin, "Y" fills 1 and 1 at its stop, the first
+//    opening's last unit and one of the second's, and "X" still fills 1 at
+//    its limit afterwards, from the second opening's lot; the position is
+//    flat. Before the correction the second opening had no order of "X"
+//    unless the script called "X" again: "X" never filled a second time.
+// 14. added-opening-called-again [d7520d72]: the same with that stop called
+//    under the id "X" itself. The call replaces the second opening's order
+//    of "X", and the first opening's has filled: "X" fills 1 at the stop,
+//    from the first opening's lot, and nothing when its old limit is reached
+//    later. The 2 units left stay until the script closes them.
 //
 // No market data or fixture is read.
 
@@ -158,12 +215,19 @@ private:
 // exit that closed it, its quantity and its exit price.
 using Fill = std::tuple<int, std::string, std::string, double, double>;
 
+// The lot a closed row came from, where two openings share one entry id: the
+// bar it closed on, the exit that closed it, the bar its entry opened on and
+// its quantity.
+using Lot = std::tuple<int, std::string, int, double>;
+
 struct Row {
     const char* name;
     Setup setup;
     std::vector<Ohlc> tape;
     Probe::Script script;
     std::vector<Fill> expected;
+    // Compared only by the rows that name them.
+    std::vector<Lot> lots;
 };
 
 std::string text(const Fill& fill) {
@@ -174,12 +238,21 @@ std::string text(const Fill& fill) {
     return line;
 }
 
+std::string text(const Lot& lot) {
+    char line[160];
+    std::snprintf(line, sizeof line, "bar %d exit=%s entry opened on bar %d quantity=%.17g",
+                  std::get<0>(lot), std::get<1>(lot).c_str(), std::get<2>(lot),
+                  std::get<3>(lot));
+    return line;
+}
+
 bool run_row(const Row& row) {
     Probe probe(row.setup, row.script);
     const auto bars = bars_of(row.tape);
     probe.run(bars.data(), static_cast<int>(bars.size()), "15", "15");
 
     std::vector<Fill> actual;
+    std::vector<Lot> actual_lots;
     bool open_row = false;
     std::printf("%s: trades=%d final position=%.17g\n", row.name, probe.trade_count(),
                 probe.position());
@@ -187,9 +260,15 @@ bool run_row(const Row& row) {
         const Trade& trade = probe.get_trade(i);
         const Fill fill{trade.exit_bar_index, trade.entry_id, trade.exit_id, trade.qty,
                         trade.exit_price};
-        std::printf("  %s open=%d\n", text(fill).c_str(), trade.open_at_end ? 1 : 0);
-        if (trade.open_at_end) open_row = true;
-        else actual.push_back(fill);
+        std::printf("  %s entry opened on bar %d open=%d\n", text(fill).c_str(),
+                    trade.entry_bar_index, trade.open_at_end ? 1 : 0);
+        if (trade.open_at_end) {
+            open_row = true;
+        } else {
+            actual.push_back(fill);
+            actual_lots.emplace_back(trade.exit_bar_index, trade.exit_id, trade.entry_bar_index,
+                                     trade.qty);
+        }
     }
     std::fflush(stdout);
 
@@ -225,6 +304,26 @@ bool run_row(const Row& row) {
     for (const Fill& fill : unexpected) {
         std::printf("FAIL %s: present and not expected: %s\n", row.name, text(fill).c_str());
         ok = false;
+    }
+    // Which opening's lot each closed row took, for the rows that name it.
+    if (!row.lots.empty()) {
+        std::vector<Lot> expected_lots = row.lots;
+        std::sort(actual_lots.begin(), actual_lots.end());
+        std::sort(expected_lots.begin(), expected_lots.end());
+        std::vector<Lot> missing_lots, unexpected_lots;
+        std::set_difference(expected_lots.begin(), expected_lots.end(), actual_lots.begin(),
+                            actual_lots.end(), std::back_inserter(missing_lots));
+        std::set_difference(actual_lots.begin(), actual_lots.end(), expected_lots.begin(),
+                            expected_lots.end(), std::back_inserter(unexpected_lots));
+        for (const Lot& lot : missing_lots) {
+            std::printf("FAIL %s: lot expected and absent: %s\n", row.name, text(lot).c_str());
+            ok = false;
+        }
+        for (const Lot& lot : unexpected_lots) {
+            std::printf("FAIL %s: lot present and not expected: %s\n", row.name,
+                        text(lot).c_str());
+            ok = false;
+        }
     }
     if (ok) std::printf("PASS %s\n", row.name);
     return ok;
@@ -371,6 +470,79 @@ void held_reissue(Probe& probe, int bar) {
     if (bar >= 6) probe.close_all();
 }
 
+// The captured two-opening cells: "L" opens at 100 on bar 1 and again at 101
+// on bar 3; a limit at 108 is first reached inside bar 4; a stop at 100, called
+// on bar 5, is first crossed inside bar 6, and bars 7 and 8 are at or below it
+// again; close_all on bar 9.
+const std::vector<Ohlc> kTwoOpeningsTape{
+    {100, 101, 99, 100}, {100, 101, 99, 100}, {100, 102, 100, 101}, {101, 103, 100, 102},
+    {102, 109, 101, 103}, {103, 104, 102, 104}, {104, 105, 98, 99}, {99, 101, 99, 100},
+    {100, 101, 99, 100}, {100, 102, 99, 101}, {101, 102, 100, 101}, {101, 102, 100, 101}};
+
+// The bars are the captures' own: the two entries are called on bars 0 and 2,
+// the limit exit "X" once, on bar 3, with both openings open, and one stop on
+// bar 5 under the same id or under another.
+Probe::Script two_openings(double qty, const char* stop_id) {
+    return [=](Probe& probe, int bar) {
+        if (bar == 0 || bar == 2) probe.entry("L", 2);
+        if (bar == 3) probe.exit_units("X", "L", 108, kNaN, qty);
+        if (bar == 5) probe.exit_units(stop_id, "L", kNaN, 100, qty);
+        if (bar == 9) probe.close_all();
+    };
+}
+
+// The captured add cells, one bar later than the captures count them (their
+// entry call is on the bar before their first): "A" opens at 100 on bar 1;
+// bar 2 runs 101 to 106 and closes at 105; the 1-unit add called on bar 2
+// opens at 105 on bar 3, whose high is 109; nothing is reached afterwards;
+// close_all is called on bar 6 and fills at 106 on bar 7.
+const std::vector<Ohlc> kAddTape{
+    {100, 101, 99, 100}, {100, 101, 99, 100}, {101, 106, 100, 105}, {105, 109, 104, 106},
+    {106, 107, 105, 106}, {106, 107, 105, 106}, {106, 107, 105, 106}, {106, 107, 105, 106},
+    {106, 107, 105, 106}};
+
+// "X" is called on bar 1 and again on bar 2, in the calculation that places
+// the add and after it. A limit of 108 is first reached on the add's bar; a
+// limit of 104 is passed inside bar 2, before the add is placed, and is below
+// the price the add opens at.
+Probe::Script add_with_exit(double limit) {
+    return [=](Probe& probe, int bar) {
+        if (bar == 0) probe.entry("A", 2);
+        if (bar == 1) probe.exit_units("X", "A", limit, kNaN, 1);
+        if (bar == 2) {
+            probe.entry("A", 1);
+            probe.exit_units("X", "A", limit, kNaN, 1);
+        }
+        if (bar == 6) probe.close_all();
+    };
+}
+
+// The captured added-opening cells: "L" opens at 100 on bar 1; a limit at 108
+// is first reached inside bar 4; "L" opens again at 105 on bar 6; a stop at
+// 102, between the two entry prices as in the captures, is first crossed
+// inside bar 10, and bars 13 and 14 are at or below it again; the limit is
+// reached again inside bar 15, and every later bar is at or above it;
+// close_all is called on bar 18 and fills at 109 on bar 19.
+const std::vector<Ohlc> kAddedOpeningTape{
+    {100, 101, 99, 100},  {100, 101, 99, 100},  {100, 102, 99, 101},  {101, 103, 100, 102},
+    {102, 109, 101, 104}, {104, 106, 103, 105}, {105, 106, 104, 105}, {105, 106, 104, 105},
+    {105, 106, 103, 104}, {104, 105, 103, 104}, {104, 105, 101, 103}, {103, 105, 103, 104},
+    {104, 105, 103, 104}, {104, 105, 102, 103}, {103, 105, 101, 104}, {104, 109, 103, 108},
+    {108, 110, 107, 109}, {109, 110, 108, 109}, {109, 110, 108, 109}, {109, 110, 108, 109},
+    {109, 110, 108, 109}};
+
+// The bars are the captures' own: the entries are called on bars 0 and 5, the
+// limit exit "X" once, on bar 1, and on bar 6, with the second opening open,
+// one stop under `later_id`, or no call at all.
+Probe::Script added_opening(const char* later_id) {
+    return [=](Probe& probe, int bar) {
+        if (bar == 0 || bar == 5) probe.entry("L", 2);
+        if (bar == 1) probe.exit_units("X", "L", 108, kNaN, 1);
+        if (bar == 6 && later_id) probe.exit_units(later_id, "L", kNaN, 102, 1);
+        if (bar == 18) probe.close_all();
+    };
+}
+
 std::vector<Row> rows() {
     Setup capture{};
     Setup resize_one{};
@@ -385,6 +557,8 @@ std::vector<Row> rows() {
     Setup recalculating_no_slots{};
     recalculating_no_slots.pyramiding = 0;
     recalculating_no_slots.recalculate_on_fills = true;
+    Setup two_openings_capture = two_slots;
+    two_openings_capture.margin = 0.0;
     return {
         {"stop-alone", capture, kStopTape, later_stop(0, 2),
          {Fill{4, "entry", "later", 2, 95}}},
@@ -415,6 +589,36 @@ std::vector<Row> rows() {
           Fill{7, "L", kCloseAll, 1, 109}}},
         {"cancelled-stop-placed-again", recalculating_no_slots, kCancelTape, cancelled_stop,
          {Fill{3, "ticket", "first", 65, 164}, Fill{6, "ticket", "runner", 65, 169}}},
+        {"two-openings-spent", two_openings_capture, kTwoOpeningsTape, two_openings(1, "X"),
+         {Fill{4, "L", "X", 1, 108}, Fill{4, "L", "X", 1, 108}, Fill{10, "L", kCloseAll, 2, 101}},
+         {Lot{4, "X", 1, 1}, Lot{4, "X", 1, 1}, Lot{10, kCloseAll, 3, 2}}},
+        {"two-openings-other-id", two_openings_capture, kTwoOpeningsTape, two_openings(1, "Y"),
+         {Fill{4, "L", "X", 1, 108}, Fill{4, "L", "X", 1, 108}, Fill{6, "L", "Y", 1, 100},
+          Fill{6, "L", "Y", 1, 100}},
+         {Lot{4, "X", 1, 1}, Lot{4, "X", 1, 1}, Lot{6, "Y", 3, 1}, Lot{6, "Y", 3, 1}}},
+        {"two-openings-quantity-two", two_openings_capture, kTwoOpeningsTape,
+         two_openings(2, "X"), {Fill{4, "L", "X", 2, 108}, Fill{4, "L", "X", 2, 108}},
+         {Lot{4, "X", 1, 2}, Lot{4, "X", 3, 2}}},
+        {"add-with-exit", two_slots, kAddTape, add_with_exit(108),
+         {Fill{3, "A", "X", 1, 108}, Fill{3, "A", "X", 1, 108}, Fill{7, "A", kCloseAll, 1, 106}},
+         {Lot{3, "X", 1, 1}, Lot{3, "X", 1, 1}, Lot{7, kCloseAll, 3, 1}}},
+        {"add-after-fill", two_slots, kAddTape, add_with_exit(104),
+         {Fill{2, "A", "X", 1, 104}, Fill{3, "A", "X", 1, 105}, Fill{7, "A", kCloseAll, 1, 106}},
+         {Lot{2, "X", 1, 1}, Lot{3, "X", 1, 1}, Lot{7, kCloseAll, 3, 1}}},
+        {"added-opening-no-call", two_openings_capture, kAddedOpeningTape,
+         added_opening(nullptr),
+         {Fill{4, "L", "X", 1, 108}, Fill{15, "L", "X", 1, 108},
+          Fill{19, "L", kCloseAll, 2, 109}},
+         {Lot{4, "X", 1, 1}, Lot{15, "X", 1, 1}, Lot{19, kCloseAll, 6, 2}}},
+        {"added-opening-other-id", two_openings_capture, kAddedOpeningTape, added_opening("Y"),
+         {Fill{4, "L", "X", 1, 108}, Fill{10, "L", "Y", 1, 102}, Fill{10, "L", "Y", 1, 102},
+          Fill{15, "L", "X", 1, 108}},
+         {Lot{4, "X", 1, 1}, Lot{10, "Y", 1, 1}, Lot{10, "Y", 6, 1}, Lot{15, "X", 6, 1}}},
+        {"added-opening-called-again", two_openings_capture, kAddedOpeningTape,
+         added_opening("X"),
+         {Fill{4, "L", "X", 1, 108}, Fill{10, "L", "X", 1, 102},
+          Fill{19, "L", kCloseAll, 2, 109}},
+         {Lot{4, "X", 1, 1}, Lot{10, "X", 1, 1}, Lot{19, kCloseAll, 6, 2}}},
     };
 }
 

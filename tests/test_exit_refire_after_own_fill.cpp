@@ -1285,10 +1285,24 @@ constexpr std::int64_t kTimedExitMs = 1'757'688'300'000LL;  // 2025-09-12 14:45 
 constexpr int kTimedEntryBar = 5, kTimedExitBar = 8;
 
 // Synthetic prefix: a full reissue arms a same-bar add's leg; its FIFO fill
-// drains the older opening, so the main-compatible cover must close the add.
+// drains the older opening. That leg is the add's own order of the exit, so
+// no second fill covers the add: its unit stays open, and the script closes
+// it with the timed entry call.
 // The timed suffix declares a new entry and BOTH one-unit exits together,
 // before the entry fills. Its stop is first crossed three bars after entry.
 // The prefix is a constructed causal witness, not a recovered script trace.
+//
+// expectation corrected: native cover units 1 -> 0 and position after the
+// reissued fill 0 -> 1, because TradingView does not make the cover's fill.
+// Its capture of this prefix (BINANCE:BTCUSDT 15, pyramiding 2, first in
+// first out; answers digest 9f5205f7, cell 2): a 2-unit entry whose qty-1
+// limit exit has filled once, then a 1-unit market add of the same id with
+// the exit called again in the same calculation. On the add's bar the exit
+// fills once more, 1 unit from the older lot, and the add's lot stays open
+// until the script closes it. The cover had closed the add's own lot as a
+// further fill of the exit. The suffix keeps its inputs and oracles; the
+// unit the prefix now leaves is closed by an explicit close placed with the
+// timed entry, which fills first, at the same open.
 class CoverTimedAddProbe final : public source::PineStrategyHost {
 public:
     CoverTimedAddProbe() {
@@ -1423,10 +1437,13 @@ public:
             setup_expect("seed add really opened", openings, 1);
             setup_expect("fresh seed leg really filled", priced, 1);
             // These are behavioral assertions, not setup preconditions: a
-            // missing cover must remain visible in the later economic oracle.
-            expect("ungated native cover units", covered, 1.0);
-            expect("position after ungated cover", signed_position_size(), 0.0);
+            // cover must remain visible in the later economic oracle.
+            expect("no native cover of the add", covered, 0.0);
+            expect("the add's unit stays open", signed_position_size(), 1.0);
             timed_events_from = cursor();
+            // The unit the prefix leaves: closed at the next open, before
+            // the timed entry fills there.
+            strategy_close(kCoverSeed);
             strategy_entry(kTimedAdd, true, kNaN, kNaN, 2.0);
             for (std::size_t i = 0; i < kTimedExits.size(); ++i) {
                 strategy_exit(kTimedExits[i], kTimedAdd, 3670.0 + 10.0 * i,
@@ -1654,8 +1671,8 @@ bool run_cover_timed_add() {
         {3650, 3651, 3649, 3650},          // 1: seed opens, limit call
         {3655, 3661, 3654, 3660},          // 2: seed's first one-unit limit
         {3655, 3656, 3654, 3655},          // 3: add and full reissue together
-        {3650, 3661, 3649, 3652.2},        // 4: FIFO fill + cover, timed calls
-        {3650.585, 3653.47, 3649.475, 3652.205}, // 5: 14:00 timed entry
+        {3650, 3661, 3649, 3652.2},        // 4: FIFO fill, no cover; close and timed calls
+        {3650.585, 3653.47, 3649.475, 3652.205}, // 5: 14:00 the add's unit closes, timed entry
         {3652.2, 3654.495, 3651.64, 3652.835},  // 6: 14:15, no stop touch
         {3652.89, 3653.62, 3648.67, 3649.88},   // 7: 14:30, no stop touch
         {3649.86, 3650.1, 3647.425, 3648.06},   // 8: 14:45, stop first crossed
@@ -1712,15 +1729,6 @@ bool run_cover_timed_add() {
             if (request.label == kCoverExit
                 && std::holds_alternative<native_order::Market>(request.trigger)) {
                 ++cover_requests;
-                const auto* reduce = std::get_if<native_order::Reduce>(&request.intent);
-                probe.expect("native cover is a reduction", reduce != nullptr, true);
-                if (reduce) {
-                    const auto* units = std::get_if<native_order::ExplicitUnits>(&reduce->size);
-                    probe.expect("native cover uses explicit units", units != nullptr, true);
-                    if (units) probe.expect("native cover request units", units->units, 1.0);
-                }
-                probe.expect("native cover binds openings",
-                             std::holds_alternative<native_order::BindOpenings>(request.owner), true);
             }
             for (std::size_t i = 0; i < kTimedExits.size(); ++i) {
                 if (request.label != kTimedExits[i]) continue;
@@ -1750,18 +1758,6 @@ bool run_cover_timed_add() {
             if (fill->request().label == kCoverExit) {
                 if (std::holds_alternative<native_order::Market>(fill->request().trigger)) {
                     ++cover_fills;
-                    probe.expect("native cover fill units", fill->closed_units, 1.0);
-                    probe.expect("native cover opens nothing", fill->opened_units, 0.0);
-                    probe.expect("native cover fill bar", fill->interval_index(), 4);
-                    probe.expect("native cover fill time", fill->interval_open_ms(),
-                                 kTimedEntryMs - kInterval);
-                    probe.price("native cover fill price", fill->resolved_price, kCoverLimit);
-                    probe.expect("native cover closes one trade", fill->closed_trade_count, 1);
-                    if (fill->first_trade_index < static_cast<std::size_t>(probe.trade_count()))
-                        probe.expect("native cover closes seed add",
-                                     probe.get_trade(static_cast<int>(fill->first_trade_index))
-                                         .entry_incarnation == probe.seed_add_origin.incarnation, true);
-                    else probe.expect("native cover trade exists", false, true);
                 } else if (std::holds_alternative<native_order::Limit>(fill->request().trigger)) {
                     ++seed_limits;
                 }
@@ -1784,14 +1780,25 @@ bool run_cover_timed_add() {
             }
         }
     }
-    probe.expect("one native cover request", cover_requests, 1);
-    probe.expect("one native cover fill", cover_fills, 1);
+    probe.expect("no native cover request", cover_requests, 0);
+    probe.expect("no native cover fill", cover_fills, 0);
     probe.expect("one reissued seed limit, never an old-origin refire", seed_limits, 1);
 
-    int timed_trades = 0;
+    int timed_trades = 0, add_trades = 0;
     double required_units = 0.0;
     for (int i = 0; i < probe.trade_count(); ++i) {
         const auto& trade = probe.get_trade(i);
+        if (trade.entry_incarnation == probe.seed_add_origin.incarnation) {
+            // The add's unit: untouched by the exit, closed by the script.
+            ++add_trades;
+            probe.expect("add unit is not closed by the exit", trade.exit_id == kCoverExit, false);
+            probe.expect("add unit quantity", trade.qty, 1.0);
+            probe.expect("add unit entry bar", trade.entry_bar_index, 4);
+            probe.expect("add unit exit bar", trade.exit_bar_index, kTimedEntryBar);
+            probe.expect("add unit exit time", trade.exit_time, kTimedEntryMs);
+            probe.price("add unit exit price", trade.exit_price, 3650.585);
+            probe.expect("add unit closed", trade.open_at_end, false);
+        }
         if (trade.entry_incarnation != probe.timed_origin.incarnation) continue;
         ++timed_trades;
         bool named_exit = false;
@@ -1820,6 +1827,7 @@ bool run_cover_timed_add() {
     }
     probe.expect("two timed one-unit trades", timed_trades, 2);
     probe.expect("units closed at required time", required_units, 2.0);
+    probe.expect("one trade of the add's unit", add_trades, 1);
     probe.expect("all trades", probe.trade_count(), 5);
     probe.expect("final position", probe.final_size(), 0.0);
     if (probe.ok) std::printf("PASS %s\n", kCoverTimedRow.name);
@@ -1843,10 +1851,21 @@ constexpr CoverGridRow kCoverGridRows[] = {
     {{"R-cover-short-ANY-grid", false, false, false}, true, 0.00001},
 };
 
-// The timed row above keeps its original inputs and oracles. These cells
-// exercise its causal prefix on both native quantity-grid configurations.
-// FIFO drains the older opening and covers the add; ANY drains its bound add
-// and leaves the older remnant for the later explicit close.
+// These cells exercise the timed row's causal prefix on both native
+// quantity-grid configurations. The reissued leg is the add's own order of
+// the exit and fills once: FIFO takes its unit from the older opening and
+// leaves the add's, ANY takes the add's own unit and leaves the older
+// remnant. Either way nothing covers the add, and the unit left waits for
+// the later explicit close.
+//
+// expectation corrected, the four FIFO cells: native cover requests and fills
+// 1 -> 0 and position after the priced fill 0 -> the add's 0.01, because
+// TradingView does not make the cover's fill (the capture cited at the timed
+// row, answers digest 9f5205f7, cell 2: the exit fills once more on the add's
+// bar, from the older lot, and the add's lot stays open). The third trade of
+// those cells is now the explicit close of the add's unit. The capture is of
+// a long position under the first-in-first-out rule; the short cells mirror
+// it as they mirrored the cover.
 class CoverGridProbe final : public source::PineStrategyHost {
 public:
     explicit CoverGridProbe(const CoverGridRow& row) : cell(row) {
@@ -1915,7 +1934,7 @@ public:
             prefix_events_from = cursor();
             strategy_entry("seed", cell.row.is_long, kNaN, kNaN, 0.01);
             // This quantity covers all held units at the command boundary,
-            // so it must retain ordinary same-id cover eligibility.
+            // so the call is admitted the ordinary way, as any full call is.
             arm();
             for (const auto& row : native_events(prefix_events_from)) {
                 if (!row.command) continue;
@@ -1936,8 +1955,7 @@ public:
             prefix_ready = true;
         }
         if (bar == 4)
-            quantity("position after priced fill and cover", signed_position_size(),
-                     cell.any ? sign * 0.01 : 0.0);
+            quantity("position after priced fill", signed_position_size(), sign * 0.01);
         if (bar == 5) strategy_close_all();
     }
     double final_size() const { return signed_position_size(); }
@@ -2006,13 +2024,6 @@ bool run_cover_grid(const CoverGridRow& cell) {
                 }
             } else if (std::holds_alternative<native_order::Market>(request.trigger)) {
                 ++cover_requests;
-                const auto* reduce = std::get_if<native_order::Reduce>(&request.intent);
-                const auto* units = reduce
-                    ? std::get_if<native_order::ExplicitUnits>(&reduce->size) : nullptr;
-                probe.expect("cover uses native explicit reduction", units != nullptr, true);
-                if (units) probe.quantity("cover request units", units->units, 0.01);
-                probe.expect("cover binds openings",
-                             std::holds_alternative<native_order::BindOpenings>(request.owner), true);
             } else {
                 probe.expect("unexpected slice request", true, false);
             }
@@ -2042,7 +2053,7 @@ bool run_cover_grid(const CoverGridRow& cell) {
         probe.expect("native closed trade exists", exists, true);
         if (exists) {
             const auto& trade = probe.get_trade(static_cast<int>(fill->first_trade_index));
-            const auto origin = cover || cell.any ? probe.add_origin : probe.old_origin;
+            const auto origin = cell.any ? probe.add_origin : probe.old_origin;
             probe.expect("native fill closes required opening",
                          trade.entry_incarnation == origin.incarnation, true);
         }
@@ -2050,8 +2061,8 @@ bool run_cover_grid(const CoverGridRow& cell) {
     probe.expect("one actual add opening", add_fills, 1);
     probe.expect("one reissued priced request", priced_requests, 1);
     probe.expect("one reissued priced fill", priced_fills, 1);
-    probe.expect("native cover request count", cover_requests, cell.any ? 0 : 1);
-    probe.expect("native cover fill count", cover_fills, cell.any ? 0 : 1);
+    probe.expect("native cover request count", cover_requests, 0);
+    probe.expect("native cover fill count", cover_fills, 0);
     probe.expect("closed trade count", probe.trade_count(), 3);
     double closed = 0.0;
     for (int i = 0; i < probe.trade_count(); ++i) {
@@ -2061,6 +2072,14 @@ bool run_cover_grid(const CoverGridRow& cell) {
         probe.expect("trade is closed", trade.open_at_end, false);
         probe.quantity("trade quantity", trade.qty, 0.01);
         closed += trade.qty;
+        if (i != 2) continue;
+        // The unit the priced fill left: the add's under FIFO, the older
+        // remnant under ANY.
+        const auto left = cell.any ? probe.old_origin : probe.add_origin;
+        probe.expect("last trade is the explicit close", trade.exit_id == kFinalExitId, true);
+        probe.expect("explicit close takes the unit left",
+                     trade.entry_incarnation == left.incarnation, true);
+        probe.expect("explicit close bar", trade.exit_bar_index, 6);
     }
     probe.quantity("all opened units closed", closed, 0.03);
     probe.quantity("final position", probe.final_size(), 0.0);

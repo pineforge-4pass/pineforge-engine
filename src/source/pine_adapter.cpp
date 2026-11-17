@@ -11959,6 +11959,185 @@ void PineExecutionAdapter::rearm_id_bound_exits(const SourceId& entry_id) {
     }
 }
 
+// A strategy.exit that names a quantity is one order for each opening of its
+// entry id (exit_with_reservation_sequence), and an opening that fills while
+// the exit stands gets its order then, whether or not the script calls the
+// exit again: at the levels and quantity the exit was last placed with.
+// TradingView, BINANCE:BTCUSDT 15, pyramiding 2, first in first out: "L"
+// opens 2 units, a qty-1 limit exit of "L" is called once and fills 1, and
+// "L" opens 2 more. With no further call the exit fills 1 again at its limit,
+// nine bars after the second opening, from the older lot. With another exit
+// id called for both openings instead, that id fills 1 and 1 and the first
+// exit still fills 1 at its limit afterwards. Called again after the second
+// opening at another level, the first exit fills 1 there and nothing at its
+// old limit: the call replaced the second opening's order, and the first
+// opening's had filled. The same rule on the add's own bar is the same-id
+// cover tape (tests/fixtures/ki62_same_id_cover, t3): one exit call, a later
+// add of the id, and the exit fills once for each.
+//
+// The exit stands for the id while a leg of it is still a member of its
+// bracket and is bound to an opening the id holds: a bracket cancellation, a
+// call that leaves the exit no order and strategy.cancel_all take the
+// members, and strategy.cancel withdraws the leg. The newest such leg
+// carries the definition. Every row read here is one the retired-row
+// compaction keeps (sweep_retired_rows, K1: an unwithdrawn, non-dormant
+// lifecycle bound to an opened origin), and an erased row is no member.
+//
+// That definition is the one the script last named in two cases, the two the
+// captures hold. A leg of the exit is still working: every call re-issues it.
+// Or none is, and the script has not called the exit since. Where it has, the
+// call placed no order -- each opening's order of the exit had filled -- and
+// its levels were kept nowhere. No capture says which levels a later
+// opening's order takes then, so that opening gets its order at the script's
+// next call, as before.
+//
+// Also left as they were, for want of a capture: the any-entry close rule
+// and calc_on_order_fills, an exit whose last order names a tick distance or
+// a trail, and a quantity below one lot step.
+void PineExecutionAdapter::arm_standing_exits_for_opening(
+        const PlacementSnapshot& opening, const native_order::ExecutionAppliedEvent& event) {
+    if (config_.close_entries_rule_any || config_.calc_on_order_fills || coof_recalc_active_
+        || opening.source_id.empty()) {
+        return;
+    }
+    const auto cohort = cohorts_by_id_.find(opening.source_id);
+    if (cohort == cohorts_by_id_.end() || cohort->second.opened.size() < 2) return;
+    const native_order::RequestHandle add = event.handle();
+    const auto& opened = cohort->second.opened;
+    const auto exit_of_id = [&](const PlacementSnapshot& row) {
+        return (row.family == PineOrderFamily::ExitLimit
+                || row.family == PineOrderFamily::ExitStop
+                || row.family == PineOrderFamily::ExitTrail)
+            && row.from_entry == opening.source_id;
+    };
+    const auto standing = [&](std::uint64_t incarnation, const PlacementSnapshot& row) {
+        if (!exit_of_id(row) || !finite_positive(row.requested_qty)
+            || row.bracket_origin.incarnation == 0 || row.bracket_origin == add
+            || row.per_entry_origin != 0 || row.immediately || row.void_issue
+            || row.pending_bound_exit || row.reservation_deferred_to_pending_entry
+            || row.legs.target().incarnation == 0
+            || row.legs.target().owner != current_position_cycle_
+            || row.legs.dormant() || withdrawn(row.legs)
+            || std::find(opened.begin(), opened.end(), row.bracket_origin) == opened.end()) {
+            return false;
+        }
+        const auto family = bracket_families_.find(key_for(row.source_id, row.from_entry));
+        return family != bracket_families_.end() && family->second.count(incarnation) != 0;
+    };
+    PINEFORGE_AUDIT_PLACEMENT_SCAN(placement_, standing);
+    struct Definition {
+        std::uint64_t command = 0;
+        SourceId exit_id;
+        PineExitLevels levels;
+        double qty = kNaN;
+        std::string comment;
+        std::string oca_name;
+        // A leg of the exit is on the book: every call re-issues it, so its
+        // levels are the ones the script last named.
+        bool working = false;
+        // No leg works, and a command was issued since the exit's last order
+        // that may be a call of the exit naming other levels.
+        bool followed = false;
+    };
+    std::vector<Definition> definitions;
+    // Read through the const table: this scan changes nothing a pending-order
+    // observer sees.
+    const PlacementTable& rows = placement_;
+    for (const auto& row : rows) {
+        if (!standing(row.first, row.second)) continue;
+        const auto& leg = row.second;
+        auto known = std::find_if(definitions.begin(), definitions.end(),
+            [&](const Definition& value) { return value.exit_id == leg.source_id; });
+        if (known == definitions.end()) {
+            definitions.emplace_back();
+            known = std::prev(definitions.end());
+            known->exit_id = leg.source_id;
+        }
+        known->working = known->working
+            || std::any_of(live_handles_.begin(), live_handles_.end(),
+                [&](const native_order::RequestHandle& live) {
+                    return live.incarnation == row.first;
+                });
+        if (known->command > leg.command_sequence) continue;
+        known->command = leg.command_sequence;
+        known->levels = leg.exit_levels;
+        known->qty = leg.requested_qty;
+        known->comment = leg.comment;
+        known->oca_name = leg.oca_name;
+    }
+    if (definitions.empty()) return;
+    // A call of the exit that places no order, each opening's order of it
+    // having filled, keeps its levels nowhere; all it leaves is the command
+    // number it took. With no leg working, the definition is therefore the
+    // one last named only while every command number issued since its order
+    // is this opening's own entry or another standing exit's last order.
+    // Decided for all of them before the first order below takes a number.
+    const std::uint64_t issued = source_command_sequence_;
+    for (auto& definition : definitions) {
+        if (definition.working) continue;
+        std::uint64_t accounted = 0;
+        const auto since = [&](std::uint64_t command) {
+            return command > definition.command && command <= issued;
+        };
+        if (since(opening.command_sequence)) ++accounted;
+        for (const auto& other : definitions)
+            if (since(other.command)) ++accounted;
+        definition.followed = issued - definition.command != accounted;
+    }
+    // In the order the script last placed them.
+    std::sort(definitions.begin(), definitions.end(),
+        [](const Definition& left, const Definition& right) {
+            return left.command < right.command;
+        });
+    // Whether the opening has an order of the exit already: working, waiting
+    // to be submitted, or filled.
+    const auto has_order = [&](const SourceId& exit_id) {
+        const auto order = [&](const PlacementSnapshot& row) {
+            return exit_of_id(row) && row.source_id == exit_id
+                && (row.bracket_origin == add || row.bracket_origin.incarnation == 0);
+        };
+        for (const auto& handle : live_handles_) {
+            const auto row = placement_.find(handle.incarnation);
+            if (row != placement_.end() && order(row->second)) return true;
+        }
+        const auto waiting = [&](const auto& queued) {
+            return std::any_of(queued.begin(), queued.end(), [&](const auto& row) {
+                return order(row.snapshot);
+            });
+        };
+        if (waiting(pending_bracket_legs_) || waiting(pending_coof_requests_)
+            || waiting(delayed_market_orders_)) {
+            return true;
+        }
+        const auto family = bracket_families_.find(key_for(exit_id, opening.source_id));
+        return family != bracket_families_.end() && family->second.filled_on(add.incarnation);
+    };
+    for (const auto& definition : definitions) {
+        const auto& levels = definition.levels;
+        const bool absolute = (std::isfinite(levels.limit) || std::isfinite(levels.stop))
+            && std::isnan(levels.profit_ticks) && std::isnan(levels.loss_ticks)
+            && std::isnan(levels.trail_points) && std::isnan(levels.trail_price)
+            && std::isnan(levels.trail_offset);
+        if (!absolute || definition.followed || has_order(definition.exit_id)) continue;
+        if (staged_.quantity_grid
+            && !(explicit_entry_quantity_floor(definition.qty, staged_.quantity_grid) > 0.0)) {
+            continue;
+        }
+        // The call is for this opening alone (materializing_parent_).
+        materializing_parent_ = add;
+        try {
+            exit_with_reservation_sequence(
+                definition.exit_id, opening.source_id, levels.limit, levels.stop, kNaN, kNaN,
+                kNaN, 100.0, definition.comment, definition.qty, definition.oca_name, kNaN,
+                kNaN, 0);
+        } catch (...) {
+            materializing_parent_ = {};
+            throw;
+        }
+        materializing_parent_ = {};
+    }
+}
+
 void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_entry,
                                 double limit_price, double stop_price, double trail_points,
                                 double trail_offset, double trail_price, double qty_percent,
@@ -11977,6 +12156,14 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         const std::string& comment, double qty, const std::string& oca_name,
         double profit_ticks, double loss_ticks, std::uint64_t reservation_sequence) {
     const double requested_qty_percent = qty_percent;
+    // The one opening this call places an order for, when it is made at that
+    // opening's fill and not by the script (arm_standing_exits_for_opening):
+    // nothing the exit has on the book for another opening is replaced,
+    // withdrawn or cancelled, and a call the reservation leaves nothing
+    // places nothing.
+    const native_order::RequestHandle* const only_opening =
+        !materializing_relative_ && materializing_parent_.incarnation != 0
+            ? &materializing_parent_ : nullptr;
     if (intraday_loss_orders_blocked()) return;
     if (const auto point = detail::callback_point(require_host());
         point && cap_placement_denied(point->decision)) {
@@ -11994,7 +12181,8 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         const double floored = explicit_entry_quantity_floor(qty, staged_.quantity_grid);
         if (floored > 0.0 || !(qty_percent < 100.0)) qty = floored > 0.0 ? floored : kNaN;
     }
-    if (!from_entry.empty()) {
+    if (only_opening && (from_entry.empty() || !std::isfinite(qty))) return;
+    if (!from_entry.empty() && !only_opening) {
         const auto token = named_entry_cancel_tokens_.find(from_entry);
         if (token != named_entry_cancel_tokens_.end()) {
             bool recreated_parent = std::any_of(
@@ -12081,11 +12269,13 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         && !config_.calc_on_order_fills
         && detail::run_position(require_host()).signed_units == 0.0
         && !entry_order_working(nullptr);
+    // An order for one new opening is an order of a held entry.
+    if (only_opening && (void_issue || pending_bound_exit)) return;
     // A pending variable short-context entry is only tentatively held for the
     // three-object ShortSeed command book.  A bracket call proves it belongs
     // to an ordinary entry family, so materialize that entry before binding
     // the bracket just as the legacy source callback did.
-    if (!pending_same_bar_commands_.empty()
+    if (!only_opening && !pending_same_bar_commands_.empty()
         && config_.default_qty_type != static_cast<int>(QtyType::FIXED)
         && detail::run_position(require_host()).signed_units < 0.0) {
         flush_pending_same_bar_commands();
@@ -12728,6 +12918,7 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         live_reservation_basis, percentage_basis, reserved_exit_qty, reservation_sequence,
         whole_position_percent);
     if (!reservation_ok) {
+        if (only_opening) return;
         // clear_existing_exit_order ran before sizing on the legacy route:
         // a zero-capacity reissue removes its predecessor as well as refusing
         // the replacement (ab9714be:pine_strategy_commands.cpp:1688-1699,
@@ -13574,6 +13765,7 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         }
         if (origins.empty()) origins.push_back({});
         for (const auto& origin : origins) {
+            if (only_opening && origin != *only_opening) continue;
             const std::string origin_key = std::to_string(origin.incarnation);
             const auto replacement_key = exit_id + "\x1f" + from_entry + "\x1f"
                 + std::to_string(static_cast<int>(family)) + "\x1f" + origin_key;
@@ -13614,9 +13806,10 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
                     : native_order::Owner{native_order::Independent{}})
                 : native_order::Owner{native_order::BindCohort{cohort}};
             // ab9714be pine_orders.cpp:483-488: cancel_oca_group scopes cancellation strictly to matching oca_name group
+            // An order placed at its opening's fill is on the book at once.
             submit_one(std::move(owner), true, replacement_key,
                        group_for(group_name, 1, static_cast<std::int64_t>(family)),
-                       !has_live_leg, origin);
+                       !has_live_leg && !only_opening, origin);
         }
     };
     const bool exit_is_buy = !parent_long;
@@ -13802,7 +13995,7 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
     // tests/fixtures/exit_reissue_na fran-x1-exit-reissue-na-limit: a re-issue
     // with stop = na or limit = na drops that leg; lane TAIL-D). Trailing legs
     // are left as they are.
-    if (placed_absolute_leg && !has_trail_request) {
+    if (placed_absolute_leg && !has_trail_request && !only_opening) {
         const bool drop_limit = std::isnan(limit_price) && std::isnan(profit_ticks);
         const bool drop_stop = std::isnan(stop_price) && std::isnan(loss_ticks);
         const auto dropped = [&](const PlacementSnapshot& row) {
@@ -13832,7 +14025,7 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
                 }), delayed_market_orders_.end());
         }
     }
-    if (defer_for_same_bar_priority && !from_entry.empty())
+    if (defer_for_same_bar_priority && !from_entry.empty() && !only_opening)
         named_entry_cancel_tokens_.erase(from_entry);
     if (pooc_short_tick_scope && source_point) {
         bool competing_entry = false;
@@ -26530,6 +26723,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         }
         materialize_relative_exits(*placement_snapshot, event);
         per_entry_exits_at_entry_fill(*placement_snapshot, event);
+        arm_standing_exits_for_opening(*placement_snapshot, event);
         const bool true_paired_transaction =
             placement_snapshot->paired_flat_market_candidate
             && finite_positive(placement_snapshot->paired_flat_market_own_qty)
@@ -27857,12 +28051,50 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     // second fill of the same order.
     // A percentage bracket reserved per opening already has a separate leg
     // for each matching add; covering it here would spend that share twice.
+    //
+    // What that second fill is on TradingView: a strategy.exit that names a
+    // quantity is one order for each opening of its entry id, each for that
+    // quantity; each of those orders fills at most once, and whichever fills
+    // takes its units from the oldest lots (captures on BINANCE:BTCUSDT 15,
+    // pyramiding 2, first in first out). The cover is that order for an add
+    // the script did not call the exit for: one exit call, a later add of
+    // the same id, and the exit fills once for each
+    // (tests/fixtures/ki62_same_id_cover, t3). Where the add was given that
+    // order when it filled (arm_standing_exits_for_opening), the cover has
+    // nothing left to stand for; it remains for the adds that function
+    // leaves without one.
+    //
+    // An add that has that order already -- working, waiting for the add's
+    // fill, or filled -- is not covered as well, whether the script's call or
+    // the add's own fill placed it. The captures: a 2-unit entry with a
+    // qty-1 limit exit, then a 1-unit market add of the same id with the
+    // exit called again in the same calculation, the add's bar passing the
+    // limit. The exit fills 1 and 1
+    // there, one for each opening, both from the older lot, and the add's lot
+    // stays open. With the exit already filled once before the add, it fills
+    // once more on the add's bar, from the older lot, and the add's lot stays
+    // open. The cover had closed the add's own lot on top of that, a fill
+    // TradingView does not make and a lot it never takes while an older one
+    // is open.
+    //
+    // Behind a leg bound to an opening, under the first-in-first-out rule,
+    // the cover is therefore that order in every respect: its quantity is the
+    // exit's, one order for each such add (it was the add's whole lot); it
+    // takes its units first in first out (it took the add's own lot); and it
+    // is bound to the add, so the exit counts as filled on the add and a
+    // later call places no second order for it. In t3 the two quantities are
+    // equal, 1 and 1, and the leg has closed everything older, so the lot is
+    // the same. An exit with no opening binding, and the any-entry close
+    // rule, keep the cover as it was: no capture covers them.
     if (placement_snapshot && event.closed_units > 0.0
         && (placement_snapshot->family == PineOrderFamily::ExitLimit
             || placement_snapshot->family == PineOrderFamily::ExitStop
             || placement_snapshot->family == PineOrderFamily::ExitTrail)
         && !placement_snapshot->from_entry.empty()
         && placement_snapshot->per_entry_origin == 0
+        // An order the adapter executed itself at this point, the cover
+        // among them, is no leg's fill.
+        && !placement_snapshot->immediately
         && detail::run_position(require_host()).signed_units != 0.0
         && current_position_cycle_ > 0) {
         auto* pine = pine_view_of(&require_host());
@@ -27882,8 +28114,44 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             detail::ExitScratchIndex selected_adds(adds.context());
             for (const auto& opening : cohort->second.opened)
                 opened.put(opening.incarnation, 0);
+            // Whether the exit has an order of its own for this add: this
+            // fill's leg, a leg on the book, one still waiting to be
+            // submitted, or one that has filled.
+            const std::uint64_t family_key = key_for(placement_snapshot->source_id,
+                                                     placement_snapshot->from_entry);
+            const auto order_for = [&](const PlacementSnapshot& row, std::uint64_t add) {
+                return (row.family == PineOrderFamily::ExitLimit
+                        || row.family == PineOrderFamily::ExitStop
+                        || row.family == PineOrderFamily::ExitTrail)
+                    && row.bracket_origin.incarnation == add
+                    && row.source_id == placement_snapshot->source_id
+                    && row.from_entry == placement_snapshot->from_entry;
+            };
+            const auto has_own_order = [&](std::uint64_t add) {
+                if (placement_snapshot->bracket_origin.incarnation == add) return true;
+                for (const auto& handle : live_handles_) {
+                    const auto row = placement_.find(handle.incarnation);
+                    if (row != placement_.end() && order_for(row->second, add)) return true;
+                }
+                const auto waiting = [&](const auto& rows) {
+                    return std::any_of(rows.begin(), rows.end(), [&](const auto& row) {
+                        return order_for(row.snapshot, add);
+                    });
+                };
+                if (waiting(pending_bracket_legs_) || waiting(pending_coof_requests_)
+                    || waiting(delayed_market_orders_)) {
+                    return true;
+                }
+                const auto family = bracket_families_.find(family_key);
+                return family != bracket_families_.end() && family->second.filled_on(add);
+            };
             double units = 0.0;
-            bool own_add_leg = false;
+            // The scratch rows below are written as they always were, every
+            // add of the bar and in this order: the scratch store is part of
+            // the state hash, and a fill that covers nothing must leave it as
+            // it did. `covered` is the adds with no order of their own.
+            std::vector<native_order::RequestHandle> covered;
+            bool every_add_covered = true;
             for (const auto& lot : pine->pyramid_entries_) {
                 if (!market_pyramid_add(lot.entry_incarnation)
                     || lot.entry_bar_index != bar
@@ -27893,21 +28161,21 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 }
                 if (opened.find(lot.entry_incarnation) == detail::ExitScratchIndex::absent)
                     continue;
-                adds.push_back({adds.context().run, lot.entry_incarnation});
+                const native_order::RequestHandle add{adds.context().run, lot.entry_incarnation};
+                adds.push_back(add);
                 selected_adds.put(lot.entry_incarnation, 0);
+                if (has_own_order(lot.entry_incarnation)) {
+                    every_add_covered = false;
+                    continue;
+                }
+                if (std::find(covered.begin(), covered.end(), add) == covered.end())
+                    covered.push_back(add);
                 units += lot.qty;
-                own_add_leg = own_add_leg
-                    || (placement_snapshot->bracket_origin.incarnation != 0
-                        && lot.entry_incarnation
-                            == placement_snapshot->bracket_origin.incarnation);
             }
             // The cover stands behind the leg's own reduction of an OLDER lot
             // of the id: a leg whose fill reduced only the add, or (FIFO) a
             // lot of another id, keeps to its own quantity
-            // (tests/fixtures/ki62_same_id_cover). A leg admitted through the
-            // fresh-origin exception already owns its add's slice, so it
-            // receives no further cover. Other placements keep the same-id
-            // cover when their FIFO fill drained an older lot.
+            // (tests/fixtures/ki62_same_id_cover).
             bool drained_older = false;
             for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
                 const std::size_t row = event.first_trade_index + i;
@@ -27916,39 +28184,94 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                     && selected_adds.find(pine->trades_[row].entry_incarnation)
                         == detail::ExitScratchIndex::absent);
             }
-            if (!adds.empty() && units > 0.0 && drained_older
-                && !(own_add_leg && placement_snapshot->fresh_origin_bypass)) {
-                native_order::Request request;
-                request.intent = native_order::Reduce{native_order::ExplicitUnits{units}};
-                request.label = placement_snapshot->source_id;
-                request.comment = placement_snapshot->comment;
-                request.trigger = native_order::Market{};
-                request.owner = detail::exit_scratch_versions(adds.context()).freeze_openings(
-                    adds.context().run, current_position_cycle_, adds.size(), &adds,
-                    [](void* opaque, std::uint64_t index, native_order::RequestHandle& result) {
-                        const auto& rows = *static_cast<const detail::ExitScratchRows<
-                            native_order::RequestHandle>*>(opaque);
-                        if (index >= rows.size()) return detail::ScratchStatus::not_found;
-                        try {
-                            result = rows[index];
-                            return detail::ScratchStatus::ok;
-                        } catch (const detail::ExitScratchError& error) {
-                            return error.status();
+            if (!covered.empty() && units > 0.0 && drained_older) {
+                const bool own_order = placement_snapshot->bracket_origin.incarnation != 0
+                    && !config_.close_entries_rule_any
+                    && finite_positive(placement_snapshot->requested_qty);
+                if (own_order) {
+                    // The add's own order of the exit (see above): one for
+                    // each such add, bound to it as a leg of it would be, so
+                    // that its fill is recorded as the add's (the fill fact
+                    // above, the opening roster) and not as a second fill of
+                    // the leg's opening. The leg's row is copied before the
+                    // first of them is submitted.
+                    const PlacementSnapshot leg = *placement_snapshot;
+                    const double fill_price = event.resolved_price;
+                    for (const auto& add : covered) {
+                        const double held = std::abs(
+                            detail::run_position(require_host()).signed_units);
+                        if (!(held > internal::kQtyEpsilon)) break;
+                        const double order_units = std::min(leg.requested_qty, held);
+                        native_order::Request request;
+                        request.intent = native_order::Reduce{
+                            native_order::ExplicitUnits{order_units}};
+                        request.label = leg.source_id;
+                        request.comment = leg.comment;
+                        request.trigger = native_order::Market{};
+                        request.owner = native_order::Independent{};
+                        request.group = native_order::NoGroup{};
+                        PlacementSnapshot cover = leg;
+                        cover.bracket_origin = add;
+                        cover.requested_qty = order_units;
+                        cover.immediately = true;
+                        cover.deferred_cohort = false;
+                        cover.forced_execution_price = fill_price;
+                        const auto accepted = submit_or_replace(
+                            std::move(request), std::move(cover), false,
+                            leg.source_id + "\x1f" + leg.from_entry + "\x1f" + "cover");
+                        if (accepted) {
+                            (void)require_host().execute_current(
+                                {*accepted, NativeCurrentPriceRule::NearestTick});
                         }
-                    });
-                request.group = native_order::NoGroup{};
-                PlacementSnapshot cover = *placement_snapshot;
-                cover.requested_qty = units;
-                cover.immediately = true;
-                cover.deferred_cohort = false;
-                cover.forced_execution_price = event.resolved_price;
-                const auto accepted = submit_or_replace(
-                    std::move(request), std::move(cover), false,
-                    placement_snapshot->source_id + "\x1f" + placement_snapshot->from_entry
-                        + "\x1f" + "cover");
-                if (accepted) {
-                    (void)require_host().execute_current(
-                        {*accepted, NativeCurrentPriceRule::NearestTick});
+                    }
+                } else {
+                    // The cover as it was, bound to the adds it closes: all
+                    // of the bar's, or those left once the adds with an
+                    // order of their own are taken out.
+                    using AddRows = detail::ExitScratchRows<native_order::RequestHandle>;
+                    const auto send = [&](AddRows& rows) {
+                        native_order::Request request;
+                        request.intent = native_order::Reduce{native_order::ExplicitUnits{units}};
+                        request.label = placement_snapshot->source_id;
+                        request.comment = placement_snapshot->comment;
+                        request.trigger = native_order::Market{};
+                        request.owner = detail::exit_scratch_versions(rows.context())
+                            .freeze_openings(
+                                rows.context().run, current_position_cycle_, rows.size(), &rows,
+                                [](void* opaque, std::uint64_t index,
+                                   native_order::RequestHandle& result) {
+                                    const auto& bound = *static_cast<const AddRows*>(opaque);
+                                    if (index >= bound.size())
+                                        return detail::ScratchStatus::not_found;
+                                    try {
+                                        result = bound[index];
+                                        return detail::ScratchStatus::ok;
+                                    } catch (const detail::ExitScratchError& error) {
+                                        return error.status();
+                                    }
+                                });
+                        request.group = native_order::NoGroup{};
+                        PlacementSnapshot cover = *placement_snapshot;
+                        cover.requested_qty = units;
+                        cover.immediately = true;
+                        cover.deferred_cohort = false;
+                        cover.forced_execution_price = event.resolved_price;
+                        const auto accepted = submit_or_replace(
+                            std::move(request), std::move(cover), false,
+                            placement_snapshot->source_id + "\x1f"
+                                + placement_snapshot->from_entry + "\x1f" + "cover");
+                        if (accepted) {
+                            (void)require_host().execute_current(
+                                {*accepted, NativeCurrentPriceRule::NearestTick});
+                        }
+                    };
+                    if (every_add_covered) {
+                        send(adds);
+                    } else {
+                        AddRows remaining(*this);
+                        for (const auto& add : covered) remaining.push_back(add);
+                        send(remaining);
+                    }
                 }
             }
         }

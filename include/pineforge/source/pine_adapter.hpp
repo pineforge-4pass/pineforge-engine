@@ -1311,6 +1311,14 @@ public:
                 && static_cast<std::uint8_t>(fact.first & ~kFillFact) == leg_kind;
         });
     }
+    // Whether a fill's fact names `origin`: the exit has filled on that
+    // opening, through a leg bound to it or through the cover that stands for
+    // one (PineExecutionAdapter::on_applied).
+    bool filled_on(std::uint64_t origin) const noexcept {
+        return std::any_of(consumed_.begin(), consumed_.end(), [&](const auto& fact) {
+            return fill_fact(fact) && fact.second == origin;
+        });
+    }
     // Drops every fill's fact, at the end of its opening's lifetime; whether
     // there was one.
     bool drop_fill_facts() noexcept {
@@ -2836,6 +2844,10 @@ private:
     void withdraw_unplaced_cap_adds(const NativeDecisionContext& context);
     void stash_id_bound_exits(const SourceId& entry_id);
     void rearm_id_bound_exits(const SourceId& entry_id);
+    // An opening that fills while a quantity-named exit of its id stands
+    // gets its own order of that exit.
+    void arm_standing_exits_for_opening(const PlacementSnapshot& opening,
+                                        const native_order::ExecutionAppliedEvent& event);
     void place_entry(const SourceId& id, bool is_long, double limit_price, double stop_price,
                      double qty, const std::string& comment, const std::string& oca_name,
                      int oca_type, int qty_type);
@@ -2958,7 +2970,10 @@ private:
     std::uint64_t last_applied_ordinal_ = 0;
     bool materializing_relative_ = false;
     // The parent whose fill the current materialize_relative_exits re-run
-    // serves; only that parent's armed anchored legs are adoptable.
+    // serves; only that parent's armed anchored legs are adoptable. Set
+    // without materializing_relative_, it is the opening an exit call made
+    // at that opening's fill places its one order for
+    // (arm_standing_exits_for_opening).
     native_order::RequestHandle materializing_parent_{};
     std::int64_t current_position_cycle_ = 0;
     int current_position_sign_ = 0;
