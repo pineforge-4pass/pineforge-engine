@@ -2377,7 +2377,8 @@ private:
                                   double live_basis,
                                   double percentage_basis,
                                   double& reserved_qty,
-                                  std::uint64_t& reservation_sequence) const;
+                                  std::uint64_t& reservation_sequence,
+                                  bool whole_position_percent = false) const;
     void reconcile_deferred_exit_reservations(const SourceId& from_entry,
                                                double live_basis);
     void reconcile_exit_reservations_after_margin();

@@ -5829,7 +5829,12 @@ bool PineExecutionAdapter::compute_exit_reservation(
         const SourceId& exit_id, const SourceId& from_entry,
         double requested_qty, double& qty_percent, double live_basis,
         double percentage_basis, double& reserved_qty,
-        std::uint64_t& reservation_sequence) const {
+        std::uint64_t& reservation_sequence, bool whole_position_percent) const {
+    // TradingView's reservation rule (captured cells, cited where each clause
+    // is applied below): a working exit order reserves its quantity of the
+    // open position; a new exit's quantity, whether fixed or a qty_percent of
+    // the whole open position, is capped at the quantity other working exits
+    // have not reserved; an exit left nothing does not become active.
     qty_percent = std::isfinite(qty_percent)
         ? std::clamp(qty_percent, 0.0, 100.0) : 100.0;
     reserved_qty = kNaN;
@@ -5851,6 +5856,9 @@ bool PineExecutionAdapter::compute_exit_reservation(
         // strategy.close reservation has none and always holds its units.
         std::uint64_t rank = std::numeric_limits<std::uint64_t>::max();
         bool queued_exit = false;
+        // Every row of the family is a strategy.exit leg that names its
+        // quantity in units.
+        bool explicit_units = true;
     };
     std::vector<Reservation> reservations;
     auto observe = [&](const PlacementSnapshot& snapshot) {
@@ -5897,8 +5905,11 @@ bool PineExecutionAdapter::compute_exit_reservation(
             else next.legacy_units = units;
             next.rank = rank;
             next.queued_exit = queued_exit;
+            next.explicit_units = queued_exit && std::isfinite(snapshot.requested_qty);
             reservations.push_back(std::move(next));
         } else {
+            row->explicit_units = row->explicit_units && queued_exit
+                && std::isfinite(snapshot.requested_qty);
             if (origin_share) {
                 const auto share = std::find_if(row->origins.begin(), row->origins.end(),
                     [&](const auto& value) { return value.first == bound_origin; });
@@ -5958,6 +5969,7 @@ bool PineExecutionAdapter::compute_exit_reservation(
         reservation_sequence = this_rank;
     double already_reserved = 0.0;
     double preserved_reserved = kNaN;
+    double preserved_percent = kNaN;
     bool other_full_exit = false;
     for (const auto& reservation : reservations) {
         if (reservation.family == this_family) {
@@ -5966,11 +5978,20 @@ bool PineExecutionAdapter::compute_exit_reservation(
                     ? std::max(preserved_reserved, reservation.units)
                     : reservation.units;
             }
+            preserved_percent = reservation.percent;
             continue;
         }
         if (reservation.queued_exit && reservation.rank > this_rank) continue;
         if (std::isfinite(reservation.units)) already_reserved += reservation.units;
-        if (reservation.percent >= 100.0 - internal::kFullPercentEps) other_full_exit = true;
+        // A full exit owns whatever the entry holds, so a partial exit behind
+        // it is left nothing. An exit that names its quantity in units
+        // reserves those units and no more: the percentage on its rows is
+        // only what they were of the entry when it was last sized, and reads
+        // 100 while they are all the entry holds. An add-on of the same id
+        // then brings units that exit never reserved, and each exit of the
+        // add-on takes its own quantity of them.
+        if (!reservation.explicit_units
+            && reservation.percent >= 100.0 - internal::kFullPercentEps) other_full_exit = true;
     }
     const double available = std::max(0.0, live_basis - already_reserved);
     if (std::isfinite(requested_qty)) {
@@ -5978,6 +5999,21 @@ bool PineExecutionAdapter::compute_exit_reservation(
     } else if (qty_percent < 100.0 - internal::kFullPercentEps
                && std::isfinite(preserved_reserved)) {
         reserved_qty = std::min(preserved_reserved, live_basis);
+        // A call that names another percentage than the standing exit holds
+        // asks for that share of the whole open position. Where it is less
+        // than the exit holds, the exit shrinks to it (TradingView, a 50%
+        // limit exit behind a qty-2 exit on a 4-unit entry, re-issued at 25%:
+        // it fills 1, 25% of the whole 4, not of the 2 unreserved units).
+        // Where it is more, the exit keeps what it holds, as before: the
+        // capture of that case, the same exit re-issued at 75%, fills the 2
+        // it already held, which is also all the first exit leaves of the 3
+        // it asks for. A re-issue carrying the exit's own stored percentage
+        // (the adapter's re-arming of a standing bracket) names no new share.
+        if (whole_position_percent && !same_double_bits(qty_percent, preserved_percent)) {
+            const double requested = quantize_percent_exit_units(
+                percentage_basis * qty_percent / 100.0, std::max(available, reserved_qty));
+            reserved_qty = std::min(reserved_qty, requested);
+        }
     } else {
         // A full source bracket owns the exact live exposure.  Multiplying
         // that exposure by 100/100 can round down by one binary64 step and
@@ -6153,6 +6189,26 @@ void PineExecutionAdapter::reconcile_deferred_exit_reservations(
     // exit selections; it adds no resident map that grows with openings.
     detail::ExitScratchIndex reserved_by_origin(*this);
     std::vector<native_order::RequestHandle> cancel;
+    // How many of a family's bound origins still hold units of this entry or
+    // have not opened yet: only an origin that opened and was drained is left
+    // out. A family bound to one origin is never asked.
+    const auto origins_holding_units = [&](const std::vector<std::uint64_t>& origins) {
+        if (origins.size() < 2 || from_entry.empty()) return origins.size();
+        const auto entry_units = cohorts_by_id_.find_resident(from_entry);
+        if (entry_units == cohorts_by_id_.end()) return origins.size();
+        const auto& facts = entry_units->second;
+        std::size_t holding = 0;
+        for (const auto origin : origins) {
+            if (origin == 0 || facts.live_units_by_origin.count(origin) != 0
+                || std::none_of(facts.opened.begin(), facts.opened.end(),
+                    [&](const native_order::RequestHandle& opened) {
+                        return opened.incarnation == origin;
+                    })) {
+                ++holding;
+            }
+        }
+        return holding;
+    };
     for (const auto& family : families) {
         double basis = live_basis;
         if (family.origin != 0) {
@@ -6250,8 +6306,15 @@ void PineExecutionAdapter::reconcile_deferred_exit_reservations(
         }
         // A limit/stop/trail OCA set for one opening consumes one reservation,
         // even though it has multiple native request handles. Count distinct
-        // bound entry origins, not executable sibling legs.
-        const std::size_t multiplicity = std::max<std::size_t>(1, family.origins.size());
+        // bound entry origins, not executable sibling legs. An origin whose
+        // lots other exits closed first in first out holds no unit of this
+        // entry any more: its working exit keeps its own quantity, and what
+        // it closes when it fills is another opening's, so beside an origin
+        // that does hold units it takes none of theirs (TradingView, an
+        // add-on entered while an earlier add-on's qty-1 exit still works:
+        // that exit and both of the new add-on's qty-1 exits fill).
+        const std::size_t multiplicity = std::max<std::size_t>(
+            1, origins_holding_units(family.origins));
         reserved += std::isfinite(family.explicit_requested)
             ? std::min(available, units * static_cast<double>(multiplicity))
             : units;
@@ -12605,8 +12668,18 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
     // the family's standing rows already have; a fresh leg does not carry
     // that rank, because remember() derives it from the leg's predecessor.
     const std::uint64_t reserved_slot = reservation_sequence;
+    // A limit-only percentage target of a named entry is sized from the
+    // entry's own units (ancestry_sized_target). While none of them has been
+    // closed and no close of this bar is pending, that basis is the whole open
+    // position a qty_percent names, so a re-issue at a smaller percentage can
+    // be sized from it again (compute_exit_reservation). Once a unit of the
+    // entry has been closed the standing reservation is kept as before: no
+    // capture covers a re-issue there.
+    const bool whole_position_percent = ancestry_sized_target && std::isnan(qty)
+        && !(completed_entry_units > 0.0) && !(pending_same_bar_close_qty_ > 0.0);
     const bool reservation_ok = compute_exit_reservation(exit_id, from_entry, qty, qty_percent,
-        live_reservation_basis, percentage_basis, reserved_exit_qty, reservation_sequence);
+        live_reservation_basis, percentage_basis, reserved_exit_qty, reservation_sequence,
+        whole_position_percent);
     if (!reservation_ok) {
         // clear_existing_exit_order ran before sizing on the legacy route:
         // a zero-capacity reissue removes its predecessor as well as refusing

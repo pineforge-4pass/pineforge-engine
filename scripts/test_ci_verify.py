@@ -94,7 +94,7 @@ ABSENT_FLOOR = {name: entry[0] - entry[1]
 # Three eight-row splits plus four report rows: 910 + 28 = 938, 337 + 28 = 365.
 # Three public Linux scratch cases were added: 941/368 full, 634/337 absent.
 # Do not derive these from stage/floor helpers: mutations must turn them red.
-LAB_SHARD_FLOORS = {'release': {False: 635, True: 942},
+LAB_SHARD_FLOORS = {'release': {False: 636, True: 943},
                     'kernel': {False: 337, True: 368}}
 # Transcribed ctestExcludeLabel(CI_VERIFY_PROFILES[profile]) results from
 # pineforge-workflow campaign/src/remote/recipes.mjs:38-53, consumed by
@@ -3978,8 +3978,8 @@ class DriverOrderingAndAggregation(unittest.TestCase):
 
     def test_pr_exclusion_proves_registered_minus_labelled_equals_ran(self):
         self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
-                         {'debug': 908, 'sanitizers': 899, 'native': 1004,
-                          'release': 927, 'kernel': 368})
+                         {'debug': 909, 'sanitizers': 900, 'native': 1005,
+                          'release': 928, 'kernel': 368})
         self.assertNotIn('test_open_report_rows_flat', ci_verify.PINNED_SLOW_TEST_ROWS)
         self.assertNotIn('test_open_report_rows_flat_slices_cover',
                          ci_verify.PINNED_SLOW_TEST_ROWS)
@@ -5124,9 +5124,9 @@ class PrivateFixtureFloors(unittest.TestCase):
         # feeds them. A profile outside the table keeps its declared value, and
         # PRIVATE_FIXTURE_ROW_COUNT bounds the pinned half by construction.
         self.assertEqual(ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS,
-                         {'release': (942, 307), 'kernel': (368, 31)})
-        self.assertEqual(FULL_FLOOR, {'release': 942, 'kernel': 368})
-        self.assertEqual(ABSENT_FLOOR, {'release': 635, 'kernel': 337})
+                         {'release': (943, 307), 'kernel': (368, 31)})
+        self.assertEqual(FULL_FLOOR, {'release': 943, 'kernel': 368})
+        self.assertEqual(ABSENT_FLOOR, {'release': 636, 'kernel': 337})
         self.assertEqual(
             {name for name in ci_verify.PINNED_SLOW_TEST_ROWS
              if name.startswith('test_native_command_after')},
@@ -5167,8 +5167,8 @@ class PrivateFixtureFloors(unittest.TestCase):
             self.assertEqual(validate_config(parse_args(['kernel'])).min_tests,
                              FULL_FLOOR['kernel'])
         self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
-                         {'debug': 908, 'sanitizers': 899, 'native': 1004,
-                          'release': 927, 'kernel': 368})
+                         {'debug': 909, 'sanitizers': 900, 'native': 1005,
+                          'release': 928, 'kernel': 368})
 
     def test_overlay_flag_moves_the_floor_and_is_the_only_input(self):
         # F9: the flag must MOVE the value. A test that only reads the
@@ -5586,7 +5586,7 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
         # D1 floors are independent policy literals, not read back from the
         # implementation being tested. Exercise the real enforcement branch
         # without repeating an engine configure/build or scripted source guard.
-        for profile, floor in (('release', 927), ('kernel', 368)):
+        for profile, floor in (('release', 928), ('kernel', 368)):
             pinned = self.pinned_probe(1)
             cases = (
                 (floor, floor - 5, floor - 5, pinned, 'passed', ''),
@@ -6080,7 +6080,7 @@ class FloorDocsPointAtTheTable(unittest.TestCase):
                 self.assertIsInstance(value, ast.Constant)
                 self.assertIsInstance(value.value, int)
                 self.assertEqual(value.value, {
-                    'RELEASE_MIN_TESTS': 942, 'KERNEL_MIN_TESTS': 368,
+                    'RELEASE_MIN_TESTS': 943, 'KERNEL_MIN_TESTS': 368,
                 }[name])
         self.assertIsInstance(table, ast.Dict)
         entries = {}
