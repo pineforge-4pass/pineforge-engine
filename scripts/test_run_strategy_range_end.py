@@ -728,7 +728,7 @@ class RangeEndRegimeTests(unittest.TestCase):
             kwargs: dict = {}
             why = _apply_range_end_regime(d, TZ8, kwargs)
             self.assertEqual(kwargs, {"ohlcv_end_ms": RANGE_TO_MS})
-            self.assertIn("tape unmarked (ws-report-v1 shape)", why)
+            self.assertIn("tape unmarked (channel-v1 shape)", why)
             self.assertIn("range-end regime", why)
             self.assertIn("2026-05-01 00:00 UTC", why)
             self.assertIn("rangeProvenance.requestedRange.to", why)

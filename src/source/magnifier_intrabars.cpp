@@ -13,6 +13,7 @@
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <utility>
 
 namespace pineforge::source {
 
@@ -406,6 +407,15 @@ public:
             // only new rows; look-ahead is a distinct single-bar buffer.
             auto candidate = cursor_ ? std::make_unique<Cursor>(*cursor_)
                                      : std::make_unique<Cursor>(this);
+            // The copy carries position only. Hand the candidate what the
+            // published cursor's calendar memos have resolved, or every window
+            // binds two memos and resolves its session days again. A candidate
+            // that fails takes them with it: the published cursor keeps its
+            // position, and the next candidate starts from empty memos.
+            if (cursor_) {
+                candidate->charts.rows.memo = std::move(cursor_->charts.rows.memo);
+                candidate->slots.rows.memo = std::move(cursor_->slots.rows.memo);
+            }
             auto next = next_;
             scratch_.clear();
             for (const auto& bar : segment_)

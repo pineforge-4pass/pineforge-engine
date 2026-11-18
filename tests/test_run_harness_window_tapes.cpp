@@ -1,7 +1,7 @@
 /*
  * test_run_harness_window_tapes.cpp — lane RUN-HARNESS, item 1.
  *
- * TradingView's deep backtest over the ws report channel computes a script
+ * TradingView's deep backtest computes a script
  * from the first chart bar at or after the requested range start and from no
  * earlier bar, and its broker is live from that bar: an order placed on any
  * bar before the tape's first fill can make that fill. scripts/run_strategy.py

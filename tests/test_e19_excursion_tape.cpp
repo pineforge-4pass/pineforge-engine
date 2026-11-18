@@ -11,8 +11,8 @@
 // rows (tests/test_l11a_host_excursion_twin.cpp); this row pins both models
 // against TradingView's own tape.
 //
-// The tape: `lab tv` export hm-e19-stop-reversal-grouping (ws-report-v1,
-// rangeProof covered) of corpus probe order-stop-entry-reversal-grouping-01
+// The tape: TradingView export hm-e19-stop-reversal-grouping
+// (the full range covered) of corpus probe order-stop-entry-reversal-grouping-01
 // ("PF probe 57", BINANCE:ETHUSDT.P 15m, 2025-04-01..2026-05-01, 1580
 // trades); its excursion cells equal the corpus tape's on all 1460 trades the
 // two share. Three of its days are replayed here on the corpus 15m feed

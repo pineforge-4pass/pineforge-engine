@@ -1934,6 +1934,12 @@ const SessionCalendar* kept_calendar(std::string_view session, std::string_view 
 // memo, so a caller copies what it keeps across a second read. The memo also
 // keeps the last few intervals it answered and whether its calendar is valid:
 // both are pure functions of the calendar value and the question.
+//
+// One lookup has an answer its namesake has not: the containing-day lookup of
+// a zoned calendar answers an instant of a cycle the zone has certified from
+// that cycle's day, without the instant's local date (State::CycleSlot,
+// "Certified session-day cycles" below). The day it answers is the one the
+// statement-for-statement lookup finds there.
 
 struct SessionDayMemo::State {
     // session_day_from_open by the open date's day number, direct-mapped: the
@@ -1947,6 +1953,10 @@ struct SessionDayMemo::State {
     // several times (its input and script interval, the next bar's facts,
     // every driver point), and the preflight asks for each bar once more.
     static constexpr std::size_t kIntervalSlots = 8;
+    // The last few cycles a zoned calendar's containing-day lookup found the
+    // exact way: a day's last interval asks for the next day's open, so a walk
+    // reads two cycles in turn at every day's end.
+    static constexpr std::size_t kCycleSlots = 2;
 
     struct DaySlot {
         bool used = false;
@@ -2010,6 +2020,27 @@ struct SessionDayMemo::State {
     // Instants (seconds) at or after it follow the file's POSIX footer rule,
     // which the table does not list; INT64_MAX when that rule is one offset.
     std::int64_t zone_covered_until = 0;
+
+    // A cycle [origin_ms, next_origin_ms) the exact containing-day lookup
+    // found holding an instant, by its open date's day number, and what the
+    // zone answered when cycle_certificate's question was put for that
+    // instant. Certified: every lookup of every instant of the cycle is that
+    // day, so a later instant in it is answered from the day alone, with no
+    // local date read. Refused: its instants are read the exact way, and the
+    // zone is not asked about it again while the entry is kept -- one
+    // instant's refusal stands for the whole cycle, which only ever costs the
+    // short cut. Values only: the day is read from `days` every time, so no
+    // address is kept here. A UTC calendar notes none: its local date is
+    // integer arithmetic, and it is read exactly as before.
+    enum class CycleKind : std::uint8_t { None, Certified, Refused };
+    struct CycleSlot {
+        CycleKind kind = CycleKind::None;
+        int64_t open_day = 0;
+        int64_t origin_ms = 0;
+        int64_t next_origin_ms = 0;
+    };
+    std::array<CycleSlot, kCycleSlots> cycles{};
+    std::size_t next_cycle = 0;
 };
 
 namespace {
@@ -2109,12 +2140,44 @@ const SessionDay* memo_session_day_with_trading(const SessionCalendar& cal,
     return nullptr;
 }
 
+// The certified cycle kept that holds `ms` (State::CycleSlot), or null. A zone
+// found not to read its table (ZoneKind::Unsupported) certifies nothing more,
+// and what it certified before is not used either.
+const MemoState::CycleSlot* memo_certified_cycle(const MemoState& m, int64_t ms) {
+    if (m.zone_kind == MemoState::ZoneKind::Unsupported) return nullptr;
+    for (const MemoState::CycleSlot& cycle : m.cycles) {
+        if (cycle.kind == MemoState::CycleKind::Certified && cycle.origin_ms <= ms
+            && ms < cycle.next_origin_ms) {
+            return &cycle;
+        }
+    }
+    return nullptr;
+}
+
+// Notes the cycle an exact containing-day lookup found holding `ms`, with the
+// zone's answer for it. Defined with the certified cycles below, whose
+// question it asks; it reads no session day and never throws.
+void memo_note_cycle(const SessionCalendar& cal, MemoState& m, int64_t ms, int64_t open_day,
+                     int64_t origin_ms, int64_t next_origin_ms) noexcept;
+
 // Also sets *open_day, when asked, to the day number of the day's open date.
 const SessionDay* memo_session_day_containing(const SessionCalendar& cal,
                                               int64_t ms,
                                               MemoState& m,
                                               int64_t* open_day = nullptr) {
     if (!m.valid) return nullptr;
+    // An instant of a certified cycle is that cycle's day: no local date is
+    // read and no other open date is tried. The day comes from its slot like
+    // any other, resolved again if the slot was taken since, and the exact
+    // lookup below answers if it does not hold `ms`.
+    if (const MemoState::CycleSlot* cycle = memo_certified_cycle(m, ms)) {
+        const int64_t certified_day = cycle->open_day;
+        const SessionDay* day = memo_session_day_from_open(cal, certified_day, m);
+        if (day && day->origin_ms <= ms && ms < day->next_origin_ms) {
+            if (open_day) *open_day = certified_day;
+            return day;
+        }
+    }
     int64_t local_day = 0;
     if (!memo_local_day(cal, ms, m, local_day)) return nullptr;
     const int64_t candidates[3] = {local_day, local_day - 1, local_day + 1};
@@ -2123,6 +2186,9 @@ const SessionDay* memo_session_day_containing(const SessionCalendar& cal,
         if (!day) continue;
         if (day->origin_ms <= ms && ms < day->next_origin_ms) {
             if (open_day) *open_day = candidate;
+            // After the answer is complete, and touching no day slot: `day`
+            // stays good.
+            memo_note_cycle(cal, m, ms, candidate, day->origin_ms, day->next_origin_ms);
             return day;
         }
     }
@@ -2348,6 +2414,16 @@ std::optional<int64_t> memo_first_tradable_open(const SessionCalendar& cal,
 // minus two 26-hour margins still leaves them apart. Every lookup of every
 // instant of the cycle is therefore this day, and the reach's resolutions do
 // not depend on the order they are made in.
+//
+// The containing-day lookup takes the same certificate for itself. When the
+// exact lookup of a zoned calendar finds the day holding an instant, it puts
+// cycle_certificate's question for that instant (memo_note_cycle) and keeps
+// the cycle with the answer. An instant of a cycle kept as certified is then
+// answered with that day at once: the exact lookup would find that day and no
+// other, and what it would have resolved on the way -- the instant's local
+// date, a neighbouring open date -- moves no resolution within the reach.
+// Asking the zone resolves no session day, and a failure to read its table is
+// a refusal, so a lookup returns what it did before and throws nothing new.
 
 constexpr int64_t kSecondsPerDay = 86400;
 constexpr int64_t kCertifiedStepSeconds = 3 * 3600;
@@ -2566,6 +2642,42 @@ bool zone_window_certified(const SessionCalendar& cal, MemoState& m, std::int64_
     return true;
 }
 
+// cycle_certificate's question of the zone for `ms`: the conditions above over
+// the reach of every cycle within two days of it. Where it holds, the cycle
+// holding `ms` is one of them (it spans a day and at most a step).
+bool zone_certifies_cycle_at(const SessionCalendar& cal, MemoState& m, int64_t ms) {
+    const int64_t seconds = floor_div(ms, kMsPerSecond);
+    const int64_t reach = kCertifiedReachSeconds + 2 * kSecondsPerDay;
+    return zone_window_certified(cal, m, seconds - reach, seconds + reach);
+}
+
+void memo_note_cycle(const SessionCalendar& cal, MemoState& m, int64_t ms, int64_t open_day,
+                     int64_t origin_ms, int64_t next_origin_ms) noexcept {
+    // UTC reads no local date: there is nothing to save, and nothing is asked.
+    if (m.utc) return;
+    for (const MemoState::CycleSlot& cycle : m.cycles) {
+        if (cycle.kind != MemoState::CycleKind::None && cycle.open_day == open_day
+            && cycle.origin_ms == origin_ms && cycle.next_origin_ms == next_origin_ms) {
+            // Asked already: certified or refused, the answer stands.
+            return;
+        }
+    }
+    bool certified = false;
+    try {
+        certified = zone_certifies_cycle_at(cal, m, ms);
+    } catch (...) {
+        // Reading the zone's table allocates. The lookup has its answer and
+        // does not fail for a short cut it can do without: refused.
+        certified = false;
+    }
+    MemoState::CycleSlot& slot = m.cycles[m.next_cycle];
+    m.next_cycle = (m.next_cycle + 1) % MemoState::kCycleSlots;
+    slot.kind = certified ? MemoState::CycleKind::Certified : MemoState::CycleKind::Refused;
+    slot.open_day = open_day;
+    slot.origin_ms = origin_ms;
+    slot.next_origin_ms = next_origin_ms;
+}
+
 }  // namespace
 
 SessionDayMemo::SessionDayMemo() noexcept = default;
@@ -2741,9 +2853,7 @@ std::optional<CycleCertificate> cycle_certificate(const SessionCalendar& calenda
     // The zone first, over the reach of every cycle within two days of `ms`:
     // where it holds, the cycle holding `ms` is one of them (it spans a day
     // and at most a step). Nothing is resolved for an instant it refuses.
-    const int64_t seconds = floor_div(ms, kMsPerSecond);
-    const int64_t reach = kCertifiedReachSeconds + 2 * kSecondsPerDay;
-    if (!zone_window_certified(calendar, m, seconds - reach, seconds + reach)) return std::nullopt;
+    if (!zone_certifies_cycle_at(calendar, m, ms)) return std::nullopt;
     const SessionDay* day = memo_session_day_containing(calendar, ms, m);
     if (!day || ms < day->origin_ms || ms >= day->next_origin_ms) return std::nullopt;
     CycleCertificate out;

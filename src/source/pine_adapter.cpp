@@ -16071,9 +16071,9 @@ void PineExecutionAdapter::cancel_all() {
     per_entry_exits_.clear();
 }
 
-void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
-                                 double limit_price, double stop_price,
-                                 const std::string& oca_name, int oca_type) {
+void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty, double limit_price,
+                                 double stop_price, const std::string& oca_name, int oca_type,
+                                 const std::string& comment) {
     if (intraday_loss_orders_blocked()) return;
     if (const auto point = detail::callback_point(require_host());
         point && cap_placement_denied(point->decision)) {
@@ -16148,7 +16148,7 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
         if (units != normalized_qty && std::abs(qty) == (is_long ? -1.0 : 1.0) * detail::run_position(require_host()).signed_units) units = normalized_qty;
         *transact = native_order::Transact{is_long ? units : -units};
     }
-    request.label = id;
+    request.label = id; request.comment = comment;
     double native_limit = limit_price;
     double native_stop = stop_price;
     if (finite_positive(limit_price) && !finite_positive(stop_price)) {
@@ -16255,7 +16255,7 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
     }
     PlacementSnapshot snapshot;
     snapshot.family = PineOrderFamily::Order; snapshot.source_id = id; snapshot.oca_name = oca_name;
-    snapshot.oca_type = oca_type;
+    snapshot.oca_type = oca_type; snapshot.comment = comment;
     // strategy.order's source quantity is verbatim (unlike strategy.entry's
     // lot-grid floor); retain that literal in the adapter projection even
     // when the generic accepted request needs its separately normalized

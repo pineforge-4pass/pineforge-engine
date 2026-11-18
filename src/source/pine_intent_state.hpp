@@ -99,6 +99,7 @@ struct IntentOrder {
     double stop_price;
     std::string oca_name;
     int oca_type;
+    std::string comment;
 };
 
 // The six risk setter statements of PineStrategyHost (set_pine_risk_*), over

@@ -7,42 +7,40 @@
 namespace pineforge {
 
 // TradingView's sliding-window sum -- the arithmetic behind ta.sma and
-// math.sum, fitted bit-for-bit on the round-7 synthetic pins (see the note
-// above its implementation in src/ta_moving_averages.cpp):
+// math.sum (see the note above its implementation in
+// src/ta_moving_averages.cpp for the captures that pin it):
 //
-//   * a Kahan-compensated running sum S with compensation c;
-//   * the ring stores the COMPENSATED addend y = x - c each source entered
-//     with, and subtracts that y (through the same Kahan step) when the
-//     source leaves the window `length` bars later -- sub before add;
-//   * on the bar whose incoming source UNDER-applies the MAGNITUDE of the
-//     carried compensation when it is ADDED (c != 0 and, with z = fl(x + |c|),
-//     |z - x| < |c|: fully swallowed or rounded toward x -- the round-10
-//     family-W pin; round 9's x - c form and round 7's swallow case are the
-//     cases where x - c and x + |c| round alike), the sum is re-summed
-//     newest-first over the window's sources, c is reset and the bar's ring
-//     addend is its raw source.
+//   * the emitted sum S is the exact sum of the sources in the window,
+//     rounded once. It is a function of the window alone: nothing of a
+//     source that has left stays in it, so an all-zero window reads 0 and a
+//     window of one repeated value reads its exact multiple;
+//   * S is carried with what its rounding left out, so the two doubles hold
+//     the exact sum and a source enters or leaves by an error-free addition;
+//   * when the exact sum needs more than two doubles, the window is summed
+//     exactly from its own sources on every bar until two suffice again.
 //
 // Both users divide S by `length` themselves (ta.sma) or emit S (math.sum).
+// The class keeps the name of the compensated running sum it replaced.
 class KahanWindowSum {
     struct Entry {
         double value;
-        double addend;
+        double addend;   // spare slot: a partial sum while the window is re-summed
         void observe_owned_storage(OwnedStorage&) const noexcept {} // inline scalars
     };
-    // A checkpoint owns one deep-copy buffer. Pair each source with its
-    // compensated addend so growth cannot publish only half a window.
+    // A checkpoint owns one deep-copy buffer. Each source sits beside its
+    // spare slot so growth cannot publish only half a window.
     // Active slots are newest first from head_; unused slots are capacity.
     std::vector<Entry> window_;
     std::size_t head_ = 0;
     std::size_t size_ = 0;
     int length_;
     int count_;          // valid sources pushed so far
-    double sum_;         // S
-    double comp_;        // c
+    double sum_;         // S: the exact sum of the window, rounded to nearest
+    double comp_;        // the exact sum minus S; na while two doubles do not hold it
 
-    // Rewind state for the current bar: the pre-bar (S, c, count), the
-    // source/addend the bar evicted (na when it evicted none), and whether
-    // the bar pushed at all (an na input pushes nothing).
+    // Rewind state for the current bar: the pre-bar (S, remainder, count), the
+    // source and spare slot the bar evicted (na when it evicted none), and
+    // whether the bar pushed at all (an na input pushes nothing).
     double saved_sum_;
     double saved_comp_;
     int saved_count_;
@@ -59,8 +57,9 @@ class KahanWindowSum {
         head_ = head_ + 1 == window_.size() ? 0 : head_ + 1;
         --size_;
     }
-    void kahan_add(double v);
-    void enter(double src, double comp_before);
+    bool add_exact(double v);
+    bool resum();
+    void enter(double src, bool carried);
 
 public:
     // As for the original deque window, callers supply a positive length.
@@ -76,7 +75,7 @@ public:
     // repush() starts a fresh push and unpush() has nothing to rewind.
     void note_no_push();
     // Replay the current bar with a different valid source (intrabar
-    // recompute): same evicted addend, same pre-bar (S, c). Returns S.
+    // recompute): same evicted source, same pre-bar sum. Returns S.
     double repush(double src);
     // Rewind the current bar entirely (its source leaves, the evicted source
     // returns) so the window reads as it did before the bar.

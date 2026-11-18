@@ -31,8 +31,8 @@
 // entry incarnation" column, where the grader's distinct-entry gate reads
 // only whether two same-key entries differ -- true before and after the swap.
 //
-// Section 3 replays the `lab tv` tape hm-g221-short-seed (ws-report-v1,
-// rangeProof covered; fixtures/g221_short_seed) -- the same collision once a
+// Section 3 replays the TradingView tape hm-g221-short-seed
+// (the full range covered; fixtures/g221_short_seed) -- the same collision once a
 // day on BINANCE:ETHUSDT.P 15m, 2025-06-02..05, on the corpus feed: the Pine
 // host books TradingView's 13 rows (three collisions that end flat, one that
 // leaves a remnant) row for row, and the one day whose remnant a close of the

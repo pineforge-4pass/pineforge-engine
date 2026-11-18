@@ -181,13 +181,17 @@ public:
 
 class RMA {
     double output_val;
-    double sum;
     int length;
     int bar_count;
+    // The first `length` valid sources, summed the way ta.sma sums its window:
+    // the seed is their exact sum, rounded once, over length. Nothing enters it
+    // after the seed.
+    KahanWindowSum seed_window_;
+    // Whether the bar computed last entered the window; restore() takes it out.
+    bool seed_pushed_ = false;
 
     // saved state for recompute
     double saved_output_val_;
-    double saved_sum_;
     int saved_bar_count_;
 
 public:
@@ -197,8 +201,9 @@ public:
     void restore();
     double recompute(double src);
 public:
-    // All retained fields are inline scalars (or scalar-only aggregates).
-    void observe_owned_storage(OwnedStorage&) const noexcept {}
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, seed_window_);
+    }
 };
 
 class RSI {
@@ -511,12 +516,15 @@ public:
 // sum-of-squared-deviations of its documentation: it is
 //     sqrt(Sxx / n - m * m),  m = Sx / n,
 // with Sx = math.sum(src, n) and Sxx = math.sum(src * src, n) the same
-// sliding-window Kahan sums as ta.sma (window_sum.hpp) -- so the value carries
-// the cancellation error of that form and of those running sums. Pinned
-// 2026-09-05 (round 9, family W) on a full-precision NYSE:F@15 oracle
-// (pineforge-workflow famw-f15-sd-*: 7,029/7,029 bars bit-exact; the
-// two-pass form is exact on none of them). The unbiased variant
-// (biased = false) is unpinned and keeps the two-pass window arithmetic.
+// sliding-window sums as ta.sma (window_sum.hpp) -- so the value carries the
+// cancellation error of that form. Pinned 2026-09-05 (round 9, family W) on
+// a full-precision NYSE:F@15 oracle (its evidence is kept privately;
+// 7,029/7,029 bars bit-exact; the two-pass form is exact on none of them),
+// when those sums were the compensated running sums of that month. Since
+// 2026-11 they are the exact sum of the window, rounded once; this form over
+// the exact sums has NOT been measured against TradingView again. The
+// unbiased variant (biased = false) is unpinned and keeps the two-pass
+// window arithmetic.
 class StdDev {
     int length_;
     bool biased_;

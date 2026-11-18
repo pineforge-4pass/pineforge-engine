@@ -1,6 +1,7 @@
 // Expectations are pinned from the admission brief, D1 and D2.
-// This TU uses only the previous public header closure, so it is intended to
-// compile on base; its actionable invalid rows then lack the required code.
+// This TU uses only the public header closure. It needs the eight-argument
+// strategy_order, because the Order door passes its comment, and does not
+// compile against the previous closure.
 // No toolchain, private fixture, market data or admission-helper call is used.
 #include <pineforge/bar.hpp>
 #include <pineforge/run_failure.hpp>
@@ -49,8 +50,8 @@ struct Row {
     bool text;
 };
 
-// order has no comment operand. The two exit numeric exclusions have pinned
-// infinity behavior in test_fills_edge{,_l4d}.cpp and are controls below.
+// The two exit numeric exclusions have pinned infinity behavior in
+// test_fills_edge{,_l4d}.cpp and are controls below.
 const Row admitted[] = {
     {"entry.id", Door::Entry, Arg::Id, "entry.id", true},
     {"entry.comment", Door::Entry, Arg::Comment, "entry.comment", true},
@@ -58,6 +59,7 @@ const Row admitted[] = {
     {"entry.limit_price", Door::Entry, Arg::Limit, "entry.limit_price", false},
     {"entry.stop_price", Door::Entry, Arg::Stop, "entry.stop_price", false},
     {"order.id", Door::Order, Arg::Id, "order.id", true},
+    {"order.comment", Door::Order, Arg::Comment, "order.comment", true},
     {"order.oca_name", Door::Order, Arg::OcaName, "order.oca_name", true},
     {"order.limit_price", Door::Order, Arg::Limit, "order.limit_price", false},
     {"order.stop_price", Door::Order, Arg::Stop, "order.stop_price", false},
@@ -199,7 +201,7 @@ public:
             case Door::CancelAll: strategy_cancel_all(); break;
             case Door::Order:
                 strategy_order(raw_.id, true, raw_.qty, raw_.limit, raw_.stop,
-                               raw_.oca_name, oca_type_); break;
+                               raw_.oca_name, oca_type_, raw_.comment); break;
         }
         ++returned;
     }
@@ -385,8 +387,9 @@ int main(int argc, char** argv) {
     argument_rows();
     unchanged_rows();
     CHECK(rows_run > 0);
-    // Pin the full authored population as well as each individual row.
-    if (only_row.empty()) CHECK(rows_run == 1755);
+    // Pin the full authored population as well as each individual row. The
+    // order.comment row is 5 placements of 13 invalid and 4 valid texts: 85.
+    if (only_row.empty()) CHECK(rows_run == 1840);
     else CHECK(rows_run == 1);
     std::printf("%d rows, %d checks, %d failures\n", rows_run, checks, failures);
     return failures == 0 ? 0 : 1;

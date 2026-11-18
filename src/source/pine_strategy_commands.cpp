@@ -154,17 +154,25 @@ void PineStrategyHost::strategy_cancel_all() {
 void PineStrategyHost::strategy_order(const std::string& id, bool is_long, double qty,
                                       double limit_price, double stop_price,
                                       const std::string& oca_name, int oca_type) {
+    strategy_order(id, is_long, qty, limit_price, stop_price, oca_name, oca_type, {});
+}
+
+void PineStrategyHost::strategy_order(const std::string& id, bool is_long, double qty,
+                                      double limit_price, double stop_price,
+                                      const std::string& oca_name, int oca_type,
+                                      const std::string& comment) {
     if (detail::capture_pre_roll_command(*this, current_bar_.timestamp, config_, [&] {
             return detail::IntentOrder{id, is_long, qty, limit_price, stop_price, oca_name,
-                                       oca_type};
+                                       oca_type, comment};
         })) {
         return;
     }
     if (!trading_window_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_))
         return;
     adapter_.set_configuration(config_);
-    admit_strategy_order(id, is_long, qty, limit_price, stop_price, oca_name, oca_type);
-    adapter_.order(id, is_long, qty, limit_price, stop_price, oca_name, oca_type);
+    admit_strategy_order(id, is_long, qty, limit_price, stop_price, oca_name, oca_type,
+                         comment);
+    adapter_.order(id, is_long, qty, limit_price, stop_price, oca_name, oca_type, comment);
 }
 
 } // namespace pineforge::source

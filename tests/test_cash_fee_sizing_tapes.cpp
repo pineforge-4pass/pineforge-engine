@@ -15,7 +15,7 @@
  * reserved none for the order (default_sizing_cash), so every sized quantity
  * came out too large.
  *
- * The tapes are `lab tv` exports (channel ws-report-v1, rangeProof covered)
+ * The tapes are TradingView exports (the full range covered)
  * under tests/fixtures/cash_fee_sizing, whose README.md lists them; the bars are
  * the scenario windows of their feeds (fixtures/cash_fee_sizing/bars.inc). The
  * host below runs each tape's script through the Pine adapter.

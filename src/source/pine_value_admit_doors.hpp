@@ -30,6 +30,7 @@ void admit_strategy_cancel(const std::string& id);
 void admit_strategy_cancel_all() noexcept;
 void admit_strategy_order(const std::string& id, bool is_long, double qty,
                           double limit_price, double stop_price,
-                          const std::string& oca_name, int oca_type);
+                          const std::string& oca_name, int oca_type,
+                          const std::string& comment);
 
 } // namespace pineforge::source

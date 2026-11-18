@@ -5,7 +5,7 @@
  * a trailing offset arm on the raw price path or on the tick-quantized one?
  * The deleted exit-path resolver quantized it; the product armed the generic
  * Trail at the raw activation. TradingView's own tapes settle it
- * (tests/fixtures/offset_trail_arm/, `lab tv`, ws-report-v1, rangeProof
+ * (tests/fixtures/offset_trail_arm/, TradingView exports, the full range
  * covered; README.md there lists them):
  *
  *   NYSE:F 15m, mintick 0.01, sub-cent prints. One strategy.exit per entry,

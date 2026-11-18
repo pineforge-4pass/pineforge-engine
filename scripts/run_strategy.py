@@ -3898,7 +3898,7 @@ def _apply_range_end_regime(strategy_dir: Path, meta: dict, run_kwargs: dict) ->
     given and writes every row."""
     marked = _tv_tape_marks_open_rows(strategy_dir, meta)
     spelling = ("tape marks its open rows (Signal 'Open')" if marked
-                else "tape unmarked (ws-report-v1 shape)")
+                else "tape unmarked (channel-v1 shape)")
     rows = ("range-end close rows written, marked in the "
             f"'{ENGINE_RANGE_END_COLUMN}' column for the grader to pair")
     if run_kwargs.get("ohlcv_end_ms") is not None:

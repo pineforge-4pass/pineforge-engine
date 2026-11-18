@@ -1145,6 +1145,8 @@ void hash_intent_payload(BrokerStateHashSink&, const source::detail::IntentCance
 void hash_intent_payload(BrokerStateHashSink& f, const source::detail::IntentOrder& v) {
     f.s(v.id); f.b(v.is_long); f.d(v.qty); f.d(v.limit_price); f.d(v.stop_price);
     f.s(v.oca_name); f.i(v.oca_type);
+    // An order without a comment hashes as it did before the comment existed.
+    if (!v.comment.empty()) f.s(v.comment);
 }
 void hash_intent_payload(BrokerStateHashSink& f,
                          const source::detail::IntentRiskDirection& v) {
