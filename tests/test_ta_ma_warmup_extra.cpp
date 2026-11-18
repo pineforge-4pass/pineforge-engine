@@ -322,11 +322,7 @@ struct RecursiveReference {
     double update(double src, int length) {
         if (is_na(src)) return na<double>();
         const double alpha = 2.0 / (length + 1);
-        // The step ta.ema takes, value + alpha * (src - value): the doubles
-        // TradingView logs for ta.ema (see test_ta_ema_step_form.cpp) follow it,
-        // and the algebraically equal alpha * src + (1 - alpha) * value is one
-        // unit in the last place away on many bars.
-        value = is_na(value) ? src : value + alpha * (src - value);
+        value = is_na(value) ? src : alpha * src + (1.0 - alpha) * value;
         return value;
     }
 };
