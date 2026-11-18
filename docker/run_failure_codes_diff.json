@@ -1,9 +1,9 @@
 {
   "schema": "pineforge-run-failure-catalog-diff/v1",
   "from": {
-    "version": "1.12.0",
-    "tag": "v1.12.0",
-    "catalogSha256": "c42c7305aee58908b46b98768480d23f8346e1d010cfc32b6f83d594950408b4"
+    "version": "1.13.0",
+    "tag": "v1.13.0",
+    "catalogSha256": "62bdf5730e41b11532f00b4234f16017b123b40852c88fc394a2422a6516a7fd"
   },
   "to": {
     "version": null,
@@ -15,129 +15,8 @@
     "after": "pineforge-run-failure-catalog/v1"
   },
   "metadataChanges": [],
-  "added": [
-    {
-      "code": "currency_conversion_rate_unavailable",
-      "collection": "codes",
-      "entry": {
-        "args": {
-          "account_currency": {
-            "kind": "string"
-          },
-          "from": {
-            "kind": "string"
-          },
-          "function": {
-            "kind": "vocab",
-            "values": [
-              "convert_to_account",
-              "convert_to_symbol",
-              "currency_rate"
-            ]
-          },
-          "reason": {
-            "kind": "vocab",
-            "values": [
-              "rate_unavailable",
-              "unsupported_pair",
-              "invalid_currency"
-            ]
-          },
-          "symbol_currency": {
-            "kind": "string"
-          },
-          "time_ms": {
-            "kind": "integer"
-          },
-          "to": {
-            "kind": "string"
-          }
-        },
-        "class": "no_data",
-        "description": "A script's account-currency conversion had no rate to read. strategy.convert_to_account, strategy.convert_to_symbol and request.currency_rate (function convert_to_account, convert_to_symbol and currency_rate) answer only from the rate the embedding host supplied, in account-currency units per one unit of the symbol's currency: a scalar, or the curve point in effect at the evaluated time. reason is rate_unavailable when the host supplied no rate in effect at time_ms, unsupported_pair for a pair other than the symbol's currency and the account's, and invalid_currency for a missing or invalid currency code. The same currency on both sides needs no rate and never raises this code; no rate is guessed, derived from another pair or taken from a similar code. from and to are the currencies the call converts between, symbol_currency and account_currency the two the host's rate joins, and time_ms the evaluation's time in Unix milliseconds. The currencies of request.currency_rate may be text the script computed, and time_ms comes from the engine's evaluation. request.currency_rate with ignore_invalid_currency returns na instead of stopping and reports this code and these arguments as a run warning.",
-        "english": [
-          "{call}: no account-currency conversion rate for \"{from}\" to \"{to}\" at time {time_ms} (symbol currency \"{symbol_currency}\", account currency \"{account_currency}\"): a currency is missing or invalid",
-          "{call}: no account-currency conversion rate for \"{from}\" to \"{to}\" at time {time_ms} (symbol currency \"{symbol_currency}\", account currency \"{account_currency}\"): the host supplied no rate in effect at that time",
-          "{call}: no account-currency conversion rate for \"{from}\" to \"{to}\" at time {time_ms} (symbol currency \"{symbol_currency}\", account currency \"{account_currency}\"): the host-supplied rate converts only between the symbol currency and the account currency"
-        ],
-        "retryable": false,
-        "since": "1.13.0"
-      }
-    }
-  ],
-  "changed": [
-    {
-      "code": "run_options_rejected",
-      "collection": "codes",
-      "fields": [
-        {
-          "path": "args.intrabar_tf",
-          "beforePresent": false,
-          "afterPresent": true,
-          "before": null,
-          "after": {
-            "kind": "timeframe",
-            "optional": true
-          }
-        },
-        {
-          "path": "args.reason",
-          "beforePresent": false,
-          "afterPresent": true,
-          "before": null,
-          "after": {
-            "kind": "vocab",
-            "optional": true,
-            "values": [
-              "intrabar_not_divisible",
-              "not_divisible",
-              "script_finer_than_input",
-              "script_finer_than_intrabar"
-            ]
-          }
-        },
-        {
-          "path": "english",
-          "beforePresent": true,
-          "afterPresent": true,
-          "before": [
-            "Pine adapter produced invalid native run spec field {field}",
-            "native calendar parse failed at configure",
-            "native intrabar path failed validation",
-            "native intrabar path timeframe or bar count is invalid",
-            "native intrabar timeframe parse failed at configure",
-            "native magnifier arguments require an intrabar path",
-            "native module refuses unsupported magnifier arguments",
-            "native stream requires a detected timeframe",
-            "native timeframe arguments must be empty or match the spec",
-            "native undetected timeframe requires empty timeframe arguments",
-            "native undetected timeframe requires fewer than two bars",
-            "request.security cannot infer input timeframe from available input bars; pass input_tf explicitly",
-            "script timeframe must be coarser than or equal to input timeframe: requested script_tf {script_tf} from input timeframe {input_tf}"
-          ],
-          "after": [
-            "Pine adapter produced invalid native run spec field {field}",
-            "input timeframe '{input_tf}' cannot build script timeframe '{script_tf}' ({script_tf} is not a multiple of {input_tf}); pass bars whose timeframe divides the script timeframe '{script_tf}', for example {example} bars.",
-            "input timeframe '{input_tf}' cannot build script timeframe '{script_tf}' (script timeframe '{script_tf}' is finer than input timeframe '{input_tf}'); pass bars whose timeframe divides the script timeframe '{script_tf}', for example {example} bars.",
-            "input timeframe '{input_tf}' cannot build script timeframe '{script_tf}' using intrabar timeframe '{intrabar_tf}' ({script_tf} is not a multiple of {intrabar_tf}); pass bars whose timeframe divides the script timeframe '{script_tf}', for example {example} bars.",
-            "input timeframe '{input_tf}' cannot build script timeframe '{script_tf}' using intrabar timeframe '{intrabar_tf}' (script timeframe '{script_tf}' is finer than intrabar timeframe '{intrabar_tf}'); pass bars whose timeframe divides the script timeframe '{script_tf}', for example {example} bars.",
-            "native calendar parse failed at configure",
-            "native intrabar path failed validation",
-            "native intrabar path timeframe or bar count is invalid",
-            "native intrabar timeframe parse failed at configure",
-            "native magnifier arguments require an intrabar path",
-            "native module refuses unsupported magnifier arguments",
-            "native stream requires a detected timeframe",
-            "native timeframe arguments must be empty or match the spec",
-            "native undetected timeframe requires empty timeframe arguments",
-            "native undetected timeframe requires fewer than two bars",
-            "request.security cannot infer input timeframe from available input bars; pass input_tf explicitly",
-            "script timeframe must be coarser than or equal to input timeframe: requested script_tf {script_tf} from input timeframe {input_tf}"
-          ]
-        }
-      ]
-    }
-  ],
+  "added": [],
+  "changed": [],
   "removed": [],
   "deprecated": []
 }
