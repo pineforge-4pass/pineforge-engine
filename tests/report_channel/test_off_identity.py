@@ -29,7 +29,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 # Immutable reference implementation and runtime/feed request-helper pin.
 BASE = "69cddc9d102d2ccf5605231cc508b82c08c7081c"
-CORPUS_BASE = "8425ca820c4b7272db24d659a64d88e8e05b6407"
+CORPUS_BASE = "804ef5bc7ce17a561a06ba9a2ac5b464d0501d1b"
 SUBSET = "scripts/corpus_parity_subset.txt"
 SUBSET_SIZE = 54
 ROUTES = ("full", "path-sink", "fd-sink")
