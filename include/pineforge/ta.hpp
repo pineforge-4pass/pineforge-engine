@@ -511,15 +511,12 @@ public:
 // sum-of-squared-deviations of its documentation: it is
 //     sqrt(Sxx / n - m * m),  m = Sx / n,
 // with Sx = math.sum(src, n) and Sxx = math.sum(src * src, n) the same
-// sliding-window sums as ta.sma (window_sum.hpp) -- so the value carries the
-// cancellation error of that form. Pinned 2026-09-05 (round 9, family W) on
-// a full-precision NYSE:F@15 oracle (its evidence is kept privately;
-// 7,029/7,029 bars bit-exact; the two-pass form is exact on none of them),
-// when those sums were the compensated running sums of that month. Since
-// 2026-11 they are the exact sum of the window, rounded once; this form over
-// the exact sums has NOT been measured against TradingView again. The
-// unbiased variant (biased = false) is unpinned and keeps the two-pass
-// window arithmetic.
+// sliding-window Kahan sums as ta.sma (window_sum.hpp) -- so the value carries
+// the cancellation error of that form and of those running sums. Pinned
+// 2026-09-05 (round 9, family W) on a full-precision NYSE:F@15 oracle
+// (pineforge-workflow famw-f15-sd-*: 7,029/7,029 bars bit-exact; the
+// two-pass form is exact on none of them). The unbiased variant
+// (biased = false) is unpinned and keeps the two-pass window arithmetic.
 class StdDev {
     int length_;
     bool biased_;
