@@ -24,6 +24,7 @@ import csv
 import hashlib
 import io
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -31,6 +32,7 @@ from pathlib import Path
 from unittest import mock
 
 import run_strategy
+import symbol_calendar
 from run_strategy import LANE_QTY_STEP_ENV, inputs_run_kwargs
 
 FIXTURES = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "syminfo_mincontract"
@@ -72,13 +74,19 @@ def _readout(directory: Path) -> tuple[float, float]:
 class TradingViewReadoutTests(unittest.TestCase):
     def test_every_lane_reads_its_quantity_step(self) -> None:
         scripts = set()
+        channels = set()
         self.assertEqual(sorted(p.name for p in FIXTURES.iterdir() if p.is_dir()),
                          sorted(LANE_STEPS))
         for name, (lane, step) in LANE_STEPS.items():
             with self.subTest(lane=lane):
                 d = FIXTURES / name
                 metrics = json.loads((d / "metrics.json").read_text(encoding="utf-8"))
-                self.assertEqual(metrics["tapeChannel"], "ws-report-v1")
+                # Every lane names its channel, and it is the same one for all;
+                # the calendar document is the code that reads the field.
+                channel = symbol_calendar.calendar_document(d)["source"]["channel"]
+                self.assertIsInstance(channel, str)
+                self.assertTrue(channel)
+                channels.add(channel)
                 provenance, _ = run_strategy._metrics_range_provenance(metrics)
                 self.assertEqual(provenance["rangeProof"], "covered")
                 self.assertEqual(metrics["tvTradesCsvHash"],
@@ -92,6 +100,28 @@ class TradingViewReadoutTests(unittest.TestCase):
                 else:
                     self.assertEqual(mincontract, float(step))
         self.assertEqual(len(scripts), 1)
+        self.assertEqual(len(channels), 1)
+
+    def test_a_lane_on_another_channel_is_refused(self) -> None:
+        # The read-out above takes one channel for all lanes: run it on a copy
+        # whose eth-15 lane names another channel; it must fail on that.
+        with tempfile.TemporaryDirectory() as tmp:
+            copy = Path(tmp) / FIXTURES.name
+            shutil.copytree(FIXTURES, copy)
+            lane = copy / "eth-15"
+            channel = symbol_calendar.calendar_document(lane)["source"]["channel"]
+            path = lane / "metrics.json"
+            metrics = json.loads(path.read_text(encoding="utf-8"))
+            renamed = {key: (value + "-other" if value == channel else value)
+                       for key, value in metrics.items()}
+            self.assertNotEqual(renamed, metrics)
+            path.write_text(json.dumps(renamed), encoding="utf-8")
+            result = unittest.TestResult()
+            with mock.patch.object(sys.modules[__name__], "FIXTURES", copy):
+                type(self)("test_every_lane_reads_its_quantity_step").run(result)
+        self.assertEqual(len(result.failures), 1)
+        self.assertEqual(result.errors, [])
+        self.assertIn("2 != 1", result.failures[0][1])
 
 
 class InputsRunKwargsTests(unittest.TestCase):
