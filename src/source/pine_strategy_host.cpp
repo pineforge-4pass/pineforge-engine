@@ -3771,9 +3771,9 @@ void replay_intent(source::PineExecutionAdapter& adapter,
 void replay_intent(source::PineExecutionAdapter& adapter,
                    const source::detail::IntentOrder& row) {
     source::admit_strategy_order(row.id, row.is_long, row.qty, row.limit_price, row.stop_price,
-                                 row.oca_name, row.oca_type);
+                                 row.oca_name, row.oca_type, row.comment);
     adapter.order(row.id, row.is_long, row.qty, row.limit_price, row.stop_price, row.oca_name,
-                  row.oca_type);
+                  row.oca_type, row.comment);
 }
 void replay_intent(source::PineExecutionAdapter& adapter,
                    const source::detail::IntentRiskDirection& row) {

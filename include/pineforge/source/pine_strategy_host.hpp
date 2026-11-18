@@ -516,6 +516,12 @@ public:
                         double limit_price = std::numeric_limits<double>::quiet_NaN(),
                         double stop_price = std::numeric_limits<double>::quiet_NaN(),
                         const std::string& oca_name = {}, int oca_type = 0);
+    // The same order with the script's comment, the eighth argument of
+    // strategy.order: the Signal text of the order's fills in the trade list.
+    // The call above is this one with an empty comment.
+    void strategy_order(const std::string& id, bool is_long, double qty, double limit_price,
+                        double stop_price, const std::string& oca_name, int oca_type,
+                        const std::string& comment);
 
     int pine_bar_index() const;
     int pine_last_bar_index() const;

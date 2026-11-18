@@ -127,10 +127,11 @@ void admit_strategy_cancel_all() noexcept {}
 
 void admit_strategy_order(const std::string& id, bool, double,
                           double limit_price, double stop_price,
-                          const std::string& oca_name, int) {
+                          const std::string& oca_name, int, const std::string& comment) {
     admit_text(id, value_field::order_id);
     admit_level(limit_price, value_field::order_limit_price);
     admit_level(stop_price, value_field::order_stop_price);
+    admit_comment(comment, value_field::order_comment);
     admit_text(oca_name, value_field::order_oca_name);
     // The CANCEL path retains non-finite qty for default host sizing and its
     // full-fill sibling cancellation predicate. Ordinary qty NaN is default.

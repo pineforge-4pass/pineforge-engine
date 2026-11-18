@@ -1838,7 +1838,7 @@ public:
     void order(const SourceId& id, bool is_long, double qty,
                double limit_price = std::numeric_limits<double>::quiet_NaN(),
                double stop_price = std::numeric_limits<double>::quiet_NaN(),
-               const std::string& oca_name = {}, int oca_type = 0);
+               const std::string& oca_name = {}, int oca_type = 0, const std::string& comment = {});
 
     native_order::ExecutionTerms resolve_terms(const NativeExecutionTermsFacts&) const;
     // anchor_relative_exits runs at the end of a source
