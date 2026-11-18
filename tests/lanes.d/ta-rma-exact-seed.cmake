@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_ta_rma_exact_seed)
+pineforge_add_unit_test(test_ta_rma_exact_seed)

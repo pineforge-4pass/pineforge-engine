@@ -325,29 +325,37 @@ bool& ema_na_warmup_flag() {
 }
 
 RMA::RMA(int length)
-    : output_val(na<double>()), sum(0.0), length(length), bar_count(0),
+    : output_val(na<double>()), length(length), bar_count(0), seed_window_(length),
       // Mirror the initial committed state so a recompute() issued before
       // the first compute() (e.g. the first partial sub-bar of a
       // lookahead request.security aggregation) restores a well-defined
       // pristine state instead of reading uninitialized save-state. Without
       // this, restore() reads indeterminate memory and can poison the RMA
       // with NaN non-deterministically.
-      saved_output_val_(na<double>()), saved_sum_(0.0), saved_bar_count_(0) {}
+      saved_output_val_(na<double>()), saved_bar_count_(0) {}
 
 double RMA::compute(double src) {
     save();
+    seed_pushed_ = false;
     if (is_na(src)) {
         return na<double>();
     }
 
     bar_count++;
 
-    if (bar_count < length) {
-        sum += src;
-        return na<double>();
-    } else if (bar_count == length) {
-        sum += src;
-        output_val = sum / length;
+    if (bar_count <= length) {
+        // The seed is ta.sma of the first `length` valid sources: the exact sum
+        // of the window, rounded once, over length. TradingView's own doubles
+        // (tests/test_ta_rma_exact_seed.cpp: ta.rma(close, 3) on
+        // BINANCE:ETHUSDT.P 15m) read that value, where a running sum of the
+        // same sources is one unit in the last place away on some windows. The
+        // window is the KahanWindowSum ta.sma uses, so the two agree bit for bit.
+        const double window_sum = seed_window_.push(src);
+        seed_pushed_ = true;
+        if (bar_count < length) {
+            return na<double>();
+        }
+        output_val = window_sum / length;
         return output_val;
     } else {
         // Pine reference formula (TradingView ta.rma):
@@ -637,13 +645,23 @@ double SWMA::compute(double src) {
 // --- RMA ---
 void RMA::save() {
     saved_output_val_ = output_val;
-    saved_sum_ = sum;
     saved_bar_count_ = bar_count;
+    // A bar starts here and nothing of it has entered the seed window. RSI, ATR
+    // and DMI save their RMAs at the start of every bar and return before
+    // computing them when the input is na; restore() on that bar must not take
+    // the previous bar's source out of the window.
+    seed_pushed_ = false;
 }
 void RMA::restore() {
     output_val = saved_output_val_;
-    sum = saved_sum_;
     bar_count = saved_bar_count_;
+    // A bar that entered the seed window leaves it again, so the window reads
+    // as it did before the bar; a bar that did not (na, or after the seed)
+    // leaves it alone.
+    if (seed_pushed_) {
+        seed_window_.unpush();
+        seed_pushed_ = false;
+    }
 }
 double RMA::recompute(double src) {
     restore();

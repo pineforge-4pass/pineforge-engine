@@ -181,13 +181,17 @@ public:
 
 class RMA {
     double output_val;
-    double sum;
     int length;
     int bar_count;
+    // The first `length` valid sources, summed the way ta.sma sums its window:
+    // the seed is their exact sum, rounded once, over length. Nothing enters it
+    // after the seed.
+    KahanWindowSum seed_window_;
+    // Whether the bar computed last entered the window; restore() takes it out.
+    bool seed_pushed_ = false;
 
     // saved state for recompute
     double saved_output_val_;
-    double saved_sum_;
     int saved_bar_count_;
 
 public:
@@ -197,8 +201,9 @@ public:
     void restore();
     double recompute(double src);
 public:
-    // All retained fields are inline scalars (or scalar-only aggregates).
-    void observe_owned_storage(OwnedStorage&) const noexcept {}
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, seed_window_);
+    }
 };
 
 class RSI {
