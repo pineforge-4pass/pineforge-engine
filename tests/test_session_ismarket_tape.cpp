@@ -13,7 +13,7 @@
  * kernel tests the trading date of the session day the instant belongs to.
  *
  * TradingView's answer (tests/fixtures/session_ismarket, six `lab tv` tapes,
- * channel ws-report-v1, rangeProof covered): the probe reverses its position
+ * the full range covered): the probe reverses its position
  * at the close of EVERY chart bar (process_orders_on_close), so every entry is
  * one chart bar, dated at its open, and its Signal is the flag TradingView
  * evaluated there ("M1" in market, "M0" not). On all six tapes — CME_MINI:ES1!

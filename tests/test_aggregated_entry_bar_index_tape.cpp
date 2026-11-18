@@ -13,7 +13,7 @@
  * ab9714be; this row pins TradingView.
  *
  * The tape (tests/fixtures/aggregated_entry_bar_index/hm-f1e-ebi-pooc-eth,
- * `lab tv`, ws-report-v1, rangeProof covered, BINANCE:ETHUSDT.P 15m,
+ * a TradingView export, the full range covered, BINANCE:ETHUSDT.P 15m,
  * process_orders_on_close=true) enters at three fixed bar opens and closes
  * every position on a bar-index difference:
  *

@@ -267,7 +267,7 @@ std::vector<pineforge::Bar> fixture_bars(const std::string& fixture) {
     return order_print_tape::bars("explicit_qty_floor/" + fixture);
 }
 
-// TradingView's ws report prints PnL at float32 precision.
+// TradingView's report prints PnL at float32 precision.
 bool pnl_matches(double actual, double tv) {
     return std::abs(actual - tv) <= std::max(1e-4, 1.2e-7 * std::abs(tv));
 }

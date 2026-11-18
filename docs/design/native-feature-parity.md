@@ -612,7 +612,7 @@ entry-incarnation column only.
 found the adapter armed a trail WITH a trailing offset at its raw activation
 while the one-shot's activation was quantized, and no tape pinned the
 difference. TradingView's own tapes do (private fixture set `offset_trail_arm`,
-`lab tv`, ws-report-v1, `rangeProof` covered): on NYSE:F 15m with
+TradingView exports, the full range covered): on NYSE:F 15m with
 `trail_offset` 1, synthetic lows 25.041 / 26.041 / 27.041 and highs 25.049 / 26.049 /
 27.049 reach, only once quantized, the activations at those ticks, and 6
 of 6 trades exit on that bar at activation -/+ 1 tick; the one-shot twins
@@ -1583,7 +1583,7 @@ restored the open entries' cash fees (`percent_commission_live_equity`) and
 reserved nothing for the order, so every such quantity came out too large.
 
 **Evidence: thirteen `lab tv` tapes** (the private fixture set `cash_fee_sizing`,
-ws-report-v1, rangeProof covered; BINANCE:ETHUSDT.P 15 over 2025-04 and
+the full range covered; BINANCE:ETHUSDT.P 15 over 2025-04 and
 CME_MINI:ES1! 15 over 2025-06). A tape's `E` is read off the tape itself --
 the initial capital, the net profit closed before the signal, and each open
 piece marked at the signal close less its pro-rata entry fee.

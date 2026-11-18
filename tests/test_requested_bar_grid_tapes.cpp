@@ -2,7 +2,7 @@
  * TradingView requested-bar grid tapes for the next release.
  *
  * All paths below are relative to fixtures/requested_bar_grid/btc60/.
- * BINANCE:BTCUSDT, chart 60, 2024-01-01 .. 2024-03-01, ws-report-v1.
+ * BINANCE:BTCUSDT, chart 60, 2024-01-01 .. 2024-03-01.
  * feed/bars.csv: 1,441 bars, sha256
  * ec711e3df42852c33d5a12be56258add6a1851767cdc028bfb9e6c4f338b9c82.
  *

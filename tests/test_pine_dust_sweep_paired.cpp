@@ -15,7 +15,7 @@
 // inside a live book (section 2).
 //
 // What TradingView does with such a remnant (section 3): the `lab tv` tape
-// hm-g232-decimal-dust (ws-report-v1, rangeProof covered;
+// hm-g232-decimal-dust (the full range covered;
 // fixtures/g232_decimal_dust) buys 0.1, 0.2 and 1.0 and sells 0.3 every day.
 // TradingView's decimal quantities close the 0.1 and 0.2 lots whole and leave
 // the 1.0 lot alone, three rows a day. In binary64 0.1 + 0.2 exceeds 0.3, so

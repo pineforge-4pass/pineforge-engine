@@ -114,7 +114,7 @@ def _write_tape(path: Path, rows: list[tuple[int, str, str, str, str]]) -> None:
             f.write(f"{n},{typ},{when},{signal},{price}\n")
 
 
-# The ws-report-v1 export's range: every campaign tape runs 2025-04-01 to
+# The export's range: every campaign tape runs 2025-04-01 to
 # 2026-05-01, so the range-end bound never cuts the feeds below.
 WS_METRICS = {
     "symbol": "NYSE:F", "interval": "1D",
@@ -561,7 +561,7 @@ class TradingViewFirstBarTapeTests(unittest.TestCase):
 
 
 class TvFirstBarTests(unittest.TestCase):
-    def test_read_from_the_ws_report_range(self) -> None:
+    def test_read_from_the_export_range(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
             (d / "metrics.json").write_text(json.dumps(ETH_METRICS), encoding="utf-8")

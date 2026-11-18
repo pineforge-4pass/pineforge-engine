@@ -13,8 +13,8 @@
  * The TradingView-consistent expectation. TradingView's Pine has no per-call
  * qty_type: its compiler refuses `strategy.entry("L", strategy.long,
  * qty=1000, qty_type=strategy.cash)` with 'The "{signature}" function does not
- * have an argument with the name "{name}"' (lab tv, 2026-09-25, pine-facade
- * save/new_draft). The per-call spelling is codegen's (signatures.py) and a
+ * have an argument with the name "{name}"' (a TradingView export, 2026-09-25).
+ * The per-call spelling is codegen's (signatures.py) and a
  * C++ caller's, and the only TradingView meaning it can carry is the same
  * quantity declared as the strategy's default: TradingView sizes a default
  * cash / percent-of-equity entry by converting its money into contracts and
