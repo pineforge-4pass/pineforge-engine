@@ -10427,6 +10427,17 @@
   },
   {
    "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "comment",
+   "scope": [
+    "namespace pineforge :: source #2",
+    "class PineExecutionAdapter #1"
+   ],
+   "cls": "assign",
+   "spelling": "comment = . . .",
+   "ordinal": 5
+  },
+  {
+   "file": "include/pineforge/source/pine_adapter.hpp",
    "symbol": "held",
    "scope": [
     "namespace pineforge :: source #2",
@@ -38337,7 +38348,7 @@
    "symbol": "replaced_close_all",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: order ( const SourceId & id , bool is_long , double qty , double limit_price , double stop_price , const std :: string & oca_name , int oca_type ) #1",
+    "void PineExecutionAdapter :: order ( const SourceId & id , bool is_long , double qty , double limit_price , double stop_price , const std :: string & oca_name , int oca_type , const std :: string & comment ) #1",
     "if ( id = = ) #1"
    ],
    "cls": "decl",
@@ -38349,7 +38360,7 @@
    "symbol": "replaced_close_all",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: order ( const SourceId & id , bool is_long , double qty , double limit_price , double stop_price , const std :: string & oca_name , int oca_type ) #1",
+    "void PineExecutionAdapter :: order ( const SourceId & id , bool is_long , double qty , double limit_price , double stop_price , const std :: string & oca_name , int oca_type , const std :: string & comment ) #1",
     "if ( id = = ) #1",
     "for ( const auto & handle : live_handles_ ) #1",
     "if ( found ! = placement_ . end ( ) && found -> second . family = = PineOrderFamily :: CloseAll && ( ! point || found -> second . placement_script_open_ms = = point -> decision . script_bar_open_ms ) ) #1"
@@ -38363,7 +38374,7 @@
    "symbol": "result",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: order ( const SourceId & id , bool is_long , double qty , double limit_price , double stop_price , const std :: string & oca_name , int oca_type ) #1",
+    "void PineExecutionAdapter :: order ( const SourceId & id , bool is_long , double qty , double limit_price , double stop_price , const std :: string & oca_name , int oca_type , const std :: string & comment ) #1",
     "if ( id = = ) #1",
     "for ( const auto & handle : replaced_close_all ) #1"
    ],
@@ -38373,10 +38384,21 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "comment",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: order ( const SourceId & id , bool is_long , double qty , double limit_price , double stop_price , const std :: string & oca_name , int oca_type , const std :: string & comment ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "comment = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "same_bar_defaults",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: order ( const SourceId & id , bool is_long , double qty , double limit_price , double stop_price , const std :: string & oca_name , int oca_type ) #1",
+    "void PineExecutionAdapter :: order ( const SourceId & id , bool is_long , double qty , double limit_price , double stop_price , const std :: string & oca_name , int oca_type , const std :: string & comment ) #1",
     "if ( std :: holds_alternative < native_order :: Market > ( request . trigger ) ) #1"
    ],
    "cls": "decl",
@@ -38388,7 +38410,7 @@
    "symbol": "pending",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: order ( const SourceId & id , bool is_long , double qty , double limit_price , double stop_price , const std :: string & oca_name , int oca_type ) #1",
+    "void PineExecutionAdapter :: order ( const SourceId & id , bool is_long , double qty , double limit_price , double stop_price , const std :: string & oca_name , int oca_type , const std :: string & comment ) #1",
     "if ( std :: holds_alternative < native_order :: Market > ( request . trigger ) ) #1",
     "for ( const auto & handle : live_handles_ ) #1"
    ],
@@ -38401,7 +38423,7 @@
    "symbol": "same_bar_defaults",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: order ( const SourceId & id , bool is_long , double qty , double limit_price , double stop_price , const std :: string & oca_name , int oca_type ) #1",
+    "void PineExecutionAdapter :: order ( const SourceId & id , bool is_long , double qty , double limit_price , double stop_price , const std :: string & oca_name , int oca_type , const std :: string & comment ) #1",
     "if ( std :: holds_alternative < native_order :: Market > ( request . trigger ) ) #1",
     "for ( const auto & handle : live_handles_ ) #1",
     "if ( row . opening && row . family = = PineOrderFamily :: Entry && ! std :: isfinite ( row . requested_qty ) && ( ! point || row . placement_script_open_ms = = point -> decision . script_bar_open_ms ) && ! finite_positive ( row . exit_levels . limit ) && ! finite_positive ( row . exit_levels . stop ) ) #1"
@@ -38415,7 +38437,7 @@
    "symbol": "oca_name",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: order ( const SourceId & id , bool is_long , double qty , double limit_price , double stop_price , const std :: string & oca_name , int oca_type ) #1"
+    "void PineExecutionAdapter :: order ( const SourceId & id , bool is_long , double qty , double limit_price , double stop_price , const std :: string & oca_name , int oca_type , const std :: string & comment ) #1"
    ],
    "cls": "assign",
    "spelling": "oca_name = . . .",
@@ -38423,10 +38445,21 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "comment",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: order ( const SourceId & id , bool is_long , double qty , double limit_price , double stop_price , const std :: string & oca_name , int oca_type , const std :: string & comment ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "comment = . . .",
+   "ordinal": 2
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "delayed_market_orders_",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: order ( const SourceId & id , bool is_long , double qty , double limit_price , double stop_price , const std :: string & oca_name , int oca_type ) #1",
+    "void PineExecutionAdapter :: order ( const SourceId & id , bool is_long , double qty , double limit_price , double stop_price , const std :: string & oca_name , int oca_type , const std :: string & comment ) #1",
     "if ( delay_after_default_pair ) #1"
    ],
    "cls": "grow",
@@ -43819,6 +43852,17 @@
   {
    "file": "src/source/pine_intent_state.hpp",
    "symbol": "oca_name",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "struct IntentOrder #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_intent_state.hpp",
+   "symbol": "comment",
    "scope": [
     "namespace pineforge :: source :: detail #1",
     "struct IntentOrder #1"
