@@ -8,8 +8,11 @@
  * where the order fills on the bar that places it) and empty comments, for an
  * order that fills at once, for limit and stop orders that wait for their
  * price, for two orders closed by one, for a cancelled and a replaced order,
- * and for the open trade a script leaves. It passed before the comment
- * existed and has to keep passing.
+ * and for the open trade a script leaves. The last row is the one literal not
+ * worked out from the bars: the digest of the state a paused selected run keeps
+ * for an order placed before its window, harvested from the call before the
+ * comment existed. The test passed before the comment existed and has to keep
+ * passing.
  */
 
 #include <cstdint>
@@ -23,6 +26,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/selected_window.h>
 #include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
@@ -66,6 +70,7 @@ class Probe final : public pineforge::source::PineStrategyHost {
 public:
     // The host exposes the open-trade readers to derived classes only; the
     // rows read them from outside the class.
+    using source::PineStrategyHost::broker_state_hash;
     using source::PineStrategyHost::open_trade_entry_comment;
     using source::PineStrategyHost::open_trade_entry_id;
 
@@ -257,6 +262,45 @@ void test_the_open_trade_has_no_comment() {
     CHECK(probe.open_trade_entry_comment(0).empty());
 }
 
+// What a paused selected run keeps for the replay, digested: an order placed on
+// the last bar before the window, without a comment. The digest is what this
+// call produced before the comment existed; an order with an empty comment has
+// to keep adding the same bytes. The digest covers the whole broker state of the
+// paused run, as the pinned per-bar digests of test_adapter_receipts_in_place.cpp
+// do: any change of the hashed state moves it, and the host's UTC zoneinfo file
+// is part of it. It folds values in host byte order; both target machines are
+// little-endian.
+constexpr std::int64_t kWindowT0 = 1704067200000LL;
+constexpr std::int64_t kWindowMinute = 60000LL;
+constexpr std::uint64_t kRetainedStateHash = 0x94cbaa8d4d309929ULL;
+
+std::vector<Bar> flat_bars(int count) {
+    std::vector<Bar> bars;
+    for (int i = 0; i < count; ++i)
+        bars.push_back(Bar{100.0, 100.0, 100.0, 100.0, 1.0, kWindowT0 + kWindowMinute * i});
+    return bars;
+}
+
+void test_a_retained_pre_roll_order_without_a_comment_has_its_digest() {
+    std::printf("test_a_retained_pre_roll_order_without_a_comment_has_its_digest\n");
+    Probe probe(true, 1, [](Probe& p, int index) {
+        if (index == 2) p.strategy_order("pre", true, 1.0, kNaN, kNaN, "", 0);
+    });
+    pf_selected_window_config_v1 window{};
+    window.struct_size = static_cast<std::uint32_t>(sizeof window);
+    window.version = 1;
+    window.start_ms = kWindowT0 + kWindowMinute * 3;
+    window.end_ms = kWindowT0 + kWindowMinute * 8;
+    CHECK(strategy_set_selected_window_v1(static_cast<BacktestEngine*>(&probe), &window) == 0);
+    const std::vector<Bar> warmup = flat_bars(3);
+    const bool started = probe.stream_begin(warmup.data(), 3, "1", "1");
+    CHECK(started);
+    CHECK(probe.last_error().empty());
+    const std::uint64_t digest = probe.broker_state_hash();
+    std::printf("  retained state hash %016llx\n", static_cast<unsigned long long>(digest));
+    CHECK(digest == kRetainedStateHash);
+}
+
 }  // namespace
 
 int main() {
@@ -265,6 +309,7 @@ int main() {
     test_two_orders_closed_by_one();
     test_a_cancelled_and_a_replaced_order();
     test_the_open_trade_has_no_comment();
+    test_a_retained_pre_roll_order_without_a_comment_has_its_digest();
     std::printf("\n=== Results: %d checks, %d failures ===\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

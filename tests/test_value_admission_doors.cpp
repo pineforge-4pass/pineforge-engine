@@ -1,6 +1,7 @@
 // Expectations are pinned from the admission brief, D1 and D2.
-// This TU uses only the previous public header closure, so it is intended to
-// compile on base; its actionable invalid rows then lack the required code.
+// This TU uses only the public header closure. It needs the eight-argument
+// strategy_order, because the Order door passes its comment, and does not
+// compile against the previous closure.
 // No toolchain, private fixture, market data or admission-helper call is used.
 #include <pineforge/bar.hpp>
 #include <pineforge/run_failure.hpp>

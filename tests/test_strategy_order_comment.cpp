@@ -6,8 +6,9 @@
  * strategy_order takes the comment as its eighth argument, after oca_type; the
  * seven-argument form stays and is the call with an empty comment.
  *
- * Every expected comment below is the literal the script passes. Nothing is
- * read back from the engine to derive an expectation. The same scenarios
+ * Every expected comment below is the literal the script passes. The only rows
+ * that compare the engine's output with itself are the state-digest rows, which
+ * compare digests of runs that differ in the comment alone. The same scenarios
  * without a comment, with the trade rows pinned, are in
  * test_strategy_order_without_comment.cpp.
  */
@@ -23,6 +24,8 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/pending_order_mirror.hpp>
+#include <pineforge/selected_window.h>
 #include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
@@ -93,6 +96,28 @@ private:
 
 void run(Probe& probe, const std::vector<Bar>& bars) {
     probe.run(bars.data(), static_cast<int>(bars.size()));
+}
+
+// One-minute calendar bars for the selected-window rows below: every price is
+// 100, so no order reaches a price it waits for and every fill is at 100.
+constexpr std::int64_t kWindowT0 = 1704067200000LL;
+constexpr std::int64_t kWindowMinute = 60000LL;
+
+std::vector<Bar> flat_bars(int count) {
+    std::vector<Bar> bars;
+    for (int i = 0; i < count; ++i)
+        bars.push_back(Bar{100.0, 100.0, 100.0, 100.0, 1.0, kWindowT0 + kWindowMinute * i});
+    return bars;
+}
+
+// The selected window starts at bar `start_bar` and ends after bar `count - 1`.
+void select_from(Probe& probe, int start_bar, int count) {
+    pf_selected_window_config_v1 window{};
+    window.struct_size = static_cast<std::uint32_t>(sizeof window);
+    window.version = 1;
+    window.start_ms = kWindowT0 + kWindowMinute * start_bar;
+    window.end_ms = kWindowT0 + kWindowMinute * count;
+    CHECK(strategy_set_selected_window_v1(static_cast<BacktestEngine*>(&probe), &window) == 0);
 }
 
 void test_the_comment_reaches_the_trade_list() {
@@ -324,6 +349,108 @@ void test_a_comment_that_is_not_utf8_is_refused() {
     CHECK(bits(probe.live_position_size()) == bits(0.0));
 }
 
+// The pending-order mirror is a public struct a caller reads while an order
+// waits: a resting order's comment is in it, and an order without one leaves
+// the field empty.
+void test_a_resting_orders_comment_reaches_the_pending_mirror() {
+    std::printf("test_a_resting_orders_comment_reaches_the_pending_mirror\n");
+    // The buy limit at 5 is never reached, so the order is still pending at the end.
+    const std::vector<Bar> bars = {
+        bar(0, 10.0, 10.0, 10.0, 10.0), bar(1, 10.0, 10.0, 10.0, 10.0),
+        bar(2, 10.0, 10.0, 10.0, 10.0), bar(3, 10.0, 10.0, 10.0, 10.0)};
+    std::uint64_t comment_hash[2] = {0, 0};
+    for (int with_comment = 0; with_comment < 2; ++with_comment) {
+        std::printf("  %s\n", with_comment ? "with a comment" : "seven arguments");
+        Probe probe(true, 1, [with_comment](Probe& p, int index) {
+            if (index != 0) return;
+            if (with_comment) p.strategy_order("rest", true, 1.0, 5.0, kNaN, "", 0, "mirror-note");
+            else p.strategy_order("rest", true, 1.0, 5.0, kNaN, "", 0);
+        });
+        run(probe, bars);
+        CHECK(probe.last_error().empty());
+        CHECK(probe.trade_count() == 0);
+        const auto& view = probe.pending_intent_view();
+        CHECK(view.size() == 1);
+        if (view.size() != 1) continue;
+        pf_pending_order_v1_t row{};
+        CHECK(view.copy_v1(0, &row) == 0);
+        CHECK(row.is_long == 1);
+        CHECK(std::strcmp(row.comment, with_comment ? "mirror-note" : "") == 0);
+        CHECK(row.comment_truncated == 0);
+        comment_hash[with_comment] = row.comment_hash64;
+    }
+    CHECK(comment_hash[0] != comment_hash[1]);
+}
+
+// A selected window replays what its pre-roll placed. The order placed on the
+// last bar before the window carries its comment through the replay into the
+// trade list; one placed without a comment leaves the entry row empty.
+void test_a_pre_roll_order_keeps_its_comment_through_the_replay() {
+    std::printf("test_a_pre_roll_order_keeps_its_comment_through_the_replay\n");
+    const int count = 8;
+    const std::vector<Bar> bars = flat_bars(count);
+    for (int with_comment = 0; with_comment < 2; ++with_comment) {
+        std::printf("  %s\n", with_comment ? "with a comment" : "seven arguments");
+        Probe probe(true, 1, [with_comment](Probe& p, int index) {
+            if (index == 2) {
+                if (with_comment) p.strategy_order("pre", true, 1.0, kNaN, kNaN, "", 0, "pre-note");
+                else p.strategy_order("pre", true, 1.0, kNaN, kNaN, "", 0);
+            }
+            if (index == 5) p.strategy_order("close", false, 1.0, kNaN, kNaN, "", 0, "post-note");
+        });
+        select_from(probe, 3, count);
+        probe.run(bars.data(), count, "1", "1", false);
+        CHECK(probe.last_error().empty());
+        CHECK(probe.trade_count() == 1);
+        if (probe.trade_count() != 1) continue;
+        const Trade trade = probe.get_trade(0);
+        CHECK(trade.is_long);
+        CHECK(trade.entry_id == "pre");
+        CHECK(trade.entry_comment == (with_comment ? "pre-note" : ""));
+        CHECK(trade.exit_id == "close");
+        CHECK(trade.exit_comment == "post-note");
+        CHECK(bits(trade.entry_price) == bits(100.0));
+        CHECK(bits(trade.exit_price) == bits(100.0));
+    }
+}
+
+// The state a paused selected run keeps for the replay holds the order's
+// comment: the digest of that state tells two comments apart, and an order
+// without a comment digests as it did before the comment existed (its literal is
+// in test_strategy_order_without_comment.cpp).
+std::uint64_t retained_state_hash(int form) {
+    Probe probe(true, 1, [form](Probe& p, int index) {
+        if (index != 2) return;
+        switch (form) {
+            case 0: p.strategy_order("pre", true, 1.0, kNaN, kNaN, "", 0); break;
+            case 1: p.strategy_order("pre", true, 1.0, kNaN, kNaN, "", 0, std::string()); break;
+            case 2: p.strategy_order("pre", true, 1.0, kNaN, kNaN, "", 0, "note-a"); break;
+            default: p.strategy_order("pre", true, 1.0, kNaN, kNaN, "", 0, "note-b"); break;
+        }
+    });
+    select_from(probe, 3, 8);
+    const std::vector<Bar> warmup = flat_bars(3);
+    const bool started = probe.stream_begin(warmup.data(), 3, "1", "1");
+    CHECK(started);
+    CHECK(probe.last_error().empty());
+    return probe.broker_state_hash();
+}
+
+void test_a_retained_pre_roll_orders_comment_is_part_of_the_state() {
+    std::printf("test_a_retained_pre_roll_orders_comment_is_part_of_the_state\n");
+    const std::uint64_t seven = retained_state_hash(0);
+    const std::uint64_t empty = retained_state_hash(1);
+    const std::uint64_t first = retained_state_hash(2);
+    const std::uint64_t again = retained_state_hash(2);
+    const std::uint64_t other = retained_state_hash(3);
+    std::printf("  retained state hash, seven arguments: %016llx\n",
+                static_cast<unsigned long long>(seven));
+    CHECK(seven == empty);
+    CHECK(first == again);
+    CHECK(first != seven);
+    CHECK(first != other);
+}
+
 }  // namespace
 
 int main() {
@@ -335,6 +462,9 @@ int main() {
     test_a_cancelled_or_replaced_order_leaves_no_comment_behind();
     test_a_pending_orders_comment_is_part_of_the_state();
     test_a_comment_that_is_not_utf8_is_refused();
+    test_a_resting_orders_comment_reaches_the_pending_mirror();
+    test_a_pre_roll_order_keeps_its_comment_through_the_replay();
+    test_a_retained_pre_roll_orders_comment_is_part_of_the_state();
     std::printf("\n=== Results: %d checks, %d failures ===\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }
