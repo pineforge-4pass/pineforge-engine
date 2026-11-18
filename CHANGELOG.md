@@ -7,10 +7,13 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- Known difference kept for this release: when a same-id market add opens with its quantity-named exits called again, in the same calculation, at a stop that the add's bar crosses, the trade list still shows 1.12's three rows (the add's whole lot in one row) where TradingView lists one row for each exit order. The bar, the price and the total quantity are the same; the trade count differs. Fixed in 1.13.1.
+- The live runner now admits confirmed count-1 daily and weekly charts on daylight-saving calendars; other counts and tick/clock delivery on those calendars remain refused (#819).
 - Checkpoints for `ta.sma`, biased `ta.stdev`, `ta.bb`, `math.sum` and `ta.change` now copy contiguous owning window buffers and reuse them on restore, preserving the arithmetic and rewind rules (#809).
 - Explicit `strategy.order()` quantities now floor executable units at declared decimal quantity steps while preserving the source quantity; the boundary control is not measured against TradingView (#716 item 2).
 - The prebuilt Linux archives need glibc 2.35 or newer (for example Ubuntu 22.04 or Debian 12 and later), and the release check now refuses an archive that needs a newer glibc.
-- Multi-day charts restart their trading-date grid each year; measured on 24x7 daily input for chart bars, last_bar_index, barstate.islast and the open-trade report row. Streams keep the previous chart path; selected windows on generated N-day chart partitions are refused. Time offsets, exchange calendars and intraday input are not measured against TradingView.
+- Multi-day charts restart their trading-date grid each year; measured on 24x7 daily input for chart bars, last_bar_index, barstate.islast and the open-trade report row. Streams and live charts use the same year-restart grid as chart history: an N-day bar opens on 1 January, and the last bar of a year is shorter when the year's day count is not a multiple of N. Selected windows on generated N-day chart partitions are refused. Time offsets, exchange calendars and intraday input are not measured against TradingView.
+  For a live or realtime chart this follows TradingView's chart-history rule; it has not been measured against TradingView realtime bars. It is a behaviour change from 1.12 for live N-day charts (`2D`, `3D` and so on), whose bars 1.12 counted in whole N-day steps from 1970-01-01: warmup and feed bars must now be labelled on the year-restart grid, and a bar labelled on the 1.12 grid is refused wherever the two grids differ. At startup the live runner admits the year's short last bar only when the next bar opens on 1 January, and still refuses a multi-day chart with any other gap or overlap.
 - `str.match` no longer reports "no match" after a memory failure; the failure now reaches `out_of_memory`.
   A pattern over the limits of the engine's regular-expression library stops the run with `pine_string_error` and reason `regex_resource_limit`, which is not retryable.
   An invalid regular expression now stops the run with a typed error, as TradingView does; it used to return an empty string. The message is TradingView's text with the engine's bar prefix, `Error on bar N: `, or `Error before the first bar: ` when no bar is being executed.
@@ -253,6 +256,12 @@ version number follows semantic versioning over the surfaces the
   recent entry changes nothing and a hit on another entry ages only the entries
   more recent than it, so a full set replaces the entry touched longest ago. A
   miss is probed once. Every value a script reads is unchanged.
+
+## 1.13.0
+
+### Changed
+
+- N-day (count>1) Day period keys now restart on 1 January, matching TradingView and the interval bounds.
 
 ## 1.9.1 — 2026-10-31
 

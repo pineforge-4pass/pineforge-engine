@@ -94,7 +94,7 @@ ABSENT_FLOOR = {name: entry[0] - entry[1]
 # Three eight-row splits plus four report rows: 910 + 28 = 938, 337 + 28 = 365.
 # Three public Linux scratch cases were added: 941/368 full, 634/337 absent.
 # Do not derive these from stage/floor helpers: mutations must turn them red.
-LAB_SHARD_FLOORS = {'release': {False: 634, True: 941},
+LAB_SHARD_FLOORS = {'release': {False: 636, True: 943},
                     'kernel': {False: 337, True: 368}}
 # Transcribed ctestExcludeLabel(CI_VERIFY_PROFILES[profile]) results from
 # pineforge-workflow campaign/src/remote/recipes.mjs:38-53, consumed by
@@ -3363,10 +3363,12 @@ class CAbiRuntimeInventory(unittest.TestCase):
         header = [name for relative in RUNTIME_HEADERS
                   for name in _pf_api_names(ROOT / 'include/pineforge' / relative)]
         runtime = _pf_api_names(ROOT / 'src/c_abi.cpp')
-        # Source rows: pineforge.h 114 + observer 3 + window 3 + sink 5;
-        # 105 c_abi.cpp definitions and twenty generated declarations.
-        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 125)
-        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 105)
+        # Source rows: pineforge.h 115 + observer 3 + window 3 + sink 5;
+        # 106 c_abi.cpp definitions and twenty generated declarations.
+        # expectation corrected: 125 -> 126 and 105 -> 106, because the runtime
+        # adds the export strategy_set_account_currency_fx_scalar.
+        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 126)
+        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 106)
         self.assertEqual(len(EXPECTED_RUNTIME), EXPECTED_RUNTIME_IMPLEMENTATIONS)
         self.assertEqual(len(header), EXPECTED_PUBLIC_DECLARATIONS)
         self.assertEqual(len(header), len(set(header)))
@@ -3378,6 +3380,8 @@ class CAbiRuntimeInventory(unittest.TestCase):
         self.assertIn('strategy_configure_native_fx_curve_v1', runtime)
         self.assertIn('strategy_configure_native_fx_curve_ext_v1', header)
         self.assertIn('strategy_configure_native_fx_curve_ext_v1', runtime)
+        self.assertIn('strategy_set_account_currency_fx_scalar', header)
+        self.assertIn('strategy_set_account_currency_fx_scalar', runtime)
         for name in ('strategy_set_report_sink_fd_v1',
                      'strategy_report_sink_summary_v1',
                      'strategy_report_sink_diagnostics_v1',
@@ -3974,8 +3978,8 @@ class DriverOrderingAndAggregation(unittest.TestCase):
 
     def test_pr_exclusion_proves_registered_minus_labelled_equals_ran(self):
         self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
-                         {'debug': 907, 'sanitizers': 898, 'native': 1003,
-                          'release': 926, 'kernel': 368})
+                         {'debug': 909, 'sanitizers': 900, 'native': 1005,
+                          'release': 928, 'kernel': 368})
         self.assertNotIn('test_open_report_rows_flat', ci_verify.PINNED_SLOW_TEST_ROWS)
         self.assertNotIn('test_open_report_rows_flat_slices_cover',
                          ci_verify.PINNED_SLOW_TEST_ROWS)
@@ -5120,9 +5124,9 @@ class PrivateFixtureFloors(unittest.TestCase):
         # feeds them. A profile outside the table keeps its declared value, and
         # PRIVATE_FIXTURE_ROW_COUNT bounds the pinned half by construction.
         self.assertEqual(ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS,
-                         {'release': (941, 307), 'kernel': (368, 31)})
-        self.assertEqual(FULL_FLOOR, {'release': 941, 'kernel': 368})
-        self.assertEqual(ABSENT_FLOOR, {'release': 634, 'kernel': 337})
+                         {'release': (943, 307), 'kernel': (368, 31)})
+        self.assertEqual(FULL_FLOOR, {'release': 943, 'kernel': 368})
+        self.assertEqual(ABSENT_FLOOR, {'release': 636, 'kernel': 337})
         self.assertEqual(
             {name for name in ci_verify.PINNED_SLOW_TEST_ROWS
              if name.startswith('test_native_command_after')},
@@ -5163,8 +5167,8 @@ class PrivateFixtureFloors(unittest.TestCase):
             self.assertEqual(validate_config(parse_args(['kernel'])).min_tests,
                              FULL_FLOOR['kernel'])
         self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
-                         {'debug': 907, 'sanitizers': 898, 'native': 1003,
-                          'release': 926, 'kernel': 368})
+                         {'debug': 909, 'sanitizers': 900, 'native': 1005,
+                          'release': 928, 'kernel': 368})
 
     def test_overlay_flag_moves_the_floor_and_is_the_only_input(self):
         # F9: the flag must MOVE the value. A test that only reads the
@@ -5582,7 +5586,7 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
         # D1 floors are independent policy literals, not read back from the
         # implementation being tested. Exercise the real enforcement branch
         # without repeating an engine configure/build or scripted source guard.
-        for profile, floor in (('release', 926), ('kernel', 368)):
+        for profile, floor in (('release', 928), ('kernel', 368)):
             pinned = self.pinned_probe(1)
             cases = (
                 (floor, floor - 5, floor - 5, pinned, 'passed', ''),
@@ -6076,7 +6080,7 @@ class FloorDocsPointAtTheTable(unittest.TestCase):
                 self.assertIsInstance(value, ast.Constant)
                 self.assertIsInstance(value.value, int)
                 self.assertEqual(value.value, {
-                    'RELEASE_MIN_TESTS': 941, 'KERNEL_MIN_TESTS': 368,
+                    'RELEASE_MIN_TESTS': 943, 'KERNEL_MIN_TESTS': 368,
                 }[name])
         self.assertIsInstance(table, ast.Dict)
         entries = {}

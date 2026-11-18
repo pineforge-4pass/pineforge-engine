@@ -160,10 +160,22 @@ public:
     // Empty leaves all nominal calendar and completion paths unchanged.
     void set_script_period_source(std::shared_ptr<TimeframeAggregator::PeriodSource>,
                                   const Bar* bars, std::size_t n);
+    // Run-begin opt-in: include the available aggregate at a batch's input
+    // horizon. Returns false for a naturally complete final interval, a stream
+    // or a selected window, leaving their completion and hash bytes unchanged.
+    bool include_batch_script_tail(std::int64_t final_input_ms);
+    // Read-only chart population over the admitted native intervals. Counts
+    // lazy boundary seals and a final natural close or opted-in batch tail,
+    // independently of the request-completion preview.
+    std::optional<std::size_t> batch_script_population(const Bar*, std::size_t) const;
     std::optional<native_calendar::NativeInterval> script_period_interval(
             std::int64_t stamp) const {
         return script_period_.source ? script_interval_at(stamp) : std::nullopt;
     }
+    // The configured calendar span, including a known timeframe whose
+    // execution uses raw passthrough labels. Does not change that partition.
+    std::optional<native_calendar::NativeInterval> script_calendar_interval(
+        std::int64_t stamp) const;
 
     void run_simple(BacktestEngine& engine, const Bar* bars, int n) override;
     void run_tf(BacktestEngine& engine,
@@ -462,6 +474,13 @@ public:
     // Debug check a run's end makes, and a witness's probe.
     uint64_t closed_rows_digest(const TradeLedger& rows) const;
     bool closed_rows_digest_holds(const TradeLedger& rows) const;
+#ifndef NDEBUG
+    // Per-thread count of actual six-field row folds, including pending
+    // answers, verification and sealing. No counter or accessors in Release;
+    // these static functions add no consumer state or layout difference.
+    static std::uint64_t debug_closed_row_fold_work() noexcept;
+    static void reset_debug_closed_row_fold_work() noexcept;
+#endif
     // NativeStrategyHost::native_closed_rows_amended: the rows from `first` on
     // changed after they were final; the next read folds them again.
     void closed_rows_amended(std::size_t first) { rewind_closed_rows(first); }
@@ -1242,6 +1261,7 @@ private:
         std::int64_t last_ms = 0;
         std::uint64_t digest = 0;
     } script_period_;
+    bool batch_script_tail_ = false;
     void prepare_day_labels(const BacktestEngine& engine, const Bar* input_bars, int n_input);
     // The instant a lookup by `timestamp` reads the calendar at: a label a
     // stamp moved before its bar's calendar open names that bar, so it reads
@@ -1847,6 +1867,9 @@ private:
     void revoke_activation_birth(const native_order::RequestHandle&);
     void note_committed_events(const native_order::EventRange& events) noexcept;
     void note_cohort_receipts() noexcept;
+    // Advance only final rows. Debug notification checks need no digest
+    // answer over the suffix whose applied callbacks have not returned.
+    void advance_closed_rows_prefix(const TradeLedger& rows) const;
     void verify_closed_rows(const BacktestEngine& engine) const;
     void rewind_closed_rows(std::size_t first) const;
     void write_streamed_trade(const BacktestEngine& engine, std::size_t global,
@@ -2975,6 +2998,23 @@ private:
     private:
         NativeExecutionConsumer& consumer_;
     };
+
+    // The warning array as rendered each time a warning was first raised while
+    // the run was executing (record_live_run_warning), oldest first. The array
+    // rendered before the run stays in run_warnings_json_ and a deque never
+    // moves a text it holds, so a pointer a caller read earlier keeps the
+    // lifetime strategy_get_run_warnings states. Observational, like the
+    // records: never an execution input or hash state. Cleared at every begin.
+    std::deque<std::string> run_warnings_live_;
+    const std::string& run_warnings_text() const noexcept {
+        return run_warnings_live_.empty() ? run_warnings_json_ : run_warnings_live_.back();
+    }
+
+public:
+    // A warning first raised while the run is executing: recorded under the
+    // same site-and-code key as record_run_warning, so a repeat adds nothing,
+    // and the array is rendered again when the key is new.
+    void record_live_run_warning(int site_id, std::string code, std::string args_json);
 };
 
 // The same lazy backing used by RunCommandScratch's Book binding. Kept in

@@ -9,6 +9,7 @@ No external expected-output artifact or capture step is used.
 from __future__ import annotations
 
 from contextlib import ExitStack
+import ctypes
 from dataclasses import dataclass
 import fcntl
 import hashlib
@@ -21,16 +22,18 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import ModuleType
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-# Pinned to main at the merge; when main moves again before this change merges, repoint all three to the new main head (and re-run the re-anchor and the OFF row).
+# Immutable reference implementation and runtime/feed request-helper pin.
 BASE = "69cddc9d102d2ccf5605231cc508b82c08c7081c"
 CORPUS_BASE = "8425ca820c4b7272db24d659a64d88e8e05b6407"
 SUBSET = "scripts/corpus_parity_subset.txt"
 SUBSET_SIZE = 54
 ROUTES = ("full", "path-sink", "fd-sink")
+UNKNOWN_INPUT = "__pineforge_off_unknown_input__"
 CHANNEL_OPTIONS = {
     "--report-channel", "--terminal-status-fd", "--report-max-bytes",
     "--diagnostic-max-bytes", "--channel-wall-ms", "--channel-stall-ms",
@@ -84,6 +87,86 @@ def write_reference(directory, sources):
     # Give both scripts the same native helper availability.
     (directory / "lib").symlink_to(ROOT / "lib", target_is_directory=True)
     return directory / "docker/run_json.py"
+
+
+def load_module_bytes(name, path, content):
+    """Execute the supplied source bytes directly, without a bytecode fallback."""
+    module = ModuleType(name)
+    module.__file__ = str(path.resolve())
+    previous = sys.modules.get(name)
+    sys.modules[name] = module
+    try:
+        exec(compile(content, module.__file__, "exec"), module.__dict__)
+    except BaseException:
+        if previous is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = previous
+        raise
+    return module
+
+
+def load_pinned_module(name, path, expected):
+    content = path.read_bytes()
+    require(content == expected, f"BASE69 helper bytes differ: {path}")
+    # The guarded bytes themselves are compiled, rather than a second read or
+    # an import that could reuse a checkout module or cached bytecode.
+    return load_module_bytes(name, path, content)
+
+
+def load_request_helpers(directory, corpus, default_feed):
+    """Load genuine BASE69 helpers, then bind only their real filesystem roots."""
+    paths = {}
+    sources = {}
+    for filename in ("derive_corpus_feeds.py", "run_strategy.py"):
+        relative = f"scripts/{filename}"
+        content = git_bytes("show", f"{BASE}:{relative}")
+        path = directory / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        path.chmod(0o444)
+        paths[filename], sources[filename] = path, content
+    derived = load_pinned_module(
+        "_report_off_base69_derived", paths["derive_corpus_feeds.py"],
+        sources["derive_corpus_feeds.py"])
+    derived.REPO_ROOT = ROOT.resolve()
+    derived.SOURCE_1M = corpus / "data/ohlcv_ETH-USDT-USDT_1m.csv"
+    derived.DERIVED_DIR = default_feed.parent
+    derived.DERIVED_15M = default_feed
+    derived.DERIVED_15M_WINDOW = (
+        default_feed.parent / "ohlcv_ETH-USDT-USDT_15m_window.csv")
+    derived.DERIVATION_STAMP = default_feed.parent / ".derive_corpus_feeds.version"
+
+    # BASE69 imports this one sibling by its ordinary name. Scope that alias to
+    # loading the pinned helper so a checkout import cannot supply its globals.
+    previous = sys.modules.get("derive_corpus_feeds")
+    sys.modules["derive_corpus_feeds"] = derived
+    try:
+        requests = load_pinned_module(
+            "_report_off_base69_requests", paths["run_strategy.py"],
+            sources["run_strategy.py"])
+    finally:
+        if previous is None:
+            sys.modules.pop("derive_corpus_feeds", None)
+        else:
+            sys.modules["derive_corpus_feeds"] = previous
+    requests.REPO_ROOT = ROOT.resolve()
+    require(requests.DERIVED_15M == default_feed
+            and requests.DERIVED_DIR == derived.DERIVED_DIR,
+            "BASE69 request helpers must use the explicitly bound real feed paths")
+    return derived, requests
+
+
+def load_input_contract():
+    # Only the shared corpus metadata classifier and strict receipt reader come
+    # from this tree. Runtime/feed resolution above remains pinned to BASE69.
+    path = ROOT / "scripts/run_strategy.py"
+    previous = sys.path[:]
+    try:
+        sys.path.insert(0, str(path.parent))
+        return load_module_bytes("_report_off_input_contract", path, path.read_bytes())
+    finally:
+        sys.path[:] = previous
 
 
 @dataclass(frozen=True)
@@ -195,6 +278,8 @@ class OffIdentity(unittest.TestCase):
         map_path = os.environ.get("PINEFORGE_REPORT_OFF_MODULE_MAP")
         require(map_path, "CTest must supply PINEFORGE_REPORT_OFF_MODULE_MAP "
                 "with one $<TARGET_FILE:strategy_...> per ordered subset probe")
+        # tests/CMakeLists.txt generates this map in the build's tests/ directory.
+        cls.build = Path(map_path).resolve().parent.parent
         rows = [line.split("\t") for line in Path(map_path).read_text(
             encoding="utf-8").splitlines()]
         require(all(len(row) == 2 for row in rows), "invalid CMake module-map row")
@@ -204,24 +289,20 @@ class OffIdentity(unittest.TestCase):
         for probe, module in cls.modules.items():
             require(module.is_absolute() and module.suffix == ".so" and module.is_file(),
                     f"build the real corpus strategy target for {probe}: {module}")
-        corpus = ROOT / "corpus"
+        corpus = (ROOT / "corpus").resolve()
         require(git_bytes("rev-parse", "HEAD", cwd=corpus).decode().strip() == CORPUS_BASE,
                 "OFF identity requires the pinned corpus checkout")
 
-        # These unchanged helpers resolve inputs only. They never supply report
-        # bytes, run a strategy, materialize feeds or replace a runner function.
-        for name in ("derive_corpus_feeds.py", "run_strategy.py"):
-            require((ROOT / "scripts" / name).read_bytes()
-                    == git_bytes("show", f"{BASE}:scripts/{name}"),
-                    f"fixed corpus request helper differs from main: {name}")
-        sys.path.insert(0, str(ROOT / "scripts"))
-        import derive_corpus_feeds as derived
-        import run_strategy as corpus_requests
-
         default_feed = os.environ.get("PINEFORGE_REPORT_OFF_DEFAULT_OHLCV")
         require(default_feed, "CTest must supply PINEFORGE_REPORT_OFF_DEFAULT_OHLCV")
-        require(Path(default_feed).resolve() == derived.DERIVED_15M.resolve(),
+        default_feed = Path(default_feed).resolve()
+        require(default_feed == corpus / "data/derived/ohlcv_ETH-USDT-USDT_15m.csv",
                 "the default corpus feed must be the pinned full-history 15m feed")
+        # One shared request is built for both real children. These helpers never
+        # supply report bytes, materialize feeds or replace a runner function.
+        derived, corpus_requests = load_request_helpers(
+            cls.work / "request-base69", corpus, default_feed)
+        cls.input_contract = load_input_contract()
         require(derived.SOURCE_1M.is_file() and derived.SOURCE_1M.stat().st_size >= 1000000,
                 "prepare the pinned full 1m corpus feed, including its LFS content")
         pointer = re.fullmatch(
@@ -243,6 +324,9 @@ class OffIdentity(unittest.TestCase):
         tracked = set(git_bytes("ls-tree", "-r", "--name-only", CORPUS_BASE,
                                 "--", "validation", cwd=corpus).decode().splitlines())
         cls.requests = []
+        cls.declared_inputs = {}
+        cls.native_run_kwargs = {}
+        cls.classification_deltas = []
         for index, probe in enumerate(cls.probes):
             probe_dir = corpus / probe
             source = probe_dir / "generated.cpp"
@@ -274,9 +358,43 @@ class OffIdentity(unittest.TestCase):
                         if int(line.partition(b",")[0]) >= start:
                             target_feed.write(line)
                 feed = trimmed
-            inputs = {str(key): str(value) for key, value in params.items()
-                      if not str(key).startswith("tv_")
-                      and key not in corpus_requests._VALIDATION_META_KEYS}
+            # Read literal names from the actual module's descriptor receipt;
+            # source variables are never treated as native setter aliases.
+            strategy = corpus_requests.Strategy(cls.modules[probe])
+            state = strategy.lib.strategy_create(b"{}")
+            require(state, f"NEEDS a strategy handle to bind corpus inputs: {probe}")
+            try:
+                names = cls.input_contract.declared_pine_input_names(strategy.lib, state)
+            finally:
+                strategy.lib.strategy_free(state)
+            cls.declared_inputs[probe] = names
+            inputs = cls.input_contract.corpus_input_values(
+                params, declared_input_names=names)
+            # This is BASE69's static filter, using its own immutable key set.
+            # The current classifier has a separate role and must explain every
+            # request delta before either runner is given the shared request.
+            base_inputs = {
+                str(key): str(value) for key, value in params.items()
+                if not str(key).startswith("tv_")
+                and key not in corpus_requests._VALIDATION_META_KEYS
+            }
+            delta = {
+                "probe": probe, "module": str(cls.modules[probe]),
+                "module_sha256": hashlib.sha256(cls.modules[probe].read_bytes()).hexdigest(),
+                "declared": sorted(names), "base69": base_inputs, "bound": inputs,
+                "removed": sorted(base_inputs.keys() - inputs.keys()),
+                "added": sorted(inputs.keys() - base_inputs.keys()),
+                "changed": sorted(key for key in base_inputs.keys() & inputs.keys()
+                                  if base_inputs[key] != inputs[key]),
+                "expected_removed": sorted(
+                    key for key in params
+                    if key in {"notes", "expected_tier", "_comment"} and key not in names),
+            }
+            cls.classification_deltas.append(delta)
+            print("off_input_binding: " + json.dumps(delta, sort_keys=True), flush=True)
+            require(not delta["added"] and not delta["changed"]
+                    and delta["removed"] == delta["expected_removed"],
+                    f"unexpected BASE69/current input delta for {probe}: {delta}")
             overrides = {str(key): str(value) for key, value
                          in (knobs.get("strategy_overrides") or {}).items()}
             distribution = knobs["magnifier_distribution"]
@@ -308,6 +426,7 @@ class OffIdentity(unittest.TestCase):
                 syminfo_path.write_text(json.dumps(syminfo), encoding="utf-8")
                 request += ["--syminfo", str(syminfo_path)]
             cls.requests.append(tuple(request))
+            cls.native_run_kwargs[probe] = dict(knobs)
         cls.environment = {
             name: value for name, value in os.environ.items()
             if not name.startswith(("PINEFORGE_", "PYTHON"))
@@ -387,15 +506,118 @@ class OffIdentity(unittest.TestCase):
                     completed.append((probe, route))
         self.assertEqual(completed, [(probe, route) for probe in self.probes for route in ROUTES],
                          "every probe must finish all three real report routes")
+        self.assertEqual([row["probe"] for row in self.classification_deltas], self.probes)
+
+    def test_off_identity_receipts_and_input_call_order(self):
+        # Use CTest's existing modules, pinned source/inputs and real receipts.
+        # A generated declared-metadata fixture still NEEDS a bound codegen pair;
+        # that separate obligation is recorded in REPORT.md.
+        cache = self.build / "CMakeCache.txt"
+        self.assertIn(f"CMAKE_HOME_DIRECTORY:INTERNAL={ROOT}\n", cache.read_text(),
+                      "the native seam must use this tree's actual CMake build")
+        annotations = {"notes": "annotation", "expected_tier": "annotation",
+                       "_comment": "annotation"}
+        candidates = []
+        for probe, request in zip(self.probes, self.requests):
+            inputs = json.loads(request[request.index("--inputs") + 1])
+            names = self.declared_inputs[probe]
+            if inputs and inputs.keys() <= names and not annotations.keys() & names:
+                candidates.append((probe, request, inputs))
+        self.assertTrue(candidates,
+                        "NEEDS an existing OFF module with configured declared inputs "
+                        "and undeclared notes/expected_tier/_comment for native controls")
+        probe, request, inputs = candidates[0]
+        strategy = self.input_contract.Strategy(self.modules[probe])
+        library = strategy.lib
+        state = library.strategy_create(b"{}")
+        self.assertTrue(state)
+        try:
+            names = self.input_contract.declared_pine_input_names(library, state)
+            self.assertEqual(names, self.declared_inputs[probe])
+            setter = library.strategy_set_input_checked
+            setter.argtypes = [
+                ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p,
+                ctypes.c_void_p, ctypes.c_size_t]
+            setter.restype = ctypes.c_int
+            getter = library.strategy_get_effective_settings
+
+            def effective_inputs():
+                error = ctypes.create_string_buffer(1024)
+                required = ctypes.c_size_t()
+                self.assertEqual(getter(
+                    state, None, 0, ctypes.byref(required), error, len(error)), 4)
+                self.assertGreater(required.value, 0)
+                receipt = ctypes.create_string_buffer(required.value)
+                self.assertEqual(getter(
+                    state, receipt, len(receipt), ctypes.byref(required), error, len(error)), 0)
+                self.assertEqual(required.value, len(receipt.value) + 1)
+                rows = json.loads(receipt.value)["inputs"]
+                values = {row["name"]: row["effective_value"] for row in rows}
+                self.assertEqual(frozenset(values), names)
+                self.assertTrue(all(isinstance(value, str) for value in values.values()))
+                return values
+
+            # Apply only real pinned inputs, then round-trip their real
+            # canonical receipt values. No guessed input title/type/value.
+            for key, value in inputs.items():
+                error = ctypes.create_string_buffer(1024)
+                self.assertEqual(setter(
+                    state, key.encode(), value.encode(), error, len(error)), 0,
+                    error.value.decode("utf-8", "replace"))
+            effective = effective_inputs()
+            for key in inputs:
+                error = ctypes.create_string_buffer(1024)
+                self.assertEqual(setter(
+                    state, key.encode(), effective[key].encode(), error, len(error)), 0,
+                    error.value.decode("utf-8", "replace"))
+            self.assertEqual(effective_inputs(), effective)
+        finally:
+            library.strategy_free(state)
+
+        annotated = {**inputs, **annotations}
+        self.assertNotEqual(annotated, inputs)
+        bound = self.input_contract.corpus_input_values(annotated, declared_input_names=names)
+        self.assertEqual(bound, inputs)
+        # Forward every observed call to its actual native function.
+        events = []
+        observed = {}
+        for name, event in (
+                ("strategy_get_effective_settings", "receipt"),
+                ("strategy_set_input", "input"), ("run_backtest_full", "bars")):
+            native = getattr(library, name)
+
+            def forward(*args, native=native, event=event):
+                events.append(event)
+                return native(*args)
+
+            observed[name] = forward
+
+        class ObservedLibrary:
+            def __getattr__(self, name):
+                return observed[name] if name in observed else getattr(library, name)
+
+        strategy.lib = ObservedLibrary()
+        feed = Path(request[request.index("--ohlcv") + 1])
+        report = strategy.run(feed, params=annotated, **self.native_run_kwargs[probe])
+        self.assertEqual(events, ["receipt", "receipt"] + ["input"] * len(inputs) + ["bars"])
+        self.assertEqual(report["applied_inputs"], inputs)
+        self.assertGreater(report["input_bars_processed"], 0)
 
     def test_off_identity_capabilities_and_failures(self):
         module = str(self.modules[self.probes[0]])
+        self.assertNotIn(UNKNOWN_INPUT, self.declared_inputs[self.probes[0]])
+        unknown = self.input_contract.corpus_input_values(
+            {UNKNOWN_INPUT: "1"},
+            declared_input_names=self.declared_inputs[self.probes[0]])
+        self.assertEqual(unknown, {UNKNOWN_INPUT: "1"})
         cases = (
             ("capabilities", ("--so", module, "--capabilities-json"), 0, None),
             ("parse-failure", (*self.requests[0], "--magnifier-samples", "not-an-integer"),
              2, "run_request_invalid"),
             ("request-refusal", (*self.requests[0], "--report-mode", "SUMMARY_ONLY"),
              1, "report_mode_unsupported"),
+            ("unknown-input", (*self.requests[0], "--inputs", json.dumps(unknown)),
+             1, "setting_rejected"),
         )
         for name, request, status, code in cases:
             with self.subTest(scenario=name):
@@ -414,6 +636,10 @@ class OffIdentity(unittest.TestCase):
                         self.assertIn("error", report)
                         if name == "parse-failure":
                             self.assertTrue(result.stderr, "parse failure must exercise stderr")
+                        if name == "unknown-input":
+                            self.assertEqual(report["args"], {
+                                "entrypoint": "strategy_set_input", "reason": "unknown_key"})
+                            self.assertIn("unknown input key", report["error"])
 
     def test_off_identity_negative_control(self):
         sources = dict(self.sources)

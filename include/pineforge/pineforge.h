@@ -2233,6 +2233,31 @@ PF_API int pf_output_series_limit_failure(int64_t* maximum);
 PF_API int pf_map_pairs_limit_set_checked(const int64_t* maximum,
                                          char* error, size_t error_capacity);
 
+/** @ingroup pf_config
+ *  Install the host's scalar account-currency rate: account-currency units per
+ *  one unit of the symbol's quote currency, the rate every quote-to-account
+ *  money path converts at wherever no point of
+ *  #strategy_set_account_currency_fx_series is in effect.
+ *
+ *  A finite positive @p rate is installed and marked as supplied by the host,
+ *  1.0 included: an explicit 1.0 is host data, the default 1.0 is not. Only a
+ *  supplied rate (this scalar, or a curve point in effect at the evaluated
+ *  time) answers a script's `strategy.convert_to_account`,
+ *  `strategy.convert_to_symbol` and `request.currency_rate` when the account
+ *  currency differs from the symbol's currency; with none they stop the run
+ *  with the run-failure code `currency_conversion_rate_unavailable` instead of
+ *  converting at a rate nobody supplied. The same currency on both sides needs
+ *  no rate. Any other @p rate restores the 1.0 ledger fallback, clears the
+ *  mark and returns -1. The "account_currency_fx" key of
+ *  #strategy_set_syminfo_metadata installs through the same rule. Call before
+ *  a run: once #strategy_stream_begin has run, the call is refused and changes
+ *  nothing.
+ *
+ *  @return 0 when the rate was installed, -1 for a null strategy, an invalid
+ *  rate or a refused call. A runtime library without this export lacks the
+ *  symbol: look it up with `dlsym`. */
+PF_API int strategy_set_account_currency_fx_scalar(pf_strategy_t s, double rate);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

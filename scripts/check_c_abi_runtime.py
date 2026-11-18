@@ -142,6 +142,8 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_report_sink_summary_v1",
     "strategy_stream_engine_layout_version", "pf_output_series_limit_set_checked", "pf_output_series_limit_failure",
     "pf_map_pairs_limit_set_checked",
+    # The host's scalar account-currency rate, beside the curve setter above.
+    "strategy_set_account_currency_fx_scalar",
 })
 
 # The headers under include/pineforge/ whose PF_API declarations are read as one
@@ -155,10 +157,12 @@ RUNTIME_HEADERS = (
     "report_sink.h",
 )
 
-# Source inventory: pineforge.h 114 + observer 3 + window 3 + sink 5.
-EXPECTED_PUBLIC_DECLARATIONS = 125
-# c_abi.cpp implements 105 of those declarations; twenty remain generated.
-EXPECTED_RUNTIME_IMPLEMENTATIONS = 105
+# Source inventory: pineforge.h 115 + observer 3 + window 3 + sink 5.
+# expectation corrected: 125 -> 126 and 105 -> 106, because pineforge.h declares
+# and c_abi.cpp implements strategy_set_account_currency_fx_scalar.
+EXPECTED_PUBLIC_DECLARATIONS = 126
+# c_abi.cpp implements 106 of those declarations; twenty remain generated.
+EXPECTED_RUNTIME_IMPLEMENTATIONS = 106
 
 # Per-module implementations, never static-runtime implementations. The
 # capability has its own declaration in native_module.hpp; the other eight

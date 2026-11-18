@@ -42,7 +42,48 @@ void hash_source_series(BrokerStateHashSink& f, const Series<double>& series) {
     for (int i = 0; i < series.size(); ++i) f.d(series[i]);
 }
 
+void hash_request_delivery(BrokerStateHashSink& f,
+                           const source::PineRequestDelivery& delivery,
+                           const char* domain) {
+    // Default deliveries add no bytes; the domain distinguishes last from selected.
+    if (!delivery.caller_valid && !delivery.eligible && !delivery.actual_complete
+        && !delivery.publication_present && !delivery.publication
+        && delivery.caller == 0 && delivery.requested_slot == -1
+        && !delivery.replay && delivery.replay_caller == 0 && delivery.replay_slot == -1)
+        return;
+    f.s(domain);
+    f.b(delivery.caller_valid);
+    f.b(delivery.eligible);
+    f.b(delivery.actual_complete);
+    f.b(delivery.publication_present);
+    f.b(delivery.publication);
+    f.u(delivery.caller);
+    f.i(delivery.requested_slot);
+    f.b(delivery.replay);
+    f.u(delivery.replay_caller);
+    f.i(delivery.replay_slot);
+}
+
 } // namespace
+
+void source::PineRuntimeSecurityCursor::hash_request_state(BrokerStateHashSink& f) const {
+    if (request_instance != 0 || caller != 0 || chart_caller != 0 || parent_caller != 0
+        || request_selection_enabled || selected_request_available) {
+        f.s(kSourceSecurityDomain);
+        f.s("pineforge-source-runtime-request/v1");
+        f.u(request_instance);
+        f.u(caller);
+        f.u(chart_caller);
+        f.u(parent_caller);
+        f.b(request_selection_enabled);
+        f.b(selected_request_available);
+    }
+    hash_request_delivery(f, last_request_delivery, "runtime-last-request/v1");
+    hash_request_delivery(f, selected_request_delivery, "runtime-selected-request/v1");
+    // request_owner_ and request_run_ only reject foreign/stale bindings.
+    // Neither the host's address nor its monotonic run generation is state
+    // identity. The source instance number is reset with the real run.
+}
 
 namespace {
 
@@ -141,6 +182,8 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.i(value.preserved_close_all_bar);
     hash_source_run_identity(f, value.bracket_origin.run);
     f.u(value.bracket_origin.incarnation);
+    // An ordinary placement retains its existing fold.
+    if (value.fresh_origin_bypass) f.u(0x66726573686f7267ULL);
     f.u(value.source_sequence);
     f.u(value.command_ordinal); f.u(value.placement_open_epoch);
     f.u(value.command_sequence);
@@ -393,7 +436,8 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     std::sort(bracket_keys.begin(), bracket_keys.end()); f.u(bracket_keys.size());
     for (const auto key : bracket_keys) {
         // v4: the settled prefix as its count and running digest, the
-        // working tail in full, and the consumed legs of erased members.
+        // working tail in full, and consumed-origin facts, including a
+        // fact-only family whose members were cancelled.
         const auto& family = bracket_families_.at(key);
         PINEFORGE_TAIL_WORK("hash_families", 1);
         f.u(key); f.u(family.settled_count()); f.u(family.settled_digest());
@@ -466,6 +510,9 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         f.s(exit.oca_name); f.d(exit.profit_ticks); f.d(exit.loss_ticks);
         // Folded only when set, like PlacementSnapshot::void_global_issue.
         if (exit.void_global) f.u(0x766f6964676cULL);
+        if (exit.reservation_sequence != 0) {
+            f.s("relative-exit-reservation/v1"); f.u(exit.reservation_sequence);
+        }
     }
     // The anchored-leg integration: folded only while a leg is anchored, so every run that
     // anchors none keeps its established hash.
@@ -1000,6 +1047,15 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     f.b(deferred_boundary_input_.calling_bar_complete);
     f.b(deferred_boundary_input_.all_security_states);
     f.b(deferred_boundary_input_.active);
+    // Folded only when set, so unused request state keeps its prior digest.
+    if (deferred_boundary_input_.input_caller != 0
+        || deferred_boundary_input_.release_after_body != 0
+        || deferred_boundary_input_.chart_caller != 0) {
+        f.s("deferred-boundary-request/v1");
+        f.u(deferred_boundary_input_.input_caller);
+        f.u(deferred_boundary_input_.release_after_body);
+        f.u(deferred_boundary_input_.chart_caller);
+    }
 }
 
 namespace {
@@ -1231,7 +1287,47 @@ void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const
                 f.d(held.bar.close); f.d(held.bar.volume); f.i(held.bar.timestamp);
                 f.i(held.next_input_ms);
                 f.b(held.calling_bar_complete);
+                if (held.input_caller != 0 || held.release_after_body != 0
+                    || held.chart_caller != 0) {
+                    f.s("deferred-aux-request/v1");
+                    f.u(held.input_caller);
+                    f.u(held.release_after_body);
+                    f.u(held.chart_caller);
+                }
             }
+            if (pine.request_selection_enabled || pine.selected_request_available) {
+                f.s("security-request-selection/v1");
+                f.b(pine.request_selection_enabled);
+                f.b(pine.selected_request_available);
+            }
+            hash_request_delivery(f, pine.last_request_delivery, "security-last-request/v1");
+            hash_request_delivery(f, pine.selected_request_delivery, "security-selected-request/v1");
+        }
+    }
+    if (!request_caller_ids_.empty() || !request_chart_callers_.empty()
+        || request_next_runtime_instance_ != 1) {
+        f.s(kSourceSecurityDomain);
+        f.s("pineforge-source-request-callers/v2");
+        f.u(request_next_caller_);
+        f.u(request_next_runtime_instance_);
+        f.u(request_caller_ids_.size());
+        request_caller_ids_.for_each(
+            [&f](const RequestCallerKey& key, std::int64_t second, std::uint64_t caller) {
+                f.i(key.kind);
+                f.i(key.first);
+                f.i(second);
+                f.i(key.third);
+                f.u(key.occurrence);
+                f.s(key.text);
+                f.u(caller);
+            });
+        f.u(request_chart_callers_.size());
+        for (const auto& entry : request_chart_callers_) {
+            f.i(entry.first);
+            f.u(entry.second.caller);
+            f.i(entry.second.interval_index);
+            f.i(entry.second.input_interval_index);
+            f.i(entry.second.close_ms);
         }
     }
     // Lane XSYM-D: the request sites of other symbols -- registration and

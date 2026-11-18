@@ -108,6 +108,12 @@ uint64_t BacktestEngine::broker_state_hash_from_execution_hash(
     f.b(account_currency_fx_broker_epoch_initialized_);
     f.u(static_cast<uint64_t>(account_currency_fx_broker_epoch_));
     f.d(account_currency_fx_broker_rate_);
+    // Whether the host supplied the scalar rate is configuration a currency
+    // conversion answers from: with it the query converts, without it the
+    // query refuses. Folded only when supplied, so a run that supplies no
+    // scalar keeps the digest it always had; the rate itself is folded with
+    // the run configuration.
+    if (account_currency_fx_scalar_supplied_) f.s("account-currency-fx-scalar:supplied");
 
     f.d(gross_profit_sum_);
     f.d(gross_loss_sum_);

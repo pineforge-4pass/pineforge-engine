@@ -5198,6 +5198,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
             'dangling-comment-names-tests', 'doc-anchors-tests', 'doc-anchors',
             'doc-lint-tests', 'doc-lint', 'doc-reverts-tests', 'doc-reverts',
             'doc-reverts-net', 'public-role-words-tests', 'public-role-words',
+            'public-text-added-tests', 'public-text-added',
             'kernel-seam-rows-tests', 'kernel-seam-rows', 'doc-pine-coverage',
             'doc-pine-coverage-tests', 'duplicate-test-names-tests', 'duplicate-test-names',
         ]
@@ -5208,17 +5209,19 @@ class RunnerGroupAllowlist(unittest.TestCase):
         with mock.patch.object(ci_preflight.sys, 'platform', 'linux'):
             self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})], expected)
             # main() prepends actionlint-version to all/fast/github-only.
-            self.assertEqual(len(expected) + 1, 71)
-            self.assertEqual(len(check_commands(ROOT, tier='fast')), 66)
+            # expectation corrected: 71 -> 73, 66 -> 68, 7 -> 9 and 64 -> 66,
+            # because both added-text stages run in the full and reduced tiers.
+            self.assertEqual(len(expected) + 1, 73)
+            self.assertEqual(len(check_commands(ROOT, tier='fast')), 68)
             self.assertEqual(len(check_commands(ROOT, tier='slow')), 4)
-            self.assertEqual(len(check_commands(ROOT, tier='github-only')), 7)
+            self.assertEqual(len(check_commands(ROOT, tier='github-only')), 9)
         for platform in ('darwin', 'win32'):
             with mock.patch.object(ci_preflight.sys, 'platform', platform):
                 expected_platform = [name for name in expected
                                      if name not in ('prebuilt-bookworm-tests', 'prebuilt-glibc-tests')]
                 self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})],
                                  expected_platform)
-                self.assertEqual(len(check_commands(ROOT, tier='fast')), 64)
+                self.assertEqual(len(check_commands(ROOT, tier='fast')), 66)
 
 
 class PrebuiltGlibcRegistration(unittest.TestCase):
@@ -6992,7 +6995,8 @@ exit "$lookup_exit"
 
     def test_github_only_preflight_runs_only_workflow_contract_stages(self):
         expected = {'shellcheck-version', 'actionlint-runner-labels', 'runner-allowlist', 'workflow-lint',
-                    'ci-workflow-contract', 'docs-workflow-contract', 'docs-workflow-contract-tests'}
+                    'ci-workflow-contract', 'docs-workflow-contract', 'docs-workflow-contract-tests',
+                    'public-text-added-tests', 'public-text-added'}
         plan = check_commands(ROOT, tier='github-only')
         self.assertEqual({name for name, _ in plan}, expected)
         self.assertEqual(len(plan), len(expected))
@@ -8027,7 +8031,7 @@ exit "$lookup_exit"
             (6, 'changes', '    steps:\n',
              "    if: github.event_name != 'pull_request'\n    steps:\n",
              'changes must start after authz'),
-            # A lane that continues on error reports success however it ended.
+            # A job that continues on error reports success however it ended.
             (6, 'sanitizers', '    steps:\n', '    continue-on-error: true\n    steps:\n',
              'ci-post.yml job sanitizers must not continue on error'),
             (6, 'build-gate', '        shell: bash\n', '        shell: bash\n        continue-on-error: true\n',
@@ -8075,6 +8079,9 @@ exit "$lookup_exit"
         passed = ('          passed() { [[ "$1" == "success" || '
                   '( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }\n')
         mutations = (
+            # The whole step is pinned, name included; the previous name fails the exact gate pin.
+            ('      - name: Require every verification job to have passed\n',
+             '      - name: Require every verification lane to have passed\n'),
             # (e) Neither an empty result nor a skipped smoke matrix on push is the
             # PR's absent cell; accepting either must fail the exact gate pin.
             (passed, passed.replace('|| (', '|| -z "$1" || (')),
@@ -8119,14 +8126,14 @@ exit "$lookup_exit"
                                  result.stdout + result.stderr)
         for event in ('push', 'workflow_dispatch', 'schedule', 'release'):
             script = job_script(self.ci_sources()[6], 'build-gate',
-                                'Require every verification lane to have passed')
+                                'Require every verification job to have passed')
             matrices = [('X86_GCC133_RESULT', 'native x86 GNU 13.3.0')]
             matrices.append(('SMOKE_RESULT', 'amd64 smoke'))
             if event != 'pull_request':
                 matrices.append(('ARM_SMOKE_RESULT', 'arm64 smoke'))
             for variable, label in matrices:
                 for outcome in ('success', 'failure', 'cancelled', 'skipped', ''):
-                    with self.subTest(event=event, lane=variable, matrix=outcome):
+                    with self.subTest(event=event, job=variable, matrix=outcome):
                         result = subprocess.run(
                             ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
                             env={**env, 'GITHUB_EVENT_NAME': event, variable: outcome},
@@ -8136,22 +8143,22 @@ exit "$lookup_exit"
                         self.assertIn(f'{label}: {outcome}\n', result.stdout)
 
     def test_the_build_aggregate_passes_a_docs_only_skip_and_nothing_else(self):
-        """Run the aggregate's own shell over every outcome of every lane: a
-        proof lane passes by succeeding, or by being skipped after changes
+        """Run the aggregate's own shell over every outcome of every job: a
+        proof job passes by succeeding, or by being skipped after changes
         succeeded and answered docs-only; preflight always has to succeed."""
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         script = Path(directory.name) / 'gate.sh'
         script.write_text(job_script(self.ci_sources()[6], 'build-gate',
-                                     'Require every verification lane to have passed'))
+                                     'Require every verification job to have passed'))
         env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'AUTHZ_RESULT': 'success',
                'GITHUB_EVENT_NAME': 'push'}
-        lanes = list(PROOF_JOBS.values())
+        jobs = list(PROOF_JOBS.values())
         vectors = set()
         for common in ('success', 'skipped'):
-            for odd in range(len(lanes)):
+            for odd in range(len(jobs)):
                 for outcome in ('success', 'skipped', 'failure', 'cancelled'):
-                    results = [common] * len(lanes)
+                    results = [common] * len(jobs)
                     results[odd] = outcome
                     vectors.add(tuple(results))
         cases = [(changes, docs_only, preflight, *results, 'success')
@@ -8160,7 +8167,7 @@ exit "$lookup_exit"
                  for docs_only in ('true', 'false', '') for results in sorted(vectors)]
         # One bash reads every case; each runs the step in a subshell with the
         # options GitHub gives a bash step (-e, pipefail).
-        names = ['CHANGES_RESULT', 'DOCS_ONLY', 'PREFLIGHT_RESULT', *lanes,
+        names = ['CHANGES_RESULT', 'DOCS_ONLY', 'PREFLIGHT_RESULT', *jobs,
                  'X86_GCC133_RESULT']
         # The harness's own variables share no name with the step's.
         columns = [f'case_{name.lower()}' for name in names]
@@ -8186,7 +8193,7 @@ exit "$lookup_exit"
             with self.subTest(case=dict(zip(names, case))):
                 self.assertEqual(answer == '0', expected, answer)
         # And as the runner starts it: the docs-only pass, and a skip that is not.
-        docs_only = dict(zip(names, ('success', 'true', 'success', *['skipped'] * len(lanes),
+        docs_only = dict(zip(names, ('success', 'true', 'success', *['skipped'] * len(jobs),
                                      'success')))
         for override, code in (({}, 0), ({'DOCS_ONLY': 'false'}, 1), ({'CHANGES_RESULT': 'failure'}, 1),
                                *[({'AUTHZ_RESULT': result}, 1)
@@ -8552,7 +8559,7 @@ finally:
                     self.assertEqual(result.returncode == 0, expected, result.stdout + result.stderr)
         for event in ('push', 'schedule', 'workflow_dispatch'):
             script = job_script(self.ci_sources()[6], 'build-gate',
-                                'Require every verification lane to have passed')
+                                'Require every verification job to have passed')
             # Every CI round fits 15 minutes: the slow preflight tier, the leg
             # aggregates, kernel-only, native-live and the full parity sweep left
             # ci-post for the lab's verify; the smoke legs and the subset parity remain.
@@ -8571,7 +8578,7 @@ finally:
                             or (results[key] == 'skipped'
                                 and docs_only == 'true')
                             for key in proof)
-                        with self.subTest(event=event, docs_only=docs_only, lane=name, result=outcome):
+                        with self.subTest(event=event, docs_only=docs_only, job=name, result=outcome):
                             result = subprocess.run(
                                 ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
                                 env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
@@ -9386,24 +9393,79 @@ finally:
                 self.assertEqual(code, 1, output)
                 self.assertIn(finding, output.splitlines())
 
-    def run_preflight(self, commands):
+    def run_preflight(self, commands, *, console=None):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         root = Path(directory.name)
-        with contextlib.redirect_stdout(io.StringIO()):
+        console = console if console is not None else io.StringIO()
+        with contextlib.redirect_stdout(console), contextlib.redirect_stderr(console):
             code = run_checks(commands, root / 'logs', source=root)
         return code, json.loads((root / 'logs/preflight-summary.json').read_text()), root / 'logs'
 
+    def assert_named_failures(self, console, failures, *, nonfailures=()):
+        """Require per-stage exit summaries and a separate final ordered listing."""
+        lines = console.splitlines()
+        failure_lines = []
+        for name, exit_code in failures:
+            matches = [index for index, line in enumerate(lines)
+                       if re.search(r'\bFAIL ' + re.escape(name) + r'\b', line)]
+            self.assertTrue(matches, f'missing FAIL {name}\n{console}')
+            index = matches[0]
+            self.assertRegex(
+                lines[index],
+                r'(?i)\b(?:exit(?:[ _-]?(?:code|status))?|returncode|status|rc)\s*[:=]?\s*'
+                + str(exit_code) + r'\b', console)
+            self.assertEqual(re.findall(r'\bFAIL [\w-]+', lines[index]),
+                             [f'FAIL {name}'], console)
+            failure_lines.append(index)
+        tail = lines[max(failure_lines) + 1:]
+        summary_start = next((index for index, line in enumerate(tail)
+                              if re.search(r'\b(?:fail(?:ed|ures)?|summary)\b',
+                                           line, re.IGNORECASE)), None)
+        self.assertIsNotNone(summary_start, f'missing final failure summary\n{console}')
+        final_summary = '\n'.join(tail[summary_start:])
+        names = [name for name, _ in failures]
+        name_pattern = r'(?<![\w-])(?:' + '|'.join(
+            re.escape(name) for name in [*names, *nonfailures]) + r')(?![\w-])'
+        self.assertEqual(re.findall(name_pattern, final_summary), names, console)
+        for name in nonfailures:
+            self.assertNotRegex(console, r'\bFAIL ' + re.escape(name) + r'\b')
+
     def test_failure_keeps_exit_code_logs_and_runs_independent_checks(self):
-        code, summary, logs = self.run_preflight([
-            ('fail', [sys.executable, '-c', 'import sys; print("failure witness"); sys.exit(7)']),
-            ('next', [sys.executable, '-c', 'print("next check ran")']),
-        ])
-        self.assertEqual(code, 1)
-        self.assertEqual(summary['status'], 'failed')
-        self.assertEqual([s['exitCode'] for s in summary['stages']], [7, 0])
-        self.assertIn('failure witness', (logs / 'fail.log').read_text())
-        self.assertIn('next check ran', (logs / 'next.log').read_text())
+        for findings, exit_code in ((['failure witness'], 7),
+                                   (['missing anchor', 'stale symbol', 'wrong line'], 23)):
+            with self.subTest(findings=findings, exit_code=exit_code):
+                console = io.StringIO()
+                commands = [
+                    ('doc-anchors', [
+                        sys.executable, '-c',
+                        'import sys; findings = sys.argv[2:]; '
+                        'sys.stdout.buffer.write(f"checked {len(findings)} anchors\\r\\n".encode()); '
+                        'sys.stderr.buffer.write(("\\n".join(findings) + '
+                        'f"\\n{len(findings)} broken anchors").encode() + b"\\xff"); '
+                        'sys.exit(int(sys.argv[1]))',
+                        str(exit_code), *findings]),
+                    ('next', [sys.executable, '-c', 'print("next check ran")']),
+                ]
+                code, summary, logs = self.run_preflight(commands, console=console)
+                self.assertEqual(code, 1)
+                self.assertEqual(summary['status'], 'failed')
+                self.assertEqual(summary['exitCode'], 1)
+                self.assertEqual([s['name'] for s in summary['stages']], ['doc-anchors', 'next'])
+                self.assertEqual([s['status'] for s in summary['stages']], ['failed', 'passed'])
+                self.assertEqual([s['exitCode'] for s in summary['stages']], [exit_code, 0])
+                expected = (f'checked {len(findings)} anchors\r\n'
+                            + '\n'.join(findings)
+                            + f'\n{len(findings)} broken anchors').encode() + b'\xff'
+                self.assertEqual((logs / 'doc-anchors.log').read_bytes(), expected)
+                self.assertIn('next check ran', (logs / 'next.log').read_text())
+                output = console.getvalue()
+                self.assertIn(expected.decode('utf-8', 'replace'), output)
+                self.assertIn('next check ran', output)
+                self.assert_named_failures(output, [('doc-anchors', exit_code)],
+                                           nonfailures=['next'])
+                self.assertLess(output.index('FAIL doc-anchors'),
+                                output.index('ci_preflight: next:'), output)
 
     def test_preflight_stage_shards_every_test_with_cpu_cap_and_separate_logs(self):
         output = ROOT / 'build-ci-preflight'
@@ -9497,12 +9559,13 @@ finally:
         crash_finished = threading.Event()
         lock = threading.Lock()
         threads, environments, completed, active, serial_overlap = {}, {}, [], set(), []
+        failure_name, crash_name = 'source-guard-broker-hash', 'doc-lint'
         commands = [
-            ParallelCommand(('fail', [sys.executable, '-c',
-                                     'import sys; print("failed work"); sys.exit(7)'])),
+            ParallelCommand((failure_name, [sys.executable, '-c',
+                                           'import sys; print("failed work"); sys.exit(7)'])),
             ('unknown', [sys.executable, '-c', 'print("serial work")']),
-            ParallelCommand(('crash', [sys.executable, '-c',
-                                      'raise RuntimeError("parallel crash witness")'])),
+            ParallelCommand((crash_name, [sys.executable, '-c',
+                                         'raise RuntimeError("parallel crash witness")'])),
             ParallelCommand(('next', [sys.executable, '-c', 'print("next work")'])),
         ]
         names = {tuple(entry[1]): entry[0] for entry in commands}
@@ -9521,7 +9584,7 @@ finally:
                 # Hold the first real result until another worker finishes.
                 # Main's serial runner never waits here: its red is an
                 # assertion about execution, rather than a hung setup.
-                if name == 'fail' and worker != caller:
+                if name == failure_name and worker != caller:
                     crash_finished.wait()
                 with lock:
                     completed.append(name)
@@ -9529,18 +9592,19 @@ finally:
             finally:
                 with lock:
                     active.remove(name)
-                if name == 'crash':
+                if name == crash_name:
                     crash_finished.set()
 
         def pool_for_two(*args, **kwargs):
             self.assertEqual(kwargs, {'max_workers': 2})
             return ThreadPoolExecutor(*args, **kwargs)
 
+        console = io.StringIO()
         with mock.patch.object(os, 'sched_getaffinity', create=True, return_value={0, 1}), \
                 mock.patch.object(ci_preflight, 'ThreadPoolExecutor', create=True,
                                   side_effect=pool_for_two), \
                 mock.patch.object(ci_preflight.subprocess, 'run', side_effect=observe):
-            code, summary, logs = self.run_preflight(commands)
+            code, summary, logs = self.run_preflight(commands, console=console)
         self.assertEqual(code, 1)
         self.assertEqual(summary['status'], 'failed')
         self.assertEqual([stage['name'] for stage in summary['stages']],
@@ -9551,12 +9615,12 @@ finally:
         self.assertEqual(threads['unknown'], caller)
         self.assertIsNone(environments['unknown'])
         self.assertEqual(serial_overlap, [])
-        for name in ('fail', 'crash', 'next'):
+        for name in (failure_name, crash_name, 'next'):
             self.assertNotEqual(threads[name], caller, name)
             self.assertEqual(environments[name]['PYTHONDONTWRITEBYTECODE'], '1')
-        self.assertLess(completed.index('crash'), completed.index('fail'))
-        for name, witness in (('fail', 'failed work'), ('unknown', 'serial work'),
-                              ('crash', 'RuntimeError: parallel crash witness'),
+        self.assertLess(completed.index(crash_name), completed.index(failure_name))
+        for name, witness in ((failure_name, 'failed work'), ('unknown', 'serial work'),
+                              (crash_name, 'RuntimeError: parallel crash witness'),
                               ('next', 'next work')):
             self.assertIn(witness, (logs / f'{name}.log').read_text())
         for stage in summary['stages']:
@@ -9564,6 +9628,9 @@ finally:
                                          'log', 'startedAt', 'seconds'})
             self.assertIs(stage['advisory'], False)
             self.assertIsInstance(stage['seconds'], float)
+        self.assert_named_failures(console.getvalue(),
+                                   [(failure_name, 7), (crash_name, 1)],
+                                   nonfailures=['unknown', 'next'])
 
     def test_parallel_pool_sizes_to_affinity_with_a_four_worker_cap(self):
         commands = [ParallelCommand((name, [sys.executable, '-c', 'print("pool work")']))
@@ -9582,9 +9649,19 @@ finally:
                 pool.assert_called_once_with(max_workers=expected)
 
     def test_missing_tool_is_a_failure(self):
-        code, summary, _ = self.run_preflight([('missing', ['/nonexistent/pineforge-ci-tool'])])
+        console = io.StringIO()
+        command = ['/nonexistent/pineforge-ci-tool']
+        code, summary, logs = self.run_preflight([('missing', command)], console=console)
         self.assertEqual(code, 1)
+        self.assertEqual(summary['status'], 'failed')
+        self.assertEqual(summary['stages'][0]['status'], 'failed')
         self.assertEqual(summary['stages'][0]['exitCode'], 127)
+        self.assertEqual(summary['stages'][0]['argv'], command)
+        self.assertEqual(summary['stages'][0]['log'], 'missing.log')
+        log = (logs / 'missing.log').read_bytes()
+        self.assertIn(command[0].encode(), log)
+        self.assertIn(log.decode('utf-8', 'replace'), console.getvalue())
+        self.assert_named_failures(console.getvalue(), [('missing', 127)])
 
     def guard_witness(self) -> list:
         """A stage that prints the pinned skip literal and exits 77."""
@@ -9600,21 +9677,27 @@ finally:
         # Each half states the variable itself: the job's own environment (the
         # overlay jobs export PINEFORGE_PRIVATE_FIXTURES) must not decide which
         # world this control asserts.
+        skipped_console = io.StringIO()
         with mock.patch.dict(os.environ) as own_env:
             own_env.pop('PINEFORGE_PRIVATE_FIXTURES', None)
-            code, summary, logs = self.run_preflight([('guard', self.guard_witness())])
+            code, summary, logs = self.run_preflight([('guard', self.guard_witness())],
+                                                     console=skipped_console)
         self.assertEqual(code, 0)
         self.assertEqual(summary['stages'][0]['status'], 'skipped')
         self.assertEqual(summary['stages'][0]['exitCode'], 77)
         # The stage's log keeps the guard's own output, literal included.
         self.assertIn('SKIP private fixtures not present:',
                       (logs / 'guard.log').read_text())
+        self.assertNotRegex(skipped_console.getvalue(), r'\bFAIL\b')
+        failed_console = io.StringIO()
         with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': '1'}):
-            code, summary, _ = self.run_preflight([('guard', self.guard_witness())])
+            code, summary, _ = self.run_preflight([('guard', self.guard_witness())],
+                                                 console=failed_console)
         self.assertEqual(code, 1)
         self.assertEqual(summary['status'], 'failed')
         self.assertEqual(summary['stages'][0]['status'], 'failed')
         self.assertEqual(summary['stages'][0]['exitCode'], 77)
+        self.assert_named_failures(failed_console.getvalue(), [('guard', 77)])
 
     def test_a_bare_77_is_a_failure_in_both_worlds(self):
         # The literal is required: 77 alone is never a skip.
@@ -9622,9 +9705,16 @@ finally:
         for flag in ('', '1'):
             with self.subTest(overlay=flag), \
                     mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': flag}):
-                code, summary, _ = self.run_preflight([('guard', bare)])
+                console = io.StringIO()
+                code, summary, logs = self.run_preflight([('guard', bare)], console=console)
                 self.assertEqual(code, 1)
+                self.assertEqual(summary['status'], 'failed')
                 self.assertEqual(summary['stages'][0]['status'], 'failed')
+                self.assertEqual(summary['stages'][0]['exitCode'], 77)
+                self.assertEqual(summary['stages'][0]['argv'], bare)
+                self.assertEqual(summary['stages'][0]['log'], 'guard.log')
+                self.assertEqual((logs / 'guard.log').read_bytes(), b'')
+                self.assert_named_failures(console.getvalue(), [('guard', 77)])
 
     def test_the_skip_literal_has_one_home(self):
         # R2-F7: the branch reads ci_verify's literal, not a second copy.
@@ -9637,19 +9727,25 @@ finally:
         code, summary, _ = self.run_preflight([])
         self.assertEqual(code, 1)
         self.assertEqual(summary['status'], 'failed')
+        self.assertEqual(summary['exitCode'], 1)
+        self.assertEqual(summary['stages'], [])
 
     def test_advisory_failure_is_reported_without_failing_the_run(self):
         # R5 L14-A: the documentation guards report today's drift until the
         # page-rewriting lanes land. Reported, logged, and not binding.
+        console = io.StringIO()
         code, summary, logs = self.run_preflight([
             ('docs', [sys.executable, '-c', 'import sys; print("drift"); sys.exit(1)'], True),
             ('next', [sys.executable, '-c', 'print("next check ran")']),
-        ])
+        ], console=console)
         self.assertEqual(code, 0)
         self.assertEqual(summary['status'], 'passed')
         self.assertEqual(summary['stages'][0]['status'], 'reported')
         self.assertEqual(summary['stages'][0]['exitCode'], 1)
         self.assertIn('drift', (logs / 'docs.log').read_text())
+        self.assertIn('drift', console.getvalue())
+        self.assertIn('next check ran', console.getvalue())
+        self.assertNotRegex(console.getvalue(), r'\bFAIL\b')
 
     def test_every_documentation_stage_is_binding(self):
         # R5 int12: the page lanes landed, so the guards and their self-tests
@@ -9659,6 +9755,7 @@ finally:
         for name in ('doc-anchors', 'doc-lint', 'doc-anchors-tests', 'doc-lint-tests',
                      'doc-pine-coverage', 'design-inventory', 'design-inventory-tests',
                      'doc-reverts', 'doc-reverts-net', 'doc-reverts-tests', 'public-role-words', 'public-role-words-tests',
+                     'public-text-added', 'public-text-added-tests',
                      'kernel-seam-rows', 'kernel-seam-rows-tests',
                      'run-json-harness-tests'):
             self.assertIn(name, plan)
@@ -10057,10 +10154,13 @@ finally:
             self.assertFalse(len(entry) > 2 and entry[2], entry[0])
 
     def test_success_is_explicitly_only_preflight(self):
-        code, summary, _ = self.run_preflight([('ok', [sys.executable, '-c', 'pass'])])
+        console = io.StringIO()
+        code, summary, _ = self.run_preflight([('ok', [sys.executable, '-c', 'pass'])],
+                                             console=console)
         self.assertEqual(code, 0)
         self.assertEqual(summary['status'], 'passed')
         self.assertIn('full verification still required', summary['scope'])
+        self.assertNotRegex(console.getvalue(), r'\bFAIL\b')
 
     def test_summary_and_stages_record_started_at_and_seconds_while_preserving_existing_keys(self):
         iso_utc_second = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')

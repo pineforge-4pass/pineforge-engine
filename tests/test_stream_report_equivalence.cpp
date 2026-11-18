@@ -260,9 +260,297 @@ void same_calculation_bracket_reports(int timeframe, int entry_kind,
     pineforge::BacktestEngine::free_report(&observed);
 }
 
+// Civil dates and UTC offsets are the independent fixture oracle. All dates
+// below are in 2026 (a non-leap year); no production calendar resolves them.
+struct CalendarDate {
+    int month, day, utc_offset_hours;
+};
+
+std::int64_t calendar_stamp(CalendarDate date, int hour, int minute) {
+    constexpr int month_days[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    int days = date.day - 1;
+    for (int month = 1; month < date.month; ++month) days += month_days[month - 1];
+    constexpr std::int64_t january_1_2026_utc = 1767225600000LL;
+    return january_1_2026_utc + days * 86400000LL
+        + (hour - date.utc_offset_hours) * 3600000LL + minute * 60000LL;
+}
+
+struct CalendarCase {
+    const char* name;
+    const char* timezone;
+    const char* timeframe;
+    CalendarDate openings[5];
+    CalendarDate closes[5];
+};
+
+class CalendarReportStrategy final : public pineforge::source::PineStrategyHost {
+public:
+    std::vector<pineforge::Bar> consumed;
+    std::vector<std::int64_t> close_times;
+
+    explicit CalendarReportStrategy(const CalendarCase& cell) {
+        pineforge::source::PineStrategyConfig config;
+        config.initial_capital = 10000.0;
+        config.default_qty_value = 1.0;
+        configure_pine_strategy(config);
+        set_syminfo_timezone(cell.timezone);
+        set_chart_timezone(cell.timezone);
+        set_syminfo_session("0930-1600:23456");
+    }
+
+    void on_source_bar(const pineforge::Bar& bar) override {
+        consumed.push_back(bar);
+        close_times.push_back(time_close());
+        if (bar_index_ == 0) strategy_entry("calendar-long", true);
+        if (bar_index_ == 1) strategy_close_all();
+        if (bar_index_ == 2) strategy_entry("calendar-short", false);
+        if (bar_index_ == 3) strategy_close_all();
+    }
+};
+
+void calendar_values(const CalendarReportStrategy& host, const CalendarCase& cell,
+                     const pineforge::Bar* bars, int count) {
+    CHECK(host.consumed.size() == static_cast<std::size_t>(count));
+    CHECK(host.close_times.size() == static_cast<std::size_t>(count));
+    for (int index = 0; index < count
+         && index < static_cast<int>(host.consumed.size())
+         && index < static_cast<int>(host.close_times.size()); ++index) {
+        const auto& actual = host.consumed[index];
+        CHECK(actual.timestamp == bars[index].timestamp);
+        CHECK(bits(actual.open) == bits(bars[index].open));
+        CHECK(bits(actual.high) == bits(bars[index].high));
+        CHECK(bits(actual.low) == bits(bars[index].low));
+        CHECK(bits(actual.close) == bits(bars[index].close));
+        CHECK(bits(actual.volume) == bits(bars[index].volume));
+        CHECK(host.close_times[index] == calendar_stamp(cell.closes[index], 16, 0));
+    }
+}
+
+void calendar_confirmed_reports_and_recovery() {
+    const CalendarCase cases[] = {
+        {"UTC daily control", "UTC", "1D",
+         {{3, 5, 0}, {3, 6, 0}, {3, 9, 0}, {3, 10, 0}, {3, 11, 0}},
+         {{3, 5, 0}, {3, 6, 0}, {3, 9, 0}, {3, 10, 0}, {3, 11, 0}}},
+        {"NY daily winter control", "America/New_York", "1D",
+         {{1, 8, -5}, {1, 9, -5}, {1, 12, -5}, {1, 13, -5}, {1, 14, -5}},
+         {{1, 8, -5}, {1, 9, -5}, {1, 12, -5}, {1, 13, -5}, {1, 14, -5}}},
+        {"NY daily spring", "America/New_York", "1D",
+         {{3, 5, -5}, {3, 6, -5}, {3, 9, -4}, {3, 10, -4}, {3, 11, -4}},
+         {{3, 5, -5}, {3, 6, -5}, {3, 9, -4}, {3, 10, -4}, {3, 11, -4}}},
+        {"NY daily autumn", "America/New_York", "1D",
+         {{10, 29, -4}, {10, 30, -4}, {11, 2, -5}, {11, 3, -5}, {11, 4, -5}},
+         {{10, 29, -4}, {10, 30, -4}, {11, 2, -5}, {11, 3, -5}, {11, 4, -5}}},
+        {"NY weekly spring", "America/New_York", "1W",
+         {{2, 23, -5}, {3, 2, -5}, {3, 9, -4}, {3, 16, -4}, {3, 23, -4}},
+         {{2, 27, -5}, {3, 6, -5}, {3, 13, -4}, {3, 20, -4}, {3, 27, -4}}},
+        {"NY weekly autumn", "America/New_York", "1W",
+         {{10, 19, -4}, {10, 26, -4}, {11, 2, -5}, {11, 9, -5}, {11, 16, -5}},
+         {{10, 23, -4}, {10, 30, -4}, {11, 6, -5}, {11, 13, -5}, {11, 20, -5}}},
+    };
+    for (const auto& cell : cases) {
+        pineforge::Bar bars[5];
+        for (int index = 0; index < 5; ++index) {
+            // The first three OHLCV rows are the issue's unchanged reproducer.
+            bars[index] = {100.0 + index, 102.0 + index, 99.0 + index, 101.0 + index,
+                           1000.0, calendar_stamp(cell.openings[index], 9, 30)};
+        }
+        CalendarReportStrategy batch(cell);
+        batch.run(bars, 5, cell.timeframe, cell.timeframe, false);
+        CHECK(batch.last_error().empty());
+        calendar_values(batch, cell, bars, 5);
+        CHECK(batch.trade_count() == 2);
+        pineforge::ReportC expected{};
+        batch.fill_report(&expected);
+
+        // Split 2 is the exact reported transition. Split 3 reconstructs the
+        // accepted prefix in a new process-equivalent host after that boundary.
+        for (int split : {2, 3}) {
+            CalendarReportStrategy stream(cell), replay(cell);
+            const bool began = stream.stream_begin(bars, split, cell.timeframe, cell.timeframe);
+            const bool replay_began = replay.stream_begin(bars, split, cell.timeframe, cell.timeframe);
+            CHECK(began && replay_began);
+            if (!began || !replay_began) continue;
+            calendar_values(stream, cell, bars, split);
+            CHECK(stream.stream_state_hash() == replay.stream_state_hash());
+            bool completed = true;
+            for (int index = split; index < 5; ++index) {
+                const auto before = stream.stream_state_hash();
+                auto wrong = bars[index];
+                wrong.timestamp += 60000; // 09:31 is not the configured opening.
+                std::vector<pineforge::Bar> rejected{bars[index - 1], wrong};
+                if (index + 1 < 5) rejected.push_back(bars[index + 1]);
+                for (const auto& invalid : rejected) {
+                    // Duplicate, misaligned and (when available) missing input.
+                    CHECK(!stream.stream_push_bar(invalid));
+                    CHECK(stream.stream_state_hash() == before);
+                    CHECK(stream.consumed.size() == static_cast<std::size_t>(index));
+                    CHECK(stream.stream_order_actions_len() == 0);
+                }
+                const bool accepted = stream.stream_push_bar(bars[index]);
+                const bool replayed = replay.stream_push_bar(bars[index]);
+                if (!accepted || !replayed)
+                    std::fprintf(stderr, "FAIL calendar %s warmup=%d input=%d: %s / %s\n",
+                        cell.name, split, index, stream.last_error().c_str(),
+                        replay.last_error().c_str());
+                CHECK(accepted && replayed);
+                if (!accepted || !replayed) { completed = false; break; }
+                calendar_values(stream, cell, bars, index + 1);
+                calendar_values(replay, cell, bars, index + 1);
+                const int offset_change = cell.openings[index].utc_offset_hours
+                    - cell.openings[index - 1].utc_offset_hours;
+                if (offset_change != 0) {
+                    // Keeping the old UTC offset gives 10:30 in spring and
+                    // 08:30 in autumn. Reject it on an independent prefix so
+                    // a bad admission cannot contaminate the valid stream.
+                    CalendarReportStrategy shifted(cell);
+                    const bool shifted_began = shifted.stream_begin(
+                        bars, index, cell.timeframe, cell.timeframe);
+                    CHECK(shifted_began);
+                    if (shifted_began) {
+                        auto old_offset = bars[index];
+                        old_offset.timestamp += offset_change * 3600000LL;
+                        const auto unchanged = shifted.stream_state_hash();
+                        CHECK(!shifted.stream_push_bar(old_offset));
+                        CHECK(shifted.stream_state_hash() == unchanged);
+                        CHECK(shifted.stream_order_actions_len() == 0);
+                        calendar_values(shifted, cell, bars, index);
+                    }
+                }
+                CHECK(stream.stream_state_hash() == replay.stream_state_hash());
+                CHECK(stream.stream_order_actions_len() == 1);
+                CHECK(replay.stream_order_actions_len() == 1);
+                if (stream.stream_order_actions_len() == 1
+                    && replay.stream_order_actions_len() == 1) {
+                    const auto& actual = stream.stream_order_action_at(0);
+                    const auto& again = replay.stream_order_action_at(0);
+                    CHECK(actual.sequence == static_cast<std::uint64_t>(index - split + 1));
+                    CHECK(actual.timestamp_ms == bars[index].timestamp);
+                    CHECK(actual.bar_index == index);
+                    CHECK(actual.is_entry == (index % 2 == 1));
+                    CHECK(actual.is_long == (index <= 2));
+                    CHECK(actual.quantity == 1.0 && actual.price == bars[index].open);
+                    CHECK(actual.entry_incarnation != 0);
+                    CHECK(actual.sequence == again.sequence);
+                    CHECK(actual.timestamp_ms == again.timestamp_ms);
+                    CHECK(actual.bar_index == again.bar_index);
+                    CHECK(actual.is_entry == again.is_entry && actual.is_long == again.is_long);
+                    CHECK(bits(actual.quantity) == bits(again.quantity));
+                    CHECK(bits(actual.price) == bits(again.price));
+                    CHECK(actual.order_id == again.order_id && actual.comment == again.comment);
+                    CHECK(actual.entry_incarnation == again.entry_incarnation);
+                }
+                stream.stream_order_actions_clear();
+                replay.stream_order_actions_clear();
+            }
+            if (!completed) continue;
+            CHECK(stream.trade_count() == 2 && stream.live_position_size() == 0.0);
+            for (int index = 0; index < 2 && index < stream.trade_count(); ++index) {
+                const auto& trade = stream.get_trade(index);
+                CHECK(trade.entry_time == bars[2 * index + 1].timestamp);
+                CHECK(trade.exit_time == bars[2 * index + 2].timestamp);
+                CHECK(trade.entry_price == bars[2 * index + 1].open);
+                CHECK(trade.exit_price == bars[2 * index + 2].open);
+                CHECK(trade.qty == 1.0);
+            }
+            pineforge::ReportC actual{}, recovered{};
+            stream.fill_report(&actual);
+            replay.fill_report(&recovered);
+            CHECK(actual.input_bars_processed == 5 && actual.script_bars_processed == 5);
+            compare_reports(expected, actual);
+            compare_reports(actual, recovered);
+            pineforge::BacktestEngine::free_report(&actual);
+            pineforge::BacktestEngine::free_report(&recovered);
+            CHECK(stream.stream_end(false));
+            CHECK(replay.stream_end(false));
+        }
+        pineforge::BacktestEngine::free_report(&expected);
+    }
+}
+
+void lord_howe_confirmed_daily_successors() {
+    // Lord Howe ends DST on 2026-04-05 (+11:00 -> +10:30), and starts
+    // it on 2026-10-04 (+10:30 -> +11:00). Friday -> Monday at 09:30
+    // therefore takes 72.5 / 71.5 hours, independent of engine output.
+    const struct {
+        int month;
+        int days[3];
+        int utc_offset_minutes[3];
+        int weekend_minutes;
+    } cases[] = {
+        {4, {2, 3, 6}, {660, 660, 630}, 4350},
+        {10, {1, 2, 5}, {630, 630, 660}, 4290},
+    };
+    const CalendarCase cell{"Lord Howe daily", "Australia/Lord_Howe", "1D", {}, {}};
+    for (const auto& fixture : cases) {
+        pineforge::Bar bars[3];
+        std::int64_t closes[3];
+        for (int index = 0; index < 3; ++index) {
+            const CalendarDate date{fixture.month, fixture.days[index], 0};
+            const auto offset = fixture.utc_offset_minutes[index] * 60000LL;
+            bars[index] = {100.0 + index, 102.0 + index, 99.0 + index,
+                           101.0 + index, 1000.0, calendar_stamp(date, 9, 30) - offset};
+            closes[index] = calendar_stamp(date, 16, 0) - offset;
+        }
+        CHECK(bars[2].timestamp - bars[1].timestamp == fixture.weekend_minutes * 60000LL);
+        CalendarReportStrategy batch(cell), stream(cell);
+        batch.run(bars, 3, cell.timeframe, cell.timeframe, false);
+        CHECK(batch.last_error().empty());
+        const bool began = stream.stream_begin(bars, 2, cell.timeframe, cell.timeframe);
+        CHECK(began);
+        if (!began) continue;
+        const auto before = stream.stream_state_hash();
+        for (const auto shift : {60000LL,
+             (fixture.utc_offset_minutes[2] - fixture.utc_offset_minutes[1]) * 60000LL}) {
+            auto wrong = bars[2];
+            wrong.timestamp += shift; // 09:31, or an opening carried at the old UTC offset.
+            CHECK(!stream.stream_push_bar(wrong));
+            CHECK(stream.stream_state_hash() == before);
+            CHECK(stream.consumed.size() == 2 && stream.close_times.size() == 2);
+            CHECK(stream.stream_order_actions_len() == 0);
+        }
+        const bool accepted = stream.stream_push_bar(bars[2]);
+        CHECK(accepted);
+        if (!accepted) continue;
+        CHECK(stream.consumed.size() == 3 && stream.close_times.size() == 3);
+        for (int index = 0; index < 3
+             && index < static_cast<int>(stream.consumed.size())
+             && index < static_cast<int>(stream.close_times.size()); ++index) {
+            const auto& actual = stream.consumed[index];
+            CHECK(actual.timestamp == bars[index].timestamp);
+            CHECK(bits(actual.open) == bits(bars[index].open));
+            CHECK(bits(actual.high) == bits(bars[index].high));
+            CHECK(bits(actual.low) == bits(bars[index].low));
+            CHECK(bits(actual.close) == bits(bars[index].close));
+            CHECK(bits(actual.volume) == bits(bars[index].volume));
+            CHECK(stream.close_times[index] == closes[index]);
+        }
+        CHECK(stream.trade_count() == 1 && stream.live_position_size() == 0.0);
+        if (stream.trade_count() == 1) {
+            const auto& trade = stream.get_trade(0);
+            CHECK(trade.entry_time == bars[1].timestamp && trade.exit_time == bars[2].timestamp);
+            CHECK(trade.entry_price == 101.0 && trade.exit_price == 102.0 && trade.qty == 1.0);
+        }
+        CHECK(stream.stream_order_actions_len() == 1);
+        if (stream.stream_order_actions_len() == 1) {
+            const auto& fill = stream.stream_order_action_at(0);
+            CHECK(fill.timestamp_ms == bars[2].timestamp && fill.bar_index == 2);
+            CHECK(!fill.is_entry && fill.is_long && fill.quantity == 1.0 && fill.price == 102.0);
+        }
+        pineforge::ReportC expected{}, actual{};
+        batch.fill_report(&expected);
+        stream.fill_report(&actual);
+        compare_reports(expected, actual);
+        pineforge::BacktestEngine::free_report(&expected);
+        pineforge::BacktestEngine::free_report(&actual);
+        CHECK(stream.stream_end(false));
+    }
+}
+
 }
 
 int main() {
+    calendar_confirmed_reports_and_recovery();
+    lord_howe_confirmed_daily_successors();
     for (int split : {15, 22, 29}) cumulative_reports_do_not_change_continuation(split);
     for (int timeframe : {1, 5, 15, 60})
         for (int entry_kind : {0, 1, 2})

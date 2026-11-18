@@ -83,8 +83,8 @@ void BacktestEngine::set_syminfo_metadata(const std::string& key, double value) 
         syminfo_.qty_step = qty_step_;
     }
     if (key == "account_currency_fx") {
-        account_currency_fx_ =
-            (std::isfinite(value) && value > 0.0) ? value : 1.0;
+        // The rule of set_account_currency_fx_scalar: valid marks it supplied.
+        (void)install_account_currency_fx_scalar(value);
     }
 }
 

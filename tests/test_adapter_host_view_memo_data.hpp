@@ -47,7 +47,7 @@
 //   rebuilt/1: hash=2328126988218613423 -> hash=17469022339767313045
 //   rebuilt/2: hash=11441494716296226561 -> hash=10773891632206972342
 //   rebuilt/3: hash=2328126988218613423 -> hash=17469022339767313045
-// expectation corrected (R5 lane K-ULP3): host A's runs and host B's streamed
+// expectation corrected (whole-lot close): host A's runs and host B's streamed
 // runs close a pyramided book with strategy.close by exactly its own sum,
 // whose last lot K-ULP3 closes whole (two such closes in batch/A and in
 // stream/A, one in stream/B, none in batch/B). The closing row now books
@@ -76,7 +76,7 @@
 //     -> fnv=e337022ac3d8b681 net=71.786509342348978 hash=11831117278087605757
 //   rebuilt/2: fnv=5e2bd1d9860df94c net=71.786509342348751 hash=10773891632206972342
 //     -> fnv=e337022ac3d8b681 net=71.786509342348978 hash=11831117278087605757
-// expectation corrected (V19-FIX): every run's broker-state hash moved once more, because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree;
+// expectation corrected (adapter hash cleanup): every run's broker-state hash changes within v19: dead PineExecutionAdapter::path_order_ leaves pineforge-source-adapter/v4, script cancellation retires every named exit leg and the kernel releases withdrawn legs, and unbindable origins leave their kernel cohort rosters; this TU's harvest switch reproduced every old pin on main 91d65ad6 and harvested the corrected tree;
 // trades, trade digests, net profits and errors did not move:
 //   batch/A: hash=11831117278087605757 -> hash=13831511007419341774
 //   batch/B: hash=17469022339767313045 -> hash=16942810041893704776
@@ -91,7 +91,7 @@
 //   rebuilt/1: hash=17469022339767313045 -> hash=16942810041893704776
 //   rebuilt/2: hash=11831117278087605757 -> hash=13831511007419341774
 //   rebuilt/3: hash=17469022339767313045 -> hash=16942810041893704776
-// expectation corrected (INT25): every run's broker-state hash moved once more, because the integrated tree folds V19-FIX's Pine hash inputs and K-IDX's script-bar coordinate together (each lane re-pinned on a tree without the other); harvested once on the INT25 tree with this TU's harvest switch;
+// expectation corrected (hash and script-coordinate integration): every run's broker-state hash moved once more, because the integrated tree folds the corrected Pine hash inputs and script-bar coordinate together (each correction was previously pinned independently); harvested once on the integrated tree with this TU's harvest switch;
 // trades, trade digests, net profits and errors did not move:
 //   batch/A: hash=13831511007419341774 -> hash=496593797863776142
 //   batch/B: hash=16942810041893704776 -> hash=5316201723780989919
@@ -106,7 +106,7 @@
 //   rebuilt/1: hash=16942810041893704776 -> hash=5316201723780989919
 //   rebuilt/2: hash=13831511007419341774 -> hash=496593797863776142
 //   rebuilt/3: hash=16942810041893704776 -> hash=5316201723780989919
-// expectation corrected (INT26 v19 hash re-pin): every run's broker-state hash moved once more, because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary;
+// expectation corrected (integrated source rules v19 hash correction): every run's broker-state hash changes within unreleased v19: the Pine excursion model leaves the source fold, FIFO exits reserve their own entry quantity, transient coof_fill_forced_ and the post-fill margin waypoint enter the fold, and cash-fee percent-of-equity sizing folds the snapshot's strategy.equity; every intervening commit kept the pins from the pending-entry timestamp correction (1518fa8f); this TU's switch harvested the integrated tree and every commit boundary;
 // trades, trade digests, net profits and errors did not move:
 //   batch/A: hash=496593797863776142 -> hash=14113207875665531755 [H-THIN]
 //   batch/B: hash=5316201723780989919 -> hash=3001060687180726304 [H-THIN]
@@ -161,11 +161,11 @@
 //   rebuilt/1: hash=15614000236465510904 -> hash=11624460762363654931
 //   rebuilt/2: hash=14113207875665531755 -> hash=12629210294549389608
 //   rebuilt/3: hash=15614000236465510904 -> hash=11624460762363654931
-// Join head (6cac82ce51, s1c line), harvest job rj-20261022t152941-1a6cf3 (NTU2, engine 3dc24bad43 = the join head
+// Integration head (6cac82ce51), harvested with engine 3dc24bad43 (the integration head
 // with the PF_HOST_VIEW_MEMO_DUMP dump forced on): 13 of 13 runs moved in the hash= field only; trades, fnv and net
 // (and error) are identical on every run. Cause: the exit and trade scratch folds of 3c6f46d159 and the provider's
 // context.versions of 4b5ef3dd28; design, not a bug. The dump owns these values, never edit one by hand.
-// expectation corrected (LAB-QUIETFIX, kPinned hash= fields, 13 of 13 runs), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested from this test's own mismatch output on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_host_view_memo.txt:
+// expectation corrected (scope-allocation hash correction, kPinned hash= fields, 13 of 13 runs), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested from this test's own mismatch output on 2cf32840b8, with private fixtures overlaid, using this test's harvest output:
 //   batch/A: hash=10711477516890444176 -> hash=2519106336441837047
 //   batch/B: hash=4162910698961082552 -> hash=9959768908743741568
 //   stream/A: hash=10119151085004608240 -> hash=11739218832916586075

@@ -284,6 +284,9 @@ struct PlacementSnapshot {
     // their submission.  A pending parent rejected at a later candidate can
     // then retire only its own deferred legs.
     native_order::RequestHandle bracket_origin{};
+    // This placement required the fresh-origin exception at exit admission.
+    // Copies retain the fact; an ordinary or full reissue recomputes it.
+    bool fresh_origin_bypass = false;
     std::uint64_t source_sequence = 0;
     std::uint64_t command_ordinal = 0;
     std::uint64_t placement_open_epoch = 0;
@@ -1195,7 +1198,12 @@ public:
     // The members whose rows the table still holds, in roster order, from the
     // first one onward (erased members between them are parked separately).
     const std::vector<native_order::RequestHandle>& working_tail() const noexcept { return hot_; }
-    bool empty() const noexcept { return settled_count_ == 0 && parked_.empty() && hot_.empty(); }
+    // No member, and no fill's fact (record_filled), which alone outlives the
+    // members. A member's fact never keeps a family: it goes with the last one.
+    bool empty() const noexcept {
+        return settled_count_ == 0 && parked_.empty() && hot_.empty()
+            && std::none_of(consumed_.begin(), consumed_.end(), fill_fact);
+    }
     std::size_t size() const noexcept { return settled_count_ + parked_count_ + hot_.size(); }
     const_iterator begin() const { return const_iterator(this, false); }
     const_iterator end() const { return const_iterator(this, true); }
@@ -1278,14 +1286,53 @@ public:
         hot_.resize(out);
         parked_ = std::move(runs);
     }
+    // A consumed-leg fact is one of two things, told apart by kFillFact in its
+    // kind byte. A member's fact (record_consumed) is the answer an erased
+    // member row gave for its leg kind and origin: it belongs to the
+    // membership, so a bracket cancellation or the family's end takes it. A
+    // fill's fact (record_filled) says a real partial fill spent the
+    // opening's bracket: it outlives the members while the opening can still
+    // be asked about. Both answer consumed(); each is kept once.
+    static constexpr std::uint8_t kFillFact = 0x80U;
+    static bool fill_fact(const std::pair<std::uint8_t, std::uint64_t>& fact) noexcept {
+        return (fact.first & kFillFact) != 0;
+    }
     void record_consumed(std::uint8_t leg_kind, std::uint64_t origin) {
         const auto fact = std::make_pair(leg_kind, origin);
         if (std::find(consumed_.begin(), consumed_.end(), fact) == consumed_.end())
             consumed_.push_back(fact);
     }
+    void record_filled(std::uint8_t leg_kind, std::uint64_t origin) {
+        record_consumed(static_cast<std::uint8_t>(leg_kind | kFillFact), origin);
+    }
     bool consumed(std::uint8_t leg_kind, std::uint64_t origin) const noexcept {
-        return std::find(consumed_.begin(), consumed_.end(),
-                         std::make_pair(leg_kind, origin)) != consumed_.end();
+        return std::any_of(consumed_.begin(), consumed_.end(), [&](const auto& fact) {
+            return fact.second == origin
+                && static_cast<std::uint8_t>(fact.first & ~kFillFact) == leg_kind;
+        });
+    }
+    // Whether a fill's fact names `origin`: the exit has filled on that
+    // opening, through a leg bound to it or through the cover that stands for
+    // one (PineExecutionAdapter::on_applied).
+    bool filled_on(std::uint64_t origin) const noexcept {
+        return std::any_of(consumed_.begin(), consumed_.end(), [&](const auto& fact) {
+            return fill_fact(fact) && fact.second == origin;
+        });
+    }
+    // Drops every fill's fact, at the end of its opening's lifetime; whether
+    // there was one.
+    bool drop_fill_facts() noexcept {
+        const auto kept = std::remove_if(consumed_.begin(), consumed_.end(), fill_fact);
+        const bool dropped = kept != consumed_.end();
+        consumed_.erase(kept, consumed_.end());
+        return dropped;
+    }
+    // Drops one member's fact and keeps a fill's: the script cancelled the
+    // working leg whose earlier re-issues left it
+    // (PineExecutionAdapter::retire_cancelled_exits).
+    void drop_member_fact(std::uint8_t leg_kind, std::uint64_t origin) noexcept {
+        consumed_.erase(std::remove(consumed_.begin(), consumed_.end(),
+                                    std::make_pair(leg_kind, origin)), consumed_.end());
     }
     // Drops the facts whose origin can no longer be asked about.
     template<class Keep>
@@ -1295,6 +1342,22 @@ public:
     }
     const std::vector<std::pair<std::uint8_t, std::uint64_t>>& consumed_facts() const noexcept {
         return consumed_;
+    }
+    // A bracket cancellation removes membership and its historical outcomes,
+    // the members' facts among them: a leg that was only re-issued or
+    // cancelled, never filled, leaves nothing that stops the exit being
+    // placed again. An opening whose leg really filled keeps its fill facts.
+    void cancel_members() noexcept {
+        hot_.clear();
+        parked_.clear();
+        counts_.clear();
+        run_ = {};
+        settled_last_ = 0;
+        settled_count_ = 0;
+        settled_digest_ = kDigestBasis;
+        parked_count_ = 0;
+        consumed_.erase(std::remove_if(consumed_.begin(), consumed_.end(),
+            [](const auto& fact) { return !fill_fact(fact); }), consumed_.end());
     }
     // The settled prefix as the v4 extension fold reads it: its count, and
     // its running digest -- with every parked run's place, count and digest
@@ -1499,7 +1562,8 @@ private:
     // Derived member multiplicity per incarnation over the working tail's
     // handles (never next-decision state).
     std::unordered_map<std::uint64_t, std::size_t> counts_;
-    // (leg kind, origin) of the erased consumed members.
+    // (leg kind, opening incarnation), retained while the origin is askable;
+    // kFillFact in the kind marks a fill's fact, which also outlives members.
     std::vector<std::pair<std::uint8_t, std::uint64_t>> consumed_;
 };
 
@@ -2175,6 +2239,9 @@ private:
         // entry order was working, which TradingView voids
         // (PlacementSnapshot::void_global_issue): no entry's fill arms it.
         bool void_global = false;
+        // A queue slot reserved for the definition; zero when it holds none,
+        // and the parent's fill then ranks its legs as they are submitted.
+        std::uint64_t reservation_sequence = 0;
     };
 
     // One relative leg of a queued strategy.exit, spelled as the
@@ -2312,13 +2379,21 @@ private:
     double quantize_close_units(double basis, double percent) const noexcept;
     double quantize_percent_exit_units(double requested,
                                        double available) const noexcept;
+    void exit_with_reservation_sequence(
+        const SourceId& exit_id, const SourceId& from_entry,
+        double limit_price, double stop_price, double trail_points,
+        double trail_offset, double trail_price, double qty_percent,
+        const std::string& comment, double qty, const std::string& oca_name,
+        double profit_ticks, double loss_ticks, std::uint64_t reservation_sequence);
     bool compute_exit_reservation(const SourceId& exit_id,
                                   const SourceId& from_entry,
                                   double requested_qty,
                                   double& qty_percent,
                                   double live_basis,
                                   double percentage_basis,
-                                  double& reserved_qty) const;
+                                  double& reserved_qty,
+                                  std::uint64_t& reservation_sequence,
+                                  bool whole_position_percent = false) const;
     void reconcile_deferred_exit_reservations(const SourceId& from_entry,
                                                double live_basis);
     void reconcile_exit_reservations_after_margin();
@@ -2517,8 +2592,8 @@ private:
     // Whether any origin the cohort ever accepted is an opening on that side.
     bool cohort_opened_on_side(const CohortFacts&, bool is_long) const noexcept;
     // Whether a leg of that kind the (exit id, from_entry) family placed for
-    // that origin was consumed: a member of the family neither working nor
-    // suspended.
+    // that origin was consumed: a retained fact or a member of the family
+    // neither working, dormant nor withdrawn.
     bool origin_leg_consumed(std::uint64_t family_key, PineOrderFamily,
                              const native_order::RequestHandle& origin) const noexcept;
     // Whether an immediate strategy.close was placed on that bar.
@@ -2769,6 +2844,10 @@ private:
     void withdraw_unplaced_cap_adds(const NativeDecisionContext& context);
     void stash_id_bound_exits(const SourceId& entry_id);
     void rearm_id_bound_exits(const SourceId& entry_id);
+    // An opening that fills while a quantity-named exit of its id stands
+    // gets its own order of that exit.
+    void arm_standing_exits_for_opening(const PlacementSnapshot& opening,
+                                        const native_order::ExecutionAppliedEvent& event);
     void place_entry(const SourceId& id, bool is_long, double limit_price, double stop_price,
                      double qty, const std::string& comment, const std::string& oca_name,
                      int oca_type, int qty_type);
@@ -2891,7 +2970,10 @@ private:
     std::uint64_t last_applied_ordinal_ = 0;
     bool materializing_relative_ = false;
     // The parent whose fill the current materialize_relative_exits re-run
-    // serves; only that parent's armed anchored legs are adoptable.
+    // serves; only that parent's armed anchored legs are adoptable. Set
+    // without materializing_relative_, it is the opening an exit call made
+    // at that opening's fill places its one order for
+    // (arm_standing_exits_for_opening).
     native_order::RequestHandle materializing_parent_{};
     std::int64_t current_position_cycle_ = 0;
     int current_position_sign_ = 0;

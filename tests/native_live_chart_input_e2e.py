@@ -188,9 +188,16 @@ def refusals(root, runner, library):
                            "--feed", feed, "--ledger", ledger, "--mode", mode,
                            "--script-tf", timeframe, "--symbol", "TEST:EXAMPLE", "--timezone", timezone]
                 result = subprocess.run(list(map(str, command)), text=True, capture_output=True)
-                assert result.returncode == 1, (command, result.stdout, result.stderr)
-                require_refusal(result, "pineforge-live: daily/weekly chart delivery on a daylight-saving calendar is not supported yet;")
-                assert not ledger.exists() and not Path(str(ledger) + ".lock").exists()
+                if mode == "bars":
+                    # expectation corrected: refusal -> admission, because New York calendar
+                    # successors allow 71/73 h weekday weekends and 167/169 h weeks.
+                    assert result.returncode == 0, (command, result.stdout, result.stderr)
+                    assert "daily/weekly chart delivery on a daylight-saving calendar is not supported yet" not in result.stderr
+                    assert ledger.exists()
+                else:
+                    assert result.returncode == 1, (command, result.stdout, result.stderr)
+                    require_refusal(result, "pineforge-live: daily/weekly chart delivery on a daylight-saving calendar is not supported yet;")
+                    assert not ledger.exists() and not Path(str(ledger) + ".lock").exists()
     for name, rows in (("1m", chart_rows("1")[:24]), ("gap", chart_rows("15")[:24:2]),
                        ("unaligned", [{**bar, "ts_open": bar["ts_open"] + 60000} for bar in chart_rows("15")[:24]])):
         write_csv(warmup, rows)

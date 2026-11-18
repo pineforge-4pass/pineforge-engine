@@ -236,6 +236,23 @@ void PineScheduler::run_begin(PineStrategyHost& host) {
         detail::run_consumer(host).set_script_period_source(
             chart_periods, retained_.bars.data(), retained_.bars.size());
     }
+    pf_selected_window_config_v1 selected_window{};
+    const bool selected_batch = !chart_periods && !retained_.is_stream
+        && state.phase == NativeRunPhase::Batch
+        && NativeExecutionConsumer::selected_window_admitted(host, &selected_window);
+    // A historical calendar chart includes the period still developing at the
+    // end of its supplied input. The kernel seals its available aggregate;
+    // input/security completion cursors keep their natural-close rules.
+    // Generated N-day partitions already own their final-period rule. Streams
+    // and the live runner's tail/suppression protocol keep their pending bars.
+    const bool calendar_chart = needs_aggregation && !chart_periods && state.spec
+        && !selected_batch && state.phase == NativeRunPhase::Batch
+        && !retained_.is_stream && !retained_.bars.empty()
+        && !host.realtime_tail() && !host.probe_suppress_tail_logic()
+        && chart_tf && chart_tf->is_calendar();
+    if (calendar_chart)
+        (void)detail::run_consumer(host).include_batch_script_tail(
+            retained_.bars.back().timestamp);
     const std::int64_t first_ms = retained_.bars.empty() ? 0 : retained_.bars.front().timestamp;
     const std::int64_t last_ms = retained_.bars.empty() || retained_.is_stream
         ? 0 : retained_.bars.back().timestamp;
@@ -243,10 +260,12 @@ void PineScheduler::run_begin(PineStrategyHost& host) {
     host.diag_needs_aggregation_ = needs_aggregation;
     input_script_size_ = retained_.bars.size();
     expected_source_bars_ = static_cast<int>(input_script_size_);
-    // Count once without retaining flags. Input delivery and consumed-prefix
-    // hashing each get their own walk of the very same kernel producer.
-    // Ratio 1 uses complete=1/boundary=0 without constructing any cursor.
-    if (needs_aggregation && state.spec) {
+    // Input delivery and consumed-prefix hashing retain their own completion
+    // walks. Equal literals use native passthrough flags (complete=1,
+    // boundary=0). Calendar chart population is counted separately below:
+    // its final natural close need not appear in the request preview.
+    if (needs_aggregation && state.spec
+        && state.spec->input_tf != state.spec->script_tf) {
         ScriptBucketCursor counting(*state.spec, chart_periods, first_ms, last_ms);
         expected_source_bars_ = 0;
         std::int64_t previous_open = std::numeric_limits<std::int64_t>::min();
@@ -259,7 +278,7 @@ void PineScheduler::run_begin(PineStrategyHost& host) {
                                                   "N-day chart input has no period");
                 if (open >= first_ms && open != previous_open) ++expected_source_bars_;
                 previous_open = open;
-            } else {
+            } else if (!calendar_chart) {
                 expected_source_bars_ += counting.next(retained_.bars[i]).complete != 0U ? 1 : 0;
             }
         }
@@ -267,6 +286,14 @@ void PineScheduler::run_begin(PineStrategyHost& host) {
             *state.spec, chart_periods, first_ms, last_ms);
         consumed_script_cursor_ = std::make_unique<ScriptBucketCursor>(
             *state.spec, chart_periods, first_ms, last_ms);
+    }
+    if (calendar_chart) {
+        const auto count = detail::run_consumer(host).batch_script_population(
+            retained_.bars.data(), retained_.bars.size());
+        if (!count || *count > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                "calendar chart population refused or out of range after admission");
+        expected_source_bars_ = static_cast<int>(*count);
     }
     // A selected admitted batch run executes the script bars of the consumer's
     // own bucket walk, which the aggregator's per-input hint above does not
@@ -276,13 +303,9 @@ void PineScheduler::run_begin(PineStrategyHost& host) {
     // and a stream never reach this and keep the hint; completion cursors are
     // unchanged either way.
     // A selected run with a generated chart partition was refused above.
-    if (!chart_periods && !retained_.is_stream && state.phase == NativeRunPhase::Batch) {
-        pf_selected_window_config_v1 window{};
-        if (NativeExecutionConsumer::selected_window_admitted(host, &window)) {
-            expected_source_bars_ =
-                selected_executed_source_bars(host, state.spec, window, retained_.bars);
-        }
-    }
+    if (selected_batch)
+        expected_source_bars_ =
+            selected_executed_source_bars(host, state.spec, selected_window, retained_.bars);
     host.stream_warmup_mode_ = retained_.is_stream;
     host.scheduler_prepare_script_run(retained_.bars, static_eligible,
                                       expected_source_bars_, !needs_aggregation);
@@ -531,6 +554,14 @@ void PineScheduler::input(
             : host(value), previous(value.bar_index_) { host.bar_index_ = index; }
         ~InputBarIndexScope() { host.bar_index_ = previous; }
     } input_bar_index(host, context.input_index);
+    const auto capture_deferred_callers =
+        [&](DeferredBoundaryInput& deferred, std::int64_t release_open_ms) {
+            deferred.input_caller = host.request_active_caller();
+            deferred.chart_caller = host.request_active_chart_caller();
+            deferred.release_after_body =
+                release_open_ms == std::numeric_limits<std::int64_t>::min()
+                ? 0 : host.request_chart_caller_for(release_open_ms);
+        };
     // The auxiliary slice is fed per chart bar (scheduler_feed_aux_security);
     // sites the kernel steps (declare_security_sites_to_kernel) are fed by
     // its own pump, right after this callback returns.
@@ -550,9 +581,17 @@ void PineScheduler::input(
         // new caller's child proceed in timestamp order.
         const std::int64_t completed_script_open =
             deferred_boundary_input_.prior_script_open_ms;
-        (void)host.scheduler_feed_security_input(
-            deferred_boundary_input_.bar, deferred_boundary_input_.next_input_ms,
-            true, false);
+        const std::uint64_t deferred_input_caller =
+            deferred_boundary_input_.input_caller;
+        const std::uint64_t deferred_chart_caller =
+            deferred_boundary_input_.chart_caller;
+        {
+            PineRequestCallerScope deferred_scope(
+                host, deferred_input_caller, deferred_chart_caller);
+            (void)host.scheduler_feed_security_input(
+                deferred_boundary_input_.bar,
+                deferred_boundary_input_.next_input_ms, true, false);
+        }
         // Keep the new caller's first child out of request.security until the
         // completed caller's chart callback has observed the published value.
         deferred_boundary_input_.bar = bar;
@@ -561,6 +600,8 @@ void PineScheduler::input(
         deferred_boundary_input_.calling_bar_complete = false;
         deferred_boundary_input_.all_security_states = true;
         deferred_boundary_input_.active = true;
+        capture_deferred_callers(
+            deferred_boundary_input_, completed_script_open);
         prior_input_script_open_ms_ = context.script_interval.open_ms;
         return;
     }
@@ -577,6 +618,8 @@ void PineScheduler::input(
         deferred_boundary_input_.calling_bar_complete = false;
         deferred_boundary_input_.all_security_states = true;
         deferred_boundary_input_.active = true;
+        capture_deferred_callers(
+            deferred_boundary_input_, awaiting_legacy_script_open_ms_);
         prior_input_script_open_ms_ = context.script_interval.open_ms;
         return;
     }
@@ -618,6 +661,8 @@ void PineScheduler::input(
         deferred_boundary_input_.calling_bar_complete = true;
         deferred_boundary_input_.all_security_states = false;
         deferred_boundary_input_.active = true;
+        capture_deferred_callers(
+            deferred_boundary_input_, context.script_interval.open_ms);
         prior_input_script_open_ms_ = context.script_interval.open_ms;
         return;
     }
@@ -631,6 +676,8 @@ void PineScheduler::input(
         deferred_boundary_input_.calling_bar_complete = false;
         deferred_boundary_input_.all_security_states = false;
         deferred_boundary_input_.active = true;
+        capture_deferred_callers(
+            deferred_boundary_input_, prior_input_script_open_ms_);
     }
     if (calling_bar_complete && !retained_.bar_magnifier) {
         awaiting_legacy_script_open_ms_ = boundary
@@ -761,13 +808,22 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
     if (uses_aux_security_feed_) host.scheduler_feed_deferred_aux_security(chart_index);
     if (deferred_boundary_input_.active
         && deferred_boundary_input_.prior_script_open_ms == context.script_bar_open_ms) {
-        if (deferred_boundary_input_.all_security_states) {
-            (void)host.scheduler_feed_security_input(
-                deferred_boundary_input_.bar, deferred_boundary_input_.next_input_ms,
-                deferred_boundary_input_.calling_bar_complete, false);
-        } else {
-            host.scheduler_feed_deferred_security_input(
-                deferred_boundary_input_.bar, deferred_boundary_input_.next_input_ms);
+        const DeferredBoundaryInput deferred = deferred_boundary_input_;
+        {
+            PineRequestCallerScope deferred_scope(
+                host,
+                deferred.input_caller != 0 ? deferred.input_caller
+                                           : host.request_active_caller(),
+                deferred.chart_caller != 0 ? deferred.chart_caller
+                                           : host.request_active_chart_caller());
+            if (deferred.all_security_states) {
+                (void)host.scheduler_feed_security_input(
+                    deferred.bar, deferred.next_input_ms,
+                    deferred.calling_bar_complete, false);
+            } else {
+                host.scheduler_feed_deferred_security_input(
+                    deferred.bar, deferred.next_input_ms);
+            }
         }
         deferred_boundary_input_ = {};
     }

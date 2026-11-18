@@ -414,6 +414,14 @@ public:
     AggregatedBar feed(const Bar& input_bar, int64_t next_input_ms,
                        int64_t calling_close_ms);
 
+    /// Internal evaluator entry: retain the parsed input and target periods
+    /// where the feed above cannot state them: an input with no fixed duration
+    /// (a month) or a target that is a calendar multiple. One period from
+    /// fixed-duration bars, and an installed native partition, keep that feed.
+    AggregatedBar feed(const Bar& input_bar, int64_t next_input_ms,
+                       int64_t calling_close_ms, const std::string& input_tf,
+                       const std::string& target_tf);
+
     /// Current in-progress bar.
     Bar current() const;
 

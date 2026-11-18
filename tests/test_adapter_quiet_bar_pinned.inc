@@ -114,12 +114,12 @@
 //   Random48/0/0: boundary 0xa9cdc4fdbf2711f4ull -> 0x1d605fd446942e1eull; final 0x6964de82cf42b764ull -> 0x78ecfaf2273e0f0dull
 //   Random48/1/1: boundary 0x65ff21f3229cca95ull -> 0x8cfb96ec8a97eb1bull; rows 0x4e9b982f9ab665f5ull -> 0x151d1b2f00cbeffeull
 //   Random48/1/0: boundary 0x65ff21f3229cca95ull -> 0x8cfb96ec8a97eb1bull
-// R5 lane PERF-L4: the values tests/test_adapter_quiet_bar.cpp pins, one
+// Quiet-bar gates: the values tests/test_adapter_quiet_bar.cpp pins, one
 // row per run of its battery (scenario, magnifier, recording; the digests
 // of the source folds, the recorded rows and the trades; the final
 // broker-state hash; the three counts). Harvested on the base tree: see
 // the provenance note in the test. Generated -- never edit a row by hand.
-// expectation corrected (408 values), because v19's broker-state hash folds the closed rows as their count and a running digest, each row once when it is final (pineforge-broker-state/v19); this host projects one fixed execution hash, so the continuation does not enter; the source-fold digest (boundary), the trade digest and the three counts did not move; re-harvested the same way on INT19's tree; V19-A's tip (6211dc94) gives the same rows:
+// expectation corrected (408 values), because v19's broker-state hash folds the closed rows as their count and a running digest, each row once when it is final (pineforge-broker-state/v19); this host projects one fixed execution hash, so the continuation does not enter; the source-fold digest (boundary), the trade digest and the three counts did not move; re-harvested the same way on the closed-row hashing integration tree; the closed-row hashing commit (6211dc94) gives the same rows:
 //   Quiet/0/1: rows 0xea4df9335a7c1f58ull -> 0xc8c5fef2737653d1ull, final_hash 0x0b62c904f7e3555aull -> 0x7fcbc2aeb4710017ull
 //   Quiet/0/0: final_hash 0x0b62c904f7e3555aull -> 0x7fcbc2aeb4710017ull
 //   Quiet/1/1: rows 0x513640861f244867ull -> 0x0eb8899e312a2d42ull, final_hash 0xc7b4ff38f4496eb8ull -> 0x9f59de4478395359ull
@@ -665,7 +665,7 @@
 //   Random48/0/0: boundary 0x1f1f97e40e739c61ull -> 0xd305a0f9d0984075ull, final_hash 0xb4798af50cf3f648ull -> 0x840184ac798a5de2ull
 //   Random48/1/1: boundary 0x890a1e21d9208244ull -> 0x0630c1ad99e83057ull, rows 0x57fee585d5ff2aa6ull -> 0x37e26f78b1f4e325ull, final_hash 0xb95a18c6b589114dull -> 0x1969d9a52bdd51c2ull
 //   Random48/1/0: boundary 0x890a1e21d9208244ull -> 0x0630c1ad99e83057ull, final_hash 0xb95a18c6b589114dull -> 0x1969d9a52bdd51c2ull
-// expectation corrected (INT21 K3, 10 values), because K3 now keeps the first re-issue of each revival candidate instead of every one (INT21): more retired exit legs are erased, and the v4 fold reads the retained rows beside the erased-row count and digest; this host projects one fixed execution hash, so the continuation does not enter; the trades, the trade digest and the three counts did not move; harvested with its switch on this tree; the tree before the correction reproduces every old pin:
+// expectation corrected (revival candidate retention, 10 values), because revival tracking now keeps the first re-issue of each revival candidate instead of every one (revival candidate retention): more retired exit legs are erased, and the v4 fold reads the retained rows beside the erased-row count and digest; this host projects one fixed execution hash, so the continuation does not enter; the trades, the trade digest and the three counts did not move; harvested with its switch on this tree; the tree before the correction reproduces every old pin:
 //   CalcOnFills/0/1: boundary 0xfcdb5c78d844c1fdull -> 0xf4ba5f0c197f016eull, rows 0x8fce931c6789b396ull -> 0x06eeb2b1f4958e7aull, final_hash 0xfe5dc3ec475477d9ull -> 0xd27b26b32d137ec9ull
 //   CalcOnFills/0/0: boundary 0xfcdb5c78d844c1fdull -> 0xf4ba5f0c197f016eull, final_hash 0xfe5dc3ec475477d9ull -> 0xd27b26b32d137ec9ull
 //   CalcOnFills/1/1: boundary 0x8ae0abb767b7b0bbull -> 0xd69e36869ed8b309ull, rows 0x0b03280df257cee7ull -> 0xa48ec14c088a0fd9ull, final_hash 0xcd17129763baf911ull -> 0x18c7c13cfd36a5e9ull
@@ -741,7 +741,7 @@
 //   Random48/0/0: boundary 0xd305a0f9d0984075ull -> 0xd0c92fe6fc290e0bull
 //   Random48/1/1: boundary 0x0630c1ad99e83057ull -> 0xd39f4122a0d0a91dull, rows 0x37e26f78b1f4e325ull -> 0xd439da8c48c337ddull
 //   Random48/1/0: boundary 0x0630c1ad99e83057ull -> 0xd39f4122a0d0a91dull
-// expectation corrected (V19-FIX, 680 values), because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; this host projects one fixed execution hash, so the continuation does not enter; the trades, the trade digest and the three counts did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree:
+// expectation corrected (adapter hash cleanup, 680 values), because adapter hash cleanup moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and the kernel lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; this host projects one fixed execution hash, so the continuation does not enter; the trades, the trade digest and the three counts did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the corrected tree:
 //   Quiet/0/1: boundary 0xc1c15d580d2b91ddull -> 0x1c2b2e37a44f6877ull, rows 0x6f2ef9fb0f46bdb6ull -> 0x81799b58f0e052b1ull, final_hash 0xfd89dcb68ffd9f6full -> 0xe0aa4c0240939bcfull
 //   Quiet/0/0: boundary 0xc1c15d580d2b91ddull -> 0x1c2b2e37a44f6877ull, final_hash 0xfd89dcb68ffd9f6full -> 0xe0aa4c0240939bcfull
 //   Quiet/1/1: boundary 0x25925b8843f8c940ull -> 0x0a542471817c0616ull, rows 0x3f01d574c39a983full -> 0x4210b9ca5a7d77e6ull, final_hash 0x08472c64f2a3b409ull -> 0x2e91db500a83cbe9ull
@@ -1014,7 +1014,7 @@
 //   Random48/0/0: boundary 0xd0c92fe6fc290e0bull -> 0xaa6b18e4254e2f68ull, final_hash 0x840184ac798a5de2ull -> 0xaff43b38e6bc02acull
 //   Random48/1/1: boundary 0xd39f4122a0d0a91dull -> 0x655a5637ae415d60ull, rows 0xd439da8c48c337ddull -> 0x13866e45be14eaeeull, final_hash 0x1969d9a52bdd51c2ull -> 0xa0e205aa768a0bc9ull
 //   Random48/1/0: boundary 0xd39f4122a0d0a91dull -> 0x655a5637ae415d60ull, final_hash 0x1969d9a52bdd51c2ull -> 0xa0e205aa768a0bc9ull
-// R5 lane PAR-ORDERS re-harvested it the same way on its tree (62 of 272 runs move;
+// Pending-entry order handling re-harvested it the same way on its tree (62 of 272 runs move;
 // see the lane's hash commit for why each moves):
 //   Trail/0/1: boundary 0x5211ba6f22808f15 -> 0xa09d959161ab83b5, rows 0x5fd4f2baecf12c67 -> 0x6db293f4d9ba407e, final_hash 0x1ca55654b8ff3a6e -> 0xf9e526fb6a079950
 //   Trail/0/0: boundary 0x5211ba6f22808f15 -> 0xa09d959161ab83b5, final_hash 0x1ca55654b8ff3a6e -> 0xf9e526fb6a079950
@@ -1078,23 +1078,23 @@
 //   Random43/1/0: boundary 0xb9a953e47994593f -> 0xffd1c55ce888ef72, final_hash 0xb6e20a498ce1b25a -> 0x45393018e93b32be
 //   Random45/1/1: boundary 0x81ba9360ff25c670 -> 0x32a1d85e85b93f0a, rows 0xe345a7e76585b1de -> 0xebcfcdf78cd848a5, final_hash 0x6c13a376f0a1a840 -> 0x56b0e295081820c0
 //   Random45/1/0: boundary 0x81ba9360ff25c670 -> 0x32a1d85e85b93f0a, final_hash 0x6c13a376f0a1a840 -> 0x56b0e295081820c0
-// R5 lane PAR-ORDERS-2 moves these runs' trades (INT26: the behaviour half of
+// Current execution order corrections move these runs' trades (integrated source rules: the behaviour half of
 // the lane's hash commit 9f7a025c, which says why each moves; harvested the
 // same way on the integrated tree, every value equal to the lane's). Their
 // hash values, and those of the other runs the lane's new fold moves, move
-// once, in the INT26 v19 hash re-pin:
+// once, in the integrated source rules v19 hash correction:
 //   CalcOnFills/0/1: trades 0x4603f8c446ca5c1e -> 0x0b9be2eee5282e84
 //   CalcOnFills/0/0: trades 0x4603f8c446ca5c1e -> 0x0b9be2eee5282e84
 //   Random10/0/1: trades 0x274b98362186a62f -> 0xe335d30ff30abed4, boundary_count 70 -> 69, trade_count 23 -> 22
 //   Random10/0/0: trades 0x274b98362186a62f -> 0xe335d30ff30abed4, boundary_count 70 -> 69, trade_count 23 -> 22
 //   Random22/0/1: trades 0x603c10590ec68778 -> 0x87be32daa84c6426
 //   Random22/0/0: trades 0x603c10590ec68778 -> 0x87be32daa84c6426
-// R5 lane H-THIN moves these runs' trade digests and counts (INT26: the
+// Source hash cleanup moves these runs' trade digests and counts (integrated source rules: the
 // behaviour half of its hash step ab297364, harvested on the integrated tree
 // with this TU's own switch): E19 books every lot's excursions from the
 // kernel's sampler, which the trade digest folds, and P10 reserves a default
 // FIFO strategy.exit(from_entry)'s own entry quantity. Their hash values move
-// once, in the INT26 v19 hash re-pin (140 runs):
+// once, in the integrated source rules v19 hash correction (140 runs):
 //   CalcOnFills/0/1: trades 0x0b9be2eee5282e84 -> 0x87698c8f4050ce14, boundary_count 57 -> 55, trade_count 10 -> 8 (a run an earlier pick had moved too)
 //   CalcOnFills/0/0: trades 0x0b9be2eee5282e84 -> 0x87698c8f4050ce14, boundary_count 57 -> 55, trade_count 10 -> 8 (a run an earlier pick had moved too)
 //   CalcOnFills/1/1: trades 0x57aa00467e66c075 -> 0xa16d17de4933efda, boundary_count 54 -> 52, trade_count 8 -> 6
@@ -1235,12 +1235,12 @@
 //   Random48/0/0: trades 0x62a7be3a970dee6a -> 0xda74ceb1a9e7d904, trade_count 9 -> 8
 //   Random48/1/1: trades 0xee7c0d61bfb7dd62 -> 0x0876fbb01d747e2d, trade_count 9 -> 8
 //   Random48/1/0: trades 0xee7c0d61bfb7dd62 -> 0x0876fbb01d747e2d, trade_count 9 -> 8
-// R5 lane PAR-CASHFEE moves these runs' trade digests (INT26: the behaviour half
+// Cash-fee sizing moves these runs' trade digests (the behaviour half
 // of its hash step 214c082c, harvested on the integrated tree with this TU's own
 // switch): a percent-of-equity default quantity under a cash commission sizes
 // from strategy.equity net of the open entries' fees, less its own order's fee.
 // Random05/0/* had been moved by an earlier pick too. Their hash values move once,
-// in the INT26 v19 hash re-pin:
+// in the integrated v19 hash correction:
 //   Random05/0/1: trades 0x3d4c3aae7bbc3b85 -> 0xf91857e72781f5ae
 //   Random05/0/0: trades 0x3d4c3aae7bbc3b85 -> 0xf91857e72781f5ae
 //   Random06/0/1: trades 0x19f4b2ac9f3f76f7 -> 0x75cd705050ee6ca5
@@ -1263,7 +1263,7 @@
 //   Random46/0/0: trades 0x8fe7667934a81f87 -> 0xfaba8060a07d20fd
 //   Random46/1/1: trades 0x8fe7667934a81f87 -> 0xfaba8060a07d20fd
 //   Random46/1/0: trades 0x8fe7667934a81f87 -> 0xfaba8060a07d20fd
-// expectation corrected (INT26 v19 hash re-pin, 680 values over 272 rows), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; this host projects one fixed execution hash, so the continuation does not enter; the trades, the trade digest and the three counts did not move:
+// expectation corrected (integrated source rules v19 hash correction, 680 values over 272 rows), because the integrated tree's picks move v19 hash values inside the unreleased epoch: source hash cleanup's hash step (the Pine host's excursion model leaves the source-layer fold; a FIFO exit reserves its own entry's quantity), the current execution order correction's new transient coof_fill_forced_ fold and the post-fill margin correction's post-fill margin waypoint and cash-fee sizing's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since the pending-entry timestamp correction (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; this host projects one fixed execution hash, so the continuation does not enter; the trades, the trade digest and the three counts did not move:
 //   Quiet/0/1: boundary 0x1c2b2e37a44f6877ull -> 0xcd8d3ecb4d2c740aull, rows 0x81799b58f0e052b1ull -> 0xe6da4342a82c460cull, final_hash 0xe0aa4c0240939bcfull -> 0x458f1ecf00ef1d5cull [H-THIN]
 //   Quiet/0/0: boundary 0x1c2b2e37a44f6877ull -> 0xcd8d3ecb4d2c740aull, final_hash 0xe0aa4c0240939bcfull -> 0x458f1ecf00ef1d5cull [H-THIN]
 //   Quiet/1/1: boundary 0x0a542471817c0616ull -> 0x2a102759d268d84dull, rows 0x4210b9ca5a7d77e6ull -> 0x923a578d640d7fdbull, final_hash 0x2e91db500a83cbe9ull -> 0x6ca064a309be6bfaull [H-THIN]
@@ -1536,27 +1536,27 @@
 //   Random48/0/0: boundary 0xaa6b18e4254e2f68ull -> 0x21c0bf9ae910d3acull, final_hash 0xaff43b38e6bc02acull -> 0x1e560afd06471537ull [H-THIN]
 //   Random48/1/1: boundary 0x655a5637ae415d60ull -> 0x4fd90c8ca1025428ull, rows 0x13866e45be14eaeeull -> 0x7706d5e9ebfd9226ull, final_hash 0xa0e205aa768a0bc9ull -> 0xee01efa6d7b40515ull [H-THIN]
 //   Random48/1/0: boundary 0x655a5637ae415d60ull -> 0x4fd90c8ca1025428ull, final_hash 0xa0e205aa768a0bc9ull -> 0xee01efa6d7b40515ull [H-THIN]
-// R5 lane PAR-ORDERS-3 moves these runs' trade digests (INT27: the behaviour
+// Fill recalculation corrections move these runs' trade digests (fill recalculation integration: the behaviour
 // half of the lane's hash commit b65cee22, which says why each moves: finding
 // 4, bc5f7a21, on the chart path; CalcOnFills keeps every trade and renumbers
 // Trade::entry_incarnation). Harvested with PINEFORGE_QUIET_BAR_HARVEST on
-// the integrated tree, where INT26's picks had moved the same runs' trade
+// the integrated tree, where the integrated source rules' picks had moved the same runs' trade
 // digests, so the digests are this tree's, not the lane's; the boundary counts
-// equal the lane's. Their hash values move once, in the INT27 v19 hash re-pin:
+// equal the separately corrected tree's. Their hash values move once, in the fill recalculation integration v19 hash correction:
 //   CalcOnFills/0/1: trades 0x87698c8f4050ce14 -> 0x6f29557db540e116
 //   CalcOnFills/0/0: trades 0x87698c8f4050ce14 -> 0x6f29557db540e116
 //   Random10/0/1: trades 0xc9ae66b6356d2649 -> 0xaae6484f97956d07, boundary_count 69 -> 67
 //   Random10/0/0: trades 0xc9ae66b6356d2649 -> 0xaae6484f97956d07, boundary_count 69 -> 67
 //   Random20/0/1: trades 0x936a146fbbfb7d4b -> 0x4ae8ba38071c5c60, boundary_count 70 -> 69
 //   Random20/0/0: trades 0x936a146fbbfb7d4b -> 0x4ae8ba38071c5c60, boundary_count 70 -> 69
-// expectation corrected (INT27 v19 hash re-pin, 15 values over 6 rows), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane PAR-ORDERS-3's recalculation rules (findings 1-2, an exit placed on a fill at a bar's extreme reads that fill; finding 4, after the matcher's own-level fill on a bar's first extreme the recalculation's orders act from that extreme); old values are INT26's pins, which every INT27 pick before PAR-ORDERS-3 kept (0631e045 reproduces each), harvested with this TU's own switch on the integrated tree and at every PAR-ORDERS-3 commit; this host projects one fixed execution hash, so the continuation does not enter; no trade, trade digest or count moves in this commit (the trade digests and boundary counts PAR-ORDERS-3 moves are pinned by its behaviour half above):
+// expectation corrected (fill recalculation integration v19 hash correction, 15 values over 6 rows), because the integrated tree's picks move v19 hash values inside the unreleased epoch: fill recalculation corrections' recalculation rules (findings 1-2, an exit placed on a fill at a bar's extreme reads that fill; finding 4, after the matcher's own-level fill on a bar's first extreme the recalculation's orders act from that extreme); old values are the integrated source rules' pins, which every fill recalculation integration commit before the order recalculation correction kept (0631e045 reproduces each), harvested with this TU's own switch on the integrated tree and at every order recalculation commit; this host projects one fixed execution hash, so the continuation does not enter; no trade, trade digest or count moves in this commit (the trade digests and boundary counts the order recalculation correction moves are pinned by its behaviour half above):
 //   CalcOnFills/0/1: boundary 0xbd9feba11a355c84ull -> 0x109b8bbd2db3c39cull, rows 0xbd62a54cd2c27075ull -> 0x4990637dd008c142ull, final_hash 0x8e716ca55979f5e4ull -> 0x23caae4465e49b8dull [PAR-ORDERS-3 f4]
 //   CalcOnFills/0/0: boundary 0xbd9feba11a355c84ull -> 0x109b8bbd2db3c39cull, final_hash 0x8e716ca55979f5e4ull -> 0x23caae4465e49b8dull [PAR-ORDERS-3 f4]
 //   Random10/0/1: boundary 0x82933908492fe6aeull -> 0x53a92b8342582407ull, rows 0x839a10fa6478c692ull -> 0x337fd61947e125a0ull, final_hash 0x6907e89e2f502bd7ull -> 0xfb592dc1ad328c0bull [PAR-ORDERS-3 f4]
 //   Random10/0/0: boundary 0x82933908492fe6aeull -> 0x53a92b8342582407ull, final_hash 0x6907e89e2f502bd7ull -> 0xfb592dc1ad328c0bull [PAR-ORDERS-3 f4]
 //   Random20/0/1: boundary 0xad83f25bfdab1b50ull -> 0x6d39d123fcb64c3cull, rows 0x103b25042e1313deull -> 0x4350e4a911697ba6ull, final_hash 0xb27d00f43fad75a1ull -> 0x2fff8a1132834fe4ull [PAR-ORDERS-3 f4]
 //   Random20/0/0: boundary 0xad83f25bfdab1b50ull -> 0x6d39d123fcb64c3cull, final_hash 0xb27d00f43fad75a1ull -> 0x2fff8a1132834fe4ull [PAR-ORDERS-3 f4]
-// INT28 re-harvested it once on the integrated tree (main 962960b3 and the
+// Integrated order and margin rules re-harvested it once on the integrated tree (main 962960b3 and the
 // wave-J picks) with PINEFORGE_QUIET_BAR_HARVEST; the same harvest against
 // main reproduces every old row. 220 of 276 runs move or are new (the four
 // ThrottledStopEntry runs, the fixture lane W3B-ENG-GRID added so the probe's
@@ -1786,9 +1786,9 @@
 //   Random48/0/0: boundary 0x21c0bf9ae910d3acull -> 0x61058fc7c0ec1a28ull, trades 0xda74ceb1a9e7d904ull -> 0x935393ec134d3933ull, final_hash 0x1e560afd06471537ull -> 0x41e9f2a144887b14ull, trade_count 8 -> 7 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W4 F08; W8A R2]
 //   Random48/1/1: boundary 0x4fd90c8ca1025428ull -> 0x1495a6b529cfcd63ull, rows 0x7706d5e9ebfd9226ull -> 0x54746877dcc8bea2ull, trades 0x0876fbb01d747e2dull -> 0x5386898595fcb912ull, final_hash 0xee01efa6d7b40515ull -> 0x09e8b8606f92c5b5ull, trade_count 8 -> 7 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W5 C1; W4 F08; W8A R2]
 //   Random48/1/0: boundary 0x4fd90c8ca1025428ull -> 0x1495a6b529cfcd63ull, trades 0x0876fbb01d747e2dull -> 0x5386898595fcb912ull, final_hash 0xee01efa6d7b40515ull -> 0x09e8b8606f92c5b5ull, trade_count 8 -> 7 [W3B F02 first id; W3B F02 ledger booking; W3B void exit; W4 F08; W8A R2]
-// INT28-FIX re-harvested it once on the integrated tree (INT28 4efcb8c5 and
-// INT28-FIX's ten commits) with PINEFORGE_QUIET_BAR_HARVEST; the same harvest against
-// INT28 reproduces every old row. 26 of 276 runs move, each marked with the
+// Admission and margin corrections re-harvested it once on the integrated tree (integrated order and margin rules 4efcb8c5 and
+// Admission and margin corrections' ten commits) with PINEFORGE_QUIET_BAR_HARVEST; the same harvest against
+// Integrated order and margin rules reproduces every old row. 26 of 276 runs move, each marked with the
 // commit(s) at whose boundary it moved (a harvest at every commit): only the
 // picked W5B-ENG-MARGIN-RESIDUAL rules SB and PC move any; CA, PA, SZ, FU,
 // MS, SS, OU and OF move none. The rules are TradingView's (their lanes'
@@ -1819,8 +1819,8 @@
 //   Random44/0/0: boundary 0x3a7009cbf7950f96ull -> 0x732debc0dd6f7cd7ull, trades 0xd7933446c85fc9e2ull -> 0x01cadf1a08d256deull, final_hash 0xac6703f9b030be55ull -> 0xc64966b83e7cef78ull [W5B SB]
 //   Random44/1/1: boundary 0xf26161d992b0b9d7ull -> 0xe4b01bfef621cc40ull, rows 0x056fb98ed64a27afull -> 0x12aff34f2be5d18cull, trades 0xd15149879bf25c79ull -> 0x346e57041dd6b6cdull, final_hash 0x6dfe3e836bc8a2f5ull -> 0xc8470526b19e84d5ull, boundary_count 66 -> 65, trade_count 15 -> 14 [W5B SB]
 //   Random44/1/0: boundary 0xf26161d992b0b9d7ull -> 0xe4b01bfef621cc40ull, trades 0xd15149879bf25c79ull -> 0x346e57041dd6b6cdull, final_hash 0x6dfe3e836bc8a2f5ull -> 0xc8470526b19e84d5ull, boundary_count 66 -> 65, trade_count 15 -> 14 [W5B SB]
-// INT29 re-harvested it once on the integrated tree (main 74491fa1, lane
-// W10-DIAG-UNKNOWN's ten picks, lane W11-ENG-TIME-COLOR's eleven, INT29's own
+// Later order and timing integration re-harvested it once on the integrated tree (main 74491fa1, with
+// ten diagnostic commits, eleven time and color commits, and the integration's own
 // three commits, lane W12-ENG-TIME's thirteen and lane W13-ENG-MARGIN-OPP's
 // four) with PINEFORGE_QUIET_BAR_HARVEST; the same harvest against
 // main reproduces every old row. 4 of 276 runs move, and a harvest at each side
@@ -1890,8 +1890,8 @@
 // the trade digests, finals and counts do not move:
 //   MarginCalls/0/1: boundary 0x7685d0a40457d46full -> 0x005d6993f2b1c2deull, rows 0xaafecdc80e0c12a1ull -> 0x3210e1484b83ce34ull [TAIL-H PK]
 //   MarginCalls/0/0: boundary 0x7685d0a40457d46full -> 0x005d6993f2b1c2deull [TAIL-H PK]
-// R5 lane TAIL-C re-harvested it once on its tree (r5/tail-c: lane W8E-EXITS's
-// rule A picked onto INT29 8988faff, then TAIL-C's six rules) with
+// Fill and close-pass corrections re-harvested it once on its tree (the exit correction's
+// rule applied to order and timing integration 8988faff, then the six fill and close rules) with
 // PINEFORGE_QUIET_BAR_HARVEST; the same harvest against 8988faff reproduces
 // every old row. 8 of 276 runs move, each marked with the commit at whose
 // boundary it moved (a harvest at every commit; W8E's rule A and TAIL-C's
@@ -1906,7 +1906,7 @@
 //   Random44/0/0: boundary 0x732debc0dd6f7cd7ull -> 0xa4d4997f7052067dull, final_hash 0xc64966b83e7cef78ull -> 0x154f1fc08ce219c7ull [TAIL-C OPEN]
 //   Random45/0/1: boundary 0xa9aede02d7738b3eull -> 0x3c00afd78b2f850cull, rows 0xfc0f5911f30d9d12ull -> 0x622fccbecc7365a7ull, trades 0x3b74877f071e9e8dull -> 0x9e927212c83cadc5ull, final_hash 0x7929e5e00aefb02aull -> 0x805d6b921dffe691ull, boundary_count 97 -> 95, trade_count 26 -> 25 [TAIL-C OPEN]
 //   Random45/0/0: boundary 0xa9aede02d7738b3eull -> 0x3c00afd78b2f850cull, trades 0x3b74877f071e9e8dull -> 0x9e927212c83cadc5ull, final_hash 0x7929e5e00aefb02aull -> 0x805d6b921dffe691ull, boundary_count 97 -> 95, trade_count 26 -> 25 [TAIL-C OPEN]
-// INT30 harvested it once more on the integrated tree (engine main 7239ab37
+// Combined fill and margin integration harvested it once more on the integrated tree (engine main 7239ab37
 // with lanes TAIL-A, TAIL-B, TAIL-G, TAIL-D, TAIL-H, TAIL-E and TAIL-C picked,
 // in that order) and at each lane boundary of that history. main reproduces
 // every old row; each row above moves at its own lane's picks and equals
@@ -2292,24 +2292,24 @@
 //   Random38/1/1: boundary 0x704e2efa24abca57ull -> 0xb1592d34fa1aabe6ull; rows 0x83619f47c2632492ull -> 0xf09509a8d87409d5ull; final 0x2e7ba5256d8f738full -> 0xbdbb7af40b2ce916ull
 //   Random38/1/0: boundary 0x704e2efa24abca57ull -> 0xb1592d34fa1aabe6ull; final 0x2e7ba5256d8f738full -> 0xbdbb7af40b2ce916ull
 
-// Phase D: quiet-bar pins re-harvested on Phase B (2e976fb11f).
-// Proof rj-20261022t033804-5368ab; box i-09ed19f2aa5a5fc42.
-// Harvest: harvest-evidence-20261022T053127Z/out/fix-test_adapter_quiet_bar.txt.
+// Quiet-bar pins re-harvested on 2e976fb11f.
+// Provenance: values measured by the test's harvest mode on a lab build.
+// Harvest: this test's generator output.
 // 152 of 276 rows moved. The generator owns the rows; never edit a row by hand.
-// Join head (7ca2baba67, s1c line), harvest job rj-20261022t111407-69377e (NTU2, engine 8825bf1cd2 = the join head with
+// Integration head (7ca2baba67), harvested with engine 8825bf1cd2 (the integration head with
 // the harvest switch on): 690 values moved over 276 rows (boundary 276, rows digest 138 of the 138 recording-on runs,
 // final hash 276); trades digest and the three counts moved 0. Cause: the exit and trade scratch folds of 3c6f46d159
 // (pine_state_hash.cpp hash_exit_scratch, hash_host_extension) and the provider's context.versions of 4b5ef3dd28
 // (pine_adapter.cpp, the versions != nullptr byte); design, not a bug. The generator owns the rows.
-// QUIETFIX, harvest job rj-20261023t162013-a67288 (CLOUD, tree = join head cbe572be40 + commit 82ab96884e):
+// Quiet-bar correction, cloud harvest (tree = integration head cbe572be40 + commit 82ab96884e):
 // 276 of 276 rows moved by removal of the 8-byte f.u(scratch->next_scope) fold (boundary 276, rows digest 138
-// of the 138 recording-on runs, final hash 276); trades digest and the three counts moved 0. Cause: QUIETFIX
+// of the 138 recording-on runs, final hash 276); trades digest and the three counts moved 0. Cause: the hash correction
 // commit 82ab96884e removes a scope-allocation counter, not state; retained records, store digest and run identity
 // stay folded; design, not a bug. The generator owns the rows; never edit a row by hand.
 // expectation corrected (4 of 276 rows), because PineExecutionAdapter::close("") and close_all() now store the
 // pending entry's real source id as its replacement key (they stored the empty string of a moved-from SourceId), and
 // pine_state_hash.cpp:421 folds every pending_entries_ key into the broker-state hash; harvested by the generator
-// (both harvest switches on, tree = the 1.7.0 picks head 57e662382d, job rj-20261023t194305-8550f4, lab-only). Only
+// (both harvest switches on, tree = the 1.7.0 picks head 57e662382d, lab build). Only
 // the recorded-row digest of the four recording-on runs moves; boundary, trades, final hash and the three counts move 0:
 //   Random04/0/1: rows 0xf480f8181bae5e22ull -> 0x12f4bc1dbf5462a9ull
 //   Random04/1/1: rows 0x0bfef7bf4399c9efull -> 0x44d6c1b4d3679459ull

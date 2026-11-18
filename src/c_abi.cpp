@@ -31,7 +31,7 @@
  *     strategy_initial_capital, strategy_net_profit_sum,
  *     strategy_report_pointvalue, strategy_set_report_replay_v1,
  *     strategy_script_bars_processed), pf_output_series_limit_set_checked/pf_output_series_limit_failure,
- *     pf_map_pairs_limit_set_checked,
+ *     pf_map_pairs_limit_set_checked, strategy_set_account_currency_fx_scalar,
  *     pf_version_get/pf_version_string,
  *     pf_abi_version, strategy_execution_contract,
  *     strategy_configure_native_v1, strategy_configure_native_fx_curve_v1,
@@ -1637,5 +1637,18 @@ PF_API int pf_output_series_limit_failure(int64_t* maximum) {
 PF_API int pf_map_pairs_limit_set_checked(
         const int64_t* maximum, char* error, size_t error_capacity) {
     return pineforge::detail::set_map_pair_limit_checked(maximum, error, error_capacity);
+}
+
+/* The host's scalar account-currency rate (pineforge.h): 0 when a finite
+ * positive rate was installed, -1 for a NULL handle, an invalid rate (which
+ * restores the 1.0 ledger fallback and clears the supplied mark) or a call the
+ * engine refuses once a stream's warmup has begun. */
+PF_API int strategy_set_account_currency_fx_scalar(pf_strategy_t s, double rate) {
+    return pf_cabi_int(s, [&] {
+        if (!s) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)
+                       ->set_account_currency_fx_scalar(rate)
+            ? 0 : -1;
+    });
 }
 } // extern "C"

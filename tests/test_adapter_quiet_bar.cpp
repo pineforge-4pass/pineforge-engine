@@ -1,4 +1,4 @@
-// R5 lane PERF-L4: the Pine adapter's quiet-bar gates move no value.
+// The Pine adapter's quiet-bar gates move no value.
 //
 // Every TradingView policy hook the adapter runs at a bar boundary is now
 // first asked whether its body has anything to act on, and is not run when
@@ -1046,7 +1046,7 @@ void every_run_matches_the_base_tree() {
     }
     std::printf("  pinned: %zu of %zu runs match the base tree; the battery books %zu "
                 "margin-call rows\n", matched, pinned, margin_calls);
-    // The witness's own margin-call regime (the corpus has none). INT28: the
+    // The witness's own margin-call regime (the corpus has none). Integrated order and margin rules: the
     // battery books 62 margin-call rows on main 962960b3 and after lane
     // W3B-ENG-GRID's picks, 54 after W5-ENG-MARGIN-V6's, 46 after
     // W4-ENG-POOC-SAMEPASS's F08 to BRK and 10 from its F14 on -- the entry-bar
@@ -1125,7 +1125,7 @@ void every_gate_is_taken_both_ways() {
 #if defined(PINEFORGE_QUIET_BAR_HARVEST)
 void harvest() {
     const auto all = battery();
-    std::printf("// R5 lane PERF-L4: the values tests/test_adapter_quiet_bar.cpp pins, one\n"
+    std::printf("// Quiet-bar gates: the values tests/test_adapter_quiet_bar.cpp pins, one\n"
                 "// row per run of its battery (scenario, magnifier, recording; the digests\n"
                 "// of the source folds, the recorded rows and the trades; the final\n"
                 "// broker-state hash; the three counts). Harvested on the base tree: see\n"

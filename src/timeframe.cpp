@@ -1506,7 +1506,9 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
                                   CalendarPeriod cal_period,
                                   int64_t input_seconds,
                                   int64_t next_input_ms,
-                                  int64_t calling_close_ms) {
+                                  int64_t calling_close_ms,
+                                  const native_calendar::NativeInterval* interval = nullptr,
+                                  int64_t input_close_ms = 0) {
     AggregatedBar result;
     const bool pf_tr = security_trace_enabled();
     if (pf_tr) {
@@ -1517,56 +1519,69 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
             s.anchor_tz ? s.anchor_tz->c_str() : "<null>",
             s.anchor_session ? s.anchor_session->c_str() : "<null>");
     }
-    if (s.sub_bar_count == 0) {
-        // Very first bar
-        feed_reset_current(s, input_bar);
-        result.bar = s.current_bar;
-        result.is_complete = false;
-        result.sub_bar_count = s.sub_bar_count;
-        return result;
-    }
-
-    // Does the new bar fall in a different calendar period than
-    // the current group's first bar? (The owner's period key: the native
-    // period partition when a native feed installed one, the nominal
-    // session calendar otherwise -- see TimeframeAggregator::period_changes.)
     const std::string& atz = s.anchor_tz ? *s.anchor_tz : anchor_utc();
     const std::string& asess = s.anchor_session ? *s.anchor_session : empty_session();
     const bool native_periods = s.agg && s.agg->has_native_periods();
-    if (native_periods
+    // An explicit interval retains the target's unit AND count. Compare the
+    // actual first input, rather than a compatibility bar label in a session
+    // gap, with these bounds.
+    const auto in_interval = [&](int64_t stamp) {
+        const int64_t instant = session_covered_instant_ms(stamp, atz, asess);
+        return interval->open_ms <= instant && instant < interval->next_period_open_ms;
+    };
+    // Use the explicit target interval when supplied, the installed native
+    // partition otherwise, and the legacy single-period calendar last.
+    const bool boundary = s.sub_bar_count > 0 && (interval
+        ? !in_interval(s.observed_first_ms)
+        : native_periods
             ? s.agg->period_changes(s.current_bar.timestamp, input_bar.timestamp)
             : crosses_boundary(s.current_bar.timestamp, input_bar.timestamp,
-                               cal_period, atz, asess)) {
-        if (s.current_emitted_complete) {
-            feed_reset_current(s, input_bar);
+                               cal_period, atz, asess));
+    if (s.sub_bar_count == 0) {
+        // Very first bar
+        feed_reset_current(s, input_bar);
+        if (!interval) {
             result.bar = s.current_bar;
             result.is_complete = false;
             result.sub_bar_count = s.sub_bar_count;
             return result;
         }
-        // First *actual* bar of the next calendar period: finalize the previous
-        // period if it was not already closed by end-of-period projection below.
-        int completed_subs = s.sub_bar_count;
-        s.last_completed_bar = s.current_bar;
-        s.has_completed = true;
 
-        // Start new aggregation with this bar
-        feed_reset_current(s, input_bar);
+    } else if (boundary) {
+        if (s.current_emitted_complete) {
+            feed_reset_current(s, input_bar);
+            if (!interval) {
+                result.bar = s.current_bar;
+                result.is_complete = false;
+                result.sub_bar_count = s.sub_bar_count;
+                return result;
+            }
+        } else {
+            // First actual bar of the next period: retain lazy completion
+            // when no prior input reached the previous period's natural end.
+            int completed_subs = s.sub_bar_count;
+            s.last_completed_bar = s.current_bar;
+            s.has_completed = true;
 
-        result.bar = s.last_completed_bar;
-        result.is_complete = true;
-        result.sub_bar_count = completed_subs;
-        if (pf_tr) {
-            std::fprintf(stderr,
-                "[calmode] BOUNDARY-COMPLETE trigger_ts=%lld bucket_first=%lld close=%.6f subs=%d\n",
-                (long long)input_bar.timestamp,
-                (long long)s.last_completed_bar.timestamp,
-                s.last_completed_bar.close, completed_subs);
+            feed_reset_current(s, input_bar);
+
+            result.bar = s.last_completed_bar;
+            result.is_complete = true;
+            result.sub_bar_count = completed_subs;
+            if (pf_tr) {
+                std::fprintf(stderr,
+                    "[calmode] BOUNDARY-COMPLETE trigger_ts=%lld bucket_first=%lld close=%.6f subs=%d\n",
+                    (long long)input_bar.timestamp,
+                    (long long)s.last_completed_bar.timestamp,
+                    s.last_completed_bar.close, completed_subs);
+            }
+            return result;
         }
-        return result;
+    } else {
+        feed_merge_into_current(s, input_bar);
     }
 
-    // Same calendar period: merge. TradingView-style: the aggregated period is
+    // After a reset or same-period merge, the aggregated period is
     // complete once we have processed a bar such that the *next* bar of input_tf
     // duration would cross the calendar boundary (e.g. last 1m of the session
     // completes the daily bar). This matches request.security HTF behavior used
@@ -1579,7 +1594,6 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
     // finished daily bucket a full session after TV does. When the run declares
     // a same-day session window, complete eagerly on the bar whose close
     // reaches the session end: that is TV's own bucket-final bar.
-    feed_merge_into_current(s, input_bar);
     // A bucket closes once. The rules below ask whether the period is over at
     // this bar, and a period one of them has already closed stays closed: a
     // later bar of the same period merges into it without completing it
@@ -1596,7 +1610,12 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
         return result;
     }
     bool complete = false;
-    if (native_periods && next_input_ms > input_bar.timestamp) {
+    if (interval) {
+        // A calendar-only input supplies its own natural close. It completes
+        // the requested period only if that close reaches the requested
+        // interval's end of trading, including on a bucket's first input.
+        complete = input_close_ms >= interval->last_traded_close_ms;
+    } else if (native_periods && next_input_ms > input_bar.timestamp) {
         // TradingView's own period partition is installed and the next input
         // bar is known: the bucket completes on the last input bar before
         // the next native stamp -- and only there. The nominal rules below
@@ -1693,11 +1712,13 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
         // (session_period_last_traded_close_ms); without it (0: the input
         // bar is the chart bar, whose own end the nominal rules above
         // already tested) the bucket waits, bit-identical to before.
-        if (crosses_boundary(input_bar.timestamp, next_input_ms,
-                             cal_period, atz, asess)) {
+        if (interval ? !in_interval(next_input_ms)
+                     : crosses_boundary(input_bar.timestamp, next_input_ms,
+                                        cal_period, atz, asess)) {
             complete = early_close_completes
-                || calling_close_ms >= session_period_last_traded_close_ms(
-                       input_bar.timestamp, atz, asess, cal_period);
+                || calling_close_ms >= (interval ? interval->last_traded_close_ms
+                    : session_period_last_traded_close_ms(
+                          input_bar.timestamp, atz, asess, cal_period));
         }
     }
     if (!complete && native_periods && cal_period == CalendarPeriod::DAY
@@ -1727,7 +1748,8 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
     // not the period's last; its own period key decides, the same key the
     // boundary branch above splits on.
     if (complete && next_input_ms > input_bar.timestamp) {
-        const bool next_in_later_period = s.agg != nullptr
+        const bool next_in_later_period = interval ? !in_interval(next_input_ms)
+            : s.agg != nullptr
             ? s.agg->period_changes(input_bar.timestamp, next_input_ms)
             : crosses_boundary(input_bar.timestamp, next_input_ms, cal_period,
                                atz, asess);
@@ -1790,6 +1812,37 @@ AggregatedBar TimeframeAggregator::feed(const Bar& input_bar,
     result.is_complete = true;
     result.sub_bar_count = 1;
     return result;
+}
+namespace native_calendar { inline namespace native_calendar_v2 { const SessionCalendar* kept_calendar(std::string_view, std::string_view); } }
+AggregatedBar TimeframeAggregator::feed(const Bar& input_bar, int64_t next_input_ms,
+                                        int64_t calling_close_ms, const std::string& input_tf,
+                                        const std::string& target_tf) {
+    if (mode_ != Mode::CALENDAR || has_native_periods()) {
+        return feed(input_bar, next_input_ms, calling_close_ms);
+    }
+    const auto input = native_calendar::parse_timeframe(input_tf);
+    const auto target = native_calendar::parse_timeframe(target_tf);
+    // One period from fixed-duration bars keeps the existing path and its last-traded-bar close.
+    if (!input || !target || !target->is_calendar()
+        || (input_seconds_ > 0 && target->count() == 1)) {
+        return feed(input_bar, next_input_ms, calling_close_ms);
+    }
+    const auto* calendar = native_calendar::kept_calendar(anchor_session_, anchor_tz_);
+    if (!calendar) return feed(input_bar, next_input_ms, calling_close_ms);
+    const int64_t instant = session_covered_instant_ms(
+        input_bar.timestamp, anchor_tz_, anchor_session_);
+    const auto input_interval = native_calendar::interval_containing(*calendar, *input, instant);
+    const auto target_interval = native_calendar::interval_containing(
+        *calendar, *target, *input, instant);
+    if (!input_interval || !target_interval) {
+        return feed(input_bar, next_input_ms, calling_close_ms);
+    }
+    FeedState s{current_bar_, observed_first_ms_, sub_bar_count_, current_emitted_complete_,
+                last_completed_bar_, has_completed_,
+                &anchor_tz_, &anchor_session_, this, &native_late_opens_};
+    return feed_calendar_mode(input_bar, s, cal_period_, input_seconds_,
+                              next_input_ms, calling_close_ms, &*target_interval,
+                              input_interval->last_traded_close_ms);
 }
 
 Bar TimeframeAggregator::current() const {

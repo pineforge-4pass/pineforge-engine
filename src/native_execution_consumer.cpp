@@ -1499,7 +1499,7 @@ const char* NativeExecutionConsumer::run_warnings_of(const BacktestEngine& engin
     if (consumer == nullptr || !consumer->rows_current_) return "[]";
     if (consumer->run_warnings_unavailable_)
         return "[{\"args\":{},\"code\":\"run_warnings_unavailable\"}]";
-    return consumer->run_warnings_json_.c_str();
+    return consumer->run_warnings_text().c_str();
 }
 
 const char* native_run_warnings(const BacktestEngine* engine) noexcept {
@@ -1967,6 +1967,7 @@ bool NativeExecutionConsumer::prepare_public_begin(
     interval_cache_.clear();
     day_labels_.clear();
     script_period_ = {};
+    batch_script_tail_ = false;
     begin_bars_ = args.bars;
     begin_n_ = args.n;
     begin_is_stream_ = run_is_stream_ = args.is_stream;
@@ -2260,6 +2261,10 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
         f.i(script_period_.first_ms);
         f.i(script_period_.last_ms);
         f.u(script_period_.digest);
+    }
+    if (batch_script_tail_) {
+        f.s("batch-script-tail/v1");
+        f.b(batch_script_tail_);
     }
     // An explicit creation policy changes future callbacks. The unlimited
     // default adds no bytes to the historical continuation fold.
@@ -2645,6 +2650,17 @@ void NativeExecutionConsumer::cache_running_policy() noexcept {
     running_tolerant_labels_ = legacy_tolerant_slot_labels();
     running_raw_labels_ = uses_raw_label_partition();
     running_spec_ = &running->spec;
+}
+
+std::optional<native_calendar::NativeInterval>
+NativeExecutionConsumer::script_calendar_interval(std::int64_t stamp) const {
+    if (!spec_ptr() || has_undetected_timeframe() || !script_tf_.valid()
+        || !script_tf_.is_calendar())
+        return std::nullopt;
+    if (uses_raw_label_partition() && !script_period_.source)
+        return native_calendar::interval_containing(
+            calendar_, script_tf_, input_tf_, stamp, calendar_memo_);
+    return script_interval_at(stamp);
 }
 
 // A lookup the slot missed: the prior's answer when it is for this instant,
@@ -3193,7 +3209,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     for (auto& run : run_command_scratch_) run.reset();
     dependency_scratch_stats_ = {};
     run_cache_diagnostics_.begin_run();
-    run_warning_records_.clear();
+    run_warning_records_.clear(); run_warnings_live_.clear();
     run_warnings_json_ = "[]";
     run_warnings_unavailable_ = false;
     engine.reset_run_state();
@@ -8612,11 +8628,12 @@ void NativeExecutionConsumer::invoke_applied_callback(
         }
         // v19: the rows this execution booked are final now that its host has
         // been notified of it (closed_rows_digest). Debug builds fold them at
-        // once, so a later amendment of one is caught at the run's end.
+        // once, so a later amendment of one is caught at the run's end. There
+        // is no digest reader here: leave the pending suffix to its callbacks.
         closed_rows_final_ = std::max<std::size_t>(
             closed_rows_final_, applied.first_trade_index + applied.closed_trade_count);
 #ifndef NDEBUG
-        (void)closed_rows_digest(engine.trades_);
+        advance_closed_rows_prefix(engine.trades_);
 #endif
         finish_callback(engine, notification.ordinal);
     } catch (const std::bad_alloc& e) {
@@ -10480,6 +10497,7 @@ bool NativeExecutionConsumer::feed_auxiliary_slice(
         std::int64_t input_period_end_ms, Completed&& completed) {
     auto& state =
         engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
+    const std::string& feed_tf = spec_ptr()->auxiliary_feed->tf;
     const std::size_t total = auxiliary_bar_count();
     while (subscription.auxiliary_cursor < total) {
         const Bar feed_bar = auxiliary_bar(subscription.auxiliary_cursor);
@@ -10492,7 +10510,7 @@ bool NativeExecutionConsumer::feed_auxiliary_slice(
         engine.security_next_input_ms_ =
             at + 1 < total ? auxiliary_bar(at + 1).timestamp : 0;
         const std::int64_t before = state.eval_complete_count;
-        engine.feed_security_eval_state(state, feed_bar);
+        engine.feed_security_eval_state(state, feed_bar, feed_tf);
         engine.security_next_input_ms_ = 0;
         if (state.eval_complete_count <= before) continue;
         const bool boundary = state.aggregator.is_active()
@@ -10856,11 +10874,42 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
     const auto* running = std::get_if<NativeRunning>(&state_);
     const bool tolerant_realtime = legacy_tolerant_slot_labels() && running
         && running->phase == NativeRunPhase::Realtime;
-    if (tolerant_realtime && last_accepted_input_) {
-        // FeedTolerant preserves arbitrary provider labels, but the
-        // realtime confirmed-bar API still advances on the caller's raw label
-        // grid (ab9714be pine_stream.cpp:167-205).  Validate that boundary
-        // before any driver, digest, aggregation, or callback mutation.
+    std::optional<std::int64_t> calendar_successor;
+    if (tolerant_realtime && last_accepted_input_
+        && (input_tf_.unit() == native_calendar::TimeframeUnit::Day
+            || input_tf_.unit() == native_calendar::TimeframeUnit::Week)) {
+        // A calendar-labelled predecessor advances by its declared unit and
+        // count, including closed days and UTC-offset changes. Raw partitions
+        // do not retain that successor, so resolve it from the accepted label.
+        const auto previous = native_calendar::interval_containing(
+            calendar_, input_tf_, last_accepted_input_->open_ms, calendar_memo_);
+        if (previous
+            && native_confirmed_bar_label_admitted(*previous, last_accepted_input_->open_ms)
+            && previous->last_traded_close_ms > previous->eligible_open_ms) {
+            calendar_successor = previous->next_input_open_ms;
+            std::optional<native_calendar::NativeInterval> candidate;
+            if (*calendar_successor > last_accepted_input_->open_ms
+                && bar.timestamp == *calendar_successor) {
+                candidate = native_calendar::interval_containing(
+                    calendar_, input_tf_, bar.timestamp, calendar_memo_);
+            }
+            if (!candidate
+                || !native_confirmed_bar_label_admitted(*candidate, bar.timestamp)
+                || candidate->open_ms <= previous->open_ms
+                || candidate->last_traded_close_ms <= candidate->eligible_open_ms) {
+                processing_input_ = false;
+                present_refusal(engine,
+                    "native confirmed bar timestamp is out of order or off the input grid",
+                    RunFailureCode::stream_input_rejected);
+                return false;
+            }
+        }
+    }
+    if (tolerant_realtime && last_accepted_input_ && !calendar_successor) {
+        // Other FeedTolerant provider labels keep the caller's raw grid
+        // (ab9714be pine_stream.cpp:167-205). Validate before any driver,
+        // digest, aggregation, or callback mutation; a calendar successor
+        // never falls back to this grid.
         std::int64_t unit_ms = 0;
         switch (input_tf_.unit()) {
         case native_calendar::TimeframeUnit::Second: unit_ms = 1000; break;
@@ -10938,7 +10987,8 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
             return false;
         }
         if (canonical_labels && realtime_labels) {
-            int64_t expected_label = last_accepted_input_->next_input_open_ms;
+            int64_t expected_label = calendar_successor.value_or(
+                last_accepted_input_->next_input_open_ms);
             if (expected_label <= last_accepted_input_->open_ms) {
                 int64_t unit_ms = 0;
                 switch (input_tf_.unit()) {
@@ -11210,9 +11260,15 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
         // stream_begin uses this pump for Warmup too. Its pending bucket must
         // carry into Realtime; only a complete batch ends its input here.
         const auto* running = std::get_if<NativeRunning>(&state_);
+        const bool session_closed = final_script_session_closed();
         if (running && running->phase == NativeRunPhase::Batch
-            && final_script_session_closed()) {
-            seal_script(engine, NativeCompletionKind::Confirmed);
+            && (session_closed
+                || (batch_script_tail_ && script_.has_data && !script_.sealed))) {
+            // A host-requested input horizon does not confirm the period's
+            // calendar close. Use the same available-input seal as a later
+            // interval, without advancing any requested-series aggregator.
+            seal_script(engine, session_closed ? NativeCompletionKind::Confirmed
+                                               : NativeCompletionKind::LazyComplete);
             if (failed()) return;
             script_ = ScriptBucket{};
         }
@@ -12693,14 +12749,30 @@ void NativeExecutionConsumer::note_committed_events(
 // rows past the mark, whose notification is still pending, into its answer
 // only.
 namespace {
+#ifndef NDEBUG
+thread_local std::uint64_t closed_row_fold_work = 0;
+#endif
 void fold_closed_row(BrokerStateHashSink& f, const Trade& row) noexcept {
+#ifndef NDEBUG
+    ++closed_row_fold_work;
+#endif
     f.i(row.entry_time); f.i(row.exit_time);
     f.d(row.entry_price); f.d(row.exit_price);
     f.d(row.qty); f.d(row.pnl);
 }
 }  // namespace
 
-uint64_t NativeExecutionConsumer::closed_rows_digest(
+#ifndef NDEBUG
+std::uint64_t NativeExecutionConsumer::debug_closed_row_fold_work() noexcept {
+    return closed_row_fold_work;
+}
+
+void NativeExecutionConsumer::reset_debug_closed_row_fold_work() noexcept {
+    closed_row_fold_work = 0;
+}
+#endif
+
+void NativeExecutionConsumer::advance_closed_rows_prefix(
         const TradeLedger& rows) const {
     if (rows.base() != closed_trade_prefix_.base
         || closed_rows_digested_ < rows.base()
@@ -12719,7 +12791,14 @@ uint64_t NativeExecutionConsumer::closed_rows_digest(
     }
     closed_rows_digest_ = f.h;
     closed_rows_digested_ = final_rows;
-    for (std::size_t index = final_rows; index < rows.size(); ++index) {
+}
+
+uint64_t NativeExecutionConsumer::closed_rows_digest(
+        const TradeLedger& rows) const {
+    advance_closed_rows_prefix(rows);
+    BrokerStateHashSink f;
+    f.h = closed_rows_digest_;
+    for (std::size_t index = closed_rows_digested_; index < rows.size(); ++index) {
         fold_closed_row(f, rows[index]);
     }
     return f.h;
@@ -14576,6 +14655,52 @@ void NativeExecutionConsumer::fill_streamed_report(
     *out = local;
 }
 
+bool NativeExecutionConsumer::include_batch_script_tail(std::int64_t final_input_ms) {
+    batch_script_tail_ = false;
+    const auto* running = std::get_if<NativeRunning>(&state_);
+    if (!running || running->phase != NativeRunPhase::Batch || run_is_stream_
+        || selected_epoch_.admitted_selected) return false;
+    const auto input = input_interval_at(final_input_ms);
+    if (!input) return false;
+    const auto script = script_interval_at(input->open_ms);
+    if (!script) return false;
+    const bool reaches_end = input->next_period_open_ms >= script->next_period_open_ms
+        || (script->last_traded_close_ms > script->eligible_open_ms
+            && input->last_traded_close_ms >= script->last_traded_close_ms);
+    batch_script_tail_ = !reaches_end;
+    return batch_script_tail_;
+}
+
+std::optional<std::size_t> NativeExecutionConsumer::batch_script_population(
+        const Bar* bars, std::size_t n) const {
+    const auto* running = std::get_if<NativeRunning>(&state_);
+    if (!running || running->phase != NativeRunPhase::Batch || run_is_stream_
+        || selected_epoch_.admitted_selected || script_period_.source
+        || !script_tf_.is_calendar() || (n != 0 && !bars)) return std::nullopt;
+    std::size_t count = 0;
+    std::optional<native_calendar::NativeInterval> input;
+    std::optional<native_calendar::NativeInterval> script;
+    for (std::size_t i = 0; i < n; ++i) {
+        input = input_interval_at(bars[i].timestamp);
+        if (!input) return std::nullopt;
+        const auto next = script_interval_at(input->open_ms);
+        if (!next) return std::nullopt;
+        // A later interval seals the preceding aggregate even across a
+        // missing input slot. Semantic aliases share the same native bounds.
+        if (!script || script->open_ms != next->open_ms) ++count;
+        script = next;
+    }
+    if (script && !batch_script_tail_) {
+        // A confirmed calendar input has its actual month/session close;
+        // no fixed-seconds projection or request cursor can supply it.
+        const bool reaches_end = input->next_period_open_ms >= script->next_period_open_ms
+            || (script->last_traded_close_ms > script->eligible_open_ms
+                && input->last_traded_close_ms >= script->last_traded_close_ms);
+        if (!reaches_end) --count;
+    }
+    return count;
+}
+
 void NativeExecutionConsumer::set_script_period_source(
         std::shared_ptr<TimeframeAggregator::PeriodSource> source,
         const Bar* bars, std::size_t n) {
@@ -15149,6 +15274,28 @@ bool NativeExecutionConsumer::read_indexed_cohort_target(
         return a.queried_opening == b.queried_opening;
     }), out.end());
     return true;
+}
+
+// A warning first raised while the run is executing. finish_run_warnings() has
+// rendered the pre-run array into run_warnings_json_ by then and a caller may
+// hold that text, so it is put back exactly as it was: the new array is
+// rendered into its own element of run_warnings_live_, which never moves one.
+void NativeExecutionConsumer::record_live_run_warning(
+        int site_id, std::string code, std::string args_json) {
+    const bool added = run_warning_records_.try_emplace(
+        std::make_pair(site_id, std::move(code)), std::move(args_json)).second;
+    if (!added) return;
+    std::string& rendered = run_warnings_live_.emplace_back();
+    // Lend finish_run_warnings() the new element as the text it renders into.
+    rendered.swap(run_warnings_json_);
+    try {
+        finish_run_warnings();
+    } catch (...) {
+        rendered.swap(run_warnings_json_);
+        run_warnings_live_.pop_back();
+        throw;
+    }
+    rendered.swap(run_warnings_json_);
 }
 
 }  // namespace pineforge::engine_script_run_v20

@@ -282,6 +282,9 @@ private:
         bool calling_bar_complete = false;
         bool all_security_states = false;
         bool active = false;
+        std::uint64_t input_caller = 0;
+        std::uint64_t release_after_body = 0;
+        std::uint64_t chart_caller = 0;
     };
 
     // Derived lookup cursor over retained_.bars (reset-and-rescan in

@@ -77,14 +77,20 @@ def run_case(args, case):
     warmup_start = datetime.fromtimestamp(rows(warmup)[0]["ts_open"] / 1000, zone)
     daylight_calendar = any((warmup_start + timedelta(days=offset)).dst()
                             for offset in range(1099))
-    if timeframe.endswith(("D", "W")) and daylight_calendar:
-        for mode in ("bars", "ticks"):
+    daylight_chart = timeframe.endswith(("D", "W")) and daylight_calendar
+    count_one = daylight_chart and int(timeframe[:-1] or "1") == 1
+    # expectation corrected: count-1 confirmed D/W refusal -> normal proof, because
+    # calendar successors follow local sessions (New York: 71/73 h weekday weekends,
+    # 167/169 h weeks).
+    if daylight_chart:
+        for mode in (("ticks",) if count_one else ("bars", "ticks")):
             refused = target / f"refused-{mode}.sqlite"
             result = subprocess.run(list(map(str, [args.runner, "run", "--strategy", library,
                 "--warmup", warmup, "--ledger", refused, "--mode", mode] + config_args(config))),
                 text=True, capture_output=True)
             assert result.returncode == 1 and "daily/weekly chart delivery on a daylight-saving calendar is not supported yet" in result.stderr
             assert not refused.exists() and not Path(str(refused) + ".lock").exists()
+    if daylight_chart and not count_one:
         verdict = dict(case=case.name, bars="REFUSED D/W daylight-saving calendar", ticks="REFUSED", timezone=config["timezone"])
         (target / "verdict.json").write_text(json.dumps(verdict, indent=2))
         print(json.dumps(verdict), flush=True)
@@ -147,7 +153,9 @@ def run_case(args, case):
         excluded = {"input_bars_processed", "input_tf_seconds", "needs_aggregation", "script_tf_ratio"}
         verdict["before_trading_drift"] = first_drift({key: value for key, value in batch.items() if key not in excluded},
                                                      {key: value for key, value in before_report.items() if key not in excluded})
-    if not args.bars_only:
+    if daylight_chart:
+        verdict["ticks"] = "REFUSED"
+    elif not args.bars_only:
         tape = case / "tape.jsonl"
         if not tape.exists():
             with tape.open("wb") as output:

@@ -6,12 +6,12 @@
     {
       "id": "report/buy_hold_return_overflow",
       "sha256": {
-        "probe.pine": "d2a45ca5b0bcb62c985c40dbf76855bc7d31cf079efa87998e6cf2568f7fd789",
+        "probe.pine": "6feaff24aff4db4445050a53a9ac3f54e9ec100068cfaa14807ced65e518286c",
         "bars.csv": "c4b0d57cab8fb1c6d2febdb5a55892eae9166b587aca07e58da0722188e012e9",
         "syminfo.json": "9b0a94d4a3c6a3d7e59aceef79008b56bb0ece06528803883f4d76cbc1e448e3",
         "run.json": "70dc9aee310653010c226e983e009b7a52b2ba8be9fb45b79ff500190ea61e37",
         "expect.json": "43896518e1d2d254a024a87365f1a154e704909ab5087d50009e5bf3585e4ea2",
-        "NOTES.md": "cd3f14bdab8ccc2e1cb1ed35688bfe1f4c4bd8d7fe81e136999fc36089a50bef"
+        "NOTES.md": "a54dd9e8008e8633183a26394f87b94ad42cc0df48929a6b3949d648f1477e12"
       }
     }
   ],
@@ -343,6 +343,8 @@
     {"id": "src/source/pine_strategy_host.cpp:replay_intent/IntentRiskMaxIntradayFilledOrders", "calls": []},
     {"id": "src/source/pine_strategy_host.cpp:replay_intent/IntentRiskMaxPositionSize", "calls": ["admit_pine_risk_max_position_size"]},
     {"id": "src/source/pine_strategy_host.cpp:selected_replay_at_open/2", "calls": ["assert_admitted_pine_replay_risk_config", "replay_intent", "assert_admitted_pine_replay_risk_config"]},
+    {"id": "src/source/pine_strategy_host.cpp:strategy_convert_to_account/3", "calls": []},
+    {"id": "src/source/pine_strategy_host.cpp:strategy_convert_to_symbol/3", "calls": []},
     {"id": "src/source/pine_value_admit_risk.hpp:assert_admitted_pine_replay_risk_config/1", "calls": ["admit_pine_risk_max_drawdown", "admit_pine_risk_max_intraday_loss", "admit_pine_risk_max_position_size"]}
   ],
   "descriptors": [
@@ -394,7 +396,7 @@
     {"id": "admit_strategy_cancel", "file": "src/source/pine_value_admit_doors.hpp", "anchor": "admit_strategy_cancel", "owner": "source", "fields": ["id"], "policy": "Text uses S(invalid_unicode); unmatched valid IDs remain no-op."},
     {"id": "admit_strategy_cancel_all", "file": "src/source/pine_value_admit_doors.hpp", "anchor": "admit_strategy_cancel_all", "owner": "source", "fields": [], "policy": "No value arguments; internal handle corruption is engine_invariant."},
     {"id": "admit_strategy_order", "file": "src/source/pine_value_admit_doors.hpp", "anchor": "admit_strategy_order", "owner": "source", "fields": ["id", "is_long", "qty", "limit_price", "stop_price", "oca_name", "oca_type"], "policy": "Text/levels use S; NaN quantity default and non-finite CANCEL sibling sizing retain existing semantics. There is no public order comment argument despite its reserved vocabulary constant."},
-    {"id": "source_command_doors", "file": "include/pineforge/source/pine_strategy_host.hpp", "anchor": "strategy_entry", "owner": "source", "fields": ["strategy_entry/9", "strategy_close/5", "strategy_close/6", "strategy_close_all/0", "strategy_exit/13", "strategy_exit_cancel_bracket/3", "strategy_cancel/1", "strategy_cancel_all/0", "strategy_order/7"], "policy": "All public broker overloads are enumerated independently of admission helper declarations; a new door requires an explicit owner."},
+    {"id": "source_command_doors", "file": "include/pineforge/source/pine_strategy_host.hpp", "anchor": "strategy_entry", "owner": "source", "fields": ["strategy_entry/9", "strategy_close/5", "strategy_close/6", "strategy_close_all/0", "strategy_exit/13", "strategy_exit_cancel_bracket/3", "strategy_cancel/1", "strategy_cancel_all/0", "strategy_order/7", "strategy_convert_to_account/3", "strategy_convert_to_symbol/3"], "policy": "All public broker overloads are enumerated independently of admission helper declarations; a new door requires an explicit owner. The two account-currency conversions share the strategy_ prefix and are enumerated with them: source-owned queries that place no order and read only the rate the caller supplied."},
     {"id": "risk_setters", "file": "include/pineforge/source/pine_strategy_host.hpp", "anchor": "set_pine_risk_direction", "owner": "source", "fields": ["set_pine_risk_direction", "set_pine_risk_max_cons_loss_days", "set_pine_risk_max_drawdown", "set_pine_risk_max_intraday_filled_orders", "set_pine_risk_max_intraday_loss", "set_pine_risk_max_position_size"], "policy": "Every setter applies live, including earlier pre-roll; double setters use S for infinity while NaN retains absence. Integer direction/count/cap setters retain typed/default domains. Retained snapshot restore re-admits doubles. Derived thresholds/equity use G(risk)."},
     {"id": "checked_settings.Setting", "file": "include/pineforge/checked_settings.hpp", "anchor": "Setting", "owner": "source-or-caller", "fields": ["name", "type", "default_value", "options", "minimum", "maximum", "step", "integer_bits", "supported", "option_values", "kind"], "policy": "Declaration defaults are source-owned. Supplied int/float/bool/string/enum/source settings are caller-owned and keep setting_rejected/setting_unsupported/run_request_invalid. Source text must still be admitted before an actionable sink; generator descriptor/default rejection is a separate source declaration path."},
     {"id": "bound_input_getters", "file": "include/pineforge/engine.hpp", "anchor": "get_input_double", "owner": "source-or-caller", "fields": ["get_input_bool", "get_input_double", "get_input_int", "get_input_int64", "get_input_source", "get_input_string"], "policy": "Defaults belong to source, supplied bindings to caller. Getter/projection inconsistency is engine_invariant, a report-only schema fault is R(type_schema). input.value is a reserved S literal; no implemented default admission is claimed by its mere declaration."},
@@ -408,6 +410,7 @@
     "codes": [
       {"code": "chart_bars_rejected", "class": "input", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "no", "route": "caller primary feed"},
       {"code": "chart_bars_unreadable", "class": "input", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "no", "route": "caller file/parser"},
+      {"code": "currency_conversion_rate_unavailable", "class": "no_data", "retryable": false, "since": "1.13.0", "appendix": "catalog-extension", "reachability": "direct", "route": "source strategy.convert_to_account, strategy.convert_to_symbol or request.currency_rate evaluated with an account currency other than the symbol's currency and no caller-supplied rate in effect, with a pair the supplied rate does not join, or with a missing or invalid currency code; added catalog row outside Appendix C's older enumeration"},
       {"code": "diagnostic_budget_exceeded", "class": "resource", "retryable": false, "since": "1.9.0", "appendix": "catalog-extension", "reachability": "no", "route": "host supervisor diagnostic byte-budget admission or overflow; registration only, no current harness emitter or selected-window producer route"},
       {"code": "engine_command_value_invalid", "class": "engine_fault", "retryable": false, "since": "1.5.0", "appendix": "C-window", "reachability": "indirect", "route": "valid strategy reaches derived sizing/margin/settlement state; the invalid result is engine-owned"},
       {"code": "engine_invariant", "class": "engine_fault", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "no", "route": "engine defect/fault injection"},

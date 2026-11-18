@@ -754,6 +754,7 @@ void source::PineStrategyHost::on_native_run_begin() {
     foreign_security_sites_.clear();
     foreign_security_series_.clear();
     foreign_input_index_ = -1;
+    reset_request_delivery_state();
     try {
         install_symbol_calendar_metadata();
         scheduler_.run_begin(*this);
@@ -892,6 +893,10 @@ void source::PineStrategyHost::on_native_input(
     if (source_prepare_failed_) return;
     if (detail::run_phase(*this) == NativeRunPhase::Realtime)
         stream_warmup_mode_ = false;
+    const std::uint64_t input_caller = request_input_caller(context);
+    const std::uint64_t chart_caller = input_caller != 0
+        ? request_chart_caller_for(context.script_interval.open_ms) : 0;
+    PineRequestCallerScope caller_scope(*this, input_caller, chart_caller);
     foreign_input_index_ = context.input_index;
     scheduler_.input(bar, context, *this);
     // Aggregation can deliver leftover input after the last script callback.
@@ -905,6 +910,10 @@ void source::PineStrategyHost::on_native_tick(
     if (source_prepare_failed_) return;
     if (detail::run_phase(*this) == NativeRunPhase::Realtime)
         stream_warmup_mode_ = false;
+    const std::uint64_t input_caller = request_input_caller(context.decision);
+    const std::uint64_t chart_caller = input_caller != 0
+        ? request_chart_caller_for(context.decision.script_interval.open_ms) : 0;
+    PineRequestCallerScope caller_scope(*this, input_caller, chart_caller);
     scheduler_.tick(tick, context, *this);
     adapter_.on_tick(tick, context);
 }
@@ -944,6 +953,8 @@ void source::PineStrategyHost::on_native_sub_bar(
 void source::PineStrategyHost::on_native_bar(
         const Bar& bar, const NativeDecisionContext& context) {
     if (source_prepare_failed_) return;
+    const std::uint64_t body_caller = request_body_caller(context);
+    PineRequestCallerScope caller_scope(*this, body_caller, body_caller);
     bar_magnifier_enabled_ = scheduler_.bar_magnifier_enabled();
     diag_magnifier_sub_bars_processed_ = bar_magnifier_enabled_
         ? static_cast<std::int64_t>(context.driver_statistics.sub_bars_processed) : 0;
@@ -1179,6 +1190,8 @@ void source::PineStrategyHost::on_native_recalculate(
     // grouped-stop sibling, a replayed ordinal) still spends a kernel
     // recalculation slot; it publishes nothing and books nothing.
     if (!scheduler_.coof_recalculation_due(*cause, context, *this)) return;
+    const std::uint64_t body_caller = request_body_caller(context);
+    PineRequestCallerScope caller_scope(*this, body_caller, body_caller);
     scheduler_.recalculate(*cause, context, *this);
     record_applied_range_end();
 }
@@ -1874,20 +1887,397 @@ void source::PineStrategyHost::scheduler_prepare_script_run(
 }
 
 thread_local const source::PineStrategyHost* source::PineRuntimeSecurityScope::owner_ = nullptr;
+thread_local source::PineStrategyHost* source::PineRuntimeSecurityScope::mutable_owner_ = nullptr;
 thread_local source::PineRuntimeSecurityCursor* source::PineRuntimeSecurityScope::cursor_ = nullptr;
 
 source::PineRuntimeSecurityScope::PineRuntimeSecurityScope(
         const PineStrategyHost& owner, PineRuntimeSecurityCursor& cursor) noexcept
-    : previous_owner_(owner_), previous_cursor_(cursor_) {
-    owner_ = &owner; cursor_ = &cursor;
+    : previous_owner_(owner_), previous_mutable_owner_(mutable_owner_),
+      previous_cursor_(cursor_) {
+    owner_ = &owner;
+    mutable_owner_ = const_cast<PineStrategyHost*>(&owner);
+    cursor_ = &cursor;
 }
 source::PineRuntimeSecurityScope::~PineRuntimeSecurityScope() {
-    owner_ = previous_owner_; cursor_ = previous_cursor_;
+    owner_ = previous_owner_;
+    mutable_owner_ = previous_mutable_owner_;
+    cursor_ = previous_cursor_;
 }
 const source::PineRuntimeSecurityCursor* source::PineRuntimeSecurityScope::current(
         const PineStrategyHost& owner) noexcept {
     return owner_ == &owner ? cursor_ : nullptr;
 }
+source::PineStrategyHost* source::PineRuntimeSecurityScope::current_owner() noexcept {
+    return mutable_owner_;
+}
+
+source::PineRequestCallerScope::PineRequestCallerScope(
+        PineStrategyHost& host, std::uint64_t caller,
+        std::uint64_t chart_caller) noexcept
+    : host_(host), previous_caller_(host.request_active_caller_),
+      previous_chart_caller_(host.request_active_chart_caller_) {
+    host_.set_request_caller_scope(caller, chart_caller);
+}
+
+source::PineRequestCallerScope::~PineRequestCallerScope() {
+    host_.set_request_caller_scope(previous_caller_, previous_chart_caller_);
+}
+
+source::PineRequestDeliveryScope::PineRequestDeliveryScope(
+        PineStrategyHost& host, int sec_id,
+        const PineRequestDelivery& delivery, std::int64_t body_open_ms)
+    : host_(host) {
+    host_.push_request_delivery(sec_id, delivery, body_open_ms);
+}
+
+source::PineRequestDeliveryScope::PineRequestDeliveryScope(
+        PineStrategyHost& host, const PineRuntimeSecurityCursor& cursor,
+        const PineRequestDelivery& delivery, std::int64_t body_open_ms)
+    : host_(host) {
+    host_.push_request_delivery(cursor, delivery, body_open_ms);
+}
+
+source::PineRequestDeliveryScope::~PineRequestDeliveryScope() {
+    host_.pop_request_delivery();
+}
+
+bool source::PineStrategyHost::RequestCallerIds::same_series(
+        const RequestCallerKey& a, const RequestCallerKey& b) noexcept {
+    return a.kind == b.kind && a.first == b.first && a.third == b.third
+        && a.occurrence == b.occurrence && a.text == b.text;
+}
+
+std::uint64_t source::PineStrategyHost::RequestCallerIds::caller_at(
+        const RequestCallerKey& first, const Run& run, std::int64_t second) noexcept {
+    const std::uint64_t offset = static_cast<std::uint64_t>(second)
+        - static_cast<std::uint64_t>(first.second);
+    return run.caller + offset * run.stride;
+}
+
+std::optional<std::uint64_t> source::PineStrategyHost::RequestCallerIds::find(
+        const RequestCallerKey& key) const noexcept {
+    auto next = runs_.upper_bound(key);
+    if (next == runs_.begin()) return std::nullopt;
+    const auto& entry = *std::prev(next);
+    if (!same_series(entry.first, key) || key.second > entry.second.last)
+        return std::nullopt;
+    return caller_at(entry.first, entry.second, key.second);
+}
+
+void source::PineStrategyHost::RequestCallerIds::emplace(
+        const RequestCallerKey& key, std::uint64_t caller) {
+    auto next = runs_.upper_bound(key);
+    if (next != runs_.begin()) {
+        auto& entry = *std::prev(next);
+        const RequestCallerKey& first = entry.first;
+        Run& run = entry.second;
+        if (same_series(first, key)) {
+            if (key.second <= run.last) return;
+            if (run.last != std::numeric_limits<std::int64_t>::max()
+                && key.second == run.last + 1) {
+                const std::uint64_t stride = first.second == run.last
+                    ? caller - run.caller : run.stride;
+                if (caller == caller_at(first, run, run.last) + stride) {
+                    run.last = key.second;
+                    run.stride = stride;
+                    return;
+                }
+            }
+        } else if (first.kind == key.kind && first.first == key.first
+                   && key.second <= run.last) {
+            // A different suffix can sort between two occurrences of this
+            // run. Split before inserting it, so logical traversal still has
+            // exactly the original dictionary's key order.
+            RequestCallerKey right = first;
+            right.second = key.second;
+            bool split = true;
+            if (right < key) {
+                if (right.second == run.last) split = false;
+                else ++right.second;
+            }
+            if (split) {
+                const Run tail{caller_at(first, run, right.second), run.last, run.stride};
+                const std::int64_t left_last = right.second - 1;
+                // Allocate the tail before changing the old run. A failed
+                // insertion must retain every previously assigned identity.
+                runs_.emplace(std::move(right), tail);
+                run.last = left_last;
+            }
+        }
+    }
+    runs_.emplace(key, Run{caller, key.second, 0});
+}
+
+std::uint64_t source::PineStrategyHost::request_caller_id(
+        const RequestCallerKey& key) {
+    const auto found = request_caller_ids_.find(key);
+    if (found) return *found;
+    const std::uint64_t caller = request_next_caller_++;
+    request_caller_ids_.emplace(key, caller);
+    return caller;
+}
+
+std::uint64_t source::PineStrategyHost::request_chart_caller_for(
+        std::int64_t script_open_ms) {
+    if (script_open_ms == std::numeric_limits<std::int64_t>::min()) return 0;
+    auto found = request_chart_callers_.find(script_open_ms);
+    return found == request_chart_callers_.end() ? 0 : found->second.caller;
+}
+
+std::uint64_t source::PineStrategyHost::request_input_caller(
+        const NativeInputContext& context) {
+    if (pine_security_states_.empty() && foreign_security_sites_.empty()
+        && !runtime_contexts().history_enabled()) return 0;
+    auto chart_row = request_chart_callers_.find(context.script_interval.open_ms);
+    if (chart_row == request_chart_callers_.end()) {
+        RequestCallerKey chart_key;
+        chart_key.kind = 2; // chart caller admitted from a real input
+        chart_key.first = context.script_interval.open_ms;
+        chart_key.second = context.input_index;
+        chart_key.third = context.input_interval.open_ms;
+        RequestChartCaller record;
+        record.caller = request_caller_id(chart_key);
+        record.input_interval_index = context.input_index;
+        record.close_ms = context.script_interval.last_traded_close_ms;
+        chart_row = request_chart_callers_.emplace(
+            context.script_interval.open_ms, record).first;
+    } else {
+        chart_row->second.input_interval_index = context.input_index;
+        chart_row->second.close_ms = context.script_interval.last_traded_close_ms;
+    }
+    RequestCallerKey key;
+    key.kind = 1; // accepted native input occurrence
+    key.first = context.input_index;
+    key.second = context.input_interval.open_ms;
+    key.third = context.script_interval.open_ms;
+    return request_caller_id(key);
+}
+
+std::uint64_t source::PineStrategyHost::request_input_caller(
+        const NativeDecisionContext& context) {
+    if (pine_security_states_.empty() && foreign_security_sites_.empty()
+        && !runtime_contexts().history_enabled()) return 0;
+    auto chart_row = request_chart_callers_.find(context.script_interval.open_ms);
+    if (chart_row == request_chart_callers_.end()) {
+        RequestCallerKey chart_key;
+        chart_key.kind = 2;
+        chart_key.first = context.script_interval.open_ms;
+        chart_key.second = context.coordinate.interval_index;
+        chart_key.third = context.coordinate.input_interval_index;
+        RequestChartCaller record;
+        record.caller = request_caller_id(chart_key);
+        record.interval_index = context.coordinate.interval_index;
+        record.input_interval_index = context.coordinate.input_interval_index;
+        record.close_ms = context.script_interval.last_traded_close_ms;
+        chart_row = request_chart_callers_.emplace(
+            context.script_interval.open_ms, record).first;
+    } else {
+        chart_row->second.input_interval_index =
+            context.coordinate.input_interval_index;
+        chart_row->second.close_ms = context.script_interval.last_traded_close_ms;
+    }
+    RequestCallerKey key;
+    key.kind = 1;
+    key.first = context.coordinate.input_interval_index;
+    key.second = context.input_interval.open_ms;
+    key.third = context.script_interval.open_ms;
+    return request_caller_id(key);
+}
+
+std::uint64_t source::PineStrategyHost::request_body_caller(
+        const NativeDecisionContext& context) {
+    if (pine_security_states_.empty() && foreign_security_sites_.empty()
+        && !runtime_contexts().history_enabled()) return 0;
+    auto chart_row = request_chart_callers_.find(context.script_interval.open_ms);
+    if (chart_row == request_chart_callers_.end()) {
+        RequestCallerKey chart_key;
+        chart_key.kind = 2; // quiet/body caller with an actual coordinate
+        chart_key.first = context.script_interval.open_ms;
+        chart_key.second = context.coordinate.interval_index;
+        chart_key.third = context.coordinate.input_interval_index;
+        RequestChartCaller record;
+        record.caller = request_caller_id(chart_key);
+        record.interval_index = context.coordinate.interval_index;
+        record.input_interval_index = context.coordinate.input_interval_index;
+        record.close_ms = context.script_interval.last_traded_close_ms;
+        chart_row = request_chart_callers_.emplace(
+            context.script_interval.open_ms, record).first;
+    } else {
+        chart_row->second.interval_index = context.coordinate.interval_index;
+        chart_row->second.input_interval_index =
+            context.coordinate.input_interval_index;
+        chart_row->second.close_ms = context.script_interval.last_traded_close_ms;
+    }
+    return chart_row->second.caller;
+}
+
+std::uint64_t source::PineStrategyHost::request_foreign_caller(
+        int sec_id, std::int64_t delivered) {
+    RequestCallerKey key;
+    key.kind = 3; // foreign feed occurrence
+    key.first = sec_id;
+    key.second = delivered;
+    return request_caller_id(key);
+}
+
+std::uint64_t source::PineStrategyHost::request_runtime_caller(
+        std::uint64_t instance, std::uint64_t parent_caller) {
+    return request_caller_id(request_runtime_caller_key(instance, parent_caller));
+}
+
+source::PineStrategyHost::RequestCallerKey
+source::PineStrategyHost::request_runtime_caller_key(
+        std::uint64_t instance, std::uint64_t parent_caller) const noexcept {
+    RequestCallerKey key;
+    key.kind = 4; // actual runtime instance in an actual enclosing body
+    key.first = static_cast<std::int64_t>(instance);
+    key.second = static_cast<std::int64_t>(parent_caller);
+    const auto phase = detail::run_phase(*this);
+    key.third = static_cast<std::int64_t>(phase);
+    if (phase == NativeRunPhase::Realtime) {
+        if (const auto* point = detail::callback_point(*this))
+            key.occurrence = point->decision.coordinate.ordinal;
+    }
+    return key;
+}
+
+source::PineStrategyHost::RequestParentBinding
+source::PineStrategyHost::request_runtime_parent(
+        const PineRuntimeSecurityCursor& cursor) const noexcept {
+    // A callback's requested slot is its nested body's identity, even if its
+    // outer chart caller has not changed. Do not freeze this at construction.
+    for (auto it = request_delivery_stack_.rbegin();
+         it != request_delivery_stack_.rend(); ++it) {
+        if (it->runtime_cursor == &cursor) continue;
+        const std::string* timeframe = nullptr;
+        if (it->runtime_cursor) {
+            timeframe = &it->runtime_cursor->timeframe;
+        } else {
+            for (const auto& state : security_eval_states_) {
+                if (state.sec_id == it->sec_id) {
+                    timeframe = state.tf.empty() ? &script_tf_ : &state.tf;
+                    break;
+                }
+            }
+            if (timeframe == nullptr) {
+                const auto foreign = foreign_security_sites_.find(it->sec_id);
+                if (foreign != foreign_security_sites_.end())
+                    timeframe = &foreign->second.tf;
+            }
+        }
+        return {it->body_caller, it->body_open_ms, 0, true,
+                it->delivery.replay || security_history_publication_replay_,
+                timeframe};
+    }
+    const auto current = request_chart_callers_.find(current_bar_.timestamp);
+    if (current != request_chart_callers_.end()
+        && current->second.caller == request_active_chart_caller_
+        && request_active_chart_caller_ != 0) {
+        return {current->second.caller, current->first, current->second.close_ms,
+                false, security_history_publication_replay_, &script_tf_};
+    }
+    for (const auto& entry : request_chart_callers_) {
+        if (entry.second.caller == request_active_chart_caller_
+            && request_active_chart_caller_ != 0) {
+            return {entry.second.caller, entry.first, entry.second.close_ms,
+                    false, security_history_publication_replay_, &script_tf_};
+        }
+    }
+    return {};
+}
+
+bool source::PineStrategyHost::request_cursor_is_current(
+        const PineRuntimeSecurityCursor& cursor) const noexcept {
+    return cursor.request_owner_ == this
+        && cursor.request_run_ == adapter_.run_counter_
+        && cursor.request_instance != 0;
+}
+
+bool source::PineStrategyHost::request_historical_selection_allowed() const noexcept {
+    return detail::run_phase(*this) != NativeRunPhase::Realtime;
+}
+
+bool source::PineStrategyHost::request_runtime_selection_allowed(
+        const PineRuntimeSecurityCursor& cursor,
+        const RequestParentBinding& parent) const noexcept {
+    if (!cursor.request_selection_enabled || parent.caller == 0
+        || parent.timeframe == nullptr || !request_historical_selection_allowed())
+        return false;
+    // These are the source-validated clocks. Keep malformed/undetected clocks
+    // outside selection without changing their existing BASE validation.
+    try {
+        const int requested_seconds = tf_to_seconds(cursor.timeframe);
+        const int calling_seconds = tf_to_seconds(*parent.timeframe);
+        return requested_seconds > 0 && calling_seconds > requested_seconds
+            && calling_seconds % requested_seconds == 0;
+    } catch (const std::invalid_argument&) {
+        return false;
+    } catch (const std::out_of_range&) {
+        return false;
+    }
+}
+
+void source::PineStrategyHost::set_request_caller_scope(
+        std::uint64_t caller, std::uint64_t chart_caller) noexcept {
+    request_active_caller_ = caller;
+    request_active_chart_caller_ = chart_caller;
+}
+
+void source::PineStrategyHost::push_request_delivery(
+        int sec_id, const PineRequestDelivery& delivery, std::int64_t body_open_ms) {
+    RequestDeliveryFrame frame;
+    frame.sec_id = sec_id;
+    frame.delivery = delivery;
+    frame.body_open_ms = body_open_ms;
+    if (delivery.caller_valid && delivery.requested_slot >= 0) {
+        RequestCallerKey key;
+        key.kind = 5; // a static evaluator's real requested body/phase
+        key.first = sec_id;
+        key.second = delivery.requested_slot;
+        key.third = static_cast<std::int64_t>(detail::run_phase(*this));
+        frame.body_caller = request_caller_id(key);
+    }
+    request_delivery_stack_.push_back(frame);
+}
+
+void source::PineStrategyHost::push_request_delivery(
+        const PineRuntimeSecurityCursor& cursor,
+        const PineRequestDelivery& delivery, std::int64_t body_open_ms) {
+    RequestDeliveryFrame frame;
+    frame.runtime_cursor = &cursor;
+    frame.delivery = delivery;
+    frame.body_open_ms = body_open_ms;
+    if (delivery.caller_valid && delivery.requested_slot >= 0) {
+        RequestCallerKey key;
+        key.kind = 6; // a live runtime instance's real requested body/phase
+        key.first = static_cast<std::int64_t>(cursor.request_instance);
+        key.second = delivery.requested_slot;
+        key.third = static_cast<std::int64_t>(detail::run_phase(*this));
+        frame.body_caller = request_caller_id(key);
+    }
+    request_delivery_stack_.push_back(frame);
+}
+
+void source::PineStrategyHost::pop_request_delivery() noexcept {
+    if (!request_delivery_stack_.empty()) request_delivery_stack_.pop_back();
+}
+
+void source::PineStrategyHost::reset_request_delivery_state() noexcept {
+    request_caller_ids_.clear();
+    request_chart_callers_.clear();
+    request_delivery_stack_.clear();
+    request_next_caller_ = 1;
+    request_next_runtime_instance_ = 1;
+    request_active_caller_ = 0;
+    request_active_chart_caller_ = 0;
+    for (auto& entry : pine_security_states_) {
+        PineSecurityEvalState& pine = entry.second;
+        pine.selected_request_available = false;
+        pine.last_request_delivery = {};
+        pine.selected_request_delivery = {};
+    }
+}
+
 std::string source::PineStrategyHost::runtime_security_timeframe(
         const std::string& selected) const {
     if (!selected.empty()) return selected;
@@ -1957,6 +2347,13 @@ source::PineRuntimeSecurityCursor source::PineStrategyHost::make_runtime_securit
     cursor.aggregator = TimeframeAggregator(timeframe, input_tf_,
                                             cursor.timezone, cursor.session);
     cursor.aggregator.set_early_close_completes(runtime_context_early_close_completes());
+    cursor.request_selection_enabled = lookahead && !gaps && !lower_array
+        && !heikinashi && !cursor.no_loaded_bars && !cursor.subdivision;
+    // The generated evaluator invokes feed before opening its callback's TLS
+    // scope. Bind the real owner for the entire cursor/feed/read lifetime.
+    cursor.request_owner_ = const_cast<PineStrategyHost*>(this);
+    cursor.request_run_ = adapter_.run_counter_;
+    cursor.request_instance = request_next_runtime_instance_++;
     return cursor;
 }
 
@@ -1971,11 +2368,81 @@ std::uint64_t source::PineStrategyHost::runtime_security_frontier() const {
 void source::PineRuntimeSecurityCursor::feed(
         const RuntimeContextEvent& event, const Delivery& deliver,
         const std::function<void()>& begin_chart) {
+    PineStrategyHost* const owner = request_owner_
+        && request_owner_->request_cursor_is_current(*this) ? request_owner_ : nullptr;
+    // The enclosing body may change while the cursor survives. In particular,
+    // nested requested slots and COOF re-entry are not construction metadata.
+    const auto parent = owner ? owner->request_runtime_parent(*this)
+                              : PineStrategyHost::RequestParentBinding{};
+    parent_caller = parent.caller;
+    caller = owner && parent.caller != 0
+        ? owner->request_runtime_caller(request_instance, parent.caller) : 0;
+    chart_caller = caller;
+    const auto begin = [&] {
+        if (owner == nullptr) {
+            begin_chart();
+            return;
+        }
+        PineRequestCallerScope caller_scope(*owner, caller, chart_caller);
+        begin_chart();
+    };
+    const auto deliver_one = [&](const Bar& bar, bool complete) {
+        if (owner == nullptr) {
+            deliver(bar, complete);
+            return;
+        }
+        PineRequestCallerScope caller_scope(*owner, caller, chart_caller);
+        PineRequestDelivery facts;
+        facts.caller_valid = parent.caller != 0;
+        facts.actual_complete = complete;
+        facts.caller = caller;
+        facts.requested_slot = requested_index;
+        facts.replay = parent.replay;
+        if (facts.replay) {
+            facts.actual_complete = false;
+            facts.replay_caller = facts.caller;
+            facts.replay_slot = facts.requested_slot;
+        }
+        // Timestamps only check that this real completed slot belongs to the
+        // active body; identity comes from instance + source parent/body/phase.
+        // Catch-up from older bodies and a previous bucket's boundary tail
+        // still execute CURRENT/TA/history, but cannot replace SELECTED.
+        const bool belongs_to_parent = facts.caller_valid
+            && (parent.requested_body
+                ? parent.timeframe != nullptr
+                    && !tf_change(parent.open_ms, bar.timestamp, *parent.timeframe,
+                                  timezone, session)
+                : bar.timestamp >= parent.open_ms && bar.timestamp < parent.close_ms);
+        facts.eligible = owner->request_runtime_selection_allowed(*this, parent)
+            && facts.caller_valid
+            && facts.actual_complete && facts.requested_slot >= 0 && !facts.replay
+            && belongs_to_parent
+            && (!selected_request_available
+                || selected_request_delivery.caller != facts.caller);
+        // The runtime cursor has no BASE publication producer.
+        const bool previous_selected = selected_request_available;
+        const PineRequestDelivery previous_delivery = selected_request_delivery;
+        if (facts.eligible) {
+            selected_request_available = true;
+            selected_request_delivery = facts;
+        }
+        try {
+            PineRequestDeliveryScope delivery_scope(*owner, *this, facts, bar.timestamp);
+            // Preserve BASE's actual completion forwarding independently of
+            // the selection descriptor (including a replay's ineligibility).
+            deliver(bar, complete);
+        } catch (...) {
+            selected_request_available = previous_selected;
+            selected_request_delivery = previous_delivery;
+            throw;
+        }
+        last_request_delivery = facts;
+    };
     if (prior_input == std::numeric_limits<std::int64_t>::min()
         || tf_change(prior_input, event.bar.timestamp, chart_timeframe, timezone, session)) {
         chart_open = event.bar.timestamp;
         sub_bar_index = 0;
-        begin_chart();
+        begin();
     }
     prior_input = event.bar.timestamp;
     if (no_loaded_bars) return;
@@ -1984,7 +2451,7 @@ void source::PineRuntimeSecurityCursor::feed(
             slot_new = true;
             ++requested_index;
             ta::BarContextScope context(requested_index, 0);
-            deliver(sub_bar, true);
+            deliver_one(sub_bar, true);
             ++sub_bar_index;
         }
         return;
@@ -2005,7 +2472,7 @@ void source::PineRuntimeSecurityCursor::feed(
         if (aggregate.is_complete) { ha_open = open; ha_close = close; ha_seeded = true; }
     }
     ta::BarContextScope context(requested_index, 0);
-    deliver(aggregate.bar, aggregate.is_complete);
+    deliver_one(aggregate.bar, aggregate.is_complete);
     if (lower_array) ++sub_bar_index;
 }
 
@@ -2117,6 +2584,7 @@ void source::PineStrategyHost::scheduler_prepare_security_sequence(
         return;
     }
     init_security_eval_states_for_run(security_input_tf_);
+    reset_request_delivery_state();
     prepare_native_security_feeds(
         bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()));
     // An N-day request's bars are TradingView's (make_multi_day_period_source),
@@ -2457,7 +2925,10 @@ void source::PineStrategyHost::present_report(ReportC* out) const {
 
 void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_bar) {
     range_end_trades_.clear();
+    // On the chart timeframe a probe's suppressed tail is the array's last bar and keeps the rows
+    // ab9714be wrote (pine_scheduler.cpp:796); an aggregated run keeps its pending bars: no rows.
     if (stream_warmup_mode_ || realtime_tail_
+        || (probe_suppress_tail_logic_ && native_aggregates_input_bars())
         || position_side_ == PositionSide::FLAT || !last_equity_point()
         || !std::isfinite(terminal_bar.close)) return;
     const double fill_price = bar_fill_price(terminal_bar.close);
@@ -3526,8 +3997,17 @@ int64_t source::PineStrategyHost::chart_time_close() const {
 }
 
 int64_t source::PineStrategyHost::chart_bar_close_ms(int64_t stamp) const {
-    if (const auto interval = detail::run_consumer(*this).script_period_interval(stamp))
+    const auto& consumer = detail::run_consumer(*this);
+    if (const auto interval = consumer.script_period_interval(stamp))
         return interval->last_traded_close_ms;
+    const auto timeframe = native_calendar::parse_timeframe(script_tf_);
+    if (timeframe && timeframe->is_calendar() && timeframe->count() > 1) {
+        // The enum-only compatibility projection below describes one period.
+        // Use the run's full parsed interval for a calendar multiple, even
+        // when the supplied chart aggregate is still developing.
+        const auto interval = consumer.script_calendar_interval(stamp);
+        return interval ? interval->last_traded_close_ms : na<int64_t>();
+    }
     if (calendar_period_for(script_tf_) != CalendarPeriod::NONE) {
         return pine_time_close(stamp, script_tf_, "", "", script_tf_,
                                syminfo_.timezone, syminfo_.session);
@@ -3834,6 +4314,194 @@ void source::PineStrategyHost::stage_symbol_feed_views() {
     }
     NativeExecutionConsumer::bound(*this).stage_instrument_feed_views(
         slots.empty() ? nullptr : slots.data(), slots.size());
+}
+
+}  // namespace pineforge
+
+// ---- the script's account-currency conversions ------------------------------
+// strategy.convert_to_account, strategy.convert_to_symbol and
+// request.currency_rate (pine_strategy_host.hpp states the rule). The rate is a
+// host input: these read what the host supplied, and where it supplied nothing
+// they refuse. Nothing here guesses a rate, and the ledger's 1.0 fallback is
+// never taken for one.
+
+namespace pineforge {
+
+namespace {
+
+// Why a conversion has no answer: the failure's closed `reason` value and the
+// clause that ends its English text.
+struct CurrencyRefusal {
+    const char* reason;
+    const char* detail;
+};
+constexpr CurrencyRefusal kCurrencyInvalid{
+    "invalid_currency", "a currency is missing or invalid"};
+constexpr CurrencyRefusal kCurrencyRateUnavailable{
+    "rate_unavailable", "the host supplied no rate in effect at that time"};
+constexpr CurrencyRefusal kCurrencyPairUnsupported{
+    "unsupported_pair",
+    "the host-supplied rate converts only between the symbol currency and the account currency"};
+
+// request.currency_rate carries no request site of its own: the generated call
+// passes none. Its warnings share this one site identity, below every
+// request.security site (those count from 0), so a run records the first
+// refused request and a repeat adds nothing.
+constexpr int kCurrencyRateWarningSite = -1;
+
+// A currency code two sides can be compared by: letters and digits, as
+// TradingView spells its codes. An empty code, any other text and Pine's
+// currency.NONE name no currency, so they never prove two sides equal.
+bool currency_code_valid(const std::string& code) noexcept {
+    if (code.empty() || code.size() > 32 || code == "NONE") return false;
+    for (const char c : code) {
+        const bool letter = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+        if (!letter && !(c >= '0' && c <= '9')) return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+struct source::PineStrategyHost::CurrencyConversion {
+    // The request, as a refusal names it: the failure's closed `function`
+    // value, the Pine spelling for the English text, and the evaluation.
+    const char* function;
+    const char* spelling;
+    const std::string& from;
+    const std::string& to;
+    const std::string& account_currency;
+    const std::string& symbol_currency;
+    std::int64_t at_ms;
+    // The answer. `reason` is null when there is one: the same currency on
+    // both sides (`identity`), or the supplied rate r(t), in account-currency
+    // units per one unit of the symbol's currency; `to_account` says whether
+    // the request runs symbol -> account, the direction r(t) is quoted in.
+    // Otherwise `reason` and `detail` are the refusal's.
+    const char* reason;
+    const char* detail;
+    bool identity;
+    bool to_account;
+    double account_per_symbol;
+
+    // The coded failure of the refusal: its code and canonical arguments.
+    RunFailureValue failure() const {
+        return make_run_failure(
+            RunFailureCode::currency_conversion_rate_unavailable,
+            {{"function", function}, {"reason", reason}, {"from", from}, {"to", to},
+             {"account_currency", account_currency}, {"symbol_currency", symbol_currency},
+             {"time_ms", at_ms}});
+    }
+
+    // Stops the run: the transport every coded source failure takes.
+    [[noreturn]] void refuse() const {
+        throw coded<std::runtime_error>(
+            failure(),
+            std::string(spelling) + ": no account-currency conversion rate for \"" + from
+                + "\" to \"" + to + "\" at time " + std::to_string(at_ms)
+                + " (symbol currency \"" + symbol_currency + "\", account currency \""
+                + account_currency + "\"): " + detail);
+    }
+
+    // The same code and arguments as a run warning, for the request that was
+    // told to answer na instead of stopping. A warning that cannot be
+    // recorded marks the run's warnings unavailable: it is never dropped.
+    void warn(BacktestEngine& host) const noexcept {
+        try {
+            const RunFailureValue value = failure();
+            if (value.code == RunFailureCode::currency_conversion_rate_unavailable
+                && value.args) {
+                NativeExecutionConsumer::bound(host).record_live_run_warning(
+                    kCurrencyRateWarningSite, run_failure_code_name(value.code),
+                    std::string(*value.args));
+                return;
+            }
+        } catch (...) {
+            NativeExecutionConsumer::mark_run_warnings_unavailable(host);
+            return;
+        }
+        NativeExecutionConsumer::mark_run_warnings_unavailable(host);
+    }
+};
+
+source::PineStrategyHost::CurrencyConversion source::PineStrategyHost::currency_conversion(
+        const char* function, const char* spelling, const std::string& from,
+        const std::string& to, const std::string& account_currency,
+        std::int64_t at_ms) const {
+    // Q is the currency of the symbol being evaluated. While a foreign request
+    // site's payload runs, syminfo_ is that site's symbol (run_foreign_site_bar
+    // swaps it in) and the chart's own facts wait in the site. The host's rate
+    // is quoted against the chart symbol's currency, whichever symbol is being
+    // evaluated.
+    const std::string& symbol_currency = syminfo_.currency;
+    const std::string& chart_currency =
+        foreign_context_ != nullptr ? foreign_context_->syminfo.currency : symbol_currency;
+    CurrencyConversion conversion{function, spelling, from, to, account_currency,
+                                  symbol_currency, at_ms, nullptr, nullptr, false, false,
+                                  std::numeric_limits<double>::quiet_NaN()};
+    const auto no_answer = [&conversion](const CurrencyRefusal& why) {
+        conversion.reason = why.reason;
+        conversion.detail = why.detail;
+        return conversion;
+    };
+    if (!currency_code_valid(from) || !currency_code_valid(to)
+        || !currency_code_valid(account_currency) || !currency_code_valid(symbol_currency)) {
+        return no_answer(kCurrencyInvalid);
+    }
+    // The two directions the host's rate answers: symbol -> account and back.
+    conversion.to_account = from == symbol_currency && to == account_currency;
+    const bool to_symbol = from == account_currency && to == symbol_currency;
+    if (!conversion.to_account && !to_symbol) return no_answer(kCurrencyPairUnsupported);
+    // The same currency on both sides, decided by the codes alone: no rate is
+    // read, and a supplied rate of 1 for two different currencies is not this.
+    if (account_currency == symbol_currency) {
+        conversion.identity = true;
+        return conversion;
+    }
+    // A foreign symbol quoted in another currency has no supplied rate.
+    if (symbol_currency != chart_currency) return no_answer(kCurrencyPairUnsupported);
+    // Host data only: an explicit scalar, or a curve point in effect at at_ms.
+    // The ledger's 1.0 fallback answers neither question.
+    if (!has_account_currency_fx_at(at_ms)) return no_answer(kCurrencyRateUnavailable);
+    conversion.account_per_symbol = account_currency_fx_at(at_ms);
+    return conversion;
+}
+
+double source::PineStrategyHost::strategy_convert_to_account(
+        double value, const std::string& account_currency, std::int64_t at_ms) {
+    // An amount in the symbol's currency, wanted in the account's.
+    const CurrencyConversion conversion = currency_conversion(
+        "convert_to_account", "strategy.convert_to_account", syminfo_.currency,
+        account_currency, account_currency, at_ms);
+    if (conversion.reason != nullptr) conversion.refuse();
+    return conversion.identity ? value : value * conversion.account_per_symbol;
+}
+
+double source::PineStrategyHost::strategy_convert_to_symbol(
+        double value, const std::string& account_currency, std::int64_t at_ms) {
+    // An amount in the account's currency, wanted in the symbol's.
+    const CurrencyConversion conversion = currency_conversion(
+        "convert_to_symbol", "strategy.convert_to_symbol", account_currency,
+        syminfo_.currency, account_currency, at_ms);
+    if (conversion.reason != nullptr) conversion.refuse();
+    return conversion.identity ? value : value / conversion.account_per_symbol;
+}
+
+double source::PineStrategyHost::request_currency_rate(
+        const std::string& from, const std::string& to, const std::string& account_currency,
+        std::int64_t at_ms, bool ignore_invalid_currency) {
+    const CurrencyConversion conversion = currency_conversion(
+        "currency_rate", "request.currency_rate", from, to, account_currency, at_ms);
+    if (conversion.reason != nullptr) {
+        if (!ignore_invalid_currency) conversion.refuse();
+        // na instead of a stop, and never silently: the run's warnings name the
+        // request that had no rate.
+        conversion.warn(*this);
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    if (conversion.identity) return 1.0;
+    return conversion.to_account ? conversion.account_per_symbol
+                                 : 1.0 / conversion.account_per_symbol;
 }
 
 }  // namespace pineforge

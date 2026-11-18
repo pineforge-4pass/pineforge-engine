@@ -79,6 +79,11 @@ codes it tested the text alone, so a script stopped by an empty
   OHLCV, its timeframes). Script-computed indexes, sizes, symbols or
   timeframes, the bar a failure happened on and any text a script built are
   not arguments, so a failing run cannot carry results out through them.
+  Two codes state their own exceptions: `pine_timezone_error` carries the
+  refused `zone`, and `currency_conversion_rate_unavailable` the currencies
+  `from` and `to` of a `request.currency_rate` call, each of which may be
+  text the script computed; the second also carries `time_ms`, the time of
+  the evaluation that asked, as the first carries `bar_index`.
 - **Resource measurements are an explicit allowance.** Like the existing
   sink-exhaustion arguments, admitted caps, trusted planned representation
   sizes, accepted byte counts and overflow probes are measured boundary
@@ -103,11 +108,29 @@ codes it tested the text alone, so a script stopped by an empty
 
 The tables below list the catalog at this tree.
 
-The catalog contains 88 named failure codes: 38 first released in 1.4.0,
+The catalog contains 89 named failure codes: 38 first released in 1.4.0,
 26 first released in 1.5.0, 5 added in 1.7.0, 10 added in 1.9.0
-(3 run-quota codes and 7 report-channel codes), 8 added in 1.11.0, and 1
-added in 1.12.0. One unnamed `none` sentinel gives 89 registry entries;
-existing numbers stay fixed.
+(3 run-quota codes and 7 report-channel codes), 8 added in 1.11.0, 1
+added in 1.12.0, and 1 added in 1.13.0. One unnamed `none` sentinel gives
+90 registry entries; existing numbers stay fixed.
+
+The 1.13.0 addition is `currency_conversion_rate_unavailable` (class
+`no_data`), the refusal of a script's account-currency conversion that has no
+rate to read. `strategy.convert_to_account`, `strategy.convert_to_symbol` and
+`request.currency_rate` answer only from the rate the embedding host supplied
+(#strategy_set_account_currency_fx_scalar, the `account_currency_fx` metadata
+key or #strategy_set_account_currency_fx_series); the same currency on both
+sides needs none. Its `reason` is `rate_unavailable` when no supplied rate is
+in effect at the evaluated time, `unsupported_pair` for a pair other than the
+symbol's currency and the account's, and `invalid_currency` for a missing or
+invalid currency code. Its `function` is the call without its namespace
+(`convert_to_account`, `convert_to_symbol`, `currency_rate`), `from` and `to`
+are the currencies the call converts between, `symbol_currency` and
+`account_currency` the two the host's rate joins, and `time_ms` the evaluated
+time in Unix milliseconds. `request.currency_rate` with
+`ignore_invalid_currency` returns `na` instead of stopping and reports the
+same code and arguments as a run warning (#strategy_get_run_warnings). Its
+retryability and typed arguments are listed below.
 
 The 1.11.0 additions are `runtime_history_budget_exhausted` (class
 `resource`), the refusal of a dynamic runtime context that exceeds its
@@ -205,6 +228,7 @@ other `strategy_create_failed` lines omit it.
 | --- | --- | --- | --- | --- |
 | `chart_bars_rejected` | `input` | no | `field` (vocab, 6 values, optional), `index` (integer, optional), `reason` (vocab, 12 values) | The run's chart bars (the request's OHLCV) were refused. |
 | `chart_bars_unreadable` | `input` | no | `reason` (vocab, 9 values) | The harness could not read the run's OHLCV file. |
+| `currency_conversion_rate_unavailable` | `no_data` | no | `account_currency` (string), `from` (string), `function` (vocab, 3 values), `reason` (vocab, 3 values), `symbol_currency` (string), `time_ms` (integer), `to` (string) | A script's account-currency conversion had no rate to read. strategy.convert_to_account, strategy.convert_to_symbol and request.currency_rate (function convert_to_account, convert_to_symbol and currency_rate) answer only from the rate the embedding host supplied, in account-currency units per one unit of the symbol's currency: a scalar, or the curve point in effect at the evaluated time. reason is rate_unavailable when the host supplied no rate in effect at time_ms, unsupported_pair for a pair other than the symbol's currency and the account's, and invalid_currency for a missing or invalid currency code. The same currency on both sides needs no rate and never raises this code; no rate is guessed, derived from another pair or taken from a similar code. from and to are the currencies the call converts between, symbol_currency and account_currency the two the host's rate joins, and time_ms the evaluation's time in Unix milliseconds. The currencies of request.currency_rate may be text the script computed, and time_ms comes from the engine's evaluation. request.currency_rate with ignore_invalid_currency returns na instead of stopping and reports this code and these arguments as a run warning. |
 | `diagnostic_budget_exceeded` | `resource` | no | `cap_bytes` (integer), `requested_bytes` (integer), `used_bytes` (integer) | The diagnostics exceed their admitted byte budget. |
 | `engine_command_value_invalid` | `engine_fault` | no | `field` (string), `reason` (vocab, 3 values), `stage` (vocab, 7 values) | The engine derived an invalid command value (non-finite, invalid text or an overflowing finite value) from its own book, equity, margin, sizing, fee, slippage or settlement state: an engine fault, never a strategy failure. stage names where it was derived. |
 | `engine_invariant` | `engine_fault` | no | `reason` (vocab, 1 values, optional) | An engine invariant failed: a PineForge bug. |

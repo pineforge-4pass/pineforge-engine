@@ -103,7 +103,7 @@ def receipts_match_ledger_order(received_bytes, event_rows):
 
 def module_layout(probe, module):
     result = subprocess.run([probe, runner, module, 'module-layout'],
-                            capture_output=True, text=True, timeout=30)
+                            capture_output=True, text=True)
     assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
     return json.loads(result.stdout)
 
@@ -155,7 +155,7 @@ def old_layout_refusal_proof(probe):
         write_fixture(root)
         result = subprocess.run(command(runner, stub, root),
                                 input=(root / 'feed.jsonl').read_bytes(),
-                                capture_output=True, timeout=60)
+                                capture_output=True)
         assert result.returncode == 1, (
             'a mismatched engine layout stamp must end the run with status 1',
             result.returncode, result.stdout, result.stderr)

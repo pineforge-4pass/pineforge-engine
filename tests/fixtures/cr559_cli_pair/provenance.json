@@ -170,7 +170,7 @@
     "include/pineforge/source/pine_scheduler.hpp": "cc8683ce0bb938ebb123cfe970217fd1ad5ad5623b2ce5645f49c5be359af7d6",
     "include/pineforge/source/pine_security_timeframe.hpp": "e2b65dc576afd5399f14835cd5a195518bc50b1c7b7b4fc8c82a41ef886aa1a2",
     "include/pineforge/source/pine_strategy_host.hpp": "4d085462f3b6ad6936b3e4df31ed23e895238d49bc95464702993f3bdaf8b8a3",
-    "include/pineforge/source/pine_ta_length.hpp": "6be9f64d4724442b3113f4d0a984d82d67434c2ae70200b25105130a511f28cc",
+    "include/pineforge/source/pine_ta_length.hpp": "94781c065434bbacc6f7885c9cfc5b9ecdcad0f94abc4e82a46c721c6dade85e",
     "include/pineforge/spill_curve_reader.hpp": "ee9d01acd92629ff3327ba3fc4cc117f3b074aeb71dab90a048dcb21b2235ffa",
     "include/pineforge/str_utils.hpp": "c731df4cd601227c91eed449f92e12d4530cd642997dbbe393373ae6d10e8c5c",
     "include/pineforge/ta.hpp": "a163c143bb31802de9faa58e7d2794a080bd1a73eee8224197be7f112dcca51a",

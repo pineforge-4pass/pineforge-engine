@@ -39,11 +39,12 @@ std::vector<Bar> runtime_subdivide(const Bar& bar, RuntimeSubdivision subdivisio
 bool BacktestEngine::runtime_context_early_close_completes() const {
     return session_template_knows_early_close();
 }
-
-
+// Internal to native_calendar.cpp and declared by this one caller: see its definition there.
+namespace native_calendar { inline namespace native_calendar_v2 { void forget_interval_days() noexcept; } }
 // --- register_security_eval ---
 void BacktestEngine::register_security_eval(int sec_id, const std::string& requested_tf,
                                              const std::string& input_tf) {
+    native_calendar::forget_interval_days();  // this thread's kept session days end here
     SecurityEvalState state;
     state.sec_id = sec_id;
     state.tf = requested_tf;
@@ -65,7 +66,6 @@ void BacktestEngine::register_security_eval(int sec_id, const std::string& reque
     }
     security_eval_states_.push_back(std::move(state));
 }
-
 
 // Whether an early close (a session-day ending before its template's end)
 // completes a calendar period. Keyed by the instrument class in
@@ -100,10 +100,17 @@ void BacktestEngine::dispatch_security_eval(SecurityEvalState& state,
 
 void BacktestEngine::feed_security_eval_state(
         SecurityEvalState& state, const Bar& input_bar) {
+    feed_security_eval_state(state, input_bar,
+        security_input_tf_.empty() ? input_tf_ : security_input_tf_);
+}
+
+void BacktestEngine::feed_security_eval_state(
+        SecurityEvalState& state, const Bar& input_bar, const std::string& feed_tf) {
     // The next input bar's timestamp (0 when unknown) lets a calendar
     // bucket complete on the period's actual last input bar -- see
     // security_next_input_ms_.
-    AggregatedBar ab = state.aggregator.feed(input_bar, security_next_input_ms_);
+    AggregatedBar ab = state.aggregator.feed(
+        input_bar, security_next_input_ms_, 0, feed_tf, state.tf);
     state.feed_count++;
     state.current_sub_bar_count = ab.sub_bar_count;
     if (ab.is_complete) {

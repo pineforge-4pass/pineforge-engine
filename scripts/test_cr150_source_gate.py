@@ -1252,7 +1252,28 @@ class RealTree(unittest.TestCase):
         # deque groups and adds four current groups; every new group is OPEN.
         # The combined tree adds two #858 cache-id site identities inside
         # existing U0307/U0871 OPEN groups. No new group: the union stays1616.
-        expected_open = 1356 + 76 + 184 + 2 - 6 + 4
+        # expectation corrected: 1616 -> 1618, because U1860/U1861 add two
+        # unreviewed groups for the warning arrays the native execution
+        # consumer renders after a run began (the list's declaration and its
+        # one append). Both remain OPEN.
+        # expectation corrected: 1618 -> 1626, because U1862-U1869 add eight
+        # unreviewed groups: #871's request caller catalog, chart caller table
+        # and request delivery stack (each a declaration and its insertions)
+        # and the caller key's text, and #810's per-origin completed units of
+        # one percentage exit's sizing query. All remain OPEN.
+        # expectation corrected: 1626 -> 1625, because moving the #810/#716
+        # partial-exit reservation rework to the follow-up PR retires U1866.
+        # expectation corrected: 1625 -> 1629, because U1870-U1873 add four
+        # unreviewed groups: the native calendar's kept session days of one
+        # calendar set, the per-thread list of those sets and each set's zone
+        # root, and the insertions of the request caller catalog's run map.
+        # U1862 follows the catalog's storage into that run map. All remain OPEN.
+        # expectation corrected: 1629 -> 1633, because U1874-U1877 add four
+        # unreviewed groups in src/source/pine_adapter.cpp: the exits standing
+        # on the book for an opening that fills, the market adds a cover fill
+        # leaves without an order, and the comment and OCA name text those
+        # lists and the file's order copies carry. All remain OPEN.
+        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4
         self.assertEqual(c['OPEN'], expected_open)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])

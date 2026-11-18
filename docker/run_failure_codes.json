@@ -87,6 +87,50 @@
    "retryable": false,
    "since": "1.4.0"
   },
+  "currency_conversion_rate_unavailable": {
+   "args": {
+    "account_currency": {
+     "kind": "string"
+    },
+    "from": {
+     "kind": "string"
+    },
+    "function": {
+     "kind": "vocab",
+     "values": [
+      "convert_to_account",
+      "convert_to_symbol",
+      "currency_rate"
+     ]
+    },
+    "reason": {
+     "kind": "vocab",
+     "values": [
+      "rate_unavailable",
+      "unsupported_pair",
+      "invalid_currency"
+     ]
+    },
+    "symbol_currency": {
+     "kind": "string"
+    },
+    "time_ms": {
+     "kind": "integer"
+    },
+    "to": {
+     "kind": "string"
+    }
+   },
+   "class": "no_data",
+   "description": "A script's account-currency conversion had no rate to read. strategy.convert_to_account, strategy.convert_to_symbol and request.currency_rate (function convert_to_account, convert_to_symbol and currency_rate) answer only from the rate the embedding host supplied, in account-currency units per one unit of the symbol's currency: a scalar, or the curve point in effect at the evaluated time. reason is rate_unavailable when the host supplied no rate in effect at time_ms, unsupported_pair for a pair other than the symbol's currency and the account's, and invalid_currency for a missing or invalid currency code. The same currency on both sides needs no rate and never raises this code; no rate is guessed, derived from another pair or taken from a similar code. from and to are the currencies the call converts between, symbol_currency and account_currency the two the host's rate joins, and time_ms the evaluation's time in Unix milliseconds. The currencies of request.currency_rate may be text the script computed, and time_ms comes from the engine's evaluation. request.currency_rate with ignore_invalid_currency returns na instead of stopping and reports this code and these arguments as a run warning.",
+   "english": [
+    "{call}: no account-currency conversion rate for \"{from}\" to \"{to}\" at time {time_ms} (symbol currency \"{symbol_currency}\", account currency \"{account_currency}\"): a currency is missing or invalid",
+    "{call}: no account-currency conversion rate for \"{from}\" to \"{to}\" at time {time_ms} (symbol currency \"{symbol_currency}\", account currency \"{account_currency}\"): the host supplied no rate in effect at that time",
+    "{call}: no account-currency conversion rate for \"{from}\" to \"{to}\" at time {time_ms} (symbol currency \"{symbol_currency}\", account currency \"{account_currency}\"): the host-supplied rate converts only between the symbol currency and the account currency"
+   ],
+   "retryable": false,
+   "since": "1.13.0"
+  },
   "diagnostic_budget_exceeded": {
    "args": {
     "cap_bytes": {

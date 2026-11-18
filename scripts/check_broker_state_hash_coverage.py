@@ -366,11 +366,13 @@ def main(root: Path = ROOT) -> int:
         require_once(stream_hash, "integer(19); integer(broker_state_hash());",
                      "stream v19 fold")
         host_header = (root / "include/pineforge/source/pine_strategy_host.hpp").read_text()
+        # expectation corrected: v6 -> v8 (issue 871 domain bump)
         require_once(host_header,
-                     'kSourceSecurityDomain[] = "pineforge-source-security/v6"',
+                     'kSourceSecurityDomain[] = "pineforge-source-security/v8"',
                      "source request.security hash domain")
-        require_once(source_hash, "f.s(kSourceSecurityDomain);",
-                     "source request.security hash fold")
+        # expectation corrected: 1 -> 3, because #871 folds runtime, site and caller state.
+        if source_hash.count("f.s(kSourceSecurityDomain);") != 3:
+            raise ValueError("source request.security hash fold must appear exactly three times")
         if "if (false) { integer(19); integer(broker_state_hash()); }" in stream_hash:
             raise ValueError("stream v19 fold must be unconditional")
         # R5 N5 (RP10): the fold ends in the generic host seam. The projection

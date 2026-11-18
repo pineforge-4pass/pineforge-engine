@@ -1,12 +1,12 @@
-// R5 lane D2-D: the values tests/test_publication_witness.cpp pins, one
+// Source publication: the values tests/test_publication_witness.cpp pins, one
 // row per run of its battery (name, digest, source folds, closed trades,
 // recorded broker-state hash rows).
-// Harvested on 6c081f5d, re-harvested once for V19-D's v4 fold (INT23),
-// once for K-ULP3's whole-lot close, once for V19-FIX's hash step and once
-// for PAR-MARGIN-2's post-fill margin path: see the provenance note in the
+// Harvested on 6c081f5d, re-harvested once for the cached-view v4 fold,
+// once for the whole-lot close, once for adapter hash cleanup and once
+// for the post-fill margin path: see the provenance note in the
 // test.
 // Generated -- never edit a row by hand.
-// R5 lane PAR-ORDERS re-harvested it the same way on its tree (21 of 156 runs move;
+// Pending-entry order handling re-harvested it the same way on its tree (21 of 156 runs move;
 // see the lane's hash commit for why each moves):
 //   ConfigFlags113: digest 0x2a4b7804a0a3e27e -> 0xb0d7186d612e1063
 //   ConfigFlags113M: digest 0x88c14690db445933 -> 0x066c20032094d9bf
@@ -29,10 +29,10 @@
 //   Storm19M: digest 0x6e51f913b73007d5 -> 0x83ea12d967fea7e7
 //   Storm22: digest 0xce56d5badb05638c -> 0xda5de455f464504d
 //   Storm22M: digest 0xa8b971a9116eb495 -> 0xfdaa191a97b50614
-// R5 lane H-THIN's P10 moves the closed trades of 12 runs and the source folds
-// of Storm17 and Storm17M (INT26: the behaviour half of its hash step ab297364,
+// FIFO entry-quantity reservation moves the closed trades of 12 runs and the source folds
+// of Storm17 and Storm17M (integrated source rules: the behaviour half of its hash step ab297364,
 // harvested on the integrated tree, every value equal to the lane's); every
-// digest moves once, in the INT26 v19 hash re-pin:
+// digest moves once, in the integrated source rules v19 hash correction:
 //   Storm04: trades 20 -> 22
 //   Storm04M: trades 20 -> 22
 //   Storm07: trades 15 -> 13
@@ -45,16 +45,16 @@
 //   Storm19M: trades 22 -> 23
 //   Storm23: trades 27 -> 26
 //   Storm23M: trades 27 -> 26
-// R5 lane PAR-CASHFEE moves the closed trades of five runs (INT26: the behaviour
+// Cash-fee sizing moves the closed trades of five runs (integrated source rules: the behaviour
 // half of its hash step 214c082c, harvested on the integrated tree, each value
-// equal to the lane's; its Config03 50 -> 48 was already pinned with R5 lane
-// PAR-MARGIN-2); every digest moves once, in the INT26 v19 hash re-pin:
+// equal to the corrected tree's; its Config03 50 -> 48 was already pinned with
+// the post-fill margin correction); every digest moves once, in the integrated source rules v19 hash correction:
 //   ConfigFlags103: trades 65 -> 63
 //   Config03M: trades 48 -> 44
 //   ConfigFlags103M: trades 66 -> 65
 //   ConfigFlags104: trades 12 -> 13
 //   ConfigFlags104M: trades 12 -> 13
-// expectation corrected (INT26 v19 hash re-pin, 156 values over 156 rows), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the source folds, closed trades and recorded rows did not move:
+// expectation corrected (integrated source rules v19 hash correction, 156 values over 156 rows), because the integrated tree's picks move v19 hash values inside the unreleased epoch: source hash cleanup's hash step (the Pine host's excursion model leaves the source-layer fold; a FIFO exit reserves its own entry's quantity), the current execution order correction's new transient coof_fill_forced_ fold and the post-fill margin correction's post-fill margin waypoint and cash-fee sizing's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since the pending-entry timestamp correction (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the source folds, closed trades and recorded rows did not move:
 //   Config01: digest 0x13599d44631228e2ull -> 0xb668af594ea2f5d9ull [H-THIN]
 //   ConfigFlags101: digest 0x9d75aa3c41307c6aull -> 0xe7f27c137f45ac4bull [PAR-ORDERS-2, H-THIN, PAR-CASHFEE]
 //   Config01M: digest 0x3ebbd6d78581edeaull -> 0x1efcbeef8aa1dc6dull [H-THIN]
@@ -211,9 +211,9 @@
 //   TwoLegsOnlyM: digest 0xa713e15d8063372full -> 0x8b4283e07b576d5full [H-THIN]
 //   LegsApart: digest 0xcfcd1f1d87803a44ull -> 0x64ff417b6bcf212full [H-THIN]
 //   LegsApartM: digest 0x701aca7df9071fb5ull -> 0xaa0c742ddeacc4d5ull [H-THIN]
-// expectation corrected (INT27 v19 hash re-pin, 1 values over 1 rows), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane PAR-ORDERS-3's recalculation rules (findings 1-2, an exit placed on a fill at a bar's extreme reads that fill; finding 4, after the matcher's own-level fill on a bar's first extreme the recalculation's orders act from that extreme); old values are INT26's pins, which every INT27 pick before PAR-ORDERS-3 kept (0631e045 reproduces each), harvested with this TU's own switch on the integrated tree and at every PAR-ORDERS-3 commit; the source folds, closed trades and recorded rows did not move:
+// expectation corrected (fill recalculation integration v19 hash correction, 1 values over 1 rows), because the integrated tree's picks move v19 hash values inside the unreleased epoch: fill recalculation corrections' recalculation rules (findings 1-2, an exit placed on a fill at a bar's extreme reads that fill; finding 4, after the matcher's own-level fill on a bar's first extreme the recalculation's orders act from that extreme); old values are the integrated source rules' pins, which every fill recalculation integration commit before the order recalculation correction kept (0631e045 reproduces each), harvested with this TU's own switch on the integrated tree and at every order recalculation commit; the source folds, closed trades and recorded rows did not move:
 //   ConfigFlags103: digest 0x9e412b4fb357ae55ull -> 0x275174bdfd481a1bull [PAR-ORDERS-3 f1-2, PAR-ORDERS-3 f4]
-// INT28 re-harvested it once on the integrated tree (main 962960b3 and the
+// Integrated order and margin rules re-harvested it once on the integrated tree (main 962960b3 and the
 // wave-J picks) with PINEFORGE_D2D_PUBLICATION_HARVEST; the same harvest
 // against main reproduces every old row. 142 of 156 runs move, each
 // marked with the pick(s) at whose boundary it moved (a harvest at every
@@ -362,9 +362,9 @@
 //   LegBesideCloseM: digest 0x4a9e3df3ac353419 -> 0x2b0bb872ebf141d2 [W3B F02 ledger booking]
 //   LegsApart: digest 0x64ff417b6bcf212f -> 0xaef3fc2d3d2e942d [W3B F02 ledger booking]
 //   LegsApartM: digest 0xaa0c742ddeacc4d5 -> 0x650d1b75fc17cdb7 [W3B F02 ledger booking]
-// INT28-FIX re-harvested it once on the integrated tree (INT28 4efcb8c5 and
-// INT28-FIX's ten commits) with PINEFORGE_D2D_PUBLICATION_HARVEST; the same harvest against
-// INT28 reproduces every old row. 27 of 156 runs move, each marked with the
+// Admission and margin corrections re-harvested it once on the integrated tree (integrated order and margin rules 4efcb8c5 and
+// Admission and margin corrections' ten commits) with PINEFORGE_D2D_PUBLICATION_HARVEST; the same harvest against
+// Integrated order and margin rules reproduces every old row. 27 of 156 runs move, each marked with the
 // commit(s) at whose boundary it moved (a harvest at every commit): only the
 // picked W5B-ENG-MARGIN-RESIDUAL rules SB and PC move any; CA, PA, SZ, FU,
 // MS, SS, OU and OF move none. The rules are TradingView's (their lanes'
@@ -396,8 +396,8 @@
 //   Storm20: digest 0x604f8dc86a777322ull -> 0x411a4fdcd5c11299ull, folds 43 -> 44, trades 10 -> 11 [W5B PC]
 //   Storm21: digest 0xc35dd2c653db38ecull -> 0xf7b8d2e1e5dbff53ull [W5B PC]
 //   Storm21M: digest 0xf770bc84f8b963b1ull -> 0x261cd4c819b89bccull [W5B PC]
-// INT29 re-harvested it once on the integrated tree (main 74491fa1, lane
-// W10-DIAG-UNKNOWN's ten picks, lane W11-ENG-TIME-COLOR's eleven, INT29's own
+// Later order and timing integration re-harvested it once on the integrated tree (main 74491fa1, with
+// ten diagnostic commits, eleven time and color commits, and the integration's own
 // three commits, lane W12-ENG-TIME's thirteen and lane W13-ENG-MARGIN-OPP's
 // four) with PINEFORGE_D2D_PUBLICATION_HARVEST; the same harvest against main
 // reproduces every old row. One run moves, and a harvest at each side of the
@@ -421,8 +421,8 @@
 //   Storm05: digest 0x8c67fec9d289937dull -> 0x15759d5d500e7b69ull [TAIL-D FP17]
 //   Storm19: digest 0x2be2f691db8da9c4ull -> 0x1141e20bcecc13caull [TAIL-D FP17]
 //   Storm23: digest 0xb57c9d2a9d2d519full -> 0x613145193da5fe25ull [TAIL-D FP17]
-// R5 lane TAIL-C re-harvested it once on its tree (r5/tail-c: lane W8E-EXITS's
-// rule A picked onto INT29 8988faff, then TAIL-C's six rules) with
+// Fill and close-pass corrections re-harvested it once on its tree (the exit correction's
+// rule applied to order and timing integration 8988faff, then the six fill and close rules) with
 // PINEFORGE_D2D_PUBLICATION_HARVEST; the same harvest against 8988faff
 // reproduces every old row. 4 of 156 runs move, each marked with the commit at
 // whose boundary it moved (a harvest at every commit); their closed trades and
@@ -433,7 +433,7 @@
 //   Storm08: digest 0x3c2a5b9c43c4fd89ull -> 0x3fbbfd35e31f33f4ull [TAIL-C OPEN]
 //   Storm12: digest 0x2f7a3a3d3b832e58ull -> 0x7530d5bfdf947e25ull [TAIL-C OPEN]
 //   Storm22: digest 0x6862e0fd009c1790ull -> 0x699bd1943a7cf263ull [TAIL-C OPEN]
-// INT30 harvested it once more on the integrated tree (engine main 7239ab37
+// Combined fill and margin integration harvested it once more on the integrated tree (engine main 7239ab37
 // with lanes TAIL-A, TAIL-B, TAIL-G, TAIL-D, TAIL-H, TAIL-E and TAIL-C picked,
 // in that order) and at each lane boundary of that history: main reproduces
 // every old row, the 4 TAIL-D rows move at TAIL-D's picks and the 4 TAIL-C
@@ -673,12 +673,12 @@
 // every old row.
 //   ConfigFlags103: digest 0x8d55c22cdbe324aaull -> 0x0d75274f1b2bf4edull
 //   Storm02: digest 0x3aa47b814572802aull -> 0x34262d89d687ddc4ull
-// expectation corrected (WIN-CX exit-scratch re-pin, 4 of 156 rows), because the exit-scratch folds (3c6f46d159, 4b5ef3dd28) and the removal of the scope-allocation counter fold (1b89731330 in this history, LAB-QUIETFIX) move the broker-state hash; the folds, trades and rows counts did not move; actual values taken from the normal build's mismatch output of test_publication_witness on 14da9f0d82, private mode (harvest switch PINEFORGE_D2D_PUBLICATION_HARVEST; the earlier text of this note named PINEFORGE_P4_HARVEST, which belongs to the receipts test, and spoke of at_bar and folded values this test does not have: wording corrected in the 152-row re-pin, the four values are unchanged); harvest source .lane-out/publication-actuals.txt (private-mode harvest job rj-20261023t172021-89d561, proof-harvest/ctest-only.log):
+// expectation corrected (exit-scratch hash correction, 4 of 156 rows), because the exit-scratch folds (3c6f46d159, 4b5ef3dd28) and the removal of the scope-allocation counter fold (1b89731330 in this history) move the broker-state hash; the folds, trades and rows counts did not move; actual values taken from the normal build's mismatch output of test_publication_witness on 14da9f0d82, with private fixtures overlaid (harvest switch PINEFORGE_D2D_PUBLICATION_HARVEST; the earlier text of this note named PINEFORGE_P4_HARVEST, which belongs to the receipts test, and spoke of at_bar and folded values this test does not have: wording corrected in the 152-row re-pin, the four values are unchanged); provenance: private-fixture harvest and ctest output:
 //   Config01: digest 0xe752de2dd7010863ull -> 0xa6f712d00de968fdull
 //   ConfigFlags101: digest 0x19179db1a0eaed4dull -> 0x1ba869cc0d36c0f9ull
 //   Config01M: digest 0x3fac346cf0dfd611ull -> 0x6ba06c205fe23d3eull
 //   ConfigFlags101M: digest 0x828c1a8486de7dbcull -> 0xce3849680ad3a7b3ull
-// expectation corrected (WIN-CX hash-fold re-pin, 152 of 156 rows), because the exit-scratch folds (3c6f46d159, whose presence bytes enter every run's hash, with the provider 4b5ef3dd28), the retirement and archived-family hash bytes of e86eaa3cf6 (92 of the 156 runs also move for it, 067b2f2e8 being part of that effect on this tree), the released-snapshot fold of c6f7fb23cc, the removal of the scope-allocation counter fold (1b89731330, LAB-QUIETFIX) and the CR-277 key capture (af140b5d91, 7 rows) move the broker-state hash; the folds, trades and rows counts did not move; actual values taken from the normal build's mismatch output of test_publication_witness on 2cf32840b8, private mode, and verified equal (digest and counts, 156 of 156) to the dump-mode output on the picks head; harvest source .lane-out/pub-harvest.log (private-mode harvest job rj-20261023t203641-40b89b-a1, build-ctest-only/ctest-only.log):
+// expectation corrected (hash-fold correction, 152 of 156 rows), because the exit-scratch folds (3c6f46d159, whose presence bytes enter every run's hash, with the provider 4b5ef3dd28), the retirement and archived-family hash bytes of e86eaa3cf6 (92 of the 156 runs also move for it, 067b2f2e8 being part of that effect on this tree), the released-snapshot fold of c6f7fb23cc, the removal of the scope-allocation counter fold (1b89731330) and the released-entry key capture (af140b5d91, 7 rows) move the broker-state hash; the folds, trades and rows counts did not move; actual values taken from the normal build's mismatch output of test_publication_witness on 2cf32840b8, with private fixtures overlaid, and verified equal (digest and counts, 156 of 156) to the dump-mode output on the picks head; provenance: private-fixture harvest and ctest output:
 //   Config02: digest 0xa7c6dc31b184c062ull -> 0x7afb9b6d8f596e5aull
 //   ConfigFlags102: digest 0x77c5d6a390151224ull -> 0x161f627679071741ull
 //   Config02M: digest 0xe56da321d367a98cull -> 0x674ba6b7434b6324ull

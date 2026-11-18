@@ -46,7 +46,9 @@ struct Scenario {
     const char* err;
 };
 
-void scenario(const Scenario& expected) {
+// `scalar_setter` drives the same lifecycle through
+// strategy_set_account_currency_fx_scalar instead of the curve setter.
+void scenario(const Scenario& expected, bool scalar_setter = false) {
     ProbeEngine engine;
     pf_strategy_t handle = static_cast<pf_strategy_t>(&engine);
     pf_bar_t warmup{};
@@ -56,16 +58,19 @@ void scenario(const Scenario& expected) {
     const int r_begin = strategy_stream_begin(handle, &warmup, 1, "1", "1");
     const std::int64_t ts[] = {0};
     const double rates[] = {1.001};
-    const int r_set_w = expected.setter_in_warmup
-        ? strategy_set_account_currency_fx_series(handle, ts, rates, 1) : 99;
+    const auto set_fx = [&] {
+        return scalar_setter
+            ? strategy_set_account_currency_fx_scalar(handle, rates[0])
+            : strategy_set_account_currency_fx_series(handle, ts, rates, 1);
+    };
+    const int r_set_w = expected.setter_in_warmup ? set_fx() : 99;
     pf_trade_tick_t tick{};
     tick.timestamp = 60010;
     tick.sequence = 7;
     tick.price = 101.0;
     tick.quantity = 0.5;
     const int r_tick1 = strategy_stream_push_tick(handle, &tick);
-    const int r_set_r = expected.setter_after_tick
-        ? strategy_set_account_currency_fx_series(handle, ts, rates, 1) : 99;
+    const int r_set_r = expected.setter_after_tick ? set_fx() : 99;
     tick.timestamp = 60020;
     tick.sequence = 8;
     const int r_tick2 = strategy_stream_push_tick(handle, &tick);
@@ -104,6 +109,11 @@ int main() {
     scenario({"setter in warmup", false, true, 0, -1, 0, 99, 0, 0, 0, 2, 2, 0, ""});
     scenario({"setter after tick", true, false, 0, 99, 0, -1, 0, 0, 0, 2, 2, 0, ""});
     scenario({"both", true, true, 0, -1, 0, -1, 0, 0, 0, 2, 2, 0, ""});
+    // The scalar setter keeps the curve setter's window: refused in the warmup
+    // and after the first realtime tick, the stream untouched and no latch.
+    scenario({"scalar in warmup", false, true, 0, -1, 0, 99, 0, 0, 0, 2, 2, 0, ""}, true);
+    scenario({"scalar after tick", true, false, 0, 99, 0, -1, 0, 0, 0, 2, 2, 0, ""}, true);
+    scenario({"scalar both", true, true, 0, -1, 0, -1, 0, 0, 0, 2, 2, 0, ""}, true);
     std::printf("test_l9c_c_abi_fx_setter_after_realtime: %d checks, %d failures\n",
                 checks, failures);
     return failures == 0 ? 0 : 1;

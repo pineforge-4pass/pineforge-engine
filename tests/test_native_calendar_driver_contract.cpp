@@ -1057,9 +1057,13 @@ void equal_timeframe_families() {
         {"15S", {0, 15000, 30000, 45000}},
         {"1", {0, 60000, 120000, 180000}},
         {"5", {0, 300000, 600000, 900000}},
-        // January 12/13/14/15 and 12/14/16/18, 2025, UTC midnight.
+        // D: January 12/13/14/15; 2D: January 11/13/15/17, 2025 UTC.
+        // TV 2025 opens: cap897-c5-2d-chart, OUTCOME 84393e82;
+        // raw "5B|2D|7|1735689600000|1735862400000|...".
+        // Companion cap897-c5-3d-chart, OUTCOME 45d4a125:
+        // raw "5B|3D|5|1735689600000|1735948800000|...".
         {"D", {1736640000000LL, 1736726400000LL, 1736812800000LL, 1736899200000LL}},
-        {"2D", {1736640000000LL, 1736812800000LL, 1736985600000LL, 1737158400000LL}},
+        {"2D", {1736553600000LL, 1736726400000LL, 1736899200000LL, 1737072000000LL}},
         {"W", {1736121600000LL, 1736726400000LL, 1737331200000LL, 1737936000000LL}},
         // 2W anchors Dec30, Jan13, Jan27, Feb10: Jan6 is NOT a 2W anchor.
         {"2W", {1735516800000LL, 1736726400000LL, 1737936000000LL, 1739145600000LL}},
@@ -1089,18 +1093,22 @@ void equal_timeframe_families() {
 }
 
 void stable_count_and_cross_unit_grouping() {
-    // Dropping the leading Jan12 row changes the observed opening, never the
-    // Jan12 2D anchor. Jan12 is day ordinal 20100 from 1970-01-01.
-    CHECK(1736640000000LL / 86400000LL == 20100);
-    CHECK(20100 % 2 == 0);
+    // Dropping the leading Jan11 row changes the observed opening, never the
+    // observed Jan11 2D anchor: ordinal 20099 is odd; Jan12 is not an open.
+    // TV 2025 opens: cap897-c5-2d-chart, OUTCOME 84393e82;
+    // raw "5B|2D|7|1735689600000|1735862400000|...".
+    // Companion cap897-c5-3d-chart, OUTCOME 45d4a125:
+    // raw "5B|3D|5|1735689600000|1735948800000|...".
+    CHECK(1736553600000LL / 86400000LL == 20099);
+    CHECK(20099 % 2 == 1);
     for (int skip = 0; skip < 2; ++skip) {
         TraceHost host;
         if (!setup(host, spec("D", "2D"))) continue;
-        const Bar input[] = {flat(1736640000000LL, 100, 2), flat(1736726400000LL, 104, 3)};
+        const Bar input[] = {flat(1736553600000LL, 100, 2), flat(1736640000000LL, 104, 3)};
         host.run(input + skip, 2 - skip);
         if (!count(host, 1)) continue;
-        CHECK(host.contexts[0].coordinate.open_ms == 1736640000000LL);
-        CHECK(host.contexts[0].coordinate.effective_time_ms == 1736812800000LL);
+        CHECK(host.contexts[0].coordinate.open_ms == 1736553600000LL);
+        CHECK(host.contexts[0].coordinate.effective_time_ms == 1736726400000LL);
         bar_values(host.bars[0], skip ? 104 : 100, 104, skip ? 104 : 100, 104, skip ? 3 : 5);
         const auto opening = points(host, NativePriceProvenance::ModeledOHLCOpen);
         CHECK(opening.size() == 1);
@@ -1403,8 +1411,13 @@ void cross_calendar_straddles() {
     const Case cases[] = {
         {"W", "M", 1737936000000LL, 1738540800000LL, 1738540800000LL,
          1735689600000LL, 1738368000000LL}, // Jan27..Feb3 belongs wholly to January
-        {"2D", "W", 1736640000000LL, 1736812800000LL, 1736812800000LL,
-         1736121600000LL, 1736726400000LL}, // SunJan12..TueJan14 belongs to weekJan6
+        // TV 2025 opens: cap897-c5-2d-chart, OUTCOME 84393e82;
+        // raw "5B|2D|7|1735689600000|1735862400000|...".
+        // Companion cap897-c5-3d-chart, OUTCOME 45d4a125:
+        // raw "5B|3D|5|1735689600000|1735948800000|...".
+        // The observed Jan19..Jan21 input still crosses Monday Jan20.
+        {"2D", "W", 1737244800000LL, 1737417600000LL, 1737417600000LL,
+         1736726400000LL, 1737331200000LL}, // SunJan19..TueJan21 straddles MonJan20
     };
     for (const auto& item : cases) {
         for (auto policy : {NativeCloseExecution::NextEligiblePoint, NativeCloseExecution::AfterCalculation}) {
@@ -1441,7 +1454,13 @@ void cycle_date_week_month_and_counts() {
     struct Case { const char* tf; int64_t input; int64_t open; int64_t end; };
     const Case cases[] = {
         {"D", 1736701200000LL, 1736701200000LL, 1736787600000LL}, // Sunday17 -> Monday date
-        {"2D", 1736701200000LL, 1736614800000LL, 1736787600000LL}, // Jan12/13 cycle dates
+        // TV 2025 opens: cap897-c5-2d-chart, OUTCOME 84393e82;
+        // raw "5B|2D|7|1735689600000|1735862400000|...".
+        // Companion cap897-c5-3d-chart, OUTCOME 45d4a125:
+        // raw "5B|3D|5|1735689600000|1735948800000|...".
+        // Derive the 1700-session labels from the observed Jan11/12 pair;
+        // the capture measures the calendar grid, not these overnight times.
+        {"2D", 1736614800000LL, 1736528400000LL, 1736701200000LL}, // Jan11/12 cycle dates
         {"W", 1736701200000LL, 1736701200000LL, 1737306000000LL},
         {"2W", 1736701200000LL, 1736701200000LL, 1737910800000LL},
         {"M", 1735664400000LL, 1735664400000LL, 1738342800000LL}, // Dec31 17 -> Jan date

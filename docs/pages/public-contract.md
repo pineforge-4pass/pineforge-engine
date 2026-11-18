@@ -177,8 +177,15 @@ is its compile-time probe; older modules can lack the symbol.
 site whose requested timeframe is indivisible by its evaluator feed under
 `native_calendar::compatibility`, with `input_tf`, `requested_tf` and integer
 `sec_id` arguments. Compatible pairings, lower-timeframe-array sites and sites
-with no loaded bars remain silent. There is at most one warning per code and
-site in a run. The accessor returns `[]` before a run and after a later
+with no loaded bars remain silent.
+`currency_conversion_rate_unavailable` names a `request.currency_rate` call
+that was told to ignore an invalid currency and returned `na` because the host
+supplied no rate for it. Its arguments are those of the run failure of the
+same name (`function`, `reason`, `from`, `to`, `account_currency`,
+`symbol_currency` and integer `time_ms`), and its site identity is -1, below
+every `request.security` site. There is at most one warning per code and
+site in a run, so a run names the first such request. The accessor returns
+`[]` before a run and after a later
 attempt refused before admission, while live-stream warnings remain readable.
 Collection failure returns `run_warnings_unavailable` with empty arguments.
 Warnings change no values, trades, run acceptance, failure accessors or hashes;

@@ -745,10 +745,15 @@ void test_request_security_finer_tf_sparse_boundary_uses_final_caller_child() {
         require(harness.published_ts
                     == std::vector<int64_t>{final_day0_child},
                 path + " must publish day0's actual final child, not day1 00:00");
-        require(harness.chart_last_eval_ts.size() == 1
-                    && harness.chart_last_eval_ts[0] == final_day0_child,
-                path + " chart dispatch must occur before the retained day1 "
-                    "input becomes visible");
+        // expectation corrected: one -> two callbacks, per the historical
+        // calendar chart-tail contract in docs/pages/lifecycle.md:69.
+        // The prior chart callback must still see only its own final child;
+        // the available final tail then sees its own confirmed input.
+        require(harness.chart_last_eval_ts
+                    == std::vector<int64_t>{final_day0_child,
+                                            input_bars.back().timestamp},
+                path + " first chart dispatch must precede retained day1 "
+                    "input visibility, then the final tail sees that input");
         const std::size_t expected_evals = input_bars.size()
             + (expects_replay ? 1U : 0U);
         require(harness.evaluated_ts.size() == expected_evals,

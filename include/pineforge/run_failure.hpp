@@ -148,13 +148,16 @@
 #include <cstring>
 #include <exception>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 #define PINEFORGE_HAS_RUN_FAILURE_CODES_V1 1
+#define PINEFORGE_HAS_RUN_FAILURE_VALIDATION_V1 1
 #define PINEFORGE_HAS_TIMEZONE_STOP_V1 1
 
 namespace pineforge {
@@ -260,6 +263,20 @@ struct RunFailureValue {
 /// violation yields engine_invariant without arguments. Allocation failure
 /// yields out_of_memory.
 RunFailureValue make_run_failure(RunFailureCode code, const RunFailureArgs& args) noexcept;
+
+enum class RunFailureValidationStatus { accepted, unknown_code, invalid_args, unavailable };
+
+struct RunFailureValidation {
+    RunFailureValidationStatus status;
+    std::optional<RunFailureValue> value;
+};
+
+/// Resolve an exact catalog name (excluding none) and validate/canonicalize
+/// through the same path as make_run_failure. Only accepted carries a value;
+/// unknown names take precedence over argument errors. Allocation or other
+/// implementation failure yields unavailable, never an accepted fallback code.
+RunFailureValidation validate_run_failure_name(
+    std::string_view name, const RunFailureArgs& args) noexcept;
 
 /// The code's catalog name ("" for none or an unknown value).
 const char* run_failure_code_name(RunFailureCode code) noexcept;

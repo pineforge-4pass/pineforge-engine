@@ -195,7 +195,7 @@
     },
     "test_carried_pooc_short_margin_state": {
       "baseAssertions": 43,
-      "reason": "the competing-entry and rounded-money controls follow the R5 lane W5B-ENG-MARGIN-RESIDUAL TradingView tapes (tests/fixtures/margin_residual w5b-pc-seen-size and -seen-size-parked): a carried process_orders_on_close short is called on its bar's path before the script, a pending entry beside it or not and at any money class, so the script reads the called size where ab9714be read the uncalled one",
+      "reason": "the competing-entry and rounded-money controls follow the carried-short margin residual TradingView tapes (tests/fixtures/margin_residual w5b-pc-seen-size and -seen-size-parked): a carried process_orders_on_close short is called on its bar's path before the script, a pending entry beside it or not and at any money class, so the script reads the called size where ab9714be read the uncalled one",
       "twin": "test_carried_pooc_short_margin_state_l4a.cpp",
       "twinAssertionSha256": "02c5f820b47d00e8967c4272de6c3302663357fbb280b605f55d85aa18f7206c",
       "twinAssertions": 43
@@ -321,7 +321,7 @@
     },
     "test_margin_call_1x_long_entry_fill": {
       "baseAssertions": 62,
-      "reason": "F's process_orders_on_close opening-budget trim follows the R5 lane W5-ENG-MARGIN-V6 TradingView tapes (tests/fixtures/margin_v6 w5-c2-pooc-flat-explicit-long): a commissioned process_orders_on_close opening is called at the next open, never at its close fill, so the 0.1996 @100 trim lands on bar 1. E's short mirror follows the lane PX-PIN-16B TradingView tapes (tests/fixtures/margin_open_rules exit-order/short-fee-stop-on-path and -open-at-low, E's settings and bar shape): a short is trimmed at its open fill before a stop the bar reaches later on its path, so E books 0.1996 @100 then the stop's 99.7504 @105, as long case B does",
+      "reason": "F's process_orders_on_close opening-budget trim follows the opening-budget TradingView tapes (tests/fixtures/margin_v6 w5-c2-pooc-flat-explicit-long): a commissioned process_orders_on_close opening is called at the next open, never at its close fill, so the 0.1996 @100 trim lands on bar 1. E's short mirror follows the entry-fill stop-order TradingView tapes (tests/fixtures/margin_open_rules exit-order/short-fee-stop-on-path and -open-at-low, E's settings and bar shape): a short is trimmed at its open fill before a stop the bar reaches later on its path, so E books 0.1996 @100 then the stop's 99.7504 @105, as long case B does",
       "twin": "test_margin_call_1x_long_entry_fill_l4a.cpp",
       "twinAssertionSha256": "56cc0a2af7a699ab0a047a1bb0bfa9c74c044f461e1cfc9b56764dc8ae7d4061",
       "twinAssertions": 67
@@ -356,7 +356,7 @@
     },
     "test_pooc_open_money_event": {
       "baseAssertions": 57,
-      "reason": "the fee compatibility scope's opening event follows the R5 lane W5-ENG-MARGIN-V6 TradingView tapes (tests/fixtures/margin_v6 w5-c2-pooc-flat-explicit-long): under a commission a process_orders_on_close opening is called at the next open, so outside calc_on_order_fills its event is at 2000, not at the entry close",
+      "reason": "the fee compatibility scope's opening event follows the opening-budget TradingView tapes (tests/fixtures/margin_v6 w5-c2-pooc-flat-explicit-long): under a commission a process_orders_on_close opening is called at the next open, so outside calc_on_order_fills its event is at 2000, not at the entry close",
       "twin": "test_pooc_open_money_event_l4b.cpp",
       "twinAssertionSha256": "e9c3dea8f5b33e8420f6b9f9865137eac1178c9e549fe6b1906d520f758cc3f5",
       "twinAssertions": 57
@@ -384,14 +384,14 @@
     },
     "test_reversal_admission_float_guard": {
       "baseAssertions": 25,
-      "reason": "pin E follows the R5 lane W5B-ENG-MARGIN-RESIDUAL TradingView tapes (tests/fixtures/margin_residual w5b-pa-f-market-p50 and -pooc-p50): an add to a held position whose margin exceeds the equity by less than one lot's notional is dropped, so the same-direction add arm keeps no one-lot slack either",
+      "reason": "pin E follows the margin residual TradingView tapes (tests/fixtures/margin_residual w5b-pa-f-market-p50 and -pooc-p50): an add to a held position whose margin exceeds the equity by less than one lot's notional is dropped, so the same-direction add arm keeps no one-lot slack either",
       "twin": "test_reversal_admission_float_guard_l4c.cpp",
       "twinAssertionSha256": "720031f9165aa0d73fe14b136fc8098b0a71030121d06b43479cb1ddcd3df4be",
       "twinAssertions": 25
     },
     "test_rounded_carried_short_trail": {
       "baseAssertions": 43,
-      "reason": "the other order shapes and the competing entry follow the R5 lane W5B-ENG-MARGIN-RESIDUAL TradingView tapes (tests/fixtures/margin_residual w5b-pc-seen-size and -seen-size-parked): a rounded-money carried process_orders_on_close short is called on its bar's path before the script whatever else the book holds, so every shape sees the margin before the script as the trailing exits do",
+      "reason": "the other order shapes and the competing entry follow the carried-short margin residual TradingView tapes (tests/fixtures/margin_residual w5b-pc-seen-size and -seen-size-parked): a rounded-money carried process_orders_on_close short is called on its bar's path before the script whatever else the book holds, so every shape sees the margin before the script as the trailing exits do",
       "twin": "test_rounded_carried_short_trail_l4c.cpp",
       "twinAssertionSha256": "b16b9023353e7533c80e570d84017ec77a020a405f09377c0c86dbf17750dc22",
       "twinAssertions": 43
@@ -433,7 +433,7 @@
     },
     "test_tv_money_carried_pooc": {
       "baseAssertions": 43,
-      "reason": "the pyramiding-2 scope follows the R5 lane W5B-ENG-MARGIN-RESIDUAL TradingView tapes (tests/fixtures/margin_residual w5b-ms-eur-p100-pyr2 against w5b-sz-eur-p100-10m-0410): a one-lot full-margin long under process_orders_on_close takes its one-unit money call whatever pyramiding the strategy declares, so that scope takes the call carried() pins instead of none",
+      "reason": "the pyramiding-2 scope follows the margin residual TradingView tapes (tests/fixtures/margin_residual w5b-ms-eur-p100-pyr2 against w5b-sz-eur-p100-10m-0410): a one-lot full-margin long under process_orders_on_close takes its one-unit money call whatever pyramiding the strategy declares, so that scope takes the call carried() pins instead of none",
       "twin": "test_tv_money_carried_pooc_l4b.cpp",
       "twinAssertionSha256": "8b8780d985ad5393e8a75fda604e49247e6d232ea1a480d2265ac6966c9b1448",
       "twinAssertions": 43

@@ -2,6 +2,8 @@
 #include "native_startup.hpp"
 #include "transport.hpp"
 
+#include <pineforge/native_calendar.hpp>
+
 #include <cassert>
 #include <cmath>
 #include <functional>
@@ -288,9 +290,182 @@ void native_identity_changes() {
     CHECK(dump.find("\"chart_timezone_dependency\":null") != std::string::npos);
 }
 
+constexpr std::int64_t kDayMs = 86400000;
+
+// 00:00 UTC of a civil date, in Unix milliseconds.
+std::int64_t utc(int year, int month, int day) {
+    return pineforge::native_calendar::native_civil_days(year, month, day) * kDayMs;
+}
+
+// A chart period as the calendar reports it: its nominal open, its first
+// trading instant, the next period's nominal open and the next opening the
+// calendar expects after it.
+pineforge::native_calendar::NativeInterval chart_period(std::int64_t open, std::int64_t first_trade,
+                                                        std::int64_t next_open,
+                                                        std::int64_t next_trade) {
+    pineforge::native_calendar::NativeInterval period;
+    period.open_ms = open;
+    period.eligible_open_ms = first_trade;
+    period.last_traded_close_ms = next_open;
+    period.next_period_open_ms = next_open;
+    period.next_input_open_ms = next_trade;
+    return period;
+}
+
+// A period that trades from its own open and is followed at once by the next.
+pineforge::native_calendar::NativeInterval chart_period(std::int64_t open, std::int64_t next_open) {
+    return chart_period(open, open, next_open, next_open);
+}
+
+// The session day of a trading date. It opens `opens_after` milliseconds after
+// 00:00 UTC of that date and trades for `trades_for`.
+pineforge::native_calendar::NativeSessionDay session_day(int year, int month, int day,
+                                                         std::int64_t opens_after = 0,
+                                                         std::int64_t trades_for = kDayMs) {
+    pineforge::native_calendar::NativeSessionDay out;
+    out.ordinal = pineforge::native_calendar::native_civil_days(year, month, day);
+    out.origin_ms = out.ordinal * kDayMs + opens_after;
+    out.next_origin_ms = out.origin_ms + kDayMs;
+    out.spans.emplace_back(out.origin_ms, out.origin_ms + trades_for);
+    return out;
+}
+
+// True when startup admits the chart; the refusal is printed when it does not.
+bool admits(const std::function<void()>& startup) {
+    try {
+        startup();
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "refused: " << e.what() << '\n';
+        return false;
+    }
+}
+
+// The step rule of the startup walk for a chart whose periods restart on
+// 1 January (#811): the year's short last period is admitted in its exact
+// shape, and every other gap, overlap or short period is refused.
+void chart_period_tiling() {
+    const auto two = *pineforge::native_calendar::parse_timeframe("2D");
+    const auto three = *pineforge::native_calendar::parse_timeframe("3D");
+    const auto five = *pineforge::native_calendar::parse_timeframe("5D");
+    const auto seven = *pineforge::native_calendar::parse_timeframe("7D");
+    const auto two_weeks = *pineforge::native_calendar::parse_timeframe("2W");
+
+    // Whole periods tile: one period read on its second day, and the period
+    // right after it.
+    CHECK(chart_periods_tile(two, chart_period(utc(2025, 6, 10), utc(2025, 6, 12)),
+                             chart_period(utc(2025, 6, 10), utc(2025, 6, 12)),
+                             session_day(2025, 6, 11)));
+    CHECK(chart_periods_tile(two, chart_period(utc(2025, 6, 10), utc(2025, 6, 12)),
+                             chart_period(utc(2025, 6, 12), utc(2025, 6, 14)),
+                             session_day(2025, 6, 12)));
+
+    // Admitted: the year's short last period. 2025 has 365 days, so a 2D chart
+    // ends it with 31 December alone and a 3D chart with 30 and 31 December;
+    // 2028 has 366 days, so a 5D chart ends it with 31 December alone.
+    CHECK(chart_periods_tile(two, chart_period(utc(2025, 12, 31), utc(2026, 1, 1)),
+                             chart_period(utc(2026, 1, 1), utc(2026, 1, 3)),
+                             session_day(2026, 1, 1)));
+    CHECK(chart_periods_tile(three, chart_period(utc(2025, 12, 30), utc(2026, 1, 1)),
+                             chart_period(utc(2026, 1, 1), utc(2026, 1, 4)),
+                             session_day(2026, 1, 1)));
+    CHECK(chart_periods_tile(five, chart_period(utc(2028, 12, 31), utc(2029, 1, 1)),
+                             chart_period(utc(2029, 1, 1), utc(2029, 1, 6)),
+                             session_day(2029, 1, 1)));
+    // The same on a session that opens at 09:30: the period opens with the
+    // session day of 1 January, not at midnight.
+    constexpr std::int64_t opens = 34200000;   // 09:30
+    constexpr std::int64_t trades = 23400000;  // until 16:00
+    CHECK(chart_periods_tile(two,
+                             chart_period(utc(2025, 12, 31) + opens, utc(2026, 1, 1) + opens),
+                             chart_period(utc(2026, 1, 1) + opens, utc(2026, 1, 3) + opens),
+                             session_day(2026, 1, 1, opens, trades)));
+
+    // Refused: a mid-year gap. On a weekday session the 2D period of Sunday 8
+    // and Monday 9 June 2025 first trades on the Monday, three days after the
+    // period of Friday 6 June did.
+    CHECK(!chart_periods_tile(two,
+        chart_period(utc(2025, 6, 6), utc(2025, 6, 6), utc(2025, 6, 8), utc(2025, 6, 9)),
+        chart_period(utc(2025, 6, 8), utc(2025, 6, 9), utc(2025, 6, 10), utc(2025, 6, 10)),
+        session_day(2025, 6, 9)));
+    // Refused: an overlap. The period of 31 December 2024 and 1 January 2025,
+    // which the grid counted from 1970 has, under the period that opens on
+    // 1 January.
+    CHECK(!chart_periods_tile(two,
+        chart_period(utc(2024, 12, 31), utc(2024, 12, 31), utc(2025, 1, 2), utc(2025, 1, 1)),
+        chart_period(utc(2025, 1, 1), utc(2025, 1, 3)), session_day(2025, 1, 1)));
+    // Refused: a short period that does not end at the year boundary, in June
+    // and at the start of another month.
+    CHECK(!chart_periods_tile(two, chart_period(utc(2025, 6, 10), utc(2025, 6, 11)),
+                              chart_period(utc(2025, 6, 11), utc(2025, 6, 13)),
+                              session_day(2025, 6, 11)));
+    CHECK(!chart_periods_tile(two, chart_period(utc(2025, 1, 31), utc(2025, 2, 1)),
+                              chart_period(utc(2025, 2, 1), utc(2025, 2, 3)),
+                              session_day(2025, 2, 1)));
+    // Refused: a year end in another shape. 1 January 2028 is a Saturday, so
+    // on a weekday session the 7D period it opens first trades on Monday
+    // 3 January.
+    CHECK(!chart_periods_tile(seven,
+        chart_period(utc(2027, 12, 31), utc(2027, 12, 31), utc(2028, 1, 1), utc(2028, 1, 3)),
+        chart_period(utc(2028, 1, 1), utc(2028, 1, 3), utc(2028, 1, 8), utc(2028, 1, 10)),
+        session_day(2028, 1, 3)));
+    // A last period that is an hour short of one day, as a clock moved forward
+    // on 31 December leaves it.
+    CHECK(!chart_periods_tile(two, chart_period(utc(2025, 12, 31), utc(2026, 1, 1) - 3600000),
+                              chart_period(utc(2026, 1, 1) - 3600000, utc(2026, 1, 3) - 3600000),
+                              session_day(2026, 1, 1, -3600000)));
+    // A last period longer than the chart's count, although it ends at 1 January.
+    CHECK(!chart_periods_tile(three, chart_period(utc(2025, 12, 28), utc(2026, 1, 1)),
+                              chart_period(utc(2026, 1, 1), utc(2026, 1, 4)),
+                              session_day(2026, 1, 1)));
+    // Weekly periods do not restart with the year, so no short week is admitted.
+    CHECK(!chart_periods_tile(two_weeks, chart_period(utc(2025, 12, 29), utc(2026, 1, 1)),
+                              chart_period(utc(2026, 1, 1), utc(2026, 1, 15)),
+                              session_day(2026, 1, 1)));
+}
+
+// The same rule through the startup walk over real calendars.
+void multi_day_chart_year_ends() {
+    // 2025, 2026 and 2027 have 365 days, so in the three years after
+    // 2025-01-01 each of these charts ends every year with a short period:
+    // two days for 3D, one for 4D and 7D, five for 6D.
+    for (const auto* timeframe : {"3D", "4D", "6D", "7D"})
+        CHECK(admits([&] { require_chart_calendar(timeframe, "UTC", utc(2025, 1, 1)); }));
+    // 5D has a short period only where a leap year ends: 31 December 2028.
+    CHECK(admits([] { require_chart_calendar("5D", "UTC", utc(2028, 1, 1)); }));
+    // A session that opens at 09:30 every day: the year's last 2D bar opens at
+    // 09:30 on 31 December and the next one at 09:30 on 1 January.
+    CHECK(admits([] {
+        require_chart_calendar("2D", "UTC", utc(2025, 1, 1) + 34200000, "0930-1600");
+    }));
+    // Still refused: a short period in the middle of a year. Novosibirsk moved
+    // from UTC+6 to UTC+7 on 24 July 2016, a 23-hour day, so that 2D period is
+    // 47 hours long.
+    CHECK(throws_containing(
+        [] { require_chart_calendar("2D", "Asia/Novosibirsk", utc(2016, 1, 1)); },
+        "its bars do not tile the calendar's trading days"));
+    // Still refused: a year end in another shape. On a weekday session the 7D
+    // bar after Friday 31 December 2027 opens on Monday 3 January 2028, because
+    // 1 January is a Saturday.
+    CHECK(throws_containing(
+        [] { require_chart_calendar("7D", "UTC", utc(2027, 1, 1), "24x7:23456"); },
+        "its bars do not tile the calendar's trading days"));
+}
+
 void chart_calendar_admission() {
     constexpr std::int64_t start = 1735689600000;
-    for (const auto* timeframe : {"D", "W", "2D", "2W"}) {
+    // expectation corrected: confirmed D/W DST refusal -> admission, because
+    // civil session successors handle NY/Paris's 71/73 h weekday weekends
+    // and 167/169 h weeks (24x7 days: 23/25 h), including NY aliases/POSIX
+    // rules; Lord Howe moves 30 minutes (24x7 days: 23.5/24.5 h).
+    for (const auto* timeframe : {"D", "1D", "W", "1W"}) {
+        for (const auto* timezone : {"UTC", "Etc/UTC", "UTC+05:30", "EST5", "Asia/Taipei", "Asia/Kolkata"})
+            require_chart_calendar(timeframe, timezone, start);
+        for (const auto* timezone : {"America/New_York", "US/Eastern", "Europe/Paris", "Australia/Lord_Howe",
+                                     "EST5EDT", "EST5EDT,M3.2.0,M11.1.0"})
+            require_chart_calendar(timeframe, timezone, start); // Calendar successors, not elapsed-day/week tiling.
+    }
+    for (const auto* timeframe : {"2D", "2W"}) {
         for (const auto* timezone : {"UTC", "Etc/UTC", "UTC+05:30", "EST5", "Asia/Taipei", "Asia/Kolkata"})
             require_chart_calendar(timeframe, timezone, start);
         for (const auto* timezone : {"America/New_York", "US/Eastern", "Europe/Paris", "Australia/Lord_Howe",
@@ -320,7 +495,9 @@ void chart_calendar_admission() {
     CHECK(throws_containing([&] { require_chart_calendar("60", "Australia/Lord_Howe", start); },
                             "its bars do not tile the calendar's trading days"));
     CHECK(throws_containing([&] { require_chart_calendar("D", "Invalid/Timezone", start); }, "timezone"));
-    CHECK(throws_containing([&] { require_chart_calendar("D", "America/New_York", 2208988800000); }, "daylight-saving"));
+    // expectation corrected: 2040 D refusal -> admission, because future civil
+    // session successors also follow DST (23/25 h 24x7 days; 71/73 h weekday weekends).
+    require_chart_calendar("D", "America/New_York", 2208988800000);
     CHECK(throws_containing([&] { require_chart_calendar("60", "UTC", start, "0930-1130,1300-1500:23456"); },
                            "its bars do not tile the calendar's trading days"));
     require_chart_calendar("30", "UTC", start, "0930-1130,1300-1500:23456");
@@ -350,6 +527,13 @@ void chart_calendar_admission() {
     CHECK(throws_containing([&] {
         require_chart_calendar("D", "Asia/Almaty", 1546300800000, "24x7", false, 1735689600000);
     }, "its bars do not tile the calendar's trading days"));
+    for (const auto* timeframe : {"2D", "2W"})
+        CHECK(throws_containing([&] {
+            require_chart_calendar(timeframe, "America/New_York", start, "0930-1600:23456", true);
+        }, "only confirmed count-1 daily/weekly bars are supported"));
+    CHECK(throws_containing([&] {
+        require_chart_calendar("D", "America/New_York", start, "0930-1600:23456", false);
+    }, "tick/clock delivery"));
 }
 
 }  // namespace
@@ -362,6 +546,8 @@ int main() {
     daily_dst_continuity();
     timezone_identity();
     native_identity_changes();
+    chart_period_tiling();
+    multi_day_chart_year_ends();
     chart_calendar_admission();
     if (failures) {
         std::cerr << "test_native_live_startup failures: " << failures << '\n';

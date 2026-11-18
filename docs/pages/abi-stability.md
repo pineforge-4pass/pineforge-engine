@@ -121,12 +121,37 @@ Warnings do not change values, trades, execution status, failure accessors or
 state hashes. The accessor adds no C struct and changes neither existing C
 layouts nor installed host class layouts; ABI 5 and stream layout 4 stay fixed.
 
+`strategy_set_account_currency_fx_scalar(s, rate)` is an additive runtime
+setter; feature-probe the symbol in older modules. It installs the host's
+scalar account-currency rate, in account-currency units per one unit of the
+symbol's quote currency, and marks it as supplied by the host. A finite
+positive rate returns 0, and 1.0 counts: an explicit 1.0 is host data, the
+default 1.0 is not. Any other value restores the 1.0 ledger fallback, clears
+the mark and returns -1, as do a NULL handle and a call made once
+`strategy_stream_begin` has run. The `account_currency_fx` key of
+`strategy_set_syminfo_metadata` installs through the same rule, and
+`strategy_set_account_currency_fx_series` remains the timestamped curve.
+
+The mark matters to three calls of a script. With an account currency other
+than the symbol's currency, `strategy.convert_to_account`,
+`strategy.convert_to_symbol` and `request.currency_rate` answer only from a
+supplied rate: the scalar, or the curve point in effect at the evaluated time.
+With none they stop the run with the code `currency_conversion_rate_unavailable`
+([run-failure codes](@ref run_failure_codes)); they never convert at the 1.0
+fallback. The same currency on both sides needs no rate. The ledger converts at
+the same numbers as before, so no trade, fill, size or equity value moves. The
+broker-state hash folds the mark only when a scalar was supplied: a run that
+supplies none keeps its hash values, and a run that supplies one, through
+either setter, hashes differently from 1.12.0. The setter adds no C struct and
+changes neither existing C layouts nor the size of an installed host class;
+ABI 5 and stream layout 4 stay fixed.
+
 ## Symbol inventory
 
 The counts below describe the current API, including recorded outputs and the report sink; recorded outputs are not part of 1.4.0.
 
-The stable inventory contains 125 compiled-strategy `PF_API` declarations
-(105 implementations in `src/c_abi.cpp` plus twenty generated declarations)
+The stable inventory contains 126 compiled-strategy `PF_API` declarations
+(106 implementations in `src/c_abi.cpp` plus twenty generated declarations)
 and 43 native-host declarations. A module supplies the generated symbols it
 supports; a script that declares
 `use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, and a
@@ -163,6 +188,7 @@ not the complete inventory:
 | `strategy_set_syminfo_pointvalue` | @ref pf_config |
 | `strategy_set_syminfo_metadata` | @ref pf_config |
 | `strategy_set_account_currency_fx_series` | @ref pf_config |
+| `strategy_set_account_currency_fx_scalar` | @ref pf_config |
 | `strategy_configure_native_fx_curve_v1` | @ref pf_lifecycle |
 | `strategy_get_last_error` | Diagnostics |
 | `strategy_get_last_error_code` | Diagnostics (@ref run_failure_codes) |
@@ -242,7 +268,7 @@ are unchanged. Uncertified hosts and Off requests do not call admission or
 preparation.
 
 Sixteen per-strategy exports include the five create/run/free lifecycle
-functions. The remaining 105 runtime implementations, including the
+functions. The remaining 106 runtime implementations, including the
 closed-trade incarnation accessor, are force-linked into each strategy library,
 so consumers resolve the same complete ABI from the strategy `.so`. All
 additions remain covered by the minor-version append-only guarantee.

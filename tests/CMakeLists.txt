@@ -364,6 +364,7 @@ set(TEST_SOURCES
     test_matrix_ops_extra
     test_timeframe_aggregator_extra
     test_c_abi_setters
+    test_host_currency_conversion
     test_fills_edge
     test_default_qty_signal_freeze
     test_sizing_basis_mintick
@@ -404,6 +405,8 @@ set(TEST_SOURCES
     test_declined_reversal_close_leg
     test_bracket_lifecycle_declined_reversal
     test_exit_bracket_pending_entry_leg
+    test_exit_refire_after_own_fill
+    test_exit_reservation_rule
     test_dual_entry_placement_sizing
     test_fams_same_bar_market_tx
     test_default_flat_market_gross_admission
@@ -424,6 +427,7 @@ set(TEST_SOURCES
     test_ta_extremes_edge
     test_ta_extremes_ring
     test_series_percentile_nearest_rank
+    test_series_sma
     test_ta_voltrend_edge
     test_timezone_concurrency
     test_pointvalue
@@ -494,6 +498,7 @@ set(TEST_SOURCES
     test_pyramid_entry_state_hash
     test_pine_security_state_hash
     test_live_state_hash_recording
+    test_request_security_hash_row_scalar
     test_live_order_derived
     test_live_trade_accessors
     test_live_flags_off_identity
@@ -1085,15 +1090,15 @@ list(APPEND TEST_SOURCES test_open_fill_order_tapes)
 # replayed with run_strategy.py's window for a run that starts on that bar.
 list(APPEND TEST_SOURCES test_run_harness_window_tapes)
 
-# INT28: two wave-J lanes' rules acting in one run, and at one fill
+# Composed order and margin rules acting in one run, and at one fill
 # (tests/fixtures/int28_compositions), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_int28_rule_compositions)
-# INT29: lane W10-DIAG-UNKNOWN's COQ and SAMEOPEN-REV beside lane
-# W5B-ENG-MARGIN-RESIDUAL's SB and PA at one open
+# Current-quantity and same-open reversal rules beside
+# short-margin and placement-affordability residuals at one open
 # (tests/fixtures/int29_compositions), on TradingView's tape.
 list(APPEND TEST_SOURCES test_int29_rule_compositions)
 
-# Lane INT28-FIX (CA): a strategy.close_all() placed after the same bar's
+# A strategy.close_all() placed after the same bar's
 # all-in reversal entry belongs to that reversal
 # (tests/fixtures/reversal_close_all), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_reversal_close_all_tapes)
@@ -1127,7 +1132,7 @@ list(APPEND TEST_SOURCES test_point_order_open_call)
 # The carried-trail tick reach's copy of the kernel's trailing-stop level,
 # held to native_matching::checked_trail_stop bit for bit.
 list(APPEND TEST_SOURCES test_kernel_trail_stop_replica)
-# Lane INT28-FIX: a slipped all-in short's admission and its one-unit margin
+# A slipped all-in short's admission and its one-unit margin
 # calls (tests/fixtures/slipped_short), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_slipped_short_tapes)
 # Lane W13-ENG-MARGIN-OPP: a margin call at a bar's close after the script,
@@ -1138,8 +1143,8 @@ list(APPEND TEST_SOURCES test_margin_opposite_tapes)
 # admission and the grown book's margin calls (tests/fixtures/add_sibling_margin),
 # on TradingView's tapes.
 list(APPEND TEST_SOURCES test_add_sibling_margin_tapes)
-# INT30: lane TAIL-B's calls for a bar's adds (AS, AC, LF) beside lane TAIL-H's
-# rule PK, which re-reserves the exits a call shrank
+# Margin calls for a bar's adds beside exit-reservation replenishment,
+# which re-reserves the exits a call shrank
 # (tests/fixtures/int30_compositions), on TradingView's tapes.
 list(APPEND TEST_SOURCES test_int30_rule_compositions)
 # Lane TAIL-G: requests of other symbols on a daily chart stamped in its
@@ -1164,7 +1169,7 @@ list(APPEND TEST_SOURCES test_margin_open_print_tapes)
 # ... and an infinite strategy.entry quantity trades the default quantity, as
 # na does (tests/fixtures/nonfinite_entry_qty), on TradingView's tape.
 list(APPEND TEST_SOURCES test_nonfinite_entry_qty_tape)
-# Lane INT28-FIX (RC): a calc_on_order_fills recalculation reads the whole
+# A calc_on_order_fills recalculation reads the whole
 # bar's finer request.security values (tests/fixtures/coof_recalc_security),
 # on TradingView's tape.
 list(APPEND TEST_SOURCES test_coof_recalc_security_tapes)
@@ -1205,11 +1210,11 @@ list(APPEND TEST_SOURCES test_native_session_day_facts)
 # Wave G KERNEL-EDGE: one source-free row with fail-before witnesses for FX
 # rolls, session-day neighbours, final calendar-closed buckets and host marks.
 list(APPEND TEST_SOURCES test_native_kernel_edge)
-# R5 lane PAR-MARGIN (item 3): the margin model on an intrabar path is offered
+# The margin model on an intrabar path is offered
 # NativeMarginCheckKind::IntrabarSample at every delivered sample after the
 # bar's first. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_margin_intrabar_samples)
-# R5 lane PAR-MARGIN-2: the post-fill margin check of a request matched on the
+# The post-fill margin check of a request matched on the
 # segment into a waypoint measures from that segment's origin, so the waypoint
 # the fill was reached on the way to (a limit filled on its way down to the
 # bar's low) is in the scan. Source-free, so it also runs in the kernel-only
@@ -1225,7 +1230,7 @@ list(APPEND TEST_SOURCES test_native_session_day_utc)
 # twin's facts at every decision point, the per-bar cost pinned. Source-free,
 # so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_session_day_zoned)
-# R5 lane MAG-INTRABAR: a retained lower bar the direct four-sample path
+# A retained lower bar the direct four-sample path
 # declines (a zero-length leg, an open at its own low) is still walked through
 # its four turning points, so a margin call armed at such an open is booked
 # there, and a bar that traded nothing at one price is one point. Source-free,
@@ -1342,7 +1347,7 @@ list(APPEND TEST_SOURCES test_native_calendar_memo_cost)
 # and summary folds retain full-width keys. Public and source-free, including
 # the kernel-only and sanitizer profiles.
 list(APPEND TEST_SOURCES test_utc_month_key_arithmetic)
-# R5 lane D2-D: the monthly walk keeps its UTC month key with the month's
+# The monthly walk keeps its UTC month key with the month's
 # seconds -- the kept key against month_key_utc at every point of fixed-step,
 # session-shaped and random-order walks, the kept range against the civil
 # month, and compute_equity_stats bit for bit against the 6c081f5d walk.
@@ -1357,51 +1362,51 @@ list(APPEND TEST_SOURCES test_utc_month_memo)
 # reference walk (tests/equity_stats_reference.hpp). Source-free, so it also
 # runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_selected_report_view)
-# R5 lane PERF-P5611 (P5): the adapter's chart-day key on a UTC chart by the
+# The adapter's chart-day key on a UTC chart by the
 # same arithmetic, swept against gmtime_r through the host. Source-bound.
 list(APPEND TEST_SOURCES test_chart_day_key_arithmetic)
-# R5 lane D2-D: the chart-day key keeps its UTC day with the consumer -- the
+# The chart-day key keeps its UTC day with the consumer -- the
 # key at every bar of stepped, session-shaped, daily, weekly and monthly
 # sequences over the K1 zones across DST gaps, overlaps and year ends, every
 # civil-day boundary, and day-ledger runs under the intraday loss,
 # consecutive-loss-days and filled-orders rules, kept == computed at every
 # source callback. Source-bound.
 list(APPEND TEST_SOURCES test_chart_day_memo)
-# R5 lane D2-D: the host's source publication asks flush_pending_entries' and
+# The host's source publication asks flush_pending_entries' and
 # the same-bar exit sort's first questions before calling them -- every
 # configuration field written by the script at seeded bars and by the host
 # between runs, entries queued behind closes, reversals, batches and fill
 # recalculations, and bracket legs filled together, pinned on 6c081f5d.
 # Source-bound.
 list(APPEND TEST_SOURCES test_publication_witness)
-# R5 lane PERF-P5611 (P6): whether a Pine chart aggregates input bars, the
+# Whether a Pine chart aggregates input bars, the
 # one definition's equal-literal answer judged against tf_ratio over every
 # admitted literal pair. Source-bound.
 list(APPEND TEST_SOURCES test_aggregates_input_bars_literals)
-# R5 lane PERF-P5611 (P11): the language time built-ins' decomposition --
+# The language time built-ins' decomposition --
 # UTC by civil arithmetic, other zones from memoised offset intervals --
 # against libc field by field, and a memoised zoned read that no longer waits
 # for the process timezone lock. Source-free, so both also run in the
 # kernel-only profile.
 list(APPEND TEST_SOURCES test_local_time_fields)
 list(APPEND TEST_SOURCES test_local_time_lock_free_hit)
-# R5 lane PERF-L5: the matcher passes over a priced trigger its point's path
+# The matcher passes over a priced trigger its point's path
 # cannot reach before reading the rest of the row, and takes its next winner
 # from an ascending run of rows. Both are the full evaluation bit for bit over
 # books aimed at the band's edges and K3's randomized books (differential).
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_match_band_precheck)
-# R5 lane PERF-L5: the values six books aimed at the band's edges produce,
+# The values six books aimed at the band's edges produce,
 # pinned on f71cd820 (witness). Source-free, so it also runs in the
 # kernel-only profile.
 list(APPEND TEST_SOURCES test_native_match_band_witness)
-# R5 lane PERF-L5: a warm matcher allocates nothing per driver point -- its
+# A warm matcher allocates nothing per driver point -- its
 # snapshot, provenance, skip keys and trail handles live in the consumer's
 # scratch. Steady books over a window of bars allocate what an idle run does
 # (fails on f71cd820). Source-free, so it also runs in the kernel-only
 # profile.
 list(APPEND TEST_SOURCES test_native_match_allocations)
-# R5 lane PERF-L5: the Pine adapter's command path reads the predecessor's
+# The Pine adapter's command path reads the predecessor's
 # placement row in place, builds the L4c priority candidates only when a
 # selection can use them and carries the source-key node over to a
 # successor; four re-issuing scripts' values pinned on f71cd820, and a
@@ -1410,76 +1415,76 @@ list(APPEND TEST_SOURCES test_native_match_allocations)
 list(APPEND TEST_SOURCES test_adapter_command_allocations)
 list(APPEND TEST_SOURCES test_adapter_exit_scratch)
 list(APPEND TEST_SOURCES test_reversal_exit_owner_gate)
-# R5 lane PERF-L1: NativeStrategyHost's consumer, aggregate and lifecycle reads
+# NativeStrategyHost's consumer, aggregate and lifecycle reads
 # against the lookups they replaced, inside every host hook of randomized
 # runs. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_host_reads)
-# R5 lane PERF-L1: the exact guards in front of the per-point bodies against
+# The exact guards in front of the per-point bodies against
 # the bodies themselves over fixed and randomized runs, and every value a host
 # reads inside every hook of the fixed runs, pinned on f71cd820 -- the frames
 # built in place and the magnifier's scratch buffers move none. Source-free,
 # so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_lean_path)
-# R5 lane PERF-L1: a synthesized or lower intrabar path delivers its script
+# A synthesized or lower intrabar path delivers its script
 # bars without a heap allocation per bar (two to five at f71cd820). Source-free,
 # so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_intrabar_scratch)
 list(APPEND TEST_SOURCES test_parent_terminal_scratch)
 list(APPEND TEST_SOURCES test_same_bar_trade_scratch test_exit_group_reorder_scaling)
 list(APPEND TEST_SOURCES test_global_exit_recut_scratch)
-# R5 lane PERF-L1: the interval cache's prior answers and the session-point
+# The interval cache's prior answers and the session-point
 # memo hold only what a fresh, memo-free resolution answers, in every host hook
 # of randomized zoned, aggregated and streamed runs. Source-free, so it also
 # runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_lookup_memos)
-# R5 lane PERF-L1: the inline abort and projection checks fail every boundary
+# The inline abort and projection checks fail every boundary
 # as f71cd820 did (pinned), the array-free margin sizing price is the array
 # walk bit for bit, and a frame constructed from its parts is the aggregate
 # the callbacks built. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_point_checks)
-# R5 lane TA1: ta::AnchoredVWAP / AnchoredVWAPBands against a naive
+# ta::AnchoredVWAP / AnchoredVWAPBands against a naive
 # recomputation from the last anchored bar, and against ta::VWAP's session-day
 # reset. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_ta_anchored_vwap)
-# R5 lane TA1: ta::ALMA's floor input against TradingView's spelled-out ALMA.
+# ta::ALMA's floor input against TradingView's spelled-out ALMA.
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_ta_alma_floor)
-# R5 lane TA1: ta::KC's middle band is ta::EMA of its source on every bar and
+# ta::KC's middle band is ta::EMA of its source on every bar and
 # its range is ta.tr(false), against TradingView's spelled-out f_kc / f_kcw.
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_ta_kc_basis)
-# R5 lane TA1: ta::KC / ta::KCW's useTrueRange against f_kc / f_kcw.
+# ta::KC / ta::KCW's useTrueRange against f_kc / f_kcw.
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_ta_kc_range)
-# R5 lane TA1: ta::PivotPointLevels, held and developing, against the pivot
+# ta::PivotPointLevels, held and developing, against the pivot
 # formulas re-aggregated naively, and against ta::pivot_point_levels.
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_ta_pivot_point_levels)
-# R5 lane K-COHORT: a cohort close selects each opening on its roster once,
+# A cohort close selects each opening on its roster once,
 # however many lots that opening's fills left, and books what the same close
 # bound without a roster books (BindOpenings over the members, and one
 # BindOpening per member). Source-free, so it also runs in the kernel-only
 # profile.
 list(APPEND TEST_SOURCES test_native_cohort_sliced_close)
-# R5 lane PERF-P7: the lookups the lane turns from history walks into
+# The lookups changed from history walks into
 # indexes, as the values four Pine scenarios reach through them -- every
 # recorded broker-state row, every read, every trade -- pinned on f71cd820
 # before the indexes existed. Source-bound.
 list(APPEND TEST_SOURCES test_adapter_lookup_index_witness)
-# R5 lane PERF-P7 (P7a), re-targeted by INT20 when V19-B's chain index took
-# the place of P7a's definition index: the request core's cohort receipts,
+# Cohort receipt coverage was re-targeted when the chain index took
+# the place of the definition index: the request core's cohort receipts,
 # rosters and membership answers against an oracle folded over the whole
 # journal, and a twin whose journal retires at every script-bar boundary equal
 # to it, over the randomized books of test_native_match_row_reuse and replace
 # chains joined to a cohort at every re-issue. Source-free, so it also runs in
 # the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_definition_index)
-# R5 lane PERF-P7 (P7b): the per-cohort side index behind the applied-reversal
+# The per-cohort side index behind the applied-reversal
 # purge and bracket_belongs_to_reversal, and the closed-row walk over the
 # roster positions that carry units, against the whole-roster walks, bit for
 # bit, over randomized Pine command streams (differential). Source-bound.
 list(APPEND TEST_SOURCES test_adapter_purge_index)
-# R5 lane PERF-P7: the consumed-leg index exit() reads (exit legs by origin and
+# The consumed-leg index exit() reads (exit legs by origin and
 # leg kind, folded over the retained placement table) against the walk of the
 # whole exit family, bit for bit, over randomized Pine command streams
 # (differential); and the cost of both lookups staying linear in the bars --
@@ -1487,7 +1492,7 @@ list(APPEND TEST_SOURCES test_adapter_purge_index)
 # (scaling). Source-bound.
 list(APPEND TEST_SOURCES test_adapter_exit_leg_index)
 list(APPEND TEST_SOURCES test_adapter_lookup_index_scaling)
-# R5 lane PERF-L2: the fused settlement of a book of at most one lot against
+# The fused settlement of a book of at most one lot against
 # the staged chain, bit for bit -- an admission table with each condition
 # flipped, randomized direct books through every fused-capable entry,
 # randomized matcher runs (fee forms, FX, margin, magnifier, streams, host-owned
@@ -1495,12 +1500,12 @@ list(APPEND TEST_SOURCES test_adapter_lookup_index_scaling)
 # case takes the one pass. Source-free, so it also runs in the kernel-only
 # profile.
 list(APPEND TEST_SOURCES test_native_fused_settlement)
-# R5 lane PERF-L2: a common-case fill is inspected, projected, previewed and
+# A common-case fill is inspected, projected, previewed and
 # settled without a heap allocation on a warm engine (fails on 6976a808, where
 # each call staged into heap vectors). Source-free, so it also runs in the
 # kernel-only profile.
 list(APPEND TEST_SOURCES test_native_fused_settlement_allocations)
-# R5 lane V19-E: the Pine adapter erases the placement row of a request that
+# The Pine adapter erases the placement row of a request that
 # no longer works once nothing can read it. Recording mode over N and 4N bars
 # costs < 5x and retains a live-bounded number of rows (scaling); randomized
 # Pine command scripts show the same transcript -- every command event, pending
@@ -1509,13 +1514,13 @@ list(APPEND TEST_SOURCES test_native_fused_settlement_allocations)
 # Source-bound.
 list(APPEND TEST_SOURCES test_adapter_live_state_scaling test_retirement_work_scaling)
 list(APPEND TEST_SOURCES test_adapter_live_state_equivalence)
-# R5 lane V19-D: a bracket family's roster parks the erased members behind a
+# A bracket family's roster parks the erased members behind a
 # retained one (the v4 fold reads what is retained): randomized append /
 # erase / settle / cancel streams against a plain model -- the same members
 # in order, the retained ones as the working tail, the model's fold words,
 # the same words whenever the settles came. Source-bound.
 list(APPEND TEST_SOURCES test_bracket_roster_parking)
-# R5 lane L3: the order core's direct forms (WorkingRequestCore::apply_*)
+# The order core's direct forms (WorkingRequestCore::apply_*)
 # against the prepare/install pairs they stand for, bit for bit after every
 # command -- two bare cores over randomized command streams (answers,
 # exceptions, every event and live row, receipts, chain index, counters and
@@ -1525,14 +1530,14 @@ list(APPEND TEST_SOURCES test_bracket_roster_parking)
 # flatten and current executions, under Window and Full). Source-free, so it
 # also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_direct_mutation)
-# R5 lane L3: on warm bare books a command allocates its definition and
+# On warm bare books a command allocates its definition and
 # nothing else, and the kernel's own work -- fills, their dependency drains,
 # the matcher's mutations, the journal's retirement -- nothing but the
 # calendar's session-day spans; a Full read of the whole record stays within
 # one result vector plus the definitions decoded from spilled journal pages
 # (fails on 10f20197, several per fill). Source-free: runs in kernel-only too.
 list(APPEND TEST_SOURCES test_native_direct_mutation_allocations)
-# R5 lane V19-D: a replace that keeps its handle or carries a close's book
+# A replace that keeps its handle or carries a close's book
 # binding (ReplaceOptions::keep_handle / keep_binding) matches exactly what a
 # plain replace matches -- every fill, journal outcome, queue order, answer and
 # closed trade, entry incarnations included -- over randomized re-issue scripts
@@ -1542,7 +1547,7 @@ list(APPEND TEST_SOURCES test_native_direct_mutation_allocations)
 # that keeps handles stays flat per bar at 4x the bars. Source-free, so it also
 # runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_handle_stable_replace)
-# R5 lane K-ULP2: a close that spans lots and ends inside one of them --
+# A close that spans lots and ends inside one of them --
 # Reduce or Transact, two or three lots, a selected scope, execute_current, a
 # C host, the settlement's own calls on an opening scope, a seeded battery of
 # books sized from cash at tick prices -- is one terminal fill whose closed
@@ -1551,7 +1556,7 @@ list(APPEND TEST_SOURCES test_native_handle_stable_replace)
 # split can carry are still refused. Source-free, so it also runs in the
 # kernel-only profile.
 list(APPEND TEST_SOURCES test_native_partial_close_split)
-# R5 lane K-ULP3: a close whose binary64 running sum reaches its request exactly
+# A close whose binary64 running sum reaches its request exactly
 # at a lot -- a Reduce or Transact of the book's own sum, of a FIFO prefix of
 # it, or of a prefix of a bound selection; execute_current; a C host; the
 # settlement's own calls on an opening scope; a seeded battery of books sized
@@ -1561,7 +1566,7 @@ list(APPEND TEST_SOURCES test_native_partial_close_split)
 # and the refusals of unrepresentable splits are controls. Source-free, so it
 # also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_exact_sum_close)
-# R5 lane K-ULP4: a request the settlement cannot book exactly on its book --
+# A request the settlement cannot book exactly on its book --
 # a close split binary64 cannot hold, a reduction the position absorbs, an
 # opening beside a dust lot -- ends with a typed
 # MatchRejected(UnrepresentableQuantity) and the run goes on (it stopped with
@@ -1570,7 +1575,7 @@ list(APPEND TEST_SOURCES test_native_exact_sum_close)
 # close of one lot's own size are the book's own quantities and settle.
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_unrepresentable_refusal)
-# R5 lane K-ULP4 (ruling part b): NativeRunSpec::quantity_tolerance -- a close
+# NativeRunSpec::quantity_tolerance -- a close
 # within the tolerance of a FIFO boundary ends at it, charged its request; a
 # dust lot a close meets at the head of the book closes whole; a dust book
 # beside an opening stays; an overshoot opens nothing -- staged and direct,
@@ -1578,7 +1583,7 @@ list(APPEND TEST_SOURCES test_native_unrepresentable_refusal)
 # absent, pinned from 91d65ad6), and the C extension's tail. Source-free, so it
 # also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_quantity_tolerance)
-# R5 lane K-ULP5: an OCA-Reduce deduction binary64 cannot take off its
+# An OCA-Reduce deduction binary64 cannot take off its
 # recipient -- off its remaining units, into its pending total, at its terms or
 # at its owner's fill -- is absorbed and the run goes on (it stopped with code 6
 # / discriminator 7 on f1af50dc): K-ULP4's p5b probe, each of the four sites,
@@ -1586,7 +1591,7 @@ list(APPEND TEST_SOURCES test_native_quantity_tolerance)
 # and a seeded battery of OCA-Reduce groups at ulp scale, staged and direct.
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_group_absorption)
-# R5 lane K-OCA-KEEP: a re-price that keeps its handle inside a group, then a
+# A re-price that keeps its handle inside a group, then a
 # sibling's fill, drains the group in queue order and the run goes on (it
 # stopped with code 2 / discriminator 1 on 2a03c658): K-ULP5's keep_handle
 # probe under Cancel and Reduce, a retained trail and a carried binding, the
@@ -1598,31 +1603,31 @@ list(APPEND TEST_SOURCES test_native_group_absorption)
 # refused InvalidTerms, on 2a03c658). Source-free, so it also runs in the
 # kernel-only profile.
 list(APPEND TEST_SOURCES test_native_group_keep_handle)
-# R5 lane D2-A (PB): the consumer's O(1) has_command_after against the two
+# The consumer's O(1) has_command_after against the two
 # journal searches the Pine adapter's quiet receipt read compared, for every
 # kind of cursor, at every callback of windowed randomized runs
 # (differential). Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_command_after)
-# R5 lane D2-A (PQ1): a driver point with nothing live matched in front of
+# A driver point with nothing live matched in front of
 # match_path against match_path itself, bit for bit, and the points the
 # short-cut took (differential). Source-free, so it also runs in the
 # kernel-only profile.
 list(APPEND TEST_SOURCES test_native_quiet_point)
-# R5 lane D2-A (PQ2): the magnifier sampler handed its leg order and keeping
+# The magnifier sampler handed its leg order and keeping
 # no scratch between calls against the base routine, bit for bit, at every
 # sample count and distribution, and the declared order the consumer hands it
 # (differential). Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_magnifier_ordered_sampler)
-# R5 lane D2-A (PQ2): the four-sample ENDPOINTS path computed directly against
+# The four-sample ENDPOINTS path computed directly against
 # the general and the base routine, bit for bit, the bars it declines, and
 # runs with the direct path on and off (differential). Source-free, so it also
 # runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_magnifier_endpoints4)
-# R5 lane D2-A (PA): a host that declares no bar-open hook against one whose
+# A host that declares no bar-open hook against one whose
 # hook is empty, C hosts included (differential). Source-free, so it also runs
 # in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_bar_open_hook)
-# R5 lane D2-A (PC): a host that declares no precommit hook against one whose
+# A host that declares no precommit hook against one whose
 # hook admits every view, excursion owners and C hosts included, and the
 # settlement previews each run builds (differential). Source-free, so it also
 # runs in the kernel-only profile.
@@ -1630,7 +1635,7 @@ list(APPEND TEST_SOURCES test_native_precommit_hook)
 # EN-132: source-free native ownership witnesses and the source companion.
 list(APPEND TEST_SOURCES test_value_invalid_sizing_margin)
 list(APPEND TEST_SOURCES test_value_invalid_sizing_margin_source)
-# R5 lane D2-C: the library's per-thread runtime state (the TA bar context,
+# The library's per-thread runtime state (the TA bar context,
 # the EMA seeding default, the chart day partition) written on the pump's
 # runtime block against thread-local storage at every write -- bare hosts
 # whose every callback opens the Pine publication's scopes over K3's books,
@@ -1639,13 +1644,13 @@ list(APPEND TEST_SOURCES test_value_invalid_sizing_margin_source)
 # nested run and two threads (differential). Source-free, so it also runs in
 # the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_runtime_ambient)
-# R5 lane H-DOCGATES (AUDIT4 N-7): the runtime blocks' LIFO order -- the legal
+# The runtime blocks' LIFO order -- the legal
 # order in process, and in a forked child the outer block leaving first, which
 # a library with its debug checks compiled in must answer with SIGABRT and any
 # other library by returning (PINEFORGE_LIBRARY_DEBUG_CHECKS, below).
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_runtime_ambient_lifo)
-# R5 lane D2-C: the Pine host's publications, its suppressed probe tail and
+# The Pine host's publications, its suppressed probe tail and
 # its request.security evaluations (host-driven, kernel-routed, the
 # auxiliary lower-timeframe array) set the chart day partition, the EMA
 # seeding default and the TA bar context on the pump's runtime block: every
@@ -1653,21 +1658,21 @@ list(APPEND TEST_SOURCES test_native_runtime_ambient_lifo)
 # against thread-local storage at every write, line for line (differential).
 # Source-bound.
 list(APPEND TEST_SOURCES test_adapter_runtime_ambient)
-# R5 lane D2-C: the consumer's in-place reads (the run's lifecycle, spec and
+# The consumer's in-place reads (the run's lifecycle, spec and
 # phase, the callback's point, the book, the bound consumer) against
 # NativeStrategyHost's accessors at every callback of K3's books and PERF-L2's
 # hosts, in the policy hooks, after a current execution and in every
 # lifecycle state (differential). Source-free, so it also runs in the
 # kernel-only profile.
 list(APPEND TEST_SOURCES test_native_in_place_reads)
-# R5 lane D2-C: the Pine layer's in-place reads (src/source/pine_host_reads.hpp)
+# The Pine layer's in-place reads (src/source/pine_host_reads.hpp)
 # against the host's accessors in every script bar, request.security
 # evaluation and script preparation of the D2-C scenarios, and the running
 # spec's fact kept once per run in the adapter's host cache against its
 # computation; each scenario with and without the host cache, transcripts
 # identical and the kept fact answering (differential). Source-bound.
 list(APPEND TEST_SOURCES test_adapter_in_place_reads)
-# R5 lane D2-C (stage once): a fill settled from the one-lot stage its
+# A fill settled from the one-lot stage its
 # precommit preview took against the fill staged again -- PERF-L2's hosts
 # (partial closes, margin, account FX, excursion owners, streams), K3's books
 # with current executions, hooks that rewrite a quote input inside the pump,
@@ -1675,64 +1680,64 @@ list(APPEND TEST_SOURCES test_adapter_in_place_reads)
 # the carried count (differential). Source-free, so it also runs in the
 # kernel-only profile.
 list(APPEND TEST_SOURCES test_native_settlement_carry)
-# R5 lane D2-C (stage once): the Pine host's fills over the D2-C scenarios
+# The Pine host's fills over the runtime-context scenarios
 # settled from their precommit preview's stage against staged again: every
 # script read, trade and hash line for line, and the carried count
 # (differential). Source-bound.
 list(APPEND TEST_SOURCES test_adapter_settlement_carry)
-# R5 lane B-ENGINE (K-ULP1): a Transact that crosses a fractional position --
+# A Transact that crosses a fractional position --
 # one lot or two, explicit, kernel-sized or host-sized, either side, C host
 # included -- completes with one lot and one terminal fill of exactly its
 # units, whichever way closed + opened rounds (it stopped, or left a 2^-49-unit
 # dust lot, on 8cf3be58). Source-free, so it also runs in the kernel-only
 # profile.
 list(APPEND TEST_SOURCES test_native_crossing_transact)
-# R5 lane B-ENGINE: str_tostring and str_format_values render numbers by the
+# str_tostring and str_format_values render numbers by the
 # rule TradingView's tapes pin (the codegen formatter's, lane C6b) -- its
 # 42-case edge battery, every numeric string of the C6 exports, text-argument
 # MessageFormat, and the mintick mode byte-identical to 8cf3be58. Source-free,
 # so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_str_number_format)
-# R5 lane B-ADAPTER (item 2, AUDIT3-opus2 H4): the pending-order fill-quantity
+# The pending-order fill-quantity
 # probe's AT_FILL partition answers the quantity a default cash / percent entry
 # books at that fill -- fee 0 / 0.1 %, grid none / 0.001, limit and slipped
 # stop entries (differential). Source-bound.
 list(APPEND TEST_SOURCES test_adapter_fill_qty_probe)
-# R5 lane B-ADAPTER (item 1): a typed per-call entry (qty_type cash /
+# A typed per-call entry (qty_type cash /
 # percent_of_equity) is admitted, booked and probed as the contracts its money
 # buys -- the run that declares the same type and value as its default books
 # the same contracts, bit for bit (differential). Source-bound.
 list(APPEND TEST_SOURCES test_adapter_typed_entry_admission)
-# R5 lane B-ADAPTER (item 3, AUDIT3-opus2 H7): the range-end rows convert at
+# The range-end rows convert at
 # the equity curve's last point through the producer's explicit rate, and no
 # source-layer file writes the presented clock -- a stepped FX curve at seven
 # instants around the range end, plain and aggregated charts. Source-bound.
 list(APPEND TEST_SOURCES test_adapter_range_end_fx)
-# R5 lane B-ADAPTER (item 4, M26): the kernel answers how an input span
+# The kernel answers how an input span
 # aggregates into script bars before a run (the scheduler's preview), equal to
 # the preview the Pine scheduler ran on the K1 zones, across DST, on windowed
 # sessions and 1D/1W/1M; plus why the calendar's sealing is not that answer.
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_script_bucket_completions)
-# R5 lane B-ADAPTER (item 7, V19D-P1): a margin call revives a dormant exit
+# A margin call revives a dormant exit
 # the script left standing and never one it cancelled -- the lab tv tapes
 # badapter-v19dp1-control / -cancel replayed on their NYSE:F bars; R5 lane
 # V19-FIX adds the tapes v19fix-cancel-before-pair / -at-1000 (an exit
 # cancelled while live) and the other cancel spellings. Source-bound.
 list(APPEND TEST_SOURCES test_adapter_margin_revival_cancel)
-# R5 lane B-ADAPTER (item 5, F3 finding 2): a current execution converts at its
+# A current execution converts at its
 # cursor's rate, threaded through the terms facts, inspection, preview and
 # settlement contexts, and presents no clock -- its own hooks and the host after
 # it see the frame's; plus the kernel sources that say so. Source-free, so it
 # also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_current_execution_rate)
-# R5 INT24 (ruling on B-ADAPTER finding 1): strategy_last_bar_dual_entry_path
+# Simultaneous-entry ordering: strategy_last_bar_dual_entry_path
 # names the entry the run fills first -- on a tie bar the kernel walks the low
 # leg first (|H - O| < |O - L| is strict), and so does the observation.
 # Source-bound.
 list(APPEND TEST_SOURCES test_adapter_dual_entry_tie)
-# R5 lane H-MEASURE (AUDIT4 X14): every adapter retention AUDIT4 §6 still read
-# as "ruled, unmeasured", measured -- the same bars and orders through the Pine
+# Adapter retention rules previously read as "ruled, unmeasured" are
+# measured -- the same bars and orders through the Pine
 # adapter and through a bare kernel host (a paired differential), and/or
 # TradingView's own trades (`lab tv` tapes under tests/fixtures/, each
 # directory's README.md names them). All source-bound.
@@ -1743,7 +1748,7 @@ list(APPEND TEST_SOURCES test_adapter_margin_schedule_differential)
 list(APPEND TEST_SOURCES test_pyramiding_count_differential)
 #   G2-18 the sibling Stop beside an explicit-zero trail.
 list(APPEND TEST_SOURCES test_zero_trail_sibling_stop)
-#   E5's pending-entry arm and E14's anchored-leg seed (AUDIT3 H6 tapes).
+#   Pending-entry arming and anchored-leg seeding against TradingView tapes.
 list(APPEND TEST_SOURCES test_pending_entry_trail_tapes)
 list(APPEND TEST_SOURCES test_pine_input_domain)
 list(APPEND TEST_SOURCES test_pine_confirmed_source_state)
@@ -1796,11 +1801,11 @@ list(APPEND TEST_SOURCES test_series_origin_tailh_tape)
 list(APPEND TEST_SOURCES test_magnified_aggregated_tape)
 #   G2-23 every condition that keeps request.security on the source evaluator.
 list(APPEND TEST_SOURCES test_adapter_security_route_conditions)
-# R5 lane PAR-ORDERS-2: a current execution refuses a request bound to a host
+# A current execution refuses a request bound to a host
 # roster (BindCohort) instead of failing the run. Source-free, so it also runs
 # in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_current_cohort_refusal)
-# R5 lane PAR-ORDERS-2: TradingView's own trades (`lab tv` tapes under
+# TradingView's own trades (`lab tv` tapes under
 # tests/fixtures/, each directory's README.md names them) replayed through the
 # Pine adapter. All source-bound.
 #   A calc_on_order_fills exit placed while flat, for a pending or a filled parent.
@@ -1809,12 +1814,12 @@ list(APPEND TEST_SOURCES test_flat_coof_exit_tapes)
 list(APPEND TEST_SOURCES test_second_extreme_order_tapes)
 #   A process_orders_on_close stop entry placed while the book is still open.
 list(APPEND TEST_SOURCES test_pooc_reversing_stop_tapes)
-# R5 lane PAR-CASHFEE: a percent-of-equity default quantity under a cash
+# A percent-of-equity default quantity under a cash
 # commission (per order, per contract) against TradingView's own trades -- the
 # `lab tv` tapes under tests/fixtures/cash_fee_sizing (README.md there names
 # them) replayed on their bars through the Pine adapter. Source-bound.
 list(APPEND TEST_SOURCES test_cash_fee_sizing_tapes)
-# R5 lane INT26 (round 2): a process_orders_on_close stop re-entry its close
+# A process_orders_on_close stop re-entry its close
 # reached keeps its fresh bracket when the previous bracket's same-bar limit is
 # observed at the next open -- the `lab tv` tapes under
 # tests/fixtures/pooc_stop_reentry_bracket (README.md there names them) replayed
@@ -1825,7 +1830,7 @@ list(APPEND TEST_SOURCES test_pooc_stop_reentry_bracket_tapes)
 # instead of stopping the run; a chart fed without intrabar bars still
 # refuses. Source-bound.
 list(APPEND TEST_SOURCES test_security_finer_than_feed)
-# R5 lane MAG-INTRABAR: the intrabars TradingView's bar magnifier walks --
+# The intrabars TradingView's bar magnifier walks --
 # its table's timeframe, the session's grid, each owned by the chart bar of
 # its last minute, between the chart bar's own open and close -- as the
 # adapter builds them from the host's 1-minute feed. Source-bound.
@@ -1835,10 +1840,10 @@ list(APPEND TEST_SOURCES test_magnifier_tradingview_intrabars)
 # tapes and calc_on_order_fills refill cascades replayed through the adapter.
 # Source-bound.
 list(APPEND TEST_SOURCES test_adapter_magnifier_intrabar_tapes)
-# R5 lane PAR-ORDERS-3: a process_orders_on_close limit entry at the close that
+# A process_orders_on_close limit entry at the close that
 # placed it (TradingView's tapes, tests/fixtures/pooc_limit_close). Source-bound.
 list(APPEND TEST_SOURCES test_pooc_limit_close_tapes)
-# R5 lane FIX-E1E2: the report's script_tf_ratio and needs_aggregation on
+# The report's script_tf_ratio and needs_aggregation on
 # every run route (E1), and an aggregated chart's admission receipts in their
 # command's bar space, on TradingView's tapes
 # (tests/fixtures/aggregated_admission_receipt, E2). Source-bound.
@@ -3951,7 +3956,7 @@ list(APPEND TEST_SOURCES test_native_dormant_book_reachability)
 list(APPEND TEST_SOURCES test_native_dormant_book_core_contract)
 list(APPEND TEST_SOURCES test_native_dormant_book_capacity)
 
-# CR-150: engine-free pipe flag control beside the ordinary C++ unit rows.
+# Pipe writer flags: engine-free control beside the ordinary C++ unit rows.
 if(UNIX)
     list(APPEND TEST_SOURCES test_pipe_writer_fd_flags)
 endif()
@@ -4269,7 +4274,7 @@ endif()
 add_test(NAME test_l4g_runtime_budget_mutations
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_runtime_budget.py)
 
-# R5 lane PERF-P7: the lookup-index scaling row's ratio is a Release-only
+# The lookup-index scaling row's ratio is a Release-only
 # gate, as the runtime budget's is. A non-Release library asserts every
 # indexed lookup equal to the walk it replaces (pine_adapter.cpp,
 # native_order.cpp), which restores the walk's cost by design; there the row
@@ -4278,7 +4283,7 @@ if(TARGET test_adapter_lookup_index_scaling AND NOT CMAKE_BUILD_TYPE STREQUAL "R
     set_tests_properties(test_adapter_lookup_index_scaling PROPERTIES
         ENVIRONMENT "PINEFORGE_P7_SCALING_GATE=0")
 endif()
-# R5 lane V19-E: the same Release-only gate for the recording-mode ratio.
+# The same Release-only gate for the recording-mode ratio.
 if(TARGET test_adapter_live_state_scaling AND NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     set_tests_properties(test_adapter_live_state_scaling PROPERTIES
         ENVIRONMENT "PINEFORGE_V19E_SCALING_GATE=0")
@@ -4592,7 +4597,7 @@ endif()
 # exit_legs::Domain::Coof / MagnifierCoof -- are gone at 1.0. The row compiles
 # their 1.0 spellings clean (-Werror) in strict C99 and in C++17, and each
 # removed spelling alone, which must fail with the unknown-member diagnostic
-# that names it (R5 lane F6 registered this row as the deprecation check).
+# that names it (registered here as the deprecation check).
 add_test(NAME test_removed_public_spellings
     COMMAND ${CMAKE_COMMAND}
         -DPF_CC=${CMAKE_C_COMPILER}
@@ -4637,7 +4642,7 @@ endif()
 pineforge_add_twin_test(test_native_c_api test_native_c_api)
 pineforge_add_twin_test(test_native_c_api_frozen_header test_native_c_api_frozen_header)
 
-# C-SURFACE-1: an INT23 object compiled with the db98990c C header closure
+# A frozen native C object compiled with the db98990c C header closure
 # must receive the decision tail its 168-byte policy-hook table published.
 # The fixture include path precedes the live headers for this target only.
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/native_c_api/int23/pineforge/native_c_api.h")
@@ -4653,7 +4658,7 @@ else()
 endif()
 pineforge_add_twin_test(test_native_c_api_int23_header test_native_c_api_int23_header)
 
-# R5 lane F4: the public C headers as a strict C99 consumer compiles them --
+# The public C headers as a strict C99 consumer compiles them --
 # extensions off and -pedantic-errors, so any C11-only construct in
 # <pineforge/pineforge.h> or <pineforge/native_c_api.h> is a build failure.
 # The one C11 construct they held, the anonymous union behind P2c's
@@ -4683,7 +4688,7 @@ if(PINEFORGE_ENABLE_COVERAGE)
 endif()
 pineforge_add_twin_test(test_outputs_c_api_c99 test_outputs_c_api_c99)
 
-# R5 lane H-MEASURE (AUDIT4-codex A4-ACID-COVERAGE): the G1 composite witness.
+# The native composite witness.
 # One ctest row, two translation units, the test_native_c_api pattern. The C++
 # half drives one Pine-free NativeStrategyHost through every feature the G1
 # acid test names (a PASS line per feature) in batch and in stream, runs the
@@ -4797,11 +4802,11 @@ add_test(NAME test_doc_anchors COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/test_check_doc_anchors.py)
 add_test(NAME test_doc_lint COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/test_check_doc_lint.py)
-# R5 lane H-DOCGATES (AUDIT4-opus X13): the doc-revert gate's must-fail suite,
+# The doc-revert gate's must-fail suite,
 # over throwaway git repositories; the gate itself is a ci_preflight stage.
 add_test(NAME test_doc_reverts COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/test_check_doc_reverts.py)
-# R5 lane H-DOCGATES (AUDIT4-opus X10): the kernel seam-row gate's must-fail
+# The kernel seam-row gate's must-fail
 # suite, over throwaway trees; the gate itself is a ci_preflight stage.
 add_test(NAME test_kernel_seam_rows COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/test_check_kernel_seam_rows.py)
@@ -4978,7 +4983,7 @@ test_trail_close_restart_no_fold_l4c
     test_magnifier_real_bars_l4b
     test_streaming_l4d)
 
-# R5 lane V19-D: the adapter re-issues with a carried binding
+# The adapter re-issues with a carried binding
 # (ReplaceOptions::keep_binding). The V19-E battery's randomized Pine scripts,
 # each run carrying and with plain re-issues: every transcript but its
 # CloseBoundEvents matches bar for bar -- command events with their ordinals,
@@ -4989,7 +4994,7 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND TARGET test_adapter_live_state_equivalence)
     add_test(NAME test_adapter_reissue_binding
              COMMAND test_adapter_live_state_equivalence --reissue-binding)
 endif()
-# R5 lane V19-D: a margin revival reads the same legs whatever the sweep
+# A margin revival reads the same legs whatever the sweep
 # erased -- a short's exit held dormant by a dropped reversal pair,
 # cancelled and re-placed at other stops, then a margin call: the revival
 # skips it past an erased second re-placement (K3) or after K1 released it,
@@ -5013,7 +5018,7 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND TARGET test_adapter_live_state_equivalence)
         COMMAND test_adapter_live_state_equivalence --retirement-cursors)
 endif()
 
-# PR CI-LITE timing selection: INT23 sanitizer job 107895095058 and INT24
+# PR smoke timing selection: sanitizer job 107895095058 and later
 # sanitizer/Debug jobs 107996509646, 107996511076, 107996511419.
 # A row is slow when it exceeded 60 s in either sanitizer run or 30 s in
 # either Debug run. This is the single home of the PR exclusion population;
@@ -6927,12 +6932,12 @@ if(TARGET test_adapter_sizing_relower)
         PINEFORGE_R2_CORE_FILES="${PINEFORGE_R2_CORE_JOINED}")
 endif()
 
-# R5 lane B-ADAPTER (item 5): the current-execution witness reads the kernel.
+# The current-execution witness reads the kernel.
 if(TARGET test_native_current_execution_rate)
     target_compile_definitions(test_native_current_execution_rate PRIVATE
         PINEFORGE_B_ADAPTER_KERNEL_FILES="${PROJECT_SOURCE_DIR}/src/engine_execution.cpp|${PROJECT_SOURCE_DIR}/src/native_execution_consumer.cpp")
 endif()
-# R5 lane B-ADAPTER (item 3): the range-end witness reads the source layer.
+# The range-end witness reads the source layer.
 if(TARGET test_adapter_range_end_fx)
     target_compile_definitions(test_adapter_range_end_fx PRIVATE
         PINEFORGE_B_ADAPTER_SOURCE_DIR="${PROJECT_SOURCE_DIR}/src/source")
@@ -6957,7 +6962,7 @@ if(TARGET test_offset_trail_quantized_arm)
         PINEFORGE_E5_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/offset_trail_arm")
 endif()
 
-# R5 lane H-MEASURE: the rows that read TradingView tapes from the fixture tree.
+# The rows that read TradingView tapes from the fixture tree.
 foreach(_pf_hm_row IN ITEMS
         "test_series_origin_tailh_tape|PINEFORGE_SERIES_ORIGIN_FIXTURE_DIR|series_origin"
         "test_pyramiding_count_differential|PINEFORGE_PYRAMIDING_FIXTURE_DIR|pyramiding_count"
@@ -6972,17 +6977,17 @@ foreach(_pf_hm_row IN ITEMS
         "test_requested_bar_grid_tapes|PINEFORGE_REQUESTED_BAR_GRID_FIXTURE_DIR|requested_bar_grid"
         "test_magnified_aggregated_tape|PINEFORGE_HM_MAG_FIXTURE_DIR|magnified_aggregated"
         "test_adapter_margin_schedule_differential|PINEFORGE_HM_M7A_FIXTURE_DIR|margin_entry_bar"
-        # R5 lane PAR-ORDERS-2's tape rows.
+        # Current execution order tape rows.
         "test_flat_coof_exit_tapes|PINEFORGE_PA2_FLAT_COOF_FIXTURE_DIR|flat_coof_exit"
         "test_second_extreme_order_tapes|PINEFORGE_PA2_SECOND_EXTREME_FIXTURE_DIR|second_extreme_orders"
         "test_pooc_reversing_stop_tapes|PINEFORGE_PA2_REVERSING_STOP_FIXTURE_DIR|pooc_reversing_stop"
-        # R5 lane MAG-INTRABAR's tape row.
+        # Intrabar magnifier tape row.
         "test_adapter_magnifier_intrabar_tapes|PINEFORGE_MI_FIXTURE_DIR|magnifier_intrabars"
-        # R5 lane PAR-ORDERS-3's tape row.
+        # Fill recalculation order tape row.
         "test_pooc_limit_close_tapes|PINEFORGE_PA3_POOC_LIMIT_FIXTURE_DIR|pooc_limit_close"
-        # R5 lane XAU-CAL's tape row.
+        # Symbol session calendar tape row.
         "test_daily_magnifier_tapes|PINEFORGE_DAILY_MAGNIFIER_FIXTURE_DIR|daily_magnifier"
-        # R5 lane FIX-E1E2's tape row.
+        # Report timeframe tape row.
         "test_aggregated_admission_receipt_tapes|PINEFORGE_FIX_E1E2_FIXTURE_DIR|aggregated_admission_receipt")
     string(REPLACE "|" ";" _pf_hm_fields "${_pf_hm_row}")
     list(GET _pf_hm_fields 0 _pf_hm_target)
@@ -6994,17 +6999,17 @@ foreach(_pf_hm_row IN ITEMS
     endif()
 endforeach()
 
-# R5 lane PAR-CASHFEE reads its TradingView tapes from the fixture tree too.
+# Cash-fee sizing reads its TradingView tapes from the fixture tree too.
 if(TARGET test_cash_fee_sizing_tapes)
     target_compile_definitions(test_cash_fee_sizing_tapes PRIVATE
         PINEFORGE_CASH_FEE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cash_fee_sizing")
 endif()
-# R5 lane INT26 (round 2) reads its TradingView tapes from the fixture tree too.
+# Close-pass stop re-entry reads its TradingView tapes from the fixture tree too.
 if(TARGET test_pooc_stop_reentry_bracket_tapes)
     target_compile_definitions(test_pooc_stop_reentry_bracket_tapes PRIVATE
         PINEFORGE_INT26_REENTRY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_stop_reentry_bracket")
 endif()
-# R5 lane K-SESSION-WINDOWS reads TradingView's session-flag tapes.
+# Session windows read TradingView's session-flag tapes.
 foreach(_pf_ksw_target IN ITEMS test_session_prepost_windows_tape
         test_native_session_day_bar_open test_session_extended_day_tape
         test_session_break_open_bar_tape)
@@ -7289,13 +7294,13 @@ if(TARGET test_int28_rule_compositions)
         PINEFORGE_OPEN_FILL_ORDER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/open_fill_order")
 endif()
 
-# INT29 reads its TradingView tape from the fixture tree; source-bound.
+# Order/timing compositions read their TradingView tape from the fixture tree; source-bound.
 if(TARGET test_int29_rule_compositions)
     target_compile_definitions(test_int29_rule_compositions PRIVATE
         PINEFORGE_INT29_COMPOSITIONS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/int29_compositions")
 endif()
 
-# Lane INT28-FIX (CA) reads its TradingView tapes from the fixture tree and
+# Reversal close_all association reads its TradingView tapes from the fixture tree and
 # the 15m bars of tests/fixtures/margin_v6; source-bound.
 if(TARGET test_reversal_close_all_tapes)
     target_compile_definitions(test_reversal_close_all_tapes PRIVATE
@@ -7348,7 +7353,7 @@ if(TARGET test_point_order_open_call)
         PINEFORGE_ADMISSION_RULES_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/admission_rules")
 endif()
 
-# Lane INT28-FIX reads its TradingView tapes from the fixture tree;
+# Slipped-short admission reads its TradingView tapes from the fixture tree;
 # source-bound.
 if(TARGET test_slipped_short_tapes)
     target_compile_definitions(test_slipped_short_tapes PRIVATE
@@ -7381,14 +7386,14 @@ if(TARGET test_add_sibling_margin_tapes)
         PINEFORGE_ADD_SIBLING_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/add_sibling_margin")
 endif()
 
-# INT30 reads its TradingView tapes from the fixture tree and the 15m bars of
+# Fill-rule compositions read their TradingView tapes from the fixture tree and the 15m bars of
 # tests/fixtures/margin_v6; source-bound.
 if(TARGET test_int30_rule_compositions)
     target_compile_definitions(test_int30_rule_compositions PRIVATE
         PINEFORGE_INT30_COMPOSITIONS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/int30_compositions")
 endif()
 
-# Lane INT28-FIX (RC) reads its TradingView tape from the fixture tree;
+# Recalculated security reads its TradingView tape from the fixture tree;
 # source-bound.
 if(TARGET test_coof_recalc_security_tapes)
     target_compile_definitions(test_coof_recalc_security_tapes PRIVATE
@@ -7584,7 +7589,7 @@ set_tests_properties(
     PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
 
-# CR-233: a public, receipt-independent Release smoke. Build these executables
+# A public, receipt-independent Release smoke. Build these executables
 # before CTest; a library-only build leaves statically linked tests stale.
 # Full profiles still build all targets and run every registered row.
 set(PINEFORGE_PR_FAST_TESTS
@@ -7602,7 +7607,7 @@ set(PINEFORGE_PR_FAST_TESTS
     test_abi_layout_probe
 )
 
-# CR-150 P00: append after the pre-existing line-pinned registrations.
+# Contract headers: append after the pre-existing line-pinned registrations.
 # Keep the unit-test inventory in sync; its main registration loop is above.
 list(APPEND TEST_SOURCES test_cr150_contract_headers)
 pineforge_add_unit_test(test_cr150_contract_headers)
@@ -7610,12 +7615,12 @@ target_sources(test_cr150_contract_headers PRIVATE test_cr150_contract_headers_c
 set_target_properties(test_cr150_contract_headers PROPERTIES
     C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 
-# CR-150 L7B: point-source equity metrics.  This registration intentionally
-# follows the P00 line-pinned block above (scope ruling SCOPE-RULING-1818.md).
+# Point-source equity metrics. This registration intentionally
+# follows the line-pinned contract-header block above.
 list(APPEND TEST_SOURCES test_metrics_point_source)
 pineforge_add_unit_test(test_metrics_point_source)
 
-# CR-150 L15a: append after every existing line-pinned registration.
+# Borrowed native bar views: append after every existing line-pinned registration.
 list(APPEND TEST_SOURCES test_native_bar_views_l15a)
 pineforge_add_unit_test(test_native_bar_views_l15a)
 
@@ -7623,24 +7628,24 @@ add_test(NAME test_native_bar_views_guard_l15a
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_native_cpp_versions.py
             --self-test-bar-views)
 
-# CR-150 L16: source-layer differential, appended after all line-pinned rows.
+# Magnifier path: source-layer differential, appended after all line-pinned rows.
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     list(APPEND TEST_SOURCES test_magnifier_path_source_l16)
     pineforge_add_unit_test(test_magnifier_path_source_l16)
 endif()
 
-# CR-150 L8a: keep the existing CMake line pins stable.
+# Trade ledger: keep the existing CMake line pins stable.
 list(APPEND TEST_SOURCES test_trade_ledger)
 pineforge_add_unit_test(test_trade_ledger)
 
 list(APPEND TEST_SOURCES test_trade_percent_prefix)
 pineforge_add_unit_test(test_trade_percent_prefix)
 
-# CR-150 L7A: isolated trade-fold proof, after all line-pinned registrations.
+# Trade statistics: isolated trade-fold proof, after all line-pinned registrations.
 list(APPEND TEST_SOURCES test_trade_stats_accumulator)
 pineforge_add_unit_test(test_trade_stats_accumulator)
 
-# CR-150 L0B: append only; private_fixture_reads.evidence pins earlier lines.
+# Heap census: append only; private_fixture_reads.evidence pins earlier lines.
 add_test(NAME test_heap_census
     COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/test_heap_census.py)
 if(PINEFORGE_BUILD_SOURCE_LAYER)
@@ -7687,7 +7692,7 @@ endif()
 
 add_test(NAME test_lanes_cmake_d COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/check_lanes_cmake_d.py)
 
-# CR-352: regression rows retain the fixture API available on the red base.
+# Scratch attribution: regression rows retain the fixture API available on the red base.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     list(APPEND TEST_SOURCES test_scratch_watch_attribution)
     pineforge_add_unit_test(test_scratch_watch_attribution)
@@ -7834,7 +7839,7 @@ foreach(lane_file IN LISTS LANE_CMAKE)
 endforeach()
 
 # --- lane scratch-directory-resolution-and-fallback begin ---
-# CR-352: only these opted-in existing targets need the interposer's linkage.
+# Scratch resolution: only these opted-in existing targets need the interposer's linkage.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(test_default_scratch_tmpfs_tmpdir PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
     target_link_libraries(test_jailed_scratch_tmpfs_tmpdir PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
@@ -7850,7 +7855,7 @@ endif()
 # --- lane streaming-ratios end ---
 
 # --- lane report-sink-format begin ---
-# CR-150 L6B1: appended after every pre-existing line pin. A real source
+# Report sink: appended after every pre-existing line pin. A real source
 # strategy module, with the same whole-archive link as release modules.
 if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
     add_library(report_sink_l6b1_strategy MODULE test_report_sink_l6b1.cpp)
@@ -7878,13 +7883,13 @@ endif()
 # --- lane report-sink-format end ---
 
 # --- lane selected-capture-window-values begin ---
-# CR-150 L17A: a kernel-only native host and a real version-1 path sink.
+# Selected-window capture: a kernel-only native host and a real version-1 path sink.
 # The UNIX-only plain registration is in lanes.d/selected-capture-window-values.cmake.
 # No additional target or test settings are required here.
 # --- lane selected-capture-window-values end ---
 
 # --- lane run-json-sink-full-output begin ---
-# CR-150 L9A: full JSON through the temporary sink; after every line pin.
+# Full JSON through the temporary sink; after every line pin.
 # Preflight also discovers this file through docker/run_json_*_test.py.
 # H2-6: optional native and corpus checks must not skip inside a green row.
 # The native row is in pytest-no-skips-controls.cmake. The corpus byte proof needs a
@@ -7898,7 +7903,7 @@ add_test(NAME test_run_json_sink_l9a
 # --- lane run-json-sink-full-output end ---
 
 # --- lane group-receipt-retirement begin ---
-# CR-150 L19B: match the library Debug-mode precedent for
+# Group receipt retirement: match the library Debug-mode precedent for
 # test_native_runtime_ambient_lifo's PINEFORGE_LIBRARY_DEBUG_CHECKS definition (H2-12).
 target_compile_definitions(test_group_receipt_retirement PRIVATE PINEFORGE_LIBRARY_DEBUG_CHECKS=$<CONFIG:Debug>)
 # --- lane group-receipt-retirement end ---
@@ -7956,7 +7961,7 @@ endif()
 # --- lane run-json-bin end ---
 
 # --- lane run-json-sink-summary begin ---
-# CR-150 L9B: native named-sink summary rows, after every line pin. The Python
+# Named-sink summary: native rows, after every line pin. The Python
 # row is registered in lanes.d/run-json-sink-summary.cmake. These rows read the real
 # L6B1 and outputs-fixture modules from their ENVIRONMENT, which a lane file may
 # not set, so they are registered here once both modules are declared. The
@@ -7976,7 +7981,7 @@ endif()
 # --- lane run-json-sink-summary end ---
 
 # --- lane run-json-selected-sink begin ---
-# CR-150 L9S: native selected-sink rows, after both module declarations.
+# Selected sink: native rows, after both module declarations.
 # The Python control row stays in lanes.d/run-json-selected-sink.cmake.
 # Corpus rows need a supervisor-supplied manifest; selecting them here would
 # otherwise always SKIP inside a green row.
@@ -8195,7 +8200,7 @@ endif()
 # --- lane source-exit-scratch-io end ---
 
 # --- lane report-nonfinite-equity begin ---
-# CR-289: ctypes needs a test-only bridge to the hidden C++ writer; the module
+# Nonfinite equity: ctypes needs a test-only bridge to the hidden C++ writer; the module
 # path reaches the pytest row through $<TARGET_FILE:...> in the lane file.
 if(UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
     add_library(report_nonfinite_equity_fd MODULE test_report_nonfinite_equity_fd.cpp)
@@ -8205,7 +8210,7 @@ endif()
 # --- lane report-nonfinite-equity end ---
 
 # --- lane run-json-jailed-no-file-arena begin ---
-# CR-281 ports CR-224 to Linux's sealed-memfd jailed arena. The module's only
+# The no-file sink uses Linux's sealed-memfd jailed arena. The module's only
 # source is a file of the corpus submodule, so the module and its row exist
 # exactly where that file does: the lab profiles check the submodule out
 # (ci_verify ensure_corpus_submodule) although they turn corpus strategy
@@ -8548,6 +8553,24 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
         PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/run_json_run_warnings")
 endif()
 # --- lane run-json-run-warnings end ---
+
+# --- lane run-failure-validation begin ---
+# Strict external-name validation has no generated-strategy/private-fixture dependency.
+# Keep the CI-pinned PR smoke population; these normal rows run in full profiles
+# and the focused validation proof.
+list(APPEND TEST_SOURCES test_run_failure_validation test_run_failure_validation_unavailable)
+pineforge_add_unit_test(test_run_failure_validation)
+pineforge_add_unit_test(test_run_failure_validation_unavailable)
+# --- lane run-failure-validation end ---
+
+# --- lane closed-rows-debug-fold-slope begin ---
+# This counter is absent from NDEBUG libraries. Register an executing Debug
+# row only, rather than a Release row that skips the measured path.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    list(APPEND TEST_SOURCES test_closed_rows_debug_fold_slope)
+    pineforge_add_unit_test(test_closed_rows_debug_fold_slope)
+endif()
+# --- lane closed-rows-debug-fold-slope end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))

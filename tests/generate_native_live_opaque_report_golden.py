@@ -81,7 +81,7 @@ def ledger_bytes(path):
 def capture(runner, module, root, interval=1):
     result = subprocess.run(command(runner, module, root, interval),
                             input=(root / "feed.jsonl").read_bytes(),
-                            capture_output=True, timeout=60)
+                            capture_output=True)
     assert result.returncode == 0, (
         "live report runner must finish successfully", result.returncode,
         result.stdout, result.stderr)

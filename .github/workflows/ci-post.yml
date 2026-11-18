@@ -407,7 +407,7 @@ jobs:
     with:
       mode: subset
 
-  # Advisory aggregate context covering every GitHub Actions lane. The merge
+  # Advisory aggregate context covering every GitHub Actions job. The merge
   # ruleset requires pineforge/verify and pineforge/parity, posted by the
   # maintainers, rather than this build context.
   build-gate:
@@ -426,7 +426,7 @@ jobs:
         run: |
           echo "::error::authz did not pass; nothing of this run's code is checked out or run"
           exit 1
-      - name: Require every verification lane to have passed
+      - name: Require every verification job to have passed
         shell: bash
         env:
           AUTHZ_RESULT: ${{ needs.authz.result }}

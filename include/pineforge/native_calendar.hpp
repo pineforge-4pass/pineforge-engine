@@ -398,8 +398,8 @@ std::optional<CivilResolution> resolve_civil(std::string_view timezone,
 // ---------------------------------------------------------------------------
 //
 // Session-day ordinal: Howard Hinnant days_from_civil of the session-day's
-// trading date. Day 0 is 1970-01-01. Dates before that are negative; nD uses
-// floor division toward -inf: key = floor(ordinal / n) * n.
+// trading date. Day 0 is 1970-01-01. Dates before that are negative.
+// nD keys restart on January 1 of that trading date's year.
 //
 // Session-week origin: Monday 1969-12-29, the Monday of the week containing
 // 1970-01-01. Week index 0 is that week. nW key = floor(week_index / n) * n.

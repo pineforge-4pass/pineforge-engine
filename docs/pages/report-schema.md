@@ -439,6 +439,14 @@ configures no security surface, so there is nothing to warn about. A native
 security feed attaches to buckets formed by the aggregator; an indivisible
 request forms none, so installing a native feed does not remove the warning.
 
+The second code is `currency_conversion_rate_unavailable`: a
+`request.currency_rate` call with `ignore_invalid_currency` returned `na`
+because the host supplied no rate for it. Its `args` are those of the run
+failure of the same name: `function`, `reason`, `from`, `to`,
+`account_currency`, `symbol_currency` (strings) and `time_ms` (integer, the
+evaluated time in Unix milliseconds). A run reports it once, for the first
+such request.
+
 An absent getter or an empty list leaves the report byte-identical to the earlier
 shape, with no `warnings` key. Unknown codes and their argument objects are
 preserved; extra element keys are ignored and malformed elements are dropped.
