@@ -4807,7 +4807,9 @@ add_test(NAME test_doc_lint COMMAND ${Python3_EXECUTABLE} -B
 add_test(NAME test_doc_reverts COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/test_check_doc_reverts.py)
 # The kernel seam-row gate's must-fail
-# suite, over throwaway trees; the gate itself is a ci_preflight stage.
+# suite, over throwaway trees and, for the excursion writers' check, over a
+# copy of this tree's own adapter source; the gate itself is a ci_preflight
+# stage.
 add_test(NAME test_kernel_seam_rows COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/test_check_kernel_seam_rows.py)
 
