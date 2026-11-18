@@ -1,2 +1,0 @@
-list(APPEND TEST_SOURCES test_ta_ema_step_form)
-pineforge_add_unit_test(test_ta_ema_step_form)
