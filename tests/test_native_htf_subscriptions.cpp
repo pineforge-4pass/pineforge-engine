@@ -44,6 +44,8 @@
 #include "native_htf_subscriptions_fixture.hpp"
 #include "native_fixed_period_fixture.hpp"
 
+#include <pineforge/pineforge.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -1470,9 +1472,122 @@ void test_fixed_period_session_hole_is_not_a_close() {
     check_exchange_day_series({30, 30, 5, whole, "stock", true}, holed(30), holed(5));
 }
 
+// ---- a supplied fixed-period bar off its requested grid -------------------
+
+// The refusal of a supplied bar that does not open on its requested grid, as
+// the public getters report it after the run. Over a 30-minute input on a UTC
+// 24x7 session, a 75-minute request opens at 00:00, 01:15 and 02:30, and a
+// 105-minute one at 00:00, 01:45 and 03:30. A second supplied bar one minute
+// after its grid open is admitted at configure and refuses the run at begin,
+// before any input reaches the host. The code is security_feed_refused, with
+// the reason native_feed_grid and the timeframe the request named. The same
+// bar on its grid open is the control: the run completes and delivers both
+// supplied bars as they were supplied.
+void test_fixed_period_off_grid_classification() {
+    scenario = "fixed period off-grid classification";
+    const std::int64_t origin = utc_ms(2024, 1, 1);
+    std::vector<Bar> bars;
+    for (int i = 0; i < 9; ++i) {
+        Bar bar{};
+        bar.open = 100.0 + i;
+        bar.high = 103.0 + i;
+        bar.low = 99.0 + i;
+        bar.close = 102.0 + i;
+        bar.volume = 10.0 + i;
+        bar.timestamp = origin + static_cast<std::int64_t>(i) * 30 * kMinute;
+        bars.push_back(bar);
+    }
+    struct Request {
+        const char* tf;
+        int second_open_minute;  // the second open of the requested grid
+    };
+    for (const Request& request : {Request{"75", 75}, Request{"105", 105}}) {
+        for (const bool off_grid : {true, false}) {
+            Bar first{};
+            first.open = 200.0;
+            first.high = 205.0;
+            first.low = 198.0;
+            first.close = 203.0;
+            first.volume = 90.0;
+            first.timestamp = origin;
+            Bar second{};
+            second.open = 210.0;
+            second.high = 215.0;
+            second.low = 208.0;
+            second.close = 213.0;
+            second.volume = 100.0;
+            const int minute = request.second_open_minute + (off_grid ? 1 : 0);
+            second.timestamp = origin + minute * kMinute;
+            NativeRunSpec spec = base_spec("30", "30", "native-fixed-period-off-grid");
+            NativeTimeframeSubscription series;
+            series.tf = request.tf;
+            series.authoritative_bars = {first, second};
+            spec.subscriptions.push_back(series);
+            SeriesHost host;
+            const bool applied =
+                host.configure_native(spec).status == NativeSetupStatus::Applied;
+            if (applied) {
+                host.run(bars.data(), static_cast<int>(bars.size()), "30", "30", false, 4,
+                         MagnifierDistribution::ENDPOINTS);
+            }
+            // What the public getters report on this handle after the run.
+            BacktestEngine& engine = host;
+            const pf_strategy_t handle = static_cast<pf_strategy_t>(&engine);
+            const std::string error = strategy_get_last_error(handle);
+            const std::string code = strategy_get_last_error_code(handle);
+            const std::string args = strategy_get_last_error_args(handle);
+            // The deliveries that are a supplied bar as supplied: time and OHLCV.
+            int supplied = 0;
+            for (const Delivery& delivery : host.deliveries) {
+                for (const Bar& row : {first, second}) {
+                    if (delivery.bar.timestamp == row.timestamp
+                        && same(delivery.bar.open, row.open) && same(delivery.bar.high, row.high)
+                        && same(delivery.bar.low, row.low) && same(delivery.bar.close, row.close)
+                        && same(delivery.bar.volume, row.volume)) {
+                        ++supplied;
+                    }
+                }
+            }
+            std::printf("FEEDGRID request=%s second_open_minute=%d applied=%d log=%zu bars=%d "
+                        "deliveries=%zu supplied=%d error=\"%s\" code=\"%s\" args=%s\n",
+                        request.tf, minute, applied ? 1 : 0, host.log.size(), host.bars_seen,
+                        host.deliveries.size(), supplied, error.c_str(), code.c_str(),
+                        args.c_str());
+            CHECK(applied);
+            if (off_grid) {
+                const std::string want_args =
+                    std::string("{\"reason\":\"native_feed_grid\",\"requested_tf\":\"")
+                    + request.tf + "\"}";
+                // Refused at begin: nothing reached the host.
+                CHECK(host.log.empty());
+                CHECK(error == "native fixed-period bar is off the requested grid");
+                CHECK(code == "security_feed_refused");
+                CHECK(args == want_args);
+            } else {
+                CHECK(error.empty());
+                CHECK(code.empty());
+                CHECK(args.empty());
+                CHECK(host.bars_seen == static_cast<int>(bars.size()));
+                CHECK(supplied == 2);
+            }
+        }
+    }
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    // --only off-grid-classification runs the off-grid case by itself.
+    if (argc == 3 && std::string(argv[1]) == "--only"
+        && std::string(argv[2]) == "off-grid-classification") {
+        test_fixed_period_off_grid_classification();
+        std::printf("native HTF subscriptions: %d checks, %d failures\n", checks, failures);
+        return failures == 0 ? 0 : 1;
+    }
+    if (argc != 1) {
+        std::printf("usage: test_native_htf_subscriptions [--only off-grid-classification]\n");
+        return 2;
+    }
     test_hourly_over_quarter_hour();
     test_hourly_lookahead();
     test_same_timeframe_instances();
@@ -1492,6 +1607,7 @@ int main() {
     test_fixed_period_exchange_early_close();
     test_fixed_period_early_close_gate();
     test_fixed_period_session_hole_is_not_a_close();
+    test_fixed_period_off_grid_classification();
     std::printf("native HTF subscriptions: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

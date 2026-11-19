@@ -1878,8 +1878,13 @@
       "aux_chart_period_identity",
       "native_feed_timeframe",
       "native_feed_shape",
-      "native_feed_order"
+      "native_feed_order",
+      "native_feed_grid"
      ]
+    },
+    "requested_tf": {
+     "kind": "timeframe",
+     "optional": true
     }
    },
    "class": "input",
@@ -1895,7 +1900,8 @@
     "native chart feed trading-period identities must be unique and strictly increasing with an auxiliary security feed",
     "native request.security feed requires a parseable timeframe",
     "native request.security feed requires bars and a positive count",
-    "native request.security feed timestamps must be strictly increasing"
+    "native request.security feed timestamps must be strictly increasing",
+    "native fixed-period bar is off the requested grid"
    ],
    "retryable": false,
    "since": "1.4.0"

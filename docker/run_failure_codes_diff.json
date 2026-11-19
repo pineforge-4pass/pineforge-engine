@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "4db9213cc1801ce4152ef25a32f882b2908a367816724188331c3ccafa178ffd"
+    "catalogSha256": "716fa77785ced515d1ed4da68f5b0a4b26126b77d910daaa302b48d7a84db346"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -466,6 +466,86 @@
             "Pine adapter produced invalid native run spec field {field}",
             "syminfo.mincontract must be a positive finite number, got {json_value_cut_80}",
             "syminfo.qty_step must be a positive finite number, got {json_value_cut_80}"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "security_feed_refused",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.reason.values",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "aux_feed_shape",
+            "aux_feed_timeframe",
+            "aux_feed_order",
+            "aux_feed_no_chart",
+            "aux_feed_not_finer",
+            "aux_feed_not_divisor",
+            "aux_chart_order",
+            "aux_chart_period_identity",
+            "native_feed_timeframe",
+            "native_feed_shape",
+            "native_feed_order"
+          ],
+          "after": [
+            "aux_feed_shape",
+            "aux_feed_timeframe",
+            "aux_feed_order",
+            "aux_feed_no_chart",
+            "aux_feed_not_finer",
+            "aux_feed_not_divisor",
+            "aux_chart_order",
+            "aux_chart_period_identity",
+            "native_feed_timeframe",
+            "native_feed_shape",
+            "native_feed_order",
+            "native_feed_grid"
+          ]
+        },
+        {
+          "path": "args.requested_tf",
+          "beforePresent": false,
+          "afterPresent": true,
+          "before": null,
+          "after": {
+            "kind": "timeframe",
+            "optional": true
+          }
+        },
+        {
+          "path": "english",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "auxiliary request.security feed input_tf must be fixed and strictly finer than the native chart timeframe",
+            "auxiliary request.security feed input_tf must evenly divide the native chart timeframe",
+            "auxiliary request.security feed requires a fixed positive input_tf",
+            "auxiliary request.security feed requires at least one native chart bar",
+            "auxiliary request.security feed requires bars, a positive count, and input_tf",
+            "auxiliary request.security feed timestamps must be strictly increasing",
+            "native chart feed timestamps must be strictly increasing with an auxiliary security feed",
+            "native chart feed trading-period identities must be unique and strictly increasing with an auxiliary security feed",
+            "native request.security feed requires a parseable timeframe",
+            "native request.security feed requires bars and a positive count",
+            "native request.security feed timestamps must be strictly increasing"
+          ],
+          "after": [
+            "auxiliary request.security feed input_tf must be fixed and strictly finer than the native chart timeframe",
+            "auxiliary request.security feed input_tf must evenly divide the native chart timeframe",
+            "auxiliary request.security feed requires a fixed positive input_tf",
+            "auxiliary request.security feed requires at least one native chart bar",
+            "auxiliary request.security feed requires bars, a positive count, and input_tf",
+            "auxiliary request.security feed timestamps must be strictly increasing",
+            "native chart feed timestamps must be strictly increasing with an auxiliary security feed",
+            "native chart feed trading-period identities must be unique and strictly increasing with an auxiliary security feed",
+            "native request.security feed requires a parseable timeframe",
+            "native request.security feed requires bars and a positive count",
+            "native request.security feed timestamps must be strictly increasing",
+            "native fixed-period bar is off the requested grid"
           ]
         }
       ]
