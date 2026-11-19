@@ -251,7 +251,7 @@ payload length supplies the extra-payload reservation. After the input commits,
 the checkpoint is inserted in its own admitted transaction while retaining the
 writer mutex, with a byte ceiling no greater than the input's reservation.
 Charging that payload to the boundary input is intended
-(`Ledger::commit_input`, `runner/store.cpp:1330`): the boundary input can hit a
+(`Ledger::commit_input`, `runner/store.cpp:1348`): the boundary input can hit a
 storage stop when the input alone would fit, up to the cumulative payload's
 reservation earlier than strictly necessary. This cost buys the guarantee that
 no input commits with a checkpoint admitted without room in its reservation.
@@ -328,8 +328,8 @@ first need reports or integrity digests populated
 retry after startup replay, before new inputs. Later opens add no startup copy
 when a checkpoint already exists.
 Startup and post-replay checkpoints intentionally have no input reservation
-behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1474`;
-the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1332`).
+behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1493`;
+the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1373`).
 With a large budget, either can spend most of the remaining headroom on an
 O(T) payload before the first live input. The run can stop sooner, never over
 budget; this is the intended cost of preparing the report shortcut at startup.

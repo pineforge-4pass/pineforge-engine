@@ -408,8 +408,8 @@ selected-window `.bin` reader lands.
 | Always emits `capabilities.selected_window_bars_bin_version = 0`, including when the borrowed runtime export is absent. | `selected_window_bars_bin_version` docker/run_json.py:5017; `selected_window_bars_bin_version` tests/test_run_json_bin.py:462 |
 
 Version/info surfaces are separate: the C API exposes `pf_version_get`
-include/pineforge/pineforge.h:1932 and `pf_version_string`
-include/pineforge/pineforge.h:1946. The runner's `engine_version`
+include/pineforge/pineforge.h:1944 and `pf_version_string`
+include/pineforge/pineforge.h:1958. The runner's `engine_version`
 docker/run_json.py:2594 collects `version_string`, `major`, `minor`, `patch`,
 `commit_sha`; none of those fields is the binary-input feature indicator
 (`eng` docker/run_json.py:2597; `eng` docker/run_json.py:2608).

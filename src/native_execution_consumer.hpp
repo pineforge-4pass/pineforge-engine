@@ -778,7 +778,7 @@ public:
     // declares, from the next begin on (nullopt restores the spec's). For a
     // test that reads a whole run's events from a host whose spec it does not
     // write -- the Pine host declares Window -- a readback choice alone: the
-    // spec, its digest and every decision are the spec's. No host reaches it.
+    // spec, its digest and every decision are the spec's. The live runner calls it too.
     void set_retention_override(std::optional<NativeEventRetention> retention) noexcept {
         retention_override_ = retention;
     }
