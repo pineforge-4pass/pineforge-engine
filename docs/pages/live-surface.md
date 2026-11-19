@@ -335,6 +335,18 @@ self-described by `strategy_pending_order_layout`, so an FFI consumer
 builds its struct from that table instead of a hand-typed copy —
 the mirror can grow (append-only) without breaking it.
 
+`strategy_pending_order_fill_qty` reports before the fill: its quantity and its
+`close_only` flag describe what the fill of the resting order would book if the
+book stayed as it is now. The report is made before the fill and does not
+account for checks the fill makes at fill time against equity, price and margin
+(for example, an entry the account cannot afford in whole units). In those
+cases the fill can differ from the report. The report also does not model a
+margin-call surplus, the close quantity a reversal keeps when a margin call was
+booked after the script, a refused signal price, or fills of other orders
+earlier in the same pass. A row whose request names its own quantity, or whose
+request cannot be read (a row held in the source's shadow queue), is reported
+by the prior-cycle rule alone.
+
 ## Evidence {#live_surface_evidence}
 
 Three measurement scripts showed, when the surface landed (fork point

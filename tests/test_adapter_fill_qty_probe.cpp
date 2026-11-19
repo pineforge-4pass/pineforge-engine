@@ -29,6 +29,14 @@
  * tapes, test_tv_money_precision_l4b). Section 2 measures why no kernel query
  * can stand in for them: on a seven-digit decimal tie the kernel's conversion
  * and plain binary64 both refuse the lot the source's rule admits.
+ *
+ * Sections 3 to 5 compare the probe's close_only with the shape the fill of
+ * the same row books in the same run: (3) a same-bar opposite market
+ * predecessor, (4) the short-seed final Short, and (5) the fill's shapes the
+ * probe models, the shape_* tests: a close before a pyramiding stop, a frozen
+ * reversal, a host-sized strategy.order, a row probed in the callback that
+ * queued it, a priced replacement of a market entry, a sequential pair member
+ * and an entry against the allowed risk direction.
  */
 
 #include <algorithm>
@@ -246,12 +254,13 @@ struct PendingProbe {
     int index = -1, rc = -1;
     double qty = kNaN;
     int close_only = -1, partition = -1, predecessor = -1;
-    std::uint64_t incarnation = 0;
+    std::uint64_t incarnation = 0, replaced_market = 0;
 
     void print(const char* shape, const char* order) const {
         std::fprintf(stderr, "%s %s: index=%d rc=%d qty=%.17g close_only=%d partition=%d "
-                     "predecessor=%d incarnation=%llu\n", shape, order, index, rc, qty,
-                     close_only, partition, predecessor, static_cast<unsigned long long>(incarnation));
+                     "predecessor=%d incarnation=%llu replaced_market=%llu\n", shape, order, index, rc, qty,
+                     close_only, partition, predecessor, static_cast<unsigned long long>(incarnation),
+                     static_cast<unsigned long long>(replaced_market));
     }
 };
 
@@ -265,6 +274,7 @@ PendingProbe probe_order(const source::PineStrategyHost& host, const char* id,
         probe.index = i;
         probe.incarnation = row.incarnation;
         probe.predecessor = row.reverses_same_bar_market_from_flat;
+        probe.replaced_market = row.replaced_default_market_incarnation;
         probe.rc = host.probe_fill_qty(i, price, &probe.qty, &probe.close_only, &probe.partition);
         break;
     }
@@ -298,15 +308,23 @@ public:
         strategy_entry("S", false, kNaN, 95.0);
         if (!market_first_) strategy_entry("L", true, kNaN, kNaN, 1.0);
     }
+    std::uint64_t filled_s = 0;  // the S row's incarnation at its fill
+protected:
+    void on_native_applied_event(const native_order::ExecutionAppliedEvent& event,
+                                 const NativeDecisionContext&) override {
+        if (event.request().label == "S" && filled_s == 0) filled_s = event.handle().incarnation;
+    }
 private:
     bool market_first_;
 };
 
 void test_same_bar_predecessor(bool market_first) {
+    // Bars start at index 10: a same-bar placement time is never the
+    // field's default of 0 (placement_script_open_ms).
     const Bar bars[] = {
-        mk_bar(0, 100, 100, 100, 100, 60'000),
-        mk_bar(1, 100, 100, 100, 100, 60'000),
-        mk_bar(2, 100, 101, 94, 96, 60'000),
+        mk_bar(10, 100, 100, 100, 100, 60'000),
+        mk_bar(11, 100, 100, 100, 100, 60'000),
+        mk_bar(12, 100, 101, 94, 96, 60'000),
     };
     SameBarPredecessor p(market_first), f(market_first);
     p.run(bars, 2);
@@ -321,6 +339,8 @@ void test_same_bar_predecessor(bool market_first) {
                  p.last_error().c_str(), f.last_error().c_str());
     CHECK(p.last_error().empty() && f.last_error().empty());
     CHECK(stop.index >= 0 && stop.rc == 0);
+    // The probed row is the row that fills (same script, same incarnation).
+    CHECK(f.filled_s != 0 && stop.incarnation == f.filled_s);
     CHECK(stop.predecessor == (market_first ? 1 : 0));
     CHECK(near(before, 1.0) && closed > 0.0 && near(closed, before));
     CHECK(after <= 0.0);
@@ -401,6 +421,9 @@ void test_short_seed_replay(QtyType sizing) {
                  seed, first, second, f.before_final, f.average_before_final, after,
                  static_cast<unsigned long long>(f.filled_short), p.last_error().c_str(), f.last_error().c_str());
 
+    // Scenario setup (the collision's own shape is the target of
+    // test_short_seed_collision_percent and test_short_seed_close_collision):
+    // these lines only confirm the replay reached the shape under probe.
     CHECK(p.last_error().empty() && f.last_error().empty());
     CHECK(p.pine_bar_index() == 1);
     CHECK(long_entry.index >= 0 && long_entry.rc == 0);
@@ -423,10 +446,375 @@ void test_short_seed_replay(QtyType sizing) {
     CHECK(final_short.partition == PF_FILL_QTY_PARTITION_FROZEN_PLACEMENT && near(final_short.qty, -after));
     CHECK(final_short.close_only == (after == 0.0 ? 1 : 0));
     if (fixed) {
-        CHECK(near(first, seed) && after == 0.0);
+        CHECK(near(first, seed) && near(after, 0.0));
     } else {
         CHECK(first > seed && after < 0.0);
     }
+}
+
+// The probe's close_only against the shape the fill books, in one run: the
+// host probes the row inside a callback (on_native_applied_event, after the
+// named fill has moved the position) and records what the row's own fill
+// then does to the position. Bars start at a non-zero timestamp so a
+// same-bar placement time is never the field's default of 0.
+struct ShapeRecord {
+    PendingProbe probe;
+    double after = kNaN;    // position right after the row fills
+    std::uint64_t filled = 0;
+};
+
+class ShapeReplay : public pineforge::source::PineStrategyHost {
+public:
+    ShapeReplay(const char* probe_after, const char* row, std::int32_t type, int pyramiding)
+        : probe_after_(probe_after), row_(row), type_(type) {
+        source::PineStrategyConfig config;
+        config.initial_capital = 1'000'000.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        config.pyramiding = pyramiding;
+        configure_pine_strategy(config);
+        set_syminfo_mintick(0.01);
+    }
+    ShapeRecord rec;
+
+protected:
+    void on_native_applied_event(const native_order::ExecutionAppliedEvent& event,
+                                 const NativeDecisionContext&) override {
+        const std::string& label = event.request().label;
+        if (label == probe_after_ && rec.probe.index < 0)
+            rec.probe = probe_order(*this, row_, type_, kProbePrice);
+        if (label == row_ && rec.filled == 0) {
+            rec.filled = event.handle().incarnation;
+            rec.after = live_position_size();
+        }
+    }
+    static constexpr double kProbePrice = 95.0;
+
+private:
+    const char* probe_after_;
+    const char* row_;
+    std::int32_t type_;
+};
+
+const Bar kShapeBars[] = {
+    mk_bar(10, 100, 100, 100, 100, 60'000),
+    mk_bar(11, 100, 100, 100, 100, 60'000),
+    mk_bar(12, 100, 100, 100, 100, 60'000),
+    mk_bar(13, 100, 100, 94, 95, 60'000),
+    mk_bar(14, 95, 95, 95, 95, 60'000),
+};
+
+// (a) pyramiding 2: strategy.close("L") then a default-sized buy stop L2 on
+// the same bar is stamped after-close with the LONG created side; a 0.5 short
+// opens later. L2's fill is a Transact of its own unit (long 0.5 after it),
+// where the prior-cycle predicate alone (LONG != SHORT, priced) says 1.
+class CloseThenStop final : public ShapeReplay {
+public:
+    CloseThenStop() : ShapeReplay("S", "L2", kEntryRow, 2) {}
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() == 0) strategy_entry("L", true, kNaN, kNaN, 1.0);
+        if (pine_bar_index() == 1) {
+            strategy_close("L");
+            strategy_entry("L2", true, kNaN, 105.0);
+        }
+        if (pine_bar_index() == 2) strategy_entry("S", false, kNaN, kNaN, 0.5);
+    }
+};
+
+void shape_close_then_stop_reports_the_fills_transaction() {
+    CloseThenStop host;
+    const Bar bars[] = {
+        mk_bar(10, 100, 100, 100, 100, 60'000),
+        mk_bar(11, 100, 100, 100, 100, 60'000),
+        mk_bar(12, 100, 100, 100, 100, 60'000),
+        mk_bar(13, 100, 106, 100, 105, 60'000),
+        mk_bar(14, 105, 105, 105, 105, 60'000),
+    };
+    host.run(bars, 5);
+    const auto& r = host.rec;
+    r.probe.print("close then stop", "L2 after S");
+    std::printf("  close then stop: L2 position after its fill %.17g, error '%s'\n",
+                r.after, host.last_error().c_str());
+    CHECK(host.last_error().empty());
+    CHECK(r.probe.index >= 0 && r.probe.rc == 0 && r.filled == r.probe.incarnation);
+    CHECK(near(r.after, 0.5));
+    CHECK(r.probe.close_only == 0);
+}
+
+// (c) a host-sized strategy.order against an opposite position books
+// CloseOpposite (resolve_source_terms, the Order branch).
+class OrderAgainstShort final : public ShapeReplay {
+public:
+    OrderAgainstShort() : ShapeReplay("S", "O", 3, 1) {}
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() != 0) return;
+        strategy_entry("S", false, kNaN, kNaN, 1.0);
+        strategy_order("O", true, kNaN, 95.0);
+    }
+};
+
+void shape_host_sized_order_reports_close_opposite() {
+    OrderAgainstShort host;
+    host.run(kShapeBars, 5);
+    const auto& r = host.rec;
+    r.probe.print("host-sized order", "O after S");
+    std::printf("  host-sized order: O position after its fill %.17g, error '%s'\n",
+                r.after, host.last_error().c_str());
+    CHECK(host.last_error().empty());
+    CHECK(r.probe.index >= 0 && r.probe.rc == 0 && r.filled == r.probe.incarnation);
+    CHECK(near(r.after, 0.0));
+    CHECK(r.probe.close_only == 1);
+}
+
+// (d) a priced reversal queued in the callback that placed it (pending_entries_,
+// flushed after the script) is probed in that same callback: its queued copy
+// still carries the default FLAT created side, but its flush stamps the live
+// side, so the fill reverses through it (ReverseTo), never close-only.
+class QueuedReversal final : public pineforge::source::PineStrategyHost {
+public:
+    QueuedReversal() {
+        source::PineStrategyConfig config;
+        config.initial_capital = 1'000'000.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        configure_pine_strategy(config);
+        set_syminfo_mintick(0.01);
+    }
+    PendingProbe probe;
+    double before = kNaN;   // position in the callback that queued S
+    double after = kNaN;    // position right after S's own fill
+    std::uint64_t filled = 0;
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() == 0) strategy_entry("L", true);
+        if (pine_bar_index() == 2) {
+            strategy_entry("S", false, kNaN, 95.0);
+            before = live_position_size();
+            probe = probe_order(*this, "S", kEntryRow, 95.0);
+        }
+    }
+
+protected:
+    void on_native_applied_event(const native_order::ExecutionAppliedEvent& event,
+                                 const NativeDecisionContext&) override {
+        if (event.request().label == "S" && filled == 0) {
+            filled = event.handle().incarnation;
+            after = live_position_size();
+        }
+    }
+};
+
+void shape_queued_row_is_probed_on_its_flush_side() {
+    QueuedReversal host;
+    host.run(kShapeBars, 5);
+    host.probe.print("queued reversal", "S in its own callback");
+    std::printf("  queued reversal: position before S %.17g, after S's fill %.17g, error '%s'\n",
+                host.before, host.after, host.last_error().c_str());
+    CHECK(host.last_error().empty());
+    CHECK(host.probe.index >= 0 && host.probe.rc == 0 && host.probe.incarnation == 0);
+    // Long 1 when S is queued; nothing fills before S (bar 13 low 94 crosses
+    // 95). The flush stamps the live LONG side, so S's fill reverses: short 1.
+    CHECK(near(host.before, 1.0));
+    CHECK(host.filled != 0 && near(host.after, -1.0));
+    CHECK(host.probe.close_only == 0);
+}
+
+// The 0-to-1 direction of the prior-cycle predicate: a priced entry that
+// replaced a same-id market entry (replaced_default_market_incarnation), then an
+// opposite market entry on the same bar. Once the short is live the fill of X
+// only closes it; the probe says 1.
+// A nonzero commission keeps every same-bar market batch scope off
+// (same_bar_market_tx_scope needs commission 0, the p2 and fixed-batch scopes
+// pyramiding 2): the market X is then submitted live, so the priced X finds it
+// in live_by_source_key_ and replaces it (replaced_opening,
+// projection_predecessor_market). Under the batch scope the market X was only
+// staged, the priced X found no predecessor, and the market X filled long 1.
+class ReplacedMarketThenOpposite final : public ShapeReplay {
+public:
+    ReplacedMarketThenOpposite() : ShapeReplay("S", "X", kEntryRow, 1) {
+        source::PineStrategyConfig config;
+        config.initial_capital = 1'000'000.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        config.pyramiding = 1;
+        config.commission_value = 0.01;
+        configure_pine_strategy(config);
+    }
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() != 0) return;
+        strategy_entry("X", true, kNaN, kNaN, 1.0);
+        strategy_entry("X", true, kNaN, 105.0, 1.0);
+        strategy_entry("S", false, kNaN, kNaN, 1.0);
+    }
+};
+
+void shape_priced_replacement_of_a_market_entry_closes_only() {
+    ReplacedMarketThenOpposite host;
+    const Bar bars[] = {
+        mk_bar(10, 100, 100, 100, 100, 60'000),
+        mk_bar(11, 100, 100, 100, 100, 60'000),
+        mk_bar(12, 100, 106, 100, 105, 60'000),
+        mk_bar(13, 105, 105, 105, 105, 60'000),
+    };
+    host.run(bars, 4);
+    const auto& r = host.rec;
+    r.probe.print("replaced market", "X after S");
+    std::printf("  replaced market: X position after its fill %.17g, error '%s'\n",
+                r.after, host.last_error().c_str());
+    CHECK(host.last_error().empty());
+    CHECK(r.probe.index >= 0 && r.probe.rc == 0 && r.filled == r.probe.incarnation);
+    // The shape was built: the probed row is the replacement of the market X.
+    CHECK(r.probe.index >= 0 && r.probe.replaced_market != 0);
+    CHECK(near(r.after, 0.0));
+    CHECK(r.probe.close_only == 1);
+}
+
+// (c1) a frozen reversal transaction (construction of
+// test_same_cycle_frozen_transaction_exactly_flattens_long,
+// tests/oracle/test_oracle_reversal_close_only.cpp): long 1, a priced FIXED
+// short stop S of 1 freezes the transaction 2, a same-bar long add L2 makes
+// the book long 2. S's fill books CloseOpposite of the frozen 2
+// (resolve_source_terms, frozen_reversal_closes) and ends flat; the probe,
+// after L2 has filled, must say close_only 1 and that 2.
+class FrozenReversal final : public ShapeReplay {
+public:
+    FrozenReversal() : ShapeReplay("L2", "S", kEntryRow, 2) {}
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() == 0) strategy_entry("L1", true, kNaN, kNaN, 1.0);
+        if (pine_bar_index() == 1) {
+            strategy_entry("S", false, kNaN, 95.0, 1.0);
+            strategy_entry("L2", true, kNaN, kNaN, 1.0);
+        }
+    }
+};
+
+void shape_frozen_reversal_reports_its_close() {
+    FrozenReversal host;
+    host.run(kShapeBars, 5);
+    const auto& r = host.rec;
+    r.probe.print("frozen reversal", "S after L2");
+    std::printf("  frozen reversal: S position after its fill %.17g, error '%s'\n",
+                r.after, host.last_error().c_str());
+    CHECK(host.last_error().empty());
+    CHECK(r.probe.index >= 0 && r.probe.rc == 0 && r.filled == r.probe.incarnation);
+    CHECK(near(r.after, 0.0));
+    CHECK(r.probe.close_only == 1);
+    CHECK(near(r.probe.qty, 2.0));
+}
+
+// (b) a sequential bracketed pair (construction of RaceProbe,
+// tests/test_same_tick_multi_entry_race.cpp: seed short 50, then two default
+// market longs on one bar, each with its own full bracket). The first member's
+// fill is the pair's Transact of max(|position|, own) = 200 (position +150
+// after it), never close-only; the probe, inside the callback that placed the
+// pair, reports 0.
+class SequentialPair final : public pineforge::source::PineStrategyHost {
+public:
+    SequentialPair() {
+        source::PineStrategyConfig config;
+        config.initial_capital = 1'000'000.0;
+        config.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
+        config.default_qty_value = 2.0;
+        config.pyramiding = 1;
+        config.commission_value = 0.0;
+        config.slippage = 0;
+        configure_pine_strategy(config);
+        set_syminfo_mintick(0.01);
+    }
+    ShapeRecord rec;
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() == 0) strategy_entry("Seed", false, kNaN, kNaN, 50.0);
+        if (pine_bar_index() != 2) return;
+        strategy_entry("Long", true);
+        strategy_exit("Long Exit", "Long", 105.0, 90.0, kNaN, kNaN, kNaN, 100.0, "", kNaN, "");
+        strategy_entry("Wyckoff Long", true);
+        strategy_exit("Wyckoff Long Exit", "Wyckoff Long", 110.0, 88.0, kNaN, kNaN, kNaN,
+                      100.0, "", kNaN, "");
+        rec.probe = probe_order(*this, "Long", kEntryRow, 100.0);
+    }
+
+protected:
+    void on_native_applied_event(const native_order::ExecutionAppliedEvent& event,
+                                 const NativeDecisionContext&) override {
+        if (event.request().label == "Long" && rec.filled == 0) {
+            rec.filled = event.handle().incarnation;
+            rec.after = live_position_size();
+        }
+    }
+};
+
+void shape_sequential_pair_member_is_not_close_only() {
+    SequentialPair host;
+    const Bar bars[] = {
+        mk_bar(10, 100, 100.5, 99.5, 100, 900'000),
+        mk_bar(11, 100, 100.5, 99.5, 100, 900'000),
+        mk_bar(12, 100, 100.5, 99.5, 100, 900'000),
+        mk_bar(13, 100, 100.5, 99.5, 100, 900'000),
+        mk_bar(14, 100, 100.5, 99.5, 100, 900'000),
+    };
+    host.run(bars, 5);
+    const auto& r = host.rec;
+    r.probe.print("sequential pair", "Long in its own callback");
+    std::printf("  sequential pair: Long position after its fill %.17g, error '%s'\n",
+                r.after, host.last_error().c_str());
+    CHECK(host.last_error().empty());
+    // The pair groups only against a LIVE prior member (place_entry scans
+    // live_handles_), so "Long" is live when the callback probes it: the
+    // probed incarnation is the one that fills.
+    CHECK(r.probe.index >= 0 && r.probe.rc == 0 && r.probe.incarnation != 0
+          && r.filled == r.probe.incarnation);
+    CHECK(near(r.after, 150.0));
+    CHECK(r.probe.close_only == 0);
+}
+
+// An entry against the allowed risk direction (strategy.risk.allow_entry_in
+// long only) can only close: live_direction_gate in resolve_source_terms books
+// CloseOpposite of the opposite book against an opposite position, and the
+// probe's direction branch reports `opposite`. Long 1 by market on bar 0, a
+// short stop S at 95 placed on bar 1 against it, probed on bar 2 with S
+// resting; bar 13's low 94 fills S, which ends flat.
+class DirectionGated final : public pineforge::source::PineStrategyHost {
+public:
+    DirectionGated() {
+        source::PineStrategyConfig config;
+        config.initial_capital = 1'000'000.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        config.pyramiding = 1;
+        configure_pine_strategy(config);
+        set_syminfo_mintick(0.01);
+    }
+    ShapeRecord rec;
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() == 0) {
+            set_pine_risk_direction(1);
+            strategy_entry("L", true, kNaN, kNaN, 1.0);
+        }
+        if (pine_bar_index() == 1) strategy_entry("S", false, kNaN, 95.0, 1.0);
+        if (pine_bar_index() == 2) rec.probe = probe_order(*this, "S", kEntryRow, 95.0);
+    }
+
+protected:
+    void on_native_applied_event(const native_order::ExecutionAppliedEvent& event,
+                                 const NativeDecisionContext&) override {
+        if (event.request().label == "S" && rec.filled == 0) {
+            rec.filled = event.handle().incarnation;
+            rec.after = live_position_size();
+        }
+    }
+};
+
+void shape_direction_gated_entry_closes_only() {
+    DirectionGated host;
+    host.run(kShapeBars, 5);
+    const auto& r = host.rec;
+    r.probe.print("direction gated", "S against long only");
+    std::printf("  direction gated: S position after its fill %.17g, error '%s'\n",
+                r.after, host.last_error().c_str());
+    CHECK(host.last_error().empty());
+    CHECK(r.probe.index >= 0 && r.probe.rc == 0 && r.filled != 0
+          && r.filled == r.probe.incarnation);
+    CHECK(near(r.after, 0.0));
+    CHECK(r.probe.close_only == 1);
 }
 
 }  // namespace
@@ -436,10 +824,22 @@ int main() {
     a_default_entry_probe_answers_its_booked_quantity();
     std::printf("-- the money band's affordable price is not the kernel conversion (SZ10)\n");
     the_money_band_price_is_not_the_kernel_conversion();
+    std::printf("-- a priced entry after a same-bar opposite market reverses; without one it closes only\n");
     test_same_bar_predecessor(true);
+    // Control: the same target as test_prior_cycle_close_only
+    // (test_live_order_derived.cpp), kept here as the replay's other branch.
     test_same_bar_predecessor(false);
+    std::printf("-- a short seed's final Short reports what its fill reopens\n");
     test_short_seed_replay(QtyType::FIXED);
     test_short_seed_replay(QtyType::PERCENT_OF_EQUITY);
+    std::printf("-- the probe reports the fill's modelled shapes\n");
+    shape_close_then_stop_reports_the_fills_transaction();
+    shape_frozen_reversal_reports_its_close();
+    shape_host_sized_order_reports_close_opposite();
+    shape_queued_row_is_probed_on_its_flush_side();
+    shape_priced_replacement_of_a_market_entry_closes_only();
+    shape_sequential_pair_member_is_not_close_only();
+    shape_direction_gated_entry_closes_only();
     std::printf("R5 B-ADAPTER fill-quantity probe: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

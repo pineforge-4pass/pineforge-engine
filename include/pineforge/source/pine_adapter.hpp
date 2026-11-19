@@ -2522,6 +2522,13 @@ private:
     void apply_frozen_reversal_close(const PlacementSnapshot&, const NativeExecutionTermsFacts&,
                                      native_order::ExecutionTerms&) const;
     native_order::ExecutionTerms resolve_source_terms(const NativeExecutionTermsFacts&) const;
+    bool frozen_reversal_closes(const PlacementSnapshot&, double signed_units) const noexcept;
+    bool sequential_pair_member(const PlacementSnapshot&) const;
+    static bool prior_cycle_close_only(const PlacementSnapshot&, double signed_units,
+                                       std::int32_t created_side) noexcept;
+    std::optional<native_order::OpeningShape> opposite_opening_shape(
+        const PlacementSnapshot&, std::uint64_t target_incarnation, double signed_units,
+        bool market_trigger, std::int32_t created_side, bool after_close) const;
     double gain_loss_closed_equity() const;
     bool declined_reversal_at_open(const Bar&) const;
     bool schedule_margin_call_path(const Bar&, const NativeDecisionContext&);

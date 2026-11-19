@@ -1701,7 +1701,11 @@ list(APPEND TEST_SOURCES test_str_number_format)
 # The pending-order fill-quantity
 # probe's AT_FILL partition answers the quantity a default cash / percent entry
 # books at that fill -- fee 0 / 0.1 %, grid none / 0.001, limit and slipped
-# stop entries (differential). Source-bound.
+# stop entries (differential) -- and its close_only is the shape the fill of
+# the same row books (same-bar predecessor, short seed, after-close stop,
+# host-sized order, queued reversal, replaced market, sequential pair,
+# frozen reversal, risk-direction gate).
+# Source-bound.
 list(APPEND TEST_SOURCES test_adapter_fill_qty_probe)
 # A typed per-call entry (qty_type cash /
 # percent_of_equity) is admitted, booked and probed as the contracts its money

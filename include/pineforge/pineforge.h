@@ -1412,9 +1412,11 @@ typedef enum pf_fill_qty_partition_e {
  *  -- the fill closes against the live opposite position and that
  *  predicate opens no leg of its own: the order's
  *  `affordability_close_only` (entry leg declined at placement), the
- *  priced-entry `prior_cycle_close_only` rule (opposite live position whose
- *  cycle the order was not placed in -- `created_position_side !=` the
- *  live side -- and not a `reverses_same_bar_market_from_flat`), the
+ *  fill's prior-cycle predicate for a priced entry together with the
+ *  shapes it modelled from the fill (the same-bar close, sequential-pair,
+ *  replacement and direction shapes, the frozen reversal, a host-sized
+ *  order; a row still queued is judged on the live side and same-bar close
+ *  as of the probe), the
  *  same-cycle frozen explicit-FIXED transaction the close consumes exactly,
  *  a finalized flat MARKET pair against an opposite position, or one of the
  *  two reversal kernels above opening nothing. Where the order was created
@@ -1424,8 +1426,18 @@ typedef enum pf_fill_qty_partition_e {
  *  default-percent short is dispatched
  *  with its `frozen_default_qty`:
  *  @p qty is that transaction, @p close_only 0. The probe answers for the
- *  order filling against the CURRENT book and position; fills that an
- *  earlier order in the same pass would make first are not simulated.
+ *  order filling against the CURRENT book and position. The report is made
+ *  before the fill and does not account for checks the fill makes at fill
+ *  time against equity, price and margin (for example, an entry the account
+ *  cannot afford in whole units). In those cases the fill can differ from
+ *  the report. Not modelled: the fill-time money guards (whole-lot tie,
+ *  low-value or fractional lot), affordability at the fill, the
+ *  margin-call surplus, the close quantity a reversal keeps when a margin
+ *  call was booked after the script, a refused signal price, an admission
+ *  refusal, fills that an earlier order in the same pass would make first,
+ *  and a row whose request names its own quantity or cannot be read (an
+ *  explicit-quantity row, a row held in the source's shadow queue), which
+ *  is judged by the prior-cycle rule alone.
  *  NOT folded into @p qty: the deferred-flip
  *  carry (`tv_carry_qty`, added on a priced entry from FLAT whose
  *  placement side is the opposite of the
