@@ -152,33 +152,70 @@ byte-equal): 191.0 B per bar for a module with 63 B per bar of stdout and
 These report bounds also exclude input mappings, strategy histories and the
 other stores listed on this page.
 
-The native live runner keeps the cumulative JSON document, the accumulator's
-raw equity curve and ratio workspace, and the engine's own arrays resident in
-every mode, including the default stream and runs without JSONL output.
-This is O(report) memory that grows with equity points and trades, the cost of
-one builder of the cumulative document. The numbers come from
-`test_native_live_report_memory`: it drives the real runner's default cumulative
-stream and default ratio interval on seeded inputs and always prints
-`mem n=<N> peak_rss_kib=<K>` for each completed size. On Linux it reads the
-runner's `/proc/<pid>/status` `VmHWM` at the final committed input before
-releasing stdin EOF, then includes any later peak from `wait4` for that exact
-child at exit; macOS skips with a printed reason. The row measures 1,000 and
-10,000 inputs and adds 100,000 only when the smaller run's measured time projects
-within the remaining work deadline for its build kind, printing the omission
-reason otherwise. A peak below 2 GiB and growth below 4 KiB per additional input
-between the two largest sizes are deliberate sanity ceilings, not measured
-baselines. Measured on the lab 10-28
-with the default stream and default ratio interval, on a native test host that
-records one equity point per bar: peak RSS 22,880 KiB at 1,000 inputs and
-40,024 KiB at 10,000 inputs, about 1.9 KiB per additional input. These are the
-runner's own `VmHWM` readings for one fixture, including the accumulator curve,
-retained cumulative document and engine arrays. The native market example,
-which records no equity points, read 22,472 KiB and 29,828 KiB (about 0.82 KiB
-per additional input), consistent with the per-bar equity series being the
-difference (the two hosts differ in other ways too).
-The row omitted 100,000 inputs because its cumulative-stream projection assumes
-output volume quadratic in the input count, exceeding the work deadline for
-that build. These two points do not establish a flat memory bound.
+The native live runner keeps no part of its report in memory in proportion to
+the inputs it has processed. For a module with the matching engine-layout
+stamp, every mode (the default stream included, and a run without JSONL
+output) holds the scalar members of the cumulative JSON document and the rows
+of the newest input. Rows that a later input can no longer change are
+serialized once and appended to anonymous files beside the ledger
+(`SpooledReportArray` runner/report_spool.hpp:187), and a `--report-jsonl` line
+is written to stdout from those files (`write_cumulative_line`
+runner/main.cpp:952) instead of being rebuilt from a retained document. The
+curve for the exact ratios is the engine's binary curve scratch file, read
+through one 64 KiB window, and the points the reader has taken leave the
+engine's own vector as well (`LiveReportAccumulator` src/live_report.hpp:30).
+A module configured with `--native-config` also keeps, by default, only the
+unread window of the kernel's event record (`keep_live_event_window`
+src/live_report.hpp:59): that configuration declares the whole record, one row
+per driver point for the life of the stream, and the runner reads none of it.
+The run spec and every hash are unchanged. The window is a parameter:
+`--native-event-retention window|commands|full` (runner/README.md); `full`
+keeps the whole run's events as 1.12 did and grows with the inputs processed,
+by choice. Under the window a polling host loses no command it acknowledges,
+and keeps no driver point or account row; every event let go unread is
+counted per kind by `native_events_dropped` (C:
+`strategy_native_events_dropped_v1`).
+A report checkpoint above 512 inputs is folded through the same spooled arrays
+(`fold_full_report` runner/store.cpp:363) and, above the 1 MiB JSON frame,
+written into its row in pieces (`write_report_checkpoint`
+runner/store.cpp:473); under a ledger byte budget that write is admitted whole
+first and then lets SQLite spill its pages, so it does not wait in memory for
+its commit. What grows with the run is on disk: the ledger, the
+serialized settled rows (about the size of one cumulative report) and
+**24 B per report point** of curve scratch.
+
+This claim does not cover: a module without the stamp, which keeps the
+public-report path, its whole-report read at every input and, under
+`--native-config`, the kernel's whole event record; the selected,
+sink and whole-array routes, which first put the curve back in the engine; a
+ledger on a memory filesystem, where the curve scratch is refused and the
+runner keeps the curve in memory with a printed warning; `--native-event-retention`
+`commands` or `full`, which keep events that grow with the run; the `report`
+export command, which folds the report as a tree; and the strategy's own
+stores that the rest of this page lists.
+
+`test_native_live_report_memory` checks it (`report_memory`
+tests/test_native_live_report_cli.cpp:1221). The row drives the real runner's
+default cumulative stream and default ratio interval on seeded inputs, on a
+native test host that records one equity point per bar, at the sizes of
+`PINEFORGE_REPORT_MEMORY_SIZES` (strictly ascending, at least two; the default
+is 1,000, 10,000 and 100,000 inputs), and prints `mem n=<N> peak_rss_kib=<K>`
+for each completed size. On Linux it reads the runner's `/proc/<pid>/status`
+`VmHWM` at the final committed input before releasing stdin EOF, then includes
+any later peak from `wait4` for that exact child at exit; macOS skips with a
+printed reason. Every size completes, however long it takes: no size is
+omitted and no wait has a deadline. The row fails when the peak at the largest
+size exceeds the peak at the size before it by more than a fixed 8 MiB
+(32 MiB under AddressSanitizer), a constant with no per-input term, or when
+the runner's own processor time per byte of cumulative output at the largest
+size exceeds four times that at the size before it: a property of two sizes
+measured by the same build, so the build kind cancels out.
+These are the test's bounds, not RSS measurements.
+`test_native_live_report_memory_budgeted` runs the same row under a finite
+`--max-ledger-bytes`; both carry the ctest label `memory-flat`.
+The time of one input is not flat, and cannot be while the bytes stay the
+same: each cumulative line repeats every row so far, and the default exact
+ratios walk the whole curve at every input.
 
 For the plain `.bin` input route the input file is mapped, 48 B per bar of file
 payload (`_map_bar_file` docker/run_json.py:2802-2825), and the touched pages

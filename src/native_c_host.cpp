@@ -4051,6 +4051,9 @@ PF_API int strategy_native_margin_call_v1(pf_strategy_t s, uint64_t ordinal,
         if (!out) return c_refuse(host, PF_NATIVE_E_ARGUMENT);
         if (out->struct_size != sizeof(pf_native_margin_call_v1)) return c_refuse(host, PF_NATIVE_E_STRUCT);
         if (ordinal == 0u) return PF_NATIVE_ABSENT;
+        /* A retired ordinal is not "no margin call": its row left the window
+         * before this read, so the answer is unknowable here, not empty. */
+        if (ordinal < host->native_event_window_start()) return PF_NATIVE_DROPPED;
         /* The history is ordered by ordinal, so the call is the first row at
          * or past it, or it is not there at all. */
         for (const auto& event : host->native_events(ordinal - 1u)) {
@@ -4080,6 +4083,25 @@ PF_API int strategy_native_event_window_v1(pf_strategy_t s, uint64_t* out_first_
         if (!host) return PF_NATIVE_E_HANDLE;
         if (!out_first_ordinal) return c_refuse(host, PF_NATIVE_E_ARGUMENT);
         *out_first_ordinal = host->native_event_window_start();
+        return PF_NATIVE_OK;
+    });
+}
+
+PF_API int strategy_native_events_dropped_v1(pf_strategy_t s, uint32_t kind,
+                                             uint64_t* out_count) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        if (!out_count) return c_refuse(host, PF_NATIVE_E_ARGUMENT);
+        pineforge::NativeEventKind cpp = pineforge::NativeEventKind::Command;
+        if (kind == static_cast<uint32_t>(PF_NATIVE_EVENT_DRIVER_POINT))
+            cpp = pineforge::NativeEventKind::Driver;
+        else if (kind == static_cast<uint32_t>(PF_NATIVE_EVENT_ACCOUNT))
+            cpp = pineforge::NativeEventKind::Account;
+        else if (kind < static_cast<uint32_t>(PF_NATIVE_EVENT_ACCEPTED)
+                 || kind > static_cast<uint32_t>(PF_NATIVE_EVENT_RISK))
+            return c_refuse(host, PF_NATIVE_E_TAG);
+        *out_count = host->native_events_dropped(cpp);
         return PF_NATIVE_OK;
     });
 }

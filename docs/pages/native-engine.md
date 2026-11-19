@@ -1949,6 +1949,7 @@ there lists what it leaves out.
 | `trail_state(handle)` | `NativeTrailState` `native_host.hpp:689`: `activated`, `best_price`, `current_level`, `activation_ordinal`; `nullopt` when the handle is not a live trail | `strategy_native_trail_state_v1` |
 | `native_events(after)` | `NativeMarketEvent` `native_host.hpp:390` rows: a `NativeEventKind` `native_host.hpp:380` (`Command`, `Driver`, `Account`) and exactly one of `command`, `driver` (`NativeDriverPoint` `market_driver.hpp:97`) or `account` (`NativeAccountObservation` `native_host.hpp:371`) — the rows the run's `event_retention` keeps (*What a run keeps of its events*) | `strategy_native_events_v1` (partial: each kind's documented fields) |
 | `native_event_window_start()` | the oldest ordinal a read can still return: every command event at or above it is retained; 1 while nothing was dropped | `strategy_native_event_window_v1` |
+| `native_events_dropped(kind)` | how many events of one kind the window let go before the host read them; 0 for every kind under Full | `strategy_native_events_dropped_v1` |
 | `current_execution_point()` | `NativeCurrentPointView` `native_host.hpp:678`: the active callback's decision context, its price, the `NativeCurrentQuoteKind` `native_host.hpp:471` and the ordinal the quote came from; `nullopt` outside a decision point | `pf_native_decision_v1::price` / `::quote_kind` (partial: no quote origin) |
 | `native_risk_state()` | `NativeRiskState` `native_host.hpp:663`: whether openings are blocked and why, the risk day, the fills counted in it, the loss-day streak, the peak equity and the day's opening equity | `strategy_native_risk_state_v1` |
 | `native_liquidation_price()` | the solved level `L`, or `nullopt` | `strategy_native_liquidation_price_v1` |
@@ -3976,7 +3977,7 @@ one derived class so the C boundary can write the presentation error string.
 A host that is not written in C++ does not subclass `NativeStrategyHost`: it
 hands the runtime a callback table and gets the same kernel back.
 `<pineforge/native_c_api.h>` (included by `pineforge.h`) is that surface —
-43 additive `PF_API` symbols implemented in `src/native_c_host.cpp` by
+44 additive `PF_API` symbols implemented in `src/native_c_host.cpp` by
 `CCallbackHost`, a `final NativeStrategyHost` that forwards each existing
 virtual to the table. No new virtual, no epoch bump, and nothing about the
 established C ABI moves: the compiled-strategy runtime symbols and their

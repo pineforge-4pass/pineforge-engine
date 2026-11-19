@@ -39,6 +39,9 @@
 #include <sstream>
 #include <thread>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/sendfile.h>
+#endif
 
 namespace {
 using namespace pineforge::live;
@@ -47,6 +50,70 @@ std::atomic<std::sig_atomic_t> stopped{0};
 static_assert(std::atomic<std::sig_atomic_t>::is_always_lock_free);
 void signal_stop(int) { stopped = 1; }
 constexpr std::size_t MAX_FRAME = 1024 * 1024;
+
+// A cumulative JSONL line goes to descriptor 1 as it is produced: scalar
+// members and the newest rows through one fixed buffer, settled rows straight
+// from their spool file. Nothing here is proportional to the report.
+class StdoutReportSink final : public ReportByteSink {
+public:
+    void write(std::string_view bytes) override {
+        if (bytes.size() > sizeof buffer_ - used_) flush();
+        if (bytes.size() > sizeof buffer_) {
+            put(bytes.data(), bytes.size());
+            return;
+        }
+        std::memcpy(buffer_ + used_, bytes.data(), bytes.size());
+        used_ += bytes.size();
+    }
+    void write_file(int descriptor, std::uint64_t offset, std::uint64_t count) override {
+        flush();
+#if defined(__linux__)
+        auto position = static_cast<off_t>(offset);
+        while (count) {
+            const auto sent = ::sendfile(STDOUT_FILENO, descriptor, &position,
+                static_cast<std::size_t>(std::min<std::uint64_t>(count, std::uint64_t{1} << 30)));
+            if (sent > 0) {
+                count -= static_cast<std::uint64_t>(sent);
+                continue;
+            }
+            if (sent < 0 && errno == EINTR) continue;
+            if (sent < 0 && errno == EAGAIN) {
+                wait_writable();
+                continue;
+            }
+            break; // Not a sendfile target: the copy below writes or reports it.
+        }
+        offset = static_cast<std::uint64_t>(position);
+#endif
+        if (count) ReportByteSink::write_file(descriptor, offset, count);
+    }
+    void flush() {
+        put(buffer_, used_);
+        used_ = 0;
+    }
+
+private:
+    static void wait_writable() {
+        pollfd descriptor{STDOUT_FILENO, POLLOUT, 0};
+        (void)::poll(&descriptor, 1, -1);
+    }
+    static void put(const char* data, std::size_t size) {
+        while (size) {
+            const auto wrote = ::write(STDOUT_FILENO, data, size);
+            if (wrote < 0 && errno == EINTR) continue;
+            if (wrote < 0 && errno == EAGAIN) {
+                wait_writable();
+                continue;
+            }
+            if (wrote <= 0)
+                throw std::runtime_error("report-jsonl stdout write failed; committed input remains durable");
+            data += wrote;
+            size -= static_cast<std::size_t>(wrote);
+        }
+    }
+    char buffer_[65536];
+    std::size_t used_ = 0;
+};
 
 enum class ReportJsonlMode { Off, Delta, Full, DeltaV2 };
 
@@ -68,6 +135,9 @@ struct Config {
     std::uint64_t status_interval = 1, max_ledger_bytes = 0, feed_idle_timeout = 15, feed_message_timeout = 15;
     std::uint64_t feed_connect_timeout = 0;
     std::uint64_t ratio_interval = 1;
+    // What a --native-config stream keeps of the kernel's event record:
+    // window (default, flat), commands, or full (1.12's whole-run record).
+    pineforge::NativeEventRetention native_event_retention = pineforge::NativeEventRetention::Window;
     double ledger_warn_fraction = kDefaultLedgerWarnFreeFraction;
     long poll_ms = 1000;
     bool check = false, allow_http = false, ledger_unbounded = false;
@@ -91,6 +161,8 @@ void help() {
                  "         --from-input N --max-events N --max-attempts 8\n"
                  "         --checkpoint-interval K (first boundary, then doubles; default 1024)\n"
                  "         --native-config FILE (strict native run specification)\n"
+                 "         --native-event-retention window|commands|full (native-config only; default window\n"
+                 "           keeps the unread event window, full keeps the whole run's events as 1.12 did)\n"
                  "         --check (one HTTP snapshot) --poll-ms 1000\n"
                  "         --report-jsonl[=full] (mirror cumulative reports to stdout)\n"
                  "         --report-jsonl=delta (mirror committed report deltas to stdout)\n"
@@ -253,6 +325,12 @@ Config args(int argc, char **argv) {
         }
         else if (a == "--native-config")
             c.native_config = v;
+        else if (a == "--native-event-retention") {
+            if (v == "window") c.native_event_retention = pineforge::NativeEventRetention::Window;
+            else if (v == "commands") c.native_event_retention = pineforge::NativeEventRetention::Commands;
+            else if (v == "full") c.native_event_retention = pineforge::NativeEventRetention::Full;
+            else throw std::runtime_error("native-event-retention must be window, commands or full");
+        }
         else if (a == "--status-file") c.status_file = v;
         else if (a == "--trade-text") {
             if (v.empty()) throw std::runtime_error("trade-text path must not be empty");
@@ -290,6 +368,8 @@ Config args(int argc, char **argv) {
         if (!c.inputs.empty() || !c.overrides.empty() || !c.syminfo.empty())
             throw std::runtime_error("native-config refuses --input, --override and --syminfo");
     } else {
+        if (c.explicit_flags.count("--native-event-retention"))
+            throw std::runtime_error("native-event-retention requires --native-config");
         if (c.symbol.empty() || c.script_tf.empty())
             throw std::runtime_error("symbol and script-tf are required");
         validate_script_tf(c.script_tf);
@@ -868,6 +948,15 @@ std::string cumulative_report(Strategy& strategy, const std::string& deployment,
     if (verify) verify(result);
     return result;
 }
+// One line of the default stream: the bytes of full_json() and a newline.
+void write_cumulative_line(const ReportDeltas& deltas) {
+    std::cout.flush();
+    if (!std::cout) throw std::runtime_error("report-jsonl stdout write failed; committed input remains durable");
+    StdoutReportSink sink;
+    deltas.write_full(sink);
+    sink.write("\n");
+    sink.flush();
+}
 void finished_trade_text(const Config& config, const Strategy& strategy,
                           const std::string& deployment, std::uint64_t cursor) {
     if (config.trade_text_path.empty()) return;
@@ -1053,6 +1142,14 @@ int run(Config c) {
             throw std::runtime_error("input timeframe or session calendar is invalid");
     }
     strategy.configure(c);
+    // The v1 native configuration keeps the kernel's whole event record: a row
+    // per driver point for the life of the stream. This runner reads none of
+    // it, so by default the stream keeps only its unread window
+    // (--native-event-retention). The spec and every hash are unchanged; a
+    // module without the layout stamp keeps the whole record.
+    if (c.native.present && strategy.has_current_engine_layout)
+        pineforge::keep_live_event_window(*static_cast<pineforge::BacktestEngine*>(strategy.state),
+                                          c.native_event_retention);
     const auto settings_receipt = strategy.effective_settings();
     const auto capabilities_receipt = strategy.capabilities();
     const auto confirmed_bar_receipt = strategy.capabilities(true);
@@ -1127,8 +1224,33 @@ int run(Config c) {
     ledger.bind_routing(c.routing.stored_document());
     // All modes fold the same carried patches. Only cumulative output, legacy
     // verification and checkpoint equality need to serialize the document.
-    ReportDeltas report_deltas(true, c.report_jsonl == ReportJsonlMode::DeltaV2, c.chart_timezone);
-    pineforge::LiveReportAccumulator report_accumulator(c.ratio_interval);
+    // Rows the report has settled and curve points the reader has taken leave
+    // the process: both go to anonymous files beside the ledger, so neither
+    // the document nor the curve grows in memory with the input count.
+    auto report_scratch = fs::weakly_canonical(fs::absolute(c.ledger)).parent_path().string();
+    try {
+        ReportSpool probe(report_scratch); // Can this directory hold an unnamed file?
+    } catch (const std::exception& error) {
+        std::cerr << "pineforge-live: warning: the live report's settled rows stay in memory: "
+                  << error.what() << '\n';
+        report_scratch.clear();
+    }
+    ReportDeltas report_deltas(true, c.report_jsonl == ReportJsonlMode::DeltaV2, c.chart_timezone,
+                               report_scratch);
+    std::unique_ptr<pineforge::LiveReportAccumulator> accumulator;
+    if (strategy.has_current_engine_layout) {
+        try {
+            accumulator = std::make_unique<pineforge::LiveReportAccumulator>(c.ratio_interval,
+                report_scratch, static_cast<pineforge::BacktestEngine*>(strategy.state));
+        } catch (const std::exception& error) {
+            // The engine's scratch needs a disk-backed directory. A ledger on a
+            // memory filesystem keeps the curve where it always was.
+            std::cerr << "pineforge-live: warning: the live report's equity curve stays in memory: "
+                      << error.what() << '\n';
+        }
+    }
+    if (!accumulator) accumulator = std::make_unique<pineforge::LiveReportAccumulator>(c.ratio_interval);
+    auto& report_accumulator = *accumulator;
     const auto verify_report = [&](std::uint64_t report_cursor,
                                    const std::string& stored = std::string{},
                                    std::optional<std::uint64_t> checkpoint = std::nullopt) {
@@ -1307,15 +1429,13 @@ int run(Config c) {
             strategy.clear(strategy.state);
             ++processed;
             source_timestamp = source_time(frame, source_time);
-            if (c.report_jsonl != ReportJsonlMode::Off) {
-                if (c.report_jsonl == ReportJsonlMode::Full) {
-                    std::cout << report_deltas.full_json();
-                } else {
-                    // The committed patch is a JSON object. Add the stream
-                    // cursor without reparsing its rows as a bounded input frame.
-                    std::cout << "{\"input_cursor\":" << num(index + 1).dump() << ','
-                              << std::string_view(report).substr(1);
-                }
+            if (c.report_jsonl == ReportJsonlMode::Full) {
+                write_cumulative_line(report_deltas);
+            } else if (c.report_jsonl != ReportJsonlMode::Off) {
+                // The committed patch is a JSON object. Add the stream
+                // cursor without reparsing its rows as a bounded input frame.
+                std::cout << "{\"input_cursor\":" << num(index + 1).dump() << ','
+                          << std::string_view(report).substr(1);
                 std::cout << '\n' << std::flush;
                 if (!std::cout) throw std::runtime_error("report-jsonl stdout write failed; committed input remains durable");
             }
@@ -1357,12 +1477,11 @@ int run(Config c) {
             : report_accumulator.ratios_as_of_input() != final_cursor
                 ? cumulative_report(strategy, deployment, final_cursor,
                     report_deltas, report_accumulator, {}, true) : std::string{};
-        if (!final_report.empty() && c.report_jsonl != ReportJsonlMode::Off) {
-            if (c.report_jsonl == ReportJsonlMode::Full)
-                std::cout << report_deltas.full_json();
-            else
-                std::cout << "{\"input_cursor\":" << num(final_cursor).dump() << ','
-                          << std::string_view(final_report).substr(1);
+        if (!final_report.empty() && c.report_jsonl == ReportJsonlMode::Full) {
+            write_cumulative_line(report_deltas);
+        } else if (!final_report.empty() && c.report_jsonl != ReportJsonlMode::Off) {
+            std::cout << "{\"input_cursor\":" << num(final_cursor).dump() << ','
+                      << std::string_view(final_report).substr(1);
             std::cout << '\n' << std::flush;
             if (!std::cout) throw std::runtime_error("report-jsonl stdout write failed; committed input remains durable");
         }

@@ -5,6 +5,8 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -145,6 +147,33 @@ void closed_prefix_regression_is_refused() {
     }
 }
 
+// A retained document with a spool directory keeps its settled rows in files.
+// Its bytes equal the in-memory document and an independent fold at every
+// input, including a report whose curve shrinks below rows already spooled.
+void spooled_document_matches_the_fold() {
+    auto directory =
+        (std::filesystem::temp_directory_path() / "pineforge-report-spool-XXXXXX").string();
+    assert(mkdtemp(directory.data()));
+    {
+        ReportDeltas spooled(true, false, {}, directory);
+        ReportDeltas memory(true);
+        Json applied;
+        std::size_t input = 0;
+        for (const std::size_t points : {1u, 2u, 3u, 9u, 10u, 4u, 5u, 40u, 2u, 3u, 64u}) {
+            ReportInput current(input, input % 2 == 0, points);
+            const auto delta = spooled.update(current.report, "spooled", input, 7000 + input);
+            assert(delta == memory.update(current.report, "spooled", input, 7000 + input));
+            apply_delta_for_test(applied, parse_json(delta));
+            ReportStringSink written;
+            spooled.write_full(written);
+            assert(written.text == applied.dump());
+            assert(spooled.json() == memory.json());
+            ++input;
+        }
+    }
+    std::filesystem::remove_all(directory);
+}
+
 struct Growth {
     std::size_t visits = 0;
     std::size_t bytes = 0;
@@ -181,6 +210,7 @@ int main() {
     equivalence_and_open_boundary();
     revised_last_closed_trade();
     closed_prefix_regression_is_refused();
+    spooled_document_matches_the_fold();
     growth_is_linear();
     std::cout << "test_live_report: OK\n";
 }

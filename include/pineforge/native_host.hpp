@@ -1390,6 +1390,15 @@ public:
     /// 1 while nothing was dropped, which is every run under Full or Commands.
     /// C spelling: strategy_native_event_window_v1.
     uint64_t native_event_window_start() const;
+    /// How many events of `kind` this run produced that the window let go
+    /// unread: the explicit signal of a read that fell behind. Command: the
+    /// commands retired while the host had acknowledged nothing (a host that
+    /// acknowledges at its run begin, even 0, loses none). Driver / Account:
+    /// every driver point / account row the run's retention does not keep
+    /// (Window keeps neither, Commands keeps account rows), acknowledged or
+    /// not. 0 for every kind under Full. Reset at each begin.
+    /// C spelling: strategy_native_events_dropped_v1.
+    uint64_t native_events_dropped(NativeEventKind kind) const;
     /// The run's monotonic decision floor in epoch milliseconds — the same value
     /// NativeStateView::decision_floor_ms carries. Every request's birth is compared
     /// against this floor, not against a later lowered clock, and a refused preflight

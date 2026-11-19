@@ -31,6 +31,19 @@ struct DeliveryResult {
 };
 
 std::string sha256_hex(std::string_view bytes);
+// The same digest over bytes supplied in pieces: sha256_hex(a + b) equals
+// update(a), update(b), hex(). hex() ends the digest.
+class Sha256 {
+public:
+    Sha256();
+    ~Sha256();
+    Sha256(const Sha256&) = delete;
+    Sha256& operator=(const Sha256&) = delete;
+    void update(std::string_view bytes);
+    std::string hex();
+private:
+    void* context_ = nullptr;
+};
 std::string hmac_sha256_hex(std::string_view secret, std::string_view bytes);
 // Map zero to libcurl's largest connect option; positive values pass through.
 long connect_timeout_option(long connect_timeout_ms);

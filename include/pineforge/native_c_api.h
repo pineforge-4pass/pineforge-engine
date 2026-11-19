@@ -175,6 +175,7 @@
  *   [C]  native_events                     strategy_native_events_v1
  *   [C]  native_acknowledge_events         strategy_native_acknowledge_events_v1
  *   [C]  native_event_window_start         strategy_native_event_window_v1
+ *   [C]  native_events_dropped             strategy_native_events_dropped_v1
  *   [C]  native_decision_floor             pf_native_state_v1::decision_floor_ms
  *   [C]  native_consumed_high_water        pf_native_state_v1::consumed_high_water
  *   [C]  native_continuation_hash          strategy_native_continuation_hash_v1
@@ -331,6 +332,11 @@ extern "C" {
  *  documentation names it can return it; #strategy_native_execute_current_v1
  *  never does, its positive codes being #pf_native_execute_outcome_t. */
 #define PF_NATIVE_ABSENT             1
+/** Non-negative outcome: the answer existed but the event window let it go
+ *  before the host read it (`native_events_dropped`), so the output was left
+ *  untouched. Distinct from #PF_NATIVE_ABSENT, which means there never was
+ *  one. Only #strategy_native_margin_call_v1 returns it. */
+#define PF_NATIVE_DROPPED            2
 /** @} */
 
 /** `NativeFailureCode::CallbackException` — the code latched when a C callback
@@ -2946,6 +2952,21 @@ PF_API int strategy_native_acknowledge_events_v1(pf_strategy_t s, uint64_t throu
  *  or another negative status. */
 PF_API int strategy_native_event_window_v1(pf_strategy_t s, uint64_t* out_first_ordinal);
 
+/** How many events of @p kind the window let go before the host read them —
+ *  `native_events_dropped()` — written to @p out_count: the explicit signal of
+ *  a poller that fell behind. @p kind is #PF_NATIVE_EVENT_DRIVER_POINT,
+ *  #PF_NATIVE_EVENT_ACCOUNT, or any command kind (every command kind answers
+ *  the one command count). Commands count when the window retired them
+ *  before the host acknowledged anything; driver points and account rows
+ *  count whenever the retention does not keep them (WINDOW keeps neither,
+ *  COMMANDS keeps account rows). 0 for every kind under FULL. Reset at each
+ *  run begin.
+ *  @return PF_NATIVE_OK, PF_NATIVE_E_ARGUMENT for a NULL @p out_count,
+ *  PF_NATIVE_E_TAG for a @p kind outside #pf_native_event_kind_t, or another
+ *  negative status. */
+PF_API int strategy_native_events_dropped_v1(pf_strategy_t s, uint32_t kind,
+                                             uint64_t* out_count);
+
 /** Read the run's lifecycle and typed failure into @p out.
  *
  *  @p out is an in/out size prefix: set `out->struct_size` to
@@ -3145,7 +3166,10 @@ PF_API int strategy_native_risk_state_v1(pf_strategy_t s, pf_native_risk_state_v
  *  `sizeof(pf_native_margin_call_v1)` before the call.
  *  @return PF_NATIVE_OK when @p out was written, #PF_NATIVE_ABSENT when no
  *  margin call of this run has that ordinal (@p out untouched),
- *  PF_NATIVE_E_STRUCT for a mis-sized row, or another negative status.
+ *  #PF_NATIVE_DROPPED when the ordinal is below the event window
+ *  (#strategy_native_event_window_v1) and the call can no longer be read
+ *  (@p out untouched), PF_NATIVE_E_STRUCT for a mis-sized row, or another
+ *  negative status.
  *
  *  Exercised by the fx-roll scenario of `tests/test_native_c_api.c`. */
 PF_API int strategy_native_margin_call_v1(pf_strategy_t s, uint64_t ordinal,

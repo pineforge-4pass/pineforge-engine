@@ -116,27 +116,51 @@ contexts require stamp 4; modules declaring stamp 3 must be rebuilt with the
 exact paired engine and its script-run epoch.
 
 The runner-owned accumulator carries trade-stat folds and the equity series
-needed for exact ratios. For modules with the matching stamp, every mode,
-including the default and runs without JSONL output, keeps the cumulative JSON
-document, the accumulator's raw curve and ratio workspace, and the engine's own
-arrays resident. Memory grows with
-equity points and trades: O(report), the cost of one builder of the cumulative
-document. Cumulative stdout, legacy report verification and checkpoint equality
-serialize that same fold of the ledger's suffix patches. Peak RSS numbers come
-from `test_native_live_report_memory`; it prints `mem n=<N> peak_rss_kib=<K>`
-for each completed size on Linux and prints a skip reason on macOS. Measured
-on the lab 10-28 with the default stream and default ratio interval, on a
-native test host that records one equity point per bar: peak RSS 22,880 KiB at
-1,000 inputs and 40,024 KiB at 10,000 inputs, about 1.9 KiB per additional
-input. These are the runner's own `VmHWM` readings for one fixture, including
-the accumulator curve, retained cumulative document and engine arrays. The
-native market example, which records no equity points, read 22,472 KiB and
-29,828 KiB (about 0.82 KiB per additional input), consistent with the per-bar
-equity series being the difference (the two hosts differ in other ways too).
-The row omitted 100,000 inputs because its
-cumulative-stream projection assumes output volume quadratic in the input
-count, exceeding the work deadline for that build. These two points do not
-establish a flat memory bound.
+needed for exact ratios. For modules with the matching stamp, no mode keeps
+the report in memory in proportion to the inputs processed. The cumulative
+JSON document holds its scalar members and the rows of the newest input in the
+process; rows that a later input can no longer change are serialized once and
+appended to anonymous files in the ledger's directory. The curve for the exact
+ratios is a binary scratch file in the same directory, read through one 64 KiB
+window, and the points the accumulator has taken leave the engine's own vector
+too. A module run with `--native-config` keeps, by default, only the unread
+window of the kernel's event record: that configuration declares the whole
+record (one row per driver point for the life of the stream), the runner reads
+none of it, and the run spec and every state hash are unchanged.
+`--native-event-retention window|commands|full` (options, below) names what the stream keeps
+(`full` restores 1.12's whole-run record
+and its memory growth). Under the default window, what a strategy host that
+polls `native_events()` keeps depends on the event kind:
+
+- command events: nothing is lost once the host acknowledges what it has read
+  (`native_acknowledge_events`, from its run begin; 0 is legal), as under the
+  C++ default; one that never acknowledges is treated as served by its
+  callbacks, and its window closes at every script bar;
+- driver points and account rows: none is kept, acknowledged or not. A host
+  that needs them reads them in its callbacks or runs with
+  `--native-event-retention full` (`commands` keeps account rows).
+
+Whatever leaves unread is counted, per kind, by `native_events_dropped(kind)`
+(C: `strategy_native_events_dropped_v1`), so a poller that fell behind knows
+how many it missed; a host that only uses its callbacks is unaffected.
+What grows with the run is on disk: the ledger, the serialized settled
+rows (about the size of one cumulative report) and 24 bytes per report point
+of curve scratch. These files are unlinked when created and vanish with the
+process; a restart rebuilds them during its replay. The ledger's directory
+therefore needs that much free space beyond the ledger itself, and
+`--max-ledger-bytes` does not count it. The curve scratch needs a disk-backed
+directory: with the ledger on a memory filesystem (tmpfs or ramfs) the runner
+prints one `warning:` line at startup and keeps the curve in memory, as it did
+before. A directory that cannot hold a new file gets the same treatment for
+the settled rows: one `warning:` line, and they stay in memory.
+Cumulative stdout writes its line from those files instead of rebuilding it;
+legacy report verification and checkpoint equality still serialize the fold of
+the ledger's suffix patches, for one row. Selected, sink and whole-array
+report routes first put the curve back in the engine and keep their existing
+memory use. `test_native_live_report_memory` checks the claim: it prints
+`mem n=<N> peak_rss_kib=<K>` for each completed size on Linux (a skip reason on
+macOS) and fails when the runner's peak RSS at the largest completed size
+exceeds the peak at the size before it by more than a fixed budget.
 
 `--ratio-interval K` takes a positive integer and defaults to 1. **K = 1 (the
 default) is unchanged behaviour:** every input's cumulative report and delta
@@ -187,17 +211,22 @@ payload length supplies the extra-payload reservation. After the input commits,
 the checkpoint is inserted in its own admitted transaction while retaining the
 writer mutex, with a byte ceiling no greater than the input's reservation.
 Charging that payload to the boundary input is intended
-(`Ledger::commit_input`, `runner/store.cpp:1140`): the boundary input can hit a
+(`Ledger::commit_input`, `runner/store.cpp:1330`): the boundary input can hit a
 storage stop when the input alone would fit, up to the cumulative payload's
 reservation earlier than strictly necessary. This cost buys the guarantee that
 no input commits with a checkpoint admitted without room in its reservation.
 A checkpoint build or write failure records `write_failed` and continues with
 the input durable. If the separate transaction's actual page admission needs
 more room than reserved, only the checkpoint rolls back; the diagnostic count
-increases without latching a storage stop. Preparation still constructs and
-serializes an O(T) cumulative document at a boundary, where T is the full
-report size; it can delay the input loop and does
-not provide constant memory or constant export time.
+increases without latching a storage stop. Up to cursor 512 preparation builds
+the cumulative document as a tree, as before. Above it, preparation folds
+every report row from cursor 0 through spooled arrays in the ledger's
+directory, and a payload above 1 MiB is hashed and written into its row in
+pieces (stored as a BLOB with the same bytes), so its memory does not grow
+with T, the full report size. It still reads O(N) report rows at a boundary,
+which can delay the input loop, and it does not provide constant export time.
+With a ledger byte budget SQLite keeps a transaction's pages in memory until
+it commits, so a checkpoint write still holds its own pages there.
 
 `--checkpoint-interval K` sets the first/base interval, default 1024 committed
 inputs. Subsequent boundaries double: K, 2K, 4K, ... . For a fixed K with all
@@ -237,13 +266,14 @@ No checkpoint pruning policy is applied.
 
 Opening a nonempty ledger without checkpoints attempts its first checkpoint at
 the current cursor, before live intake. This startup step verifies and
-reconstructs the full report history, taking O(N) report-row work and O(T)
-document memory. Ledgers that first need reports or integrity digests populated
+reconstructs the full report history, taking O(N) report-row work; above
+cursor 512 its document is spooled like any other checkpoint's. Ledgers that
+first need reports or integrity digests populated
 retry after startup replay, before new inputs. Later opens add no startup copy
 when a checkpoint already exists.
 Startup and post-replay checkpoints intentionally have no input reservation
-behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1266`;
-the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1147`).
+behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1474`;
+the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1332`).
 With a large budget, either can spend most of the remaining headroom on an
 O(T) payload before the first live input. The run can stop sooner, never over
 budget; this is the intended cost of preparing the report shortcut at startup.
@@ -268,17 +298,23 @@ The batch `fill_report` and existing C exports retain their behaviour;
 O(new/replaced rows) per input and avoids quadratic output as history grows.
 Plain `--report-jsonl` and `--report-jsonl=full` keep the
 O(cumulative document) output cost per input, which can be quadratic over a
-growing run. The O(report) resident retention described above applies to every
-mode for modules with the matching stamp; the memory measurement row covers
-the default cumulative stream with the default ratio interval. It measures
-1,000 and 10,000 inputs, adding 100,000 when the measured smaller run projects
-within the remaining work deadline for
-its build kind, and prints the reason when that largest size is omitted.
-The work deadline / CTest timeout pairs are Release 160/180 s, plain Debug
+growing run: each line repeats every row so far, so its bytes are copied from
+the spooled rows at every input even though nothing is rebuilt. The memory row
+covers the default cumulative stream with the default ratio interval. Its
+sizes are `PINEFORGE_REPORT_MEMORY_SIZES` (a comma separated list, strictly
+ascending, at least two; default 1,000, 10,000 and 100,000 inputs). A default
+size whose projected time does not fit the build kind's work deadline is
+omitted with a printed reason; a size from the environment is never omitted
+and has no deadline in the test.
+The work deadline / CTest timeout pairs are Release 900/960 s, plain Debug
 400/460 s, thread sanitizer 2000/2060 s and address sanitizer 1600/1660 s.
-Its deliberate sanity ceilings are a peak below 2 GiB and growth below 4 KiB
-per additional input between the two largest completed sizes; these are
-ceilings, not measured baselines.
+The row fails when the peak RSS at the largest completed size exceeds the peak
+at the size before it by more than a fixed 8 MiB (32 MiB under a sanitizer),
+with no per-input term; when carrying one settled row through one input costs
+more than 300 ns of the runner's own processor time in an optimised build
+(3,000 ns unoptimised or under the address sanitizer, 6,000 ns under the
+thread sanitizer); or when the peak reaches 2 GiB. These are ceilings, not
+measured baselines.
 Array suffix replacement assumes at most one provisional trailing element for
 equity points and broker hashes. The runner never enables tracing and refuses
 nonempty `trace`: traces can contain several records per bucket, so enabling
@@ -442,7 +478,20 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   defaults to 1024. Checkpoints are report recovery aids; they do not serialize
   or restore strategy state. Startup and recovery checkpoint writes use the
   same admission; opening files already over a finite budget refuses before
-  any checkpoint is attempted.
+  any checkpoint is attempted. A checkpoint above 1 MiB is admitted whole
+  (its byte size, with the same margin as an input's payload) before its first
+  write and is then written in pieces with SQLite's page spilling enabled for
+  that one transaction, so under a finite budget it does not stay in memory
+  until COMMIT either.
+- `--native-event-retention window|commands|full` (with `--native-config`
+  only; default `window`) chooses what the stream keeps of the kernel's event
+  record for `native_events()`. `window` keeps the commands a host has not yet
+  acknowledged and no driver point or account row: flat in the input count.
+  `commands` keeps the whole command journal and every account row; `full`
+  keeps every event of the run, as 1.12 did. Both grow with the inputs
+  processed and are chosen knowingly. Every event a narrower retention lets go
+  unread is counted per kind by `native_events_dropped`. The choice changes no
+  decision, run spec digest or state hash.
 
 Headroom is approximately twice the accounted SQLite page bytes, plus any
 earlier WAL pages still owed to the main file, at most one sector of frame

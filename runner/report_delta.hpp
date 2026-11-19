@@ -37,7 +37,9 @@ inline const Json& report_v2_ratios(const Json& delta, std::uint64_t cursor) {
     return ratios;
 }
 
-inline void apply_report_delta(Json& document, const Json& delta) {
+// Everything a cumulative delta changes outside its arrays, applied to the
+// document's scalar members. Returns whether the delta is a v2 delta.
+inline bool apply_report_delta_fields(Json& document, const Json& delta) {
     const bool v2 = delta.at("schema_version").text() == "pineforge-native-report-delta/v2";
     if (!v2 && delta.at("schema_version").text() != "pineforge-native-report-delta/v1")
         throw std::runtime_error("unsupported cumulative report delta");
@@ -60,11 +62,21 @@ inline void apply_report_delta(Json& document, const Json& delta) {
         document.members["ratios_as_of_input"] = *as_of;
         document.members["ratio_context"] = context;
     }
+    return v2;
+}
+
+// The name and member rules of one array patch, shared by every applier.
+inline void check_report_array_patch(bool v2, const std::string& name, const Json& patch) {
+    if (v2 && name != "closed_trades" && name != "trades" && name != "equity_curve" &&
+        name != "security_diag" && name != "trace" && name != "trace_names" && name != "broker_state_hash")
+        throw std::runtime_error("invalid cumulative report array name");
+    if (v2) only_fields(patch, {"offset", "items"});
+}
+
+inline void apply_report_delta(Json& document, const Json& delta) {
+    const bool v2 = apply_report_delta_fields(document, delta);
     for (const auto& [name, patch] : delta.at("arrays").members) {
-        if (v2 && name != "closed_trades" && name != "trades" && name != "equity_curve" &&
-            name != "security_diag" && name != "trace" && name != "trace_names" && name != "broker_state_hash")
-            throw std::runtime_error("invalid cumulative report array name");
-        if (v2) only_fields(patch, {"offset", "items"});
+        check_report_array_patch(v2, name, patch);
         auto& owner = name == "closed_trades" ? document : document.members["report"];
         owner.kind = Json::Kind::Object;
         auto& values = owner.members[name];

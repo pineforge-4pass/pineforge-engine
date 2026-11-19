@@ -1160,6 +1160,11 @@ typedef struct retention_run {
     int accounts;
     uint64_t first;         /* the first returned ordinal (0 when none) */
     uint64_t window;        /* strategy_native_event_window_v1 */
+    /* strategy_native_events_dropped_v1, per kind */
+    uint64_t dropped_commands;
+    uint64_t dropped_drivers;
+    uint64_t dropped_accounts;
+    int below_window_margin; /* strategy_native_margin_call_v1 at window - 1 */
 } retention_run;
 
 static int retention_poll_begin(void* user) {
@@ -1220,6 +1225,23 @@ static retention_run retention_case(uint32_t size, uint32_t mask, uint32_t word,
         }
         CHECK_EQ_INT(strategy_native_event_window_v1(state.host, &out.window), PF_NATIVE_OK,
                      "retention window read");
+        CHECK_EQ_INT(strategy_native_events_dropped_v1(state.host, PF_NATIVE_EVENT_ACCEPTED,
+                                                       &out.dropped_commands),
+                     PF_NATIVE_OK, "dropped command count read");
+        CHECK_EQ_INT(strategy_native_events_dropped_v1(state.host, PF_NATIVE_EVENT_DRIVER_POINT,
+                                                       &out.dropped_drivers),
+                     PF_NATIVE_OK, "dropped driver count read");
+        CHECK_EQ_INT(strategy_native_events_dropped_v1(state.host, PF_NATIVE_EVENT_ACCOUNT,
+                                                       &out.dropped_accounts),
+                     PF_NATIVE_OK, "dropped account count read");
+        out.below_window_margin = PF_NATIVE_ABSENT;
+        if (out.window > 1u) {
+            pf_native_margin_call_v1 call;
+            memset(&call, 0, sizeof(call));
+            call.struct_size = (uint32_t)sizeof(call);
+            out.below_window_margin =
+                strategy_native_margin_call_v1(state.host, out.window - 1u, &call);
+        }
     }
     strategy_native_host_free(state.host);
     return out;
@@ -1286,6 +1308,35 @@ static void check_event_retention(void) {
     CHECK_EQ_INT(fifth.configure, PF_NATIVE_OK, "the fifth layout's retention word was refused");
     CHECK(fifth.drivers == 0 && fifth.commands == v1.commands,
           "the fifth layout did not read COMMANDS");
+    /* No silent loss: every event a retention let go unread is counted, per
+     * kind, exactly. FULL drops nothing; COMMANDS drops every driver point;
+     * WINDOW drops every driver point and account row, and, for a host that
+     * never acknowledged, every command its window retired -- exactly the
+     * commands FULL holds that it no longer does. A host that acknowledged at
+     * its begin drops no command. */
+    CHECK(v1.dropped_commands == 0u && v1.dropped_drivers == 0u && v1.dropped_accounts == 0u,
+          "FULL counted a dropped event");
+    CHECK(commands.dropped_commands == 0u && commands.dropped_accounts == 0u
+              && commands.dropped_drivers == (uint64_t)v1.drivers,
+          "COMMANDS did not count exactly its driver points");
+    CHECK(window.dropped_drivers == (uint64_t)v1.drivers
+              && window.dropped_accounts == (uint64_t)v1.accounts,
+          "WINDOW did not count exactly its driver points and account rows");
+    CHECK(window.dropped_commands == (uint64_t)(v1.commands - window.commands)
+              && window.dropped_commands > 0u,
+          "WINDOW did not count exactly the commands a non-acknowledging host missed");
+    CHECK(polled.dropped_commands == 0u && polled.dropped_drivers == (uint64_t)v1.drivers
+              && polled.dropped_accounts == (uint64_t)v1.accounts,
+          "an acknowledging WINDOW host was counted a dropped command");
+    /* A retired ordinal is not "no margin call": it reads as dropped. */
+    CHECK_EQ_INT(window.below_window_margin, PF_NATIVE_DROPPED,
+                 "a retired ordinal read as absent instead of dropped");
+    {
+        uint64_t count = 7u;
+        CHECK_EQ_INT(strategy_native_events_dropped_v1(NULL, PF_NATIVE_EVENT_ACCOUNT, &count),
+                     PF_NATIVE_E_HANDLE, "a NULL handle's dropped count was accepted");
+        CHECK(count == 7u, "a refused dropped count wrote its output");
+    }
     /* The two symbols refuse what they cannot read. */
     CHECK_EQ_INT(strategy_native_acknowledge_events_v1(NULL, 0u), PF_NATIVE_E_HANDLE,
                  "a NULL handle's acknowledgement was accepted");

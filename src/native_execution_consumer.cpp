@@ -3275,6 +3275,9 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     terminal_receipt_high_water_ = 0;
     events_acknowledged_ = false;
     acknowledged_through_ = 0;
+    dropped_commands_ = 0;
+    dropped_drivers_ = 0;
+    dropped_accounts_ = 0;
     next_timeline_ordinal_ = 1;
     decision_floor_ms_ = initial_floor_ms;
     has_floor_ = true;
@@ -3700,6 +3703,7 @@ void NativeExecutionConsumer::record_driver(const NativeDriverPoint& point) {
     // The driver log is an owning readback surface (native_events), kept only
     // under NativeEventRetention::Full; since v19 no hash folds it.
     if (retention() == NativeEventRetention::Full) driver_log_.push_back(point);
+    else ++dropped_drivers_;
 }
 
 void NativeExecutionConsumer::reserve_driver_log(std::size_t expected_points) {
@@ -3733,7 +3737,10 @@ void NativeExecutionConsumer::retire_journal() noexcept {
         if (notification.ordinal == 0) return;
         through = std::min(through, notification.ordinal - 1);
     }
-    requests_.retire_history(through);
+    const std::size_t retired = requests_.retire_history(through);
+    // A host that has acknowledged retires only what it acknowledged; before
+    // any acknowledgement every retired command leaves unread.
+    if (!events_acknowledged_) dropped_commands_ += retired;
 #ifndef NDEBUG
     if (group_receipts_.count != requests_.group_effect_receipt_count()) std::abort();
 #endif
@@ -6842,6 +6849,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         // Commands; its ordinal is the stream's high water under all three.
         last_account_ordinal_ = observation.ordinal;
         if (retention() != NativeEventRetention::Window) account_log_.push_back(observation);
+        else ++dropped_accounts_;
         engine.bar_index_ = ctx.interval_index;
         // L9: one applied fill of its risk day. Counting only — settlement is
         // not a decision point, so no limit is evaluated here.
@@ -13172,6 +13180,10 @@ void NativeStrategyHost::native_acknowledge_events(uint64_t through_ordinal) {
 
 uint64_t NativeStrategyHost::native_event_window_start() const {
     return as_native_consumer(execution_consumer()).event_window_start();
+}
+
+uint64_t NativeStrategyHost::native_events_dropped(NativeEventKind kind) const {
+    return as_native_consumer(execution_consumer()).events_dropped(kind);
 }
 
 std::vector<NativeMarketEvent> NativeStrategyHost::native_events(uint64_t after_ordinal) const {

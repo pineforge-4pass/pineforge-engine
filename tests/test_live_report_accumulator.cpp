@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -66,6 +67,14 @@ void rule(Host& host) {
 }
 
 struct ReportHost : Host {
+    // The driver rows the host could still read at its last calculation.
+    std::size_t driver_rows_seen = 0;
+    std::size_t driver_rows() const {
+        std::size_t rows = 0;
+        for (const auto& event : native_events(0)) rows += event.kind == NativeEventKind::Driver;
+        return rows;
+    }
+    std::size_t curve_points() const { return equity_curve_.size(); }
     void clear_report_mark() { range_end_trades_.clear(); }
     void mark_for_report() {
         range_end_trades_.clear();
@@ -79,6 +88,12 @@ struct ReportHost : Host {
             bar_index_, active_account_currency_fx());
     }
 };
+
+void counting_rule(Host& host) {
+    rule(host);
+    auto& report = static_cast<ReportHost&>(host);
+    report.driver_rows_seen = report.driver_rows();
+}
 
 struct BatchReport {
     ReportC value{};
@@ -120,8 +135,16 @@ struct ExportLedger {
     }
 };
 
+// `long_stream` reads `actual` the way the live runner reads a long stream:
+// the curve for the ratios in the engine's scratch file, the points the reader
+// has taken out of the engine's own vector, and the event record its spec
+// declares (Full, as the v1 C configuration does) kept as the unread window
+// only. `reference` keeps all three in memory. Every assertion below, the
+// state hash included, then compares the two at every input.
 Result exercise(int inputs, std::uint64_t interval, const std::string& zone,
-                bool final_in_update, bool exporting = false, bool reject_commits = false) {
+                bool final_in_update, bool exporting = false, bool reject_commits = false,
+                bool long_stream = false,
+                NativeEventRetention retention = NativeEventRetention::Window) {
     auto bars = tape(inputs + 3);
     auto config = l2_fixture::report_spec("live-report-fold");
     config.input_tf = "1D"; config.script_tf = "1D";
@@ -129,15 +152,21 @@ Result exercise(int inputs, std::uint64_t interval, const std::string& zone,
     config.report_open_position_at_end = true;
     config.fee_value = 0.173;
     config.chart_timezone = zone;
+    if (long_stream) config.event_retention = NativeEventRetention::Full;
     ReportHost actual, reference;
-    actual.calculation = reference.calculation = rule;
+    if (long_stream) actual.calculation = reference.calculation = counting_rule;
+    else actual.calculation = reference.calculation = rule;
     REQUIRE(actual.configure_native(config).status == NativeSetupStatus::Applied);
     REQUIRE(reference.configure_native(config).status == NativeSetupStatus::Applied);
+    if (long_stream) keep_live_event_window(actual, retention);
     actual.set_broker_state_hash_recording(true);
     reference.set_broker_state_hash_recording(true);
     REQUIRE(actual.stream_begin(bars.data(), 3, "1D", "1D"));
     REQUIRE(reference.stream_begin(bars.data(), 3, "1D", "1D"));
-    LiveReportAccumulator carried(interval);
+    const auto reader = long_stream
+        ? std::make_unique<LiveReportAccumulator>(interval, std::string{}, &actual)
+        : std::make_unique<LiveReportAccumulator>(interval);
+    auto& carried = *reader;
     ReportDeltas deltas(true), batch_deltas(true);
     ExportLedger stored(exporting);
     Json applied, last_ratios;
@@ -161,6 +190,8 @@ Result exercise(int inputs, std::uint64_t interval, const std::string& zone,
         assert(actual.stream_state_hash() == reference.stream_state_hash());
         const auto work = carried.work();
         assert(work.fallback_report_reads == 0);
+        // The reader has taken every point below the held one out of the engine.
+        if (long_stream) assert(actual.curve_points() <= 1);
         BatchReport batch(reference);
         // Batch reads neither charge nor reset the carried path's counters.
         assert(std::memcmp(&work, &carried.work(), sizeof(work)) == 0);
@@ -253,6 +284,41 @@ Result exercise(int inputs, std::uint64_t interval, const std::string& zone,
     }
     assert(closed && opened && partial && short_trade);
     if (inputs >= 130) assert(monthly_finite);
+    if (long_stream && retention == NativeEventRetention::Full) {
+        // Unbounded: the stream reads the whole run, as in 1.12 -- the Full
+        // twin's record row for row -- and nothing is counted as dropped.
+        const auto whole = reference.native_events(0);
+        const auto kept = actual.native_events(0);
+        assert(kept.size() == whole.size());
+        for (std::size_t row = 0; row < kept.size(); ++row)
+            assert(kept[row].ordinal == whole[row].ordinal && kept[row].kind == whole[row].kind);
+        assert(actual.driver_rows_seen == reference.driver_rows_seen);
+        for (const auto kind : {NativeEventKind::Command, NativeEventKind::Driver,
+                                NativeEventKind::Account})
+            assert(actual.native_events_dropped(kind) == 0);
+    } else if (long_stream) {
+        // Full keeps a row for every driver point; the window keeps none.
+        assert(reference.driver_rows_seen > static_cast<std::size_t>(inputs));
+        assert(actual.driver_rows_seen == 0);
+        // No silent loss: what the window let go unread is counted, per kind,
+        // exactly. The Full twin keeps the whole record and counts nothing;
+        // the window's counts are the Full twin's rows of that kind that the
+        // window no longer holds. The host never acknowledges, so every
+        // command the window retired is counted too.
+        std::size_t full_rows[3] = {0, 0, 0}, kept_rows[3] = {0, 0, 0};
+        for (const auto& event : reference.native_events(0))
+            ++full_rows[static_cast<std::size_t>(event.kind)];
+        for (const auto& event : actual.native_events(0))
+            ++kept_rows[static_cast<std::size_t>(event.kind)];
+        for (const auto kind : {NativeEventKind::Command, NativeEventKind::Driver,
+                                NativeEventKind::Account}) {
+            const auto k = static_cast<std::size_t>(kind);
+            assert(reference.native_events_dropped(kind) == 0);
+            assert(actual.native_events_dropped(kind) == full_rows[k] - kept_rows[k]);
+        }
+        assert(actual.native_events_dropped(NativeEventKind::Driver) > 0);
+        assert(actual.native_events_dropped(NativeEventKind::Command) > 0);
+    }
     // An EOF discovered after the input update must still refresh the final
     // cumulative result, with no duplicate replay at an existing boundary.
     const auto final_patch = carried.update(actual, inputs, true);
@@ -284,6 +350,9 @@ void exactness() {
         exercise(133, 7, zone, true);
         exercise(31, 500, zone, false);
         exercise(31, std::numeric_limits<std::uint64_t>::max(), zone, false);
+        exercise(131, 1, zone, true, false, false, true);
+        exercise(131, 1, zone, true, false, false, true, NativeEventRetention::Full);
+        exercise(133, 7, zone, false, false, false, true);
     }
     bool refused = false;
     try { LiveReportAccumulator invalid(0); }

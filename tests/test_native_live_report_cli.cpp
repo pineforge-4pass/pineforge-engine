@@ -231,7 +231,8 @@ public:
         require(WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL,
                 "expected SIGKILL, actual wait status=" + std::to_string(status) + ": " + errors());
     }
-    std::string finish(int expected = 0, std::uint64_t* exit_peak_kib = nullptr) {
+    std::string finish(int expected = 0, std::uint64_t* exit_peak_kib = nullptr,
+                       std::uint64_t* cpu_microseconds = nullptr) {
         close(input_);
         input_ = -1;
         while (!eof_) pull();
@@ -242,6 +243,14 @@ public:
         require(waited == pid_, "waitpid failed");
         pid_ = -1;
         if (exit_peak_kib) *exit_peak_kib = static_cast<std::uint64_t>(usage.ru_maxrss);
+        if (cpu_microseconds) {
+            // This exact child's own processor time, user and system.
+            const auto micros = [](const timeval& value) {
+                return static_cast<std::uint64_t>(value.tv_sec) * 1000000u +
+                       static_cast<std::uint64_t>(value.tv_usec);
+            };
+            *cpu_microseconds = micros(usage.ru_utime) + micros(usage.ru_stime);
+        }
         require(WIFEXITED(status) && WEXITSTATUS(status) == expected,
                 "runner exit status " + std::to_string(status) + ": " + errors());
         return pending_;
@@ -1206,16 +1215,26 @@ std::vector<std::uint64_t> memory_sizes() {
     return sizes;
 }
 
-void report_memory(Fixture& fixture) {
+// `budgeted` runs the same stream under a finite --max-ledger-bytes (large
+// enough never to stop the run: a parameter, not a cap), the service mode in
+// which SQLite holds a transaction's pages until COMMIT.
+void report_memory(Fixture& fixture, bool budgeted = false) {
     std::uint64_t previous_n = 0, previous_peak = 0, largest_n = 0, largest_peak = 0;
+    double previous_cost = 0, largest_cost = 0;
+    const std::string mode = budgeted ? "memory-budgeted-" : "memory-";
     // Every size must complete; external job control owns hangs.
     for (const std::uint64_t count : memory_sizes()) {
-        const auto name = "memory-" + std::to_string(count);
+        const auto name = mode + std::to_string(count);
         const auto status = fixture.temporary.path / (name + ".status");
-        Runner child(fixture.command(fixture.temporary.path / (name + ".sqlite"), status, "--report-jsonl", 0),
-                     fixture.temporary.path / (name + ".stderr"), /*measure_rss=*/true);
+        auto command = fixture.command(fixture.temporary.path / (name + ".sqlite"), status, "--report-jsonl", 0);
+        if (budgeted) {
+            command.push_back("--max-ledger-bytes");
+            command.push_back(std::to_string(std::uint64_t{1} << 50));
+        }
+        Runner child(std::move(command), fixture.temporary.path / (name + ".stderr"), /*measure_rss=*/true);
         wait_ready(status, 0, child);
         std::uint32_t seed = 12345;
+        std::uint64_t carried_bytes = 0;
         for (std::uint64_t cursor = 1; cursor <= count; ++cursor) {
             child.send(seeded_input(cursor, seed) + "\n");
             // Drain each cumulative line without retaining reports in the
@@ -1224,25 +1243,47 @@ void report_memory(Fixture& fixture) {
             require(line.find("\"input_cursor\":" + std::to_string(cursor) + ",") != std::string::npos &&
                     line.find("\"schema_version\":\"pineforge-native-report/v1\"") != std::string::npos,
                     "memory witness did not run the default cumulative stream");
+            carried_bytes += line.size() + 1;
         }
         const auto terminal_hwm = child.resident_high_water_kib();
-        std::uint64_t exit_hwm = 0;
-        check_summary(child.finish(0, &exit_hwm), count, count);
+        std::uint64_t exit_hwm = 0, cpu_us = 0;
+        check_summary(child.finish(0, &exit_hwm, &cpu_us), count, count);
         // VmHWM disappears with the process's mm at exit. Read it at the
         // held-open-stdin exit barrier, and include any later peak from wait4
         // for this exact child, never the parent's cumulative child usage.
         const auto peak = std::max(terminal_hwm, exit_hwm);
-        std::cout << "mem n=" << count << " peak_rss_kib=" << peak << '\n' << std::flush;
-        previous_n = largest_n; previous_peak = largest_peak;
-        largest_n = count; largest_peak = peak;
+        // The runner's own processor time per byte of cumulative output: each
+        // line repeats every row so far, so the bytes are the work the report
+        // must do. A per-input re-walk or re-serialization of retained state
+        // makes this grow with the input count; the build kind cancels out of
+        // the ratio of two sizes measured by the same build.
+        const auto cost = carried_bytes ? 1000.0 * static_cast<double>(cpu_us) /
+                                              static_cast<double>(carried_bytes) : 0.0;
+        std::cout << "mem " << (budgeted ? "budgeted " : "") << "n=" << count
+                  << " peak_rss_kib=" << peak << " cpu_us=" << cpu_us
+                  << " output_bytes=" << carried_bytes << " cpu_ns_per_output_byte=" << cost
+                  << '\n' << std::flush;
+        previous_n = largest_n; previous_peak = largest_peak; previous_cost = largest_cost;
+        largest_n = count; largest_peak = peak; largest_cost = cost;
     }
     require(previous_n && largest_n > previous_n, "memory row needs at least two measured sizes");
-    require(largest_peak < 2ULL * 1024 * 1024, "runner peak RSS exceeds the 2 GiB sanity ceiling");
     const auto growth = largest_peak > previous_peak ? largest_peak - previous_peak : 0;
-    // A deliberate generous ceiling, not a measured baseline: a retained full
-    // document per input (quadratic storage) must fail, ordinary O(report) may
-    // grow. Both quantities are KiB, so 4 means 4 KiB per additional input.
-    require(growth < 4 * (largest_n - previous_n), "runner RSS growth exceeds 4 KiB per input");
+    // Flat: the peak at the largest size is within a fixed constant of the
+    // peak at the size before it, with no per-input term. 8 MiB covers
+    // allocator and page-cache noise; a sanitizer's shadow memory and
+    // allocator slack get 32 MiB. One retained row per input (the 1.13.0
+    // defect: about 1.8 KiB per input) fails at any default size pair.
+    const std::uint64_t flat_kib = kUnderAsan ? 32 * 1024 : 8 * 1024;
+    require(growth <= flat_kib,
+            "runner RSS grows with the input count: " + std::to_string(growth) + " KiB from n=" +
+            std::to_string(previous_n) + " to n=" + std::to_string(largest_n) +
+            " exceeds the flat " + std::to_string(flat_kib) + " KiB");
+    // The per-input time property: the processor time per output byte at the
+    // largest size stays within a small factor of the size before it.
+    require(largest_cost <= 4.0 * previous_cost + 1.0,
+            "runner time per output byte grows with the input count: " +
+            std::to_string(largest_cost) + " ns at n=" + std::to_string(largest_n) + " vs " +
+            std::to_string(previous_cost) + " ns at n=" + std::to_string(previous_n));
 }
 
 void ready_child_exit(Fixture& fixture) {
@@ -1272,6 +1313,44 @@ void ready_child_exit(Fixture& fixture) {
         std::uint64_t exit_peak_kib = 0;
         require(child.finish(1, &exit_peak_kib).empty(), "failed startup printed stdout");
         require(exit_peak_kib > 0, "readiness observation lost the child's wait4 RSS");
+    }
+}
+
+// --native-event-retention: admission, and a retention changes no report byte.
+// The cumulative stream under window (the default, named or not), commands and
+// full is byte-identical, line for line, to the stream without the option.
+void event_retention_option(Fixture& fixture) {
+    {
+        auto bad = fixture.command(fixture.temporary.path / "retention-bad.sqlite",
+                                   fixture.temporary.path / "retention-bad.status", "", 0);
+        bad.push_back("--native-event-retention");
+        bad.push_back("unbounded");
+        Runner child(std::move(bad), fixture.temporary.path / "retention-bad.stderr");
+        require(child.finish(1).empty(), "invalid retention printed stdout");
+        require(child.errors() ==
+                    "pineforge-live: native-event-retention must be window, commands or full\n",
+                "wrong retention usage error: " + child.errors());
+    }
+    std::vector<std::string> baseline;
+    for (const std::string retention : {"", "window", "commands", "full"}) {
+        const auto name = "retention-" + (retention.empty() ? std::string("default") : retention);
+        const auto status = fixture.temporary.path / (name + ".status");
+        auto command = fixture.command(fixture.temporary.path / (name + ".sqlite"), status,
+                                       "--report-jsonl", 0);
+        if (!retention.empty()) {
+            command.push_back("--native-event-retention");
+            command.push_back(retention);
+        }
+        Runner child(std::move(command), fixture.temporary.path / (name + ".stderr"));
+        wait_ready(status, 0, child);
+        std::vector<std::string> lines;
+        for (const auto& input : fixture.inputs) {
+            child.send(input + "\n");
+            lines.push_back(child.line());
+        }
+        check_summary(child.finish(0), fixture.inputs.size(), fixture.inputs.size());
+        if (retention.empty()) baseline = std::move(lines);
+        else require(lines == baseline, "--native-event-retention " + retention + " changed report bytes");
     }
 }
 
@@ -1308,7 +1387,7 @@ int main(int argc, char** argv) {
             return 0;
         }
 #if !defined(__linux__)
-        if (test_case == "memory") {
+        if (test_case == "memory" || test_case == "memory-budgeted") {
             std::cout << "SKIP report memory: runner VmHWM requires Linux /proc/<pid>/status\n";
             return 77;
         }
@@ -1343,6 +1422,10 @@ int main(int argc, char** argv) {
             ratio_body_replay(fixture);
         } else if (test_case == "memory") {
             report_memory(fixture);
+        } else if (test_case == "memory-budgeted") {
+            report_memory(fixture, true);
+        } else if (test_case == "event-retention") {
+            event_retention_option(fixture);
         } else {
             throw std::runtime_error("unknown test case");
         }

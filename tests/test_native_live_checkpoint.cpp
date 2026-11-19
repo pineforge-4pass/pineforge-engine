@@ -398,6 +398,58 @@ void oversized_checkpoint_keeps_full_fallback() {
                               CheckpointFailureCode::invalid_payload, inputs);
 }
 
+// Above the tree-fold cursor a checkpoint is folded through spooled arrays,
+// and above the JSON frame its payload is written into the row in pieces.
+// Both store exactly the bytes of the tree fold, under the same hash.
+void spooled_checkpoints_store_the_tree_fold() {
+    TempDir temp;
+    const auto path = temp.file("spooled.sqlite");
+    constexpr std::uint64_t interval = 600, inputs = 1200;
+    LedgerOptions options;
+    options.report_checkpoint_interval = interval;
+    Ledger ledger(path, "checkpoint-test", options);
+    ledger.verify_report(0, growing_report(0));
+    auto expected = parse_json(growing_report(0));
+    const std::string item(1024, 'x');
+    for (std::uint64_t cursor = 1; cursor <= inputs; ++cursor) {
+        Json items;
+        items.kind = Json::Kind::Array;
+        items.items.push_back(Json::string(item));
+        const auto patch = Json::object({
+            {"offset", Json::number(std::to_string(cursor))}, {"items", items}});
+        ledger.commit_input(cursor - 1, "{}", cursor, {}, Json::object({
+            {"schema_version", Json::string("pineforge-native-report-delta/v1")},
+            {"fields", Json::object({})},
+            {"arrays", Json::object({{"equity_curve", patch}})},
+        }).dump());
+        expected.members["report"].members["equity_curve"].items.push_back(Json::string(item));
+        if (cursor != interval && cursor != inputs) continue;
+        const auto payload = expected.dump();
+        const bool framed = payload.size() <= 1024u * 1024u;
+        CHECK_OP(framed, ==, cursor == interval);
+        const auto row = "FROM report_checkpoints WHERE input_cursor=" + std::to_string(cursor);
+        CHECK_OP(scalar(path, ("SELECT length(CAST(payload AS BLOB)) " + row).c_str()), ==,
+                 payload.size());
+        CHECK_OP(scalar(path, ("SELECT COUNT(*) " + row + " AND payload_hash='" +
+                               sha256_hex(payload) + "'").c_str()), ==, 1u);
+        CHECK_OP(scalar(path, ("SELECT COUNT(*) " + row + " AND typeof(payload)='" +
+                               (framed ? "text" : "blob") + "'").c_str()), ==, 1u);
+        CHECK_OP(ledger.checkpoint_diagnostic().has_value(), ==, false);
+        if (framed) {
+            // A payload within the frame is verified and compared byte for byte.
+            CHECK_OP(ledger.verified_report_checkpoint(cursor).value_or(0), ==, cursor);
+            ledger.verify_report_checkpoint(cursor, payload);
+        } else {
+            // Above the frame the stored bytes are hashed in pieces: a match
+            // with the fold's hash reaches the parser refusal, as before.
+            expect_checkpoint_failure([&] { ledger.verified_report_checkpoint(cursor); },
+                                      CheckpointFailureCode::invalid_payload, cursor);
+        }
+    }
+    CHECK_OP(LedgerView(path).report_json(inputs), ==, expected.dump());
+    CHECK_OP(scalar(path, "SELECT COUNT(*) FROM report_checkpoints"), ==, 2u);
+}
+
 void reports_without_checkpoint_verify_whole_ledger() {
     struct Corruption {
         const char* sql;
@@ -662,6 +714,7 @@ int main() {
         corrupt_checkpoint_hash_falls_back();
         consistent_checkpoint_edit_requires_replay_equality();
         oversized_checkpoint_keeps_full_fallback();
+        spooled_checkpoints_store_the_tree_fold();
         reports_without_checkpoint_verify_whole_ledger();
         missing_and_invalid_reports_keep_base_errors();
         old_ledger_migrates_at_open();
