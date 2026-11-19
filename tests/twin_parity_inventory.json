@@ -291,6 +291,13 @@
       "twinAssertionSha256": "a5b8bf426c9ed27559ac9044299b2f4b15761c6297c8ca058dc8c25da886193d",
       "twinAssertions": 569
     },
+    "test_live_order_derived": {
+      "baseAssertions": 125,
+      "reason": "the invented short-seed book and its fixture probe answers are removed (the final-short probe is checked against a real replay in the probe differential), the predecessor stub becomes a read of the exported row bit, and the default stop partition follows the shipped value 1",
+      "twin": "test_live_order_derived_l4d.cpp",
+      "twinAssertionSha256": "c21e78fdaa93fe5a92cfdff78e82ae98e4587d3d8acd41f7ed918578434d95c9",
+      "twinAssertions": 117
+    },
     "test_live_pending_order_mirror": {
       "baseAssertions": 73,
       "reason": "PendingOrder reads are rewritten to the frozen public C row",

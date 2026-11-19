@@ -1365,8 +1365,8 @@ PF_API int strategy_pending_order_get(pf_strategy_t s, int index, void* out, siz
 PF_API const pf_field_desc_t* strategy_pending_order_layout(int* count);
 /** Which sizing rule #strategy_pending_order_fill_qty's quantity came from,
  *  written to its `partition` out-parameter; each value is documented there.
- *  The value set is the Pine source host's pending-order sizing, the only
- *  host that answers a probe. */
+ *  Only the Pine source host answers this probe. Value 2 is reserved for
+ *  ABI compatibility; the native engine never writes it. */
 typedef enum pf_fill_qty_partition_e {
     PF_FILL_QTY_PARTITION_EXIT                   = -1, /**< An exit: no partition. */
     PF_FILL_QTY_PARTITION_EXPLICIT               = 0,
@@ -1402,11 +1402,11 @@ typedef enum pf_fill_qty_partition_e {
  *      `pyramid_entries[0].qty - pyramid_entries[1].qty` after closing both
  *      lots (the short-seed collision path). Both kernels are
  *      modelled; each reports `close_only` 1 when it opens nothing.
- *    - `2` DEFAULT_STOP_PLACEMENT -- the DEFAULT percent_of_equity pure
- *      STOP entry's placement size, at any percentage
- *      (`default_stop_placement_qty`, round-7 family K), when the
- *      placement-size rule says the fill consumes it: created flat, filling
- *      from flat, positive fill.
+ *      With percent-of-equity default sizing, a `strategy.entry` placed flat
+ *      with a stop price, no limit and no explicit qty reports its frozen qty
+ *      (partition 1) if that qty and @p fill_price are finite and positive.
+ *    - `2` DEFAULT_STOP_PLACEMENT -- reserved for ABI compatibility;
+ *      no current route in the native engine writes it.
  *    - `3` AT_FILL -- default sizing at the slipped fill.
  *  @p close_only receives 1 when the kernel's close-only predicate fires
  *  -- the fill closes against the live opposite position and that
