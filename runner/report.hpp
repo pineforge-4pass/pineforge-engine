@@ -1,7 +1,7 @@
 #pragma once
 
 #include "json.hpp"
-#include "report_delta.hpp"
+#include "report_spool.hpp"
 #include "ratio_report.hpp"
 #include "../src/report_value_invalid.hpp"
 #include "../src/live_report_patch.hpp"
@@ -197,9 +197,14 @@ inline Json native_report_json(const pineforge::report::LiveReportPatch& patch) 
 
 class ReportDeltas {
 public:
+    // A retained document keeps its scalar members and the items of the newest
+    // patch in the process. With a spool directory every settled array item
+    // goes to an anonymous file there; without one it stays in memory.
     explicit ReportDeltas(bool retain_document = false, bool delta_v2 = false,
-                          std::string chart_timezone = {})
-        : document_(retain_document || delta_v2 ? std::make_unique<Json>(Json::object({})) : nullptr),
+                          std::string chart_timezone = {}, std::string spool_directory = {})
+        : document_(retain_document || delta_v2
+              ? std::make_unique<SpooledReportDocument>(std::move(spool_directory), Json::object({}))
+              : nullptr),
           delta_v2_(delta_v2),
           // Native metrics use UTC when the optional chart clock is empty.
           chart_timezone_(delta_v2 && chart_timezone.empty()
@@ -282,7 +287,7 @@ public:
         closed_trade_visits_ += closed_trade_visits;
         scalars_ = std::move(next);
         if (document_)
-            apply_report_delta(*document_, delta);
+            document_->apply(delta);
         array_sizes_["trades"] = static_cast<std::size_t>(report.trades_len);
         array_sizes_["equity_curve"] = static_cast<std::size_t>(report.equity_curve_len);
         array_sizes_["security_diag"] = static_cast<std::size_t>(report.security_diag_len);
@@ -381,22 +386,23 @@ public:
         closed_trade_high_water_ = patch.closed_trades;
         closed_trade_visits_ += closed_trade_visits;
         scalars_ = std::move(next);
-        if (document_) apply_report_delta(*document_, delta);
+        if (document_) document_->apply(delta);
         return payload;
     }
     std::string final_ratio_refresh() {
         if (!document_)
             throw std::runtime_error("cumulative report document was not retained");
+        auto& document = document_->scalars();
         if (delta_v2_) {
-            const auto cursor = document_->at("input_cursor").integer<std::uint64_t>();
+            const auto cursor = document.at("input_cursor").integer<std::uint64_t>();
             if (ratios_cursor_ == cursor) return {};
-            const auto previous = document_->at("report").at("metrics").at("equity");
+            const auto previous = document.at("report").at("metrics").at("equity");
             // Terminal only, including a refused advanced engine: use solely
             // the report that was published after the last successful commit.
             refresh_report_ratios(*document_, chart_timezone_);
             Json fields = Json::object({});
             auto changes = changed_report_fields(previous,
-                document_->at("report").at("metrics").at("equity"));
+                document.at("report").at("metrics").at("equity"));
             if (!changes.members.empty())
                 fields.members["report"] = Json::object({
                     {"metrics", Json::object({{"equity", std::move(changes)}})}});
@@ -406,18 +412,18 @@ public:
                 {"fields", std::move(fields)}, {"arrays", Json::object({})},
                 {"kind", Json::string("final")}, {"ratios", ratio_metadata(cursor, cursor)}}).dump();
         }
-        const auto* as_of = document_->find("ratios_as_of_input");
+        const auto* as_of = document.find("ratios_as_of_input");
         if (!as_of) return {};
-        const auto cursor = document_->at("input_cursor").integer<std::uint64_t>();
+        const auto cursor = document.at("input_cursor").integer<std::uint64_t>();
         if (as_of->integer<std::uint64_t>() == cursor) return {};
         // Terminal only: the engine may include a refused input. Refresh the
         // committed curve in the one retained document, as read-only export
         // does, and emit a ratio-only patch. No later update may follow this.
         refresh_report_ratios(*document_,
-            document_->at("ratio_context").at("chart_timezone").text());
-        document_->members["ratios_as_of_input"] = report_number(cursor);
+            document.at("ratio_context").at("chart_timezone").text());
+        document.members["ratios_as_of_input"] = report_number(cursor);
         Json ratios = Json::object({});
-        const auto& equity = document_->at("report").at("metrics").at("equity");
+        const auto& equity = document.at("report").at("metrics").at("equity");
         for (const auto* name : {"sharpe_monthly", "sharpe_bar", "sortino_bar", "sortino_monthly"})
             ratios.members[name] = equity.at(name);
         auto fields = Json::object({});
@@ -428,15 +434,22 @@ public:
             {"fields", std::move(fields)},
             {"arrays", Json::object({})},
             {"ratios_as_of_input", report_number(cursor)},
-            {"ratio_context", document_->at("ratio_context")}}).dump();
+            {"ratio_context", document.at("ratio_context")}}).dump();
     }
     std::string json() const {
         if (!document_)
             throw std::runtime_error("cumulative report document was not retained");
-        return document_->dump();
+        return document_->json();
     }
     std::string full_json() const {
         return json();
+    }
+    // The bytes of full_json(), in order, without building them: settled array
+    // items go to the sink straight from their spool.
+    void write_full(ReportByteSink& sink) const {
+        if (!document_)
+            throw std::runtime_error("cumulative report document was not retained");
+        document_->write(sink);
     }
     std::size_t closed_trade_visits() const noexcept { return closed_trade_visits_; }
 private:
@@ -451,20 +464,18 @@ private:
         delta.members["ratios"] = ratio_metadata(cursor, as_of);
         auto& arrays = delta.members["arrays"].members;
         for (auto it = arrays.begin(); it != arrays.end();) {
-            const Json* owner = it->first == "closed_trades"
-                ? document_.get() : document_->find("report");
-            const auto* previous = owner ? owner->find(it->first) : nullptr;
+            const auto* previous = document_->array(it->first);
             if (!previous) { ++it; continue; } // Bootstrap includes empty arrays.
             auto& patch = it->second;
             auto offset = patch.at("offset").integer<std::size_t>();
             auto& items = patch.members["items"].items;
             std::size_t unchanged = 0;
-            while (unchanged < items.size() && offset + unchanged < previous->items.size() &&
-                   items[unchanged].dump() == previous->items[offset + unchanged].dump())
+            while (unchanged < items.size() && offset + unchanged < previous->size() &&
+                   items[unchanged].dump() == previous->item(offset + unchanged))
                 ++unchanged;
             offset += unchanged;
             items.erase(items.begin(), items.begin() + unchanged);
-            if (items.empty() && offset == previous->items.size())
+            if (items.empty() && offset == previous->size())
                 it = arrays.erase(it);
             else {
                 patch.members["offset"] = report_number(offset);
@@ -472,7 +483,7 @@ private:
             }
         }
     }
-    std::unique_ptr<Json> document_;
+    std::unique_ptr<SpooledReportDocument> document_;
     Json scalars_ = Json::object({});
     std::map<std::string, std::size_t> array_sizes_;
     std::size_t closed_trade_high_water_ = 0;

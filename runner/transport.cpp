@@ -352,6 +352,29 @@ std::string sha256_hex(std::string_view bytes) {
     return hex(digest.data(), length);
 }
 
+Sha256::Sha256() : context_(EVP_MD_CTX_new()) {
+    if (!context_ || EVP_DigestInit_ex(static_cast<EVP_MD_CTX*>(context_), EVP_sha256(), nullptr) != 1) {
+        EVP_MD_CTX_free(static_cast<EVP_MD_CTX*>(context_));
+        throw std::runtime_error("native SHA256 computation failed");
+    }
+}
+
+Sha256::~Sha256() { EVP_MD_CTX_free(static_cast<EVP_MD_CTX*>(context_)); }
+
+void Sha256::update(std::string_view bytes) {
+    if (EVP_DigestUpdate(static_cast<EVP_MD_CTX*>(context_), bytes.data(), bytes.size()) != 1)
+        throw std::runtime_error("native SHA256 computation failed");
+}
+
+std::string Sha256::hex() {
+    std::array<unsigned char, EVP_MAX_MD_SIZE> digest {};
+    unsigned int length = 0;
+    if (EVP_DigestFinal_ex(static_cast<EVP_MD_CTX*>(context_), digest.data(), &length) != 1 ||
+        length != 32)
+        throw std::runtime_error("native SHA256 computation failed");
+    return pineforge::live::hex(digest.data(), length);
+}
+
 std::string hmac_sha256_hex(std::string_view secret, std::string_view bytes) {
     if (secret.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
         throw std::runtime_error("native HMAC secret exceeds supported size");

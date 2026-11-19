@@ -116,27 +116,91 @@ contexts require stamp 4; modules declaring stamp 3 must be rebuilt with the
 exact paired engine and its script-run epoch.
 
 The runner-owned accumulator carries trade-stat folds and the equity series
-needed for exact ratios. For modules with the matching stamp, every mode,
-including the default and runs without JSONL output, keeps the cumulative JSON
-document, the accumulator's raw curve and ratio workspace, and the engine's own
-arrays resident. Memory grows with
-equity points and trades: O(report), the cost of one builder of the cumulative
-document. Cumulative stdout, legacy report verification and checkpoint equality
-serialize that same fold of the ledger's suffix patches. Peak RSS numbers come
-from `test_native_live_report_memory`; it prints `mem n=<N> peak_rss_kib=<K>`
-for each completed size on Linux and prints a skip reason on macOS. Measured
-on the lab 10-28 with the default stream and default ratio interval, on a
-native test host that records one equity point per bar: peak RSS 22,880 KiB at
-1,000 inputs and 40,024 KiB at 10,000 inputs, about 1.9 KiB per additional
-input. These are the runner's own `VmHWM` readings for one fixture, including
-the accumulator curve, retained cumulative document and engine arrays. The
-native market example, which records no equity points, read 22,472 KiB and
-29,828 KiB (about 0.82 KiB per additional input), consistent with the per-bar
-equity series being the difference (the two hosts differ in other ways too).
-The row omitted 100,000 inputs because its
-cumulative-stream projection assumes output volume quadratic in the input
-count, exceeding the work deadline for that build. These two points do not
-establish a flat memory bound.
+needed for exact ratios. For modules with the matching stamp, the report's
+equity curve and its settled rows leave the process (the curve only with
+`--native-event-retention window`). The cumulative JSON
+document holds its scalar members and the rows of the newest input in the
+process; rows that a later input can no longer change are serialized once and
+appended to anonymous files in the ledger's directory, in every mode. With
+`window` only, the curve for the exact
+ratios is a binary scratch file in the same directory, read through one 64 KiB
+window, and the points the accumulator has taken leave the engine's own vector
+too; a default run keeps the curve in memory, as 1.13.0 did, and creates no
+curve scratch file. A module run with `--native-config` keeps, by default, the whole event
+record its configuration declares (one row per driver point for the life of
+the stream), as 1.13.0 did, so its memory still grows with the inputs.
+Pass `--native-event-retention window` to keep memory bounded. The option
+(options, below) changes no report byte, run spec digest or state hash. Under
+`window`, what a strategy host that polls `native_events()` keeps depends on
+the event kind:
+
+- command events: nothing is lost once the host acknowledges what it has read
+  (`native_acknowledge_events`, from its run begin; 0 is legal), as under the
+  C++ default; one that never acknowledges is treated as served by its
+  callbacks, and its window closes at every script bar;
+- driver points and account rows: none is kept, acknowledged or not
+  (`commands` keeps account rows).
+
+Whatever leaves unread is counted, per kind, by `native_events_dropped(kind)`
+(C: `strategy_native_events_dropped_v1`), so a poller that fell behind knows
+how many it missed; a host that only uses its callbacks is unaffected.
+Even under `window`, some state still grows with the run: the engine's closed
+trades (`trades_`, whose older rows sit in the engine's own scratch files
+behind a fixed cache) and, when broker-state hash recording is on, one 8-byte
+hash per script bar (`broker_state_hashes_`), which the live report reads and
+never releases.
+What else grows with the run is on disk: the ledger, the serialized settled
+rows (about the size of one cumulative report) and, with `window`, 24 bytes
+per report point of curve scratch. These files are unlinked when created and vanish with the
+process; a restart rebuilds them during its replay. The ledger's directory
+therefore needs that much free space beyond the ledger itself, and
+`--max-ledger-bytes` does not count it. Under `window` the curve scratch needs a disk-backed
+directory: with the ledger on a memory filesystem (tmpfs or ramfs) the runner
+prints one `warning:` line at startup and keeps the curve in memory, as it did
+before. In every mode the settled rows are still spooled there, but the files of a memory
+filesystem are memory too, so the runner prints a `warning:` line
+naming the filesystem. A directory that cannot hold a new file gets the same
+treatment for the settled rows: one `warning:` line, and they stay in memory.
+A spool file whose write returns an error during the run (a full disk, an
+exceeded quota, an I/O error), or that would take the file past the process's
+per-file size limit (`ulimit -f`, RLIMIT_FSIZE; read before the write, so a
+spool never raises SIGXFSZ), does not stop the run either: the runner prints one `warning:` line
+naming the cause (`cumulative report spool write failed: ...`), keeps the rows
+it could not write and every later settled row in memory, as 1.13.0 did, and
+goes on with the same bytes; from then on its memory grows with the inputs, in
+every mode, `--native-event-retention window` included. Free disk beside the
+ledger, and a restart, bring the spool back. The ledger and the curve scratch
+file are not covered by this: a write of either past such a limit ends the
+process with SIGXFSZ unless the process ignores that signal (the ledger's does
+so in 1.13.0), and a failed write of the curve scratch file (written only
+with `window`; this is the `window` contract) ends the run (exit
+status 1) before the input commits, and a restart replays the ledger. A read
+error of a spool file (the files the cumulative `--report-jsonl` lines are
+written from; `cumulative report spool read failed`) is not covered either and
+cannot fall back, since the bytes are only in the file: it ends the run with
+exit status 1 after the input is durable, and a restart replays the ledger
+(1.13.0 read no such files). The environment variable
+`PINEFORGE_LIVE_TEST_SPOOL_FILE_LIMIT` (bytes, unset by default) is a test
+seam: it caps every spool file at that size, so that a test can make the spool
+fail part way through a run (`test_native_live_report_spool_write_failure`).
+These apply without any option, for every module with the matching
+stamp: the spool files and their fall-back to memory, the settled rows'
+memory-filesystem warning, and the checkpoint fold from cursor 0 (below).
+Only `--native-event-retention window` adds the curve scratch file and the
+release of the engine's curve points (only once
+the stream is realtime; the engine refuses an earlier release with an internal
+error, and a whole-report read puts the points back first).
+Report lines, ledger rows, checkpoint payload bytes
+and exports are the same as without them. The BLOB storage of a large
+checkpoint payload (below) applies only with `--native-event-retention window`.
+Cumulative stdout writes its line from those files instead of rebuilding it;
+legacy report verification and checkpoint equality still serialize the fold of
+the ledger's suffix patches, for one row. Selected, sink and whole-array
+report routes first put the curve back in the engine and keep their existing
+memory use. `test_native_live_report_memory` checks the claim: it prints
+`mem n=<N> peak_rss_kib=<K>` for each completed size on Linux (a skip reason on
+macOS) and fails when the runner's peak RSS at the largest completed size
+exceeds the peak at the size before it by more than a fixed budget.
 
 `--ratio-interval K` takes a positive integer and defaults to 1. **K = 1 (the
 default) is unchanged behaviour:** every input's cumulative report and delta
@@ -187,17 +251,38 @@ payload length supplies the extra-payload reservation. After the input commits,
 the checkpoint is inserted in its own admitted transaction while retaining the
 writer mutex, with a byte ceiling no greater than the input's reservation.
 Charging that payload to the boundary input is intended
-(`Ledger::commit_input`, `runner/store.cpp:1140`): the boundary input can hit a
+(`Ledger::commit_input`, `runner/store.cpp:1348`): the boundary input can hit a
 storage stop when the input alone would fit, up to the cumulative payload's
 reservation earlier than strictly necessary. This cost buys the guarantee that
 no input commits with a checkpoint admitted without room in its reservation.
 A checkpoint build or write failure records `write_failed` and continues with
 the input durable. If the separate transaction's actual page admission needs
 more room than reserved, only the checkpoint rolls back; the diagnostic count
-increases without latching a storage stop. Preparation still constructs and
-serializes an O(T) cumulative document at a boundary, where T is the full
-report size; it can delay the input loop and does
-not provide constant memory or constant export time.
+increases without latching a storage stop. Up to cursor 512 preparation builds
+the cumulative document as a tree, as before. Above it, preparation folds
+every report row from cursor 0 through spooled arrays in the ledger's
+directory, where 1.13.0 started from the nearest earlier checkpoint. At the
+geometric boundaries K, 2K, 4K, ... the checkpoints up to 2^m·K therefore read
+(2^(m+1) − 1)·K report rows in all, less than twice the last boundary's
+cursor. The read no longer goes through the nearest earlier checkpoint, so
+that checkpoint's own verification (its payload hash and integrity digests) is
+no longer repeated by it; the bytes written are the same. The read runs inside
+the boundary input's own transaction, so that input's commit takes as long as
+the read. Where no spool file can be created or written in that directory, the
+fold keeps those rows in memory (the one warning above) and the checkpoint is
+still written. With `--native-event-retention window`, a payload above 1 MiB is
+hashed and written into its row in pieces (stored as a BLOB with the same
+bytes; the column is declared `TEXT`, but SQLite keeps each value's own type,
+so `SELECT payload` returns a blob for such a row and text for the others, and
+`CAST(payload AS TEXT)` reads both; a payload of 2 GiB or more is beyond
+SQLite's blob I/O and fails as a checkpoint write failure, with the input
+durable), so its memory does not grow with T, the full report size. Without
+that option the payload is built as one string and stored as TEXT, as in
+1.13.0, and a ledger of such a run has the 1.13.0 form. It still reads O(N) report rows at a boundary,
+which can delay the input loop, and it does not provide constant export time.
+With a ledger byte budget SQLite keeps a transaction's pages in memory until
+it commits, except for that streamed checkpoint write, which is admitted
+whole first and spills its pages (`--max-ledger-bytes`, below).
 
 `--checkpoint-interval K` sets the first/base interval, default 1024 committed
 inputs. Subsequent boundaries double: K, 2K, 4K, ... . For a fixed K with all
@@ -237,13 +322,14 @@ No checkpoint pruning policy is applied.
 
 Opening a nonempty ledger without checkpoints attempts its first checkpoint at
 the current cursor, before live intake. This startup step verifies and
-reconstructs the full report history, taking O(N) report-row work and O(T)
-document memory. Ledgers that first need reports or integrity digests populated
+reconstructs the full report history, taking O(N) report-row work; above
+cursor 512 its document is spooled like any other checkpoint's. Ledgers that
+first need reports or integrity digests populated
 retry after startup replay, before new inputs. Later opens add no startup copy
 when a checkpoint already exists.
 Startup and post-replay checkpoints intentionally have no input reservation
-behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1266`;
-the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1147`).
+behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1493`;
+the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1373`).
 With a large budget, either can spend most of the remaining headroom on an
 O(T) payload before the first live input. The run can stop sooner, never over
 budget; this is the intended cost of preparing the report shortcut at startup.
@@ -268,17 +354,38 @@ The batch `fill_report` and existing C exports retain their behaviour;
 O(new/replaced rows) per input and avoids quadratic output as history grows.
 Plain `--report-jsonl` and `--report-jsonl=full` keep the
 O(cumulative document) output cost per input, which can be quadratic over a
-growing run. The O(report) resident retention described above applies to every
-mode for modules with the matching stamp; the memory measurement row covers
-the default cumulative stream with the default ratio interval. It measures
-1,000 and 10,000 inputs, adding 100,000 when the measured smaller run projects
-within the remaining work deadline for
-its build kind, and prints the reason when that largest size is omitted.
-The work deadline / CTest timeout pairs are Release 160/180 s, plain Debug
-400/460 s, thread sanitizer 2000/2060 s and address sanitizer 1600/1660 s.
-Its deliberate sanity ceilings are a peak below 2 GiB and growth below 4 KiB
-per additional input between the two largest completed sizes; these are
-ceilings, not measured baselines.
+growing run: each line repeats every row so far, so its bytes are copied from
+the spooled rows at every input even though nothing is rebuilt. The memory rows
+(`test_native_live_report_memory` and `test_native_live_report_memory_budgeted`,
+`report_memory` in tests/test_native_live_report_cli.cpp) run the default
+cumulative stream with the default ratio interval and pass
+`--native-event-retention window`. Their sizes are
+`PINEFORGE_REPORT_MEMORY_SIZES` (a comma separated list, strictly ascending,
+at least two; default 1,000, 10,000 and 30,000 inputs; Debug and sanitizer
+builds set 1,000 and 10,000 in runner/CMakeLists.txt). The largest default
+size is bounded by the bytes the row reads, which grow with the square of the
+input count (2.67 GB of report lines at 10,000 inputs, measured; about 24 GB at
+30,000 by that square); `PINEFORGE_REPORT_MEMORY_SIZES=1000,10000,100000` runs
+the full-size proof. Measured on 2026-11-19 on a 128-core host, Release: in
+three runs of this change's successive sources the memory row took 160 to 173 s
+and the budgeted row 163 to 165 s at the default sizes; at 1,000, 10,000 and
+100,000 inputs each row read 268.6 GB of report lines and took 4,577 s (memory)
+and 4,455 s (budgeted), about 75 minutes, where the memory row of the 1.13.0
+sources, at those same sizes, took about 6,100 s.
+Every size runs to
+completion: no size is omitted and no wait has a deadline (CTest `TIMEOUT 0`).
+A row fails when the peak RSS at the largest size exceeds the peak at the size
+before it by more than a fixed 8 MiB (32 MiB under the address sanitizer),
+with no per-input term, or when the runner's own processor time per byte of
+cumulative output at the largest size exceeds four times that at the size
+before it plus 1 ns (`largest_cost <= 4*previous_cost + 1`). Both compare two
+sizes measured by the same build. These are the test's bounds, not
+measured baselines. The time check catches work per output byte that grows
+with the input count, for example a step that is quadratic in the cursor on
+top of the output. It does not catch a walk of the retained rows that is
+linear in the cursor at every input: the default exact ratios already walk the
+whole curve at every input and each cumulative line is linear in the cursor
+too, so such a walk keeps the time per output byte constant.
 Array suffix replacement assumes at most one provisional trailing element for
 equity points and broker hashes. The runner never enables tracing and refuses
 nonempty `trace`: traces can contain several records per bucket, so enabling
@@ -442,7 +549,27 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   defaults to 1024. Checkpoints are report recovery aids; they do not serialize
   or restore strategy state. Startup and recovery checkpoint writes use the
   same admission; opening files already over a finite budget refuses before
-  any checkpoint is attempted.
+  any checkpoint is attempted. With `--native-event-retention window`, a
+  checkpoint above 1 MiB is admitted whole
+  (its byte size, with the same margin as an input's payload) before its first
+  write and is then written in pieces with SQLite's page spilling enabled for
+  that one transaction, so under a finite budget it does not stay in memory
+  until COMMIT either.
+- `--native-event-retention window|commands|full` (with `--native-config`
+  only; opt-in) chooses what the stream keeps of the kernel's event record
+  for `native_events()`. Without it the runner keeps the record the
+  configuration declares (the whole record for the v1 configuration), as
+  1.13.0 did, and nothing is counted as dropped. Pass
+  `--native-event-retention window` to keep memory bounded: `window` keeps
+  the commands a host has not yet acknowledged and no driver point or account
+  row, flat in the input count, so a host that polls without acknowledging
+  reads less. `commands` keeps the whole command journal and every account
+  row; `full` keeps every event of the run. Both grow with the inputs
+  processed. Every event a narrower retention lets go unread is counted per
+  kind by `native_events_dropped`. The choice changes no decision, report
+  byte, run spec digest or state hash. `window` also writes a report
+  checkpoint payload above 1 MiB in pieces and stores it as a BLOB, with the
+  same bytes (above); `commands`, `full` and no option store it as TEXT.
 
 Headroom is approximately twice the accounted SQLite page bytes, plus any
 earlier WAL pages still owed to the main file, at most one sector of frame
@@ -723,9 +850,14 @@ chart-input ledger above.
 
 Keep symbol metadata consistent with the corresponding backtest. `--syminfo`
 supports `type`, `currency`, `basecurrency`, `description`, `volumetype`,
-`mintick`, `pointvalue`, `qty_step`, `margin_long` and `margin_short`. Omitted
-values retain the engine defaults; a symbol name alone does not download
-instrument metadata. `--session` defaults to `24x7`, `--timezone` to `UTC`;
+`mintick`, `pointvalue`, `qty_step`, `mincontract`, `margin_long` and `margin_short`.
+`qty_step` and `mincontract` must be finite positive numbers. The runner forwards
+both through the existing numeric metadata setter: `mincontract` supplies the
+quantity grid when `qty_step` is absent; an explicit `qty_step` wins in either
+CLI order. For example, `--syminfo mincontract=0.00001` supplies a grid without
+also declaring `qty_step`. Omitted values retain the engine defaults; a symbol
+name alone does not download instrument metadata. `--session` defaults to `24x7`,
+`--timezone` to `UTC`;
 `--chart-timezone` is independent and defaults to the engine UTC chart path.
 Repeat `--input TITLE=VALUE` and `--override KEY=VALUE` for strategy settings.
 Those setters belong to the compiled strategy; it must validate unsupported

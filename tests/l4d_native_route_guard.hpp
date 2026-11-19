@@ -437,47 +437,6 @@ public:
         return l4d_pending_rows().at(static_cast<std::size_t>(index));
     }
 
-    int probe_fill_qty(int index, double fill_price, double* qty,
-                       int* close_only, int* partition) const {
-        const bool injected_short_seed = std::any_of(
-            l4d_pending_rows_.begin(), l4d_pending_rows_.end(),
-            [](const L4dIntentRow& row) {
-                return row.short_seed_collision_role != L4dShortSeedRole::NONE;
-            });
-        if (!injected_short_seed) {
-            const int result = PineStrategyHost::probe_fill_qty(
-                index, fill_price, qty, close_only, partition);
-            pf_pending_order_v1_t row{};
-            if (result == 0 && partition && *partition == 1
-                && observe_pending_copy_v1(index, &row) == 0
-                && row.type == static_cast<std::int32_t>(L4dOrderType::ENTRY)
-                && std::isnan(row.qty) && std::isnan(row.limit_price)
-                && std::isfinite(row.stop_price)
-                && std::isfinite(row.default_stop_placement_qty)) {
-                // The deleted owner named this frozen-stop branch partition
-                // 2; the generic frozen-placement projection uses 1. Preserve
-                // the historical fixture spelling without changing product
-                // execution or the L0 public oracle.
-                *partition = 2;
-            }
-            return result;
-        }
-        if (!qty || !close_only || !partition || index < 0
-            || index >= static_cast<int>(l4d_pending_rows_.size())) return -1;
-        const auto& row = l4d_pending_rows_[static_cast<std::size_t>(index)];
-        *close_only = 0;
-        if (row.short_seed_collision_role == L4dShortSeedRole::FINAL_SHORT
-            && pyramid_entries_.size() >= 2U) {
-            *qty = pyramid_entries_[0].qty - pyramid_entries_[1].qty;
-            *partition = 1;
-            *close_only = *qty > 1e-10 ? 0 : 1;
-            return 0;
-        }
-        *qty = fixture_configuration().default_qty_value;
-        *partition = 3;
-        return 0;
-    }
-
 private:
     mutable std::vector<L4dIntentRow> l4d_pending_rows_;
 };
@@ -492,11 +451,8 @@ using L4dOrderType = source::L4dOrderType;
 using L4dPendingOrder = source::L4dPendingOrder;
 using L4dShortSeedRole = source::L4dShortSeedRole;
 
-inline bool placement_has_opposite_market_predecessor(
-        const MarketAdmissionJournal&, const L4dPendingOrder&) noexcept {
-    return false;
-}
 inline bool placement_at_entry_capacity(const L4dPendingOrder& order) noexcept {
+    // The adapter exports this bit (src/source/pine_adapter.cpp:29008; src/source/pine_strategy_host.cpp:1734).
     return order.over_pyramiding_cap_at_placement;
 }
 

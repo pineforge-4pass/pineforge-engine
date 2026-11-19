@@ -3,12 +3,18 @@
 #include "live_report_document_oracle.hpp"
 
 #include <cassert>
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
+
+#include <sys/resource.h>
 
 using namespace pineforge::live;
 
@@ -145,6 +151,112 @@ void closed_prefix_regression_is_refused() {
     }
 }
 
+// A retained document with a spool directory keeps its settled rows in files.
+// Its bytes equal the in-memory document and an independent fold at every
+// input, including a report whose curve shrinks below rows already spooled.
+void spooled_document_matches_the_fold() {
+    auto directory =
+        (std::filesystem::temp_directory_path() / "pineforge-report-spool-XXXXXX").string();
+    assert(mkdtemp(directory.data()));
+    {
+        ReportDeltas spooled(true, false, {}, directory);
+        ReportDeltas memory(true);
+        Json applied;
+        std::size_t input = 0;
+        for (const std::size_t points : {1u, 2u, 3u, 9u, 10u, 4u, 5u, 40u, 2u, 3u, 64u}) {
+            ReportInput current(input, input % 2 == 0, points);
+            const auto delta = spooled.update(current.report, "spooled", input, 7000 + input);
+            assert(delta == memory.update(current.report, "spooled", input, 7000 + input));
+            apply_delta_for_test(applied, parse_json(delta));
+            ReportStringSink written;
+            spooled.write_full(written);
+            assert(written.text == applied.dump());
+            assert(spooled.json() == memory.json());
+            ++input;
+        }
+    }
+    std::filesystem::remove_all(directory);
+}
+
+std::size_t spool_warnings = 0;
+void count_spool_warning(const std::string&) { ++spool_warnings; }
+
+// Every item of `name`, through item() and through visit(), in order.
+std::vector<std::string> array_items(const SpooledReportDocument& document, const std::string& name) {
+    const auto* array = document.array(name);
+    assert(array);
+    std::vector<std::string> by_item, by_visit;
+    for (std::size_t index = 0; index < array->size(); ++index) by_item.push_back(array->item(index));
+    array->visit(0, array->size(), [&](std::string_view item) { by_visit.emplace_back(item); });
+    assert(by_item == by_visit);
+    return by_item;
+}
+
+// A spool write that would pass a per-file size limit is refused by the spool
+// before it reaches the kernel, so the process is not signalled (SIGXFSZ is
+// never raised) and nothing is lost: the bytes stay in memory, no exception,
+// one warning, and every read equals a document that never used a file,
+// through a patch below the settled rows and settles after the failure.
+// Returns false (skip) where the platform has no per-file size limit.
+#if defined(RLIMIT_FSIZE) && defined(SIGXFSZ)
+volatile std::sig_atomic_t file_size_signals = 0;
+void count_file_size_signal(int) { file_size_signals = 1; }
+#endif
+bool spool_write_failure_keeps_rows_in_memory() {
+#if defined(RLIMIT_FSIZE) && defined(SIGXFSZ)
+    auto directory =
+        (std::filesystem::temp_directory_path() / "pineforge-report-spool-XXXXXX").string();
+    assert(mkdtemp(directory.data()));
+    rlimit saved{};
+    assert(getrlimit(RLIMIT_FSIZE, &saved) == 0);
+    const auto previous_signal = std::signal(SIGXFSZ, &count_file_size_signal);
+    report_spool_failure_handler().store(&count_spool_warning);
+    const auto fallbacks_before = report_spool_fallbacks().load();
+    {
+        // 16 KiB per file: the equity spool of the larger inputs below
+        // passes it, so a flush writes part of its bytes and then fails.
+        rlimit small = saved;
+        small.rlim_cur = 16 * 1024;
+        assert(setrlimit(RLIMIT_FSIZE, &small) == 0);
+        ReportDeltas source(true);
+        SpooledReportDocument spooled(directory, Json::object({}));
+        SpooledReportDocument memory({}, Json::object({}));
+        Json applied;
+        std::size_t input = 0;
+        // 1500 -> 300 patches below the settled rows after the failure;
+        // 600 and 2000 settle more rows into the memory-mode spools.
+        for (const std::size_t points : {50u, 400u, 800u, 1200u, 1500u, 300u, 600u, 2000u}) {
+            ReportInput current(input, input % 2 == 0, points);
+            const auto delta = parse_json(source.update(current.report, "fallback", input, 9000 + input));
+            spooled.apply(delta);
+            memory.apply(delta);
+            apply_delta_for_test(applied, delta);
+            ReportStringSink written;
+            spooled.write(written);
+            assert(written.text == applied.dump());
+            assert(spooled.json() == memory.json());
+            assert(spooled.serialized_bytes() == memory.serialized_bytes());
+            for (const auto* name : {"equity_curve", "trades", "closed_trades"})
+                assert(array_items(spooled, name) == array_items(memory, name));
+            ++input;
+        }
+        assert(setrlimit(RLIMIT_FSIZE, &saved) == 0);
+    }
+    std::signal(SIGXFSZ, previous_signal);
+    report_spool_failure_handler().store(nullptr);
+    std::filesystem::remove_all(directory);
+    // The limit was reached (some spool fell back) and the cause was handed
+    // over once, however many spools fell back.
+    assert(report_spool_fallbacks().load() > fallbacks_before);
+    assert(spool_warnings == 1);
+    // The spool refused the write itself: the kernel never sent SIGXFSZ.
+    assert(file_size_signals == 0);
+    return true;
+#else
+    return false;
+#endif
+}
+
 struct Growth {
     std::size_t visits = 0;
     std::size_t bytes = 0;
@@ -181,6 +293,9 @@ int main() {
     equivalence_and_open_boundary();
     revised_last_closed_trade();
     closed_prefix_regression_is_refused();
+    spooled_document_matches_the_fold();
+    if (!spool_write_failure_keeps_rows_in_memory())
+        std::cout << "SKIP spool write failure: no RLIMIT_FSIZE/SIGXFSZ on this platform\n";
     growth_is_linear();
     std::cout << "test_live_report: OK\n";
 }

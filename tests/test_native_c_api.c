@@ -1160,6 +1160,11 @@ typedef struct retention_run {
     int accounts;
     uint64_t first;         /* the first returned ordinal (0 when none) */
     uint64_t window;        /* strategy_native_event_window_v1 */
+    /* strategy_native_events_dropped_v1, per kind */
+    uint64_t dropped_commands;
+    uint64_t dropped_drivers;
+    uint64_t dropped_accounts;
+    int below_window_margin; /* strategy_native_margin_call_v1 at window - 1 */
 } retention_run;
 
 static int retention_poll_begin(void* user) {
@@ -1167,7 +1172,25 @@ static int retention_poll_begin(void* user) {
     return strategy_native_acknowledge_events_v1(state->host, 0) == PF_NATIVE_OK ? 0 : 1;
 }
 
-/* size 0 = strategy_configure_native_v1 alone. */
+/* The calculation at which a mid-run host first acknowledges: after the
+ * entry (PF_TWIN_ENTRY_BAR) and before the exit (PF_TWIN_EXIT_BAR). */
+#define RETENTION_MID_ACK_CALCULATION 20
+
+/* The twin arm, plus "nothing read yet" acknowledged once, in the middle of
+ * the run. */
+static int retention_mid_ack_bar(void* user, const pf_bar_t* bar,
+                                 const pf_native_decision_v1* at) {
+    twin_state* state = (twin_state*)user;
+    const int rc = twin_on_bar(user, bar, at);
+    if (state->calculations == RETENTION_MID_ACK_CALCULATION) {
+        CHECK_EQ_INT(strategy_native_acknowledge_events_v1(state->host, 0), PF_NATIVE_OK,
+                     "the mid-run acknowledgement was refused");
+    }
+    return rc;
+}
+
+/* size 0 = strategy_configure_native_v1 alone. poll: 0 = never acknowledges,
+ * 1 = acknowledges at its run begin, 2 = first acknowledges in mid-run. */
 static retention_run retention_case(uint32_t size, uint32_t mask, uint32_t word,
                                     uint32_t reserved2, int poll) {
     static pf_native_event_v1 rows[PF_TWIN_MAX_EVENTS];
@@ -1184,7 +1207,8 @@ static retention_run retention_case(uint32_t size, uint32_t mask, uint32_t word,
     memset(&state, 0, sizeof(state));
     table = blank_callbacks(&state);
     table.on_bar = twin_on_bar;
-    if (poll) table.on_run_begin = retention_poll_begin;
+    if (poll == 1) table.on_run_begin = retention_poll_begin;
+    if (poll == 2) table.on_bar = retention_mid_ack_bar;
     state.host = strategy_native_host_create_v1(&table);
     CHECK(state.host != NULL, "retention host create failed");
     if (!state.host) {
@@ -1220,6 +1244,23 @@ static retention_run retention_case(uint32_t size, uint32_t mask, uint32_t word,
         }
         CHECK_EQ_INT(strategy_native_event_window_v1(state.host, &out.window), PF_NATIVE_OK,
                      "retention window read");
+        CHECK_EQ_INT(strategy_native_events_dropped_v1(state.host, PF_NATIVE_EVENT_ACCEPTED,
+                                                       &out.dropped_commands),
+                     PF_NATIVE_OK, "dropped command count read");
+        CHECK_EQ_INT(strategy_native_events_dropped_v1(state.host, PF_NATIVE_EVENT_DRIVER_POINT,
+                                                       &out.dropped_drivers),
+                     PF_NATIVE_OK, "dropped driver count read");
+        CHECK_EQ_INT(strategy_native_events_dropped_v1(state.host, PF_NATIVE_EVENT_ACCOUNT,
+                                                       &out.dropped_accounts),
+                     PF_NATIVE_OK, "dropped account count read");
+        out.below_window_margin = PF_NATIVE_ABSENT;
+        if (out.window > 1u) {
+            pf_native_margin_call_v1 call;
+            memset(&call, 0, sizeof(call));
+            call.struct_size = (uint32_t)sizeof(call);
+            out.below_window_margin =
+                strategy_native_margin_call_v1(state.host, out.window - 1u, &call);
+        }
     }
     strategy_native_host_free(state.host);
     return out;
@@ -1229,7 +1270,7 @@ static void check_event_retention(void) {
     const uint32_t current = (uint32_t)sizeof(pf_native_run_spec_ext_v1);
     const uint32_t bit = PF_NATIVE_SPEC_EXT_EVENT_RETENTION;
     retention_run v1, clear, older, full, commands, window, polled, bad_word, bad_reserved,
-        older_bit, fifth;
+        older_bit, fifth, mid;
 
     v1 = retention_case(0u, 0u, 0u, 0u, 0);
     clear = retention_case(current, 0u, PF_NATIVE_EVENT_RETENTION_WINDOW, 0u, 0);
@@ -1238,6 +1279,7 @@ static void check_event_retention(void) {
     commands = retention_case(current, bit, PF_NATIVE_EVENT_RETENTION_COMMANDS, 0u, 0);
     window = retention_case(current, bit, PF_NATIVE_EVENT_RETENTION_WINDOW, 0u, 0);
     polled = retention_case(current, bit, PF_NATIVE_EVENT_RETENTION_WINDOW, 0u, 1);
+    mid = retention_case(current, bit, PF_NATIVE_EVENT_RETENTION_WINDOW, 0u, 2);
     bad_word = retention_case(current, bit, 7u, 0u, 0);
     bad_reserved = retention_case(current, bit, PF_NATIVE_EVENT_RETENTION_FULL, 1u, 0);
     older_bit = retention_case(PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE, bit,
@@ -1286,6 +1328,57 @@ static void check_event_retention(void) {
     CHECK_EQ_INT(fifth.configure, PF_NATIVE_OK, "the fifth layout's retention word was refused");
     CHECK(fifth.drivers == 0 && fifth.commands == v1.commands,
           "the fifth layout did not read COMMANDS");
+    /* No silent loss: every event a retention let go unread is counted, per
+     * kind, exactly. FULL drops nothing; COMMANDS drops every driver point;
+     * WINDOW drops every driver point and account row, and, for a host that
+     * never acknowledged, every command its window retired -- exactly the
+     * commands FULL holds that it no longer does. A host that acknowledged at
+     * its begin drops no command. */
+    CHECK(v1.dropped_commands == 0u && v1.dropped_drivers == 0u && v1.dropped_accounts == 0u,
+          "FULL counted a dropped event");
+    CHECK(commands.dropped_commands == 0u && commands.dropped_accounts == 0u
+              && commands.dropped_drivers == (uint64_t)v1.drivers,
+          "COMMANDS did not count exactly its driver points");
+    CHECK(window.dropped_drivers == (uint64_t)v1.drivers
+              && window.dropped_accounts == (uint64_t)v1.accounts,
+          "WINDOW did not count exactly its driver points and account rows");
+    CHECK(window.dropped_commands == (uint64_t)(v1.commands - window.commands)
+              && window.dropped_commands > 0u,
+          "WINDOW did not count exactly the commands a non-acknowledging host missed");
+    CHECK(polled.dropped_commands == 0u && polled.dropped_drivers == (uint64_t)v1.drivers
+              && polled.dropped_accounts == (uint64_t)v1.accounts,
+          "an acknowledging WINDOW host was counted a dropped command");
+    /* WINDOW, a host that first acknowledges in the middle of the run
+     * (calculation 20, between the entry at 10 and the exit at 30), through
+     * ordinal 0. Until then retire_journal retires through every ordinal and
+     * counts each retired command dropped (never acknowledged); from then on
+     * it retires only through the acknowledged ordinal 0, which is none, and
+     * counts nothing. So the entry's commands, retired before calculation 20,
+     * are dropped and counted; the exit's commands, recorded after it, are
+     * all kept; and dropped plus kept is every command the run recorded
+     * (the same decisions as v1: retention changes no decision). */
+    CHECK_EQ_INT(mid.configure, PF_NATIVE_OK, "a mid-run acknowledging WINDOW host was refused");
+    CHECK(mid.dropped_commands > 0u && mid.commands > 0,
+          "a mid-run acknowledgement did not split its commands into dropped and kept");
+    CHECK(mid.dropped_commands + (uint64_t)mid.commands == (uint64_t)v1.commands,
+          "a mid-run acknowledging host did not count exactly the commands it missed");
+    CHECK(mid.dropped_commands <= window.dropped_commands && mid.window > 1u
+              && (mid.rows == 0 || mid.first >= mid.window),
+          "a mid-run acknowledging host's window is not the one its acknowledgement froze");
+    CHECK(mid.dropped_drivers == (uint64_t)v1.drivers
+              && mid.dropped_accounts == (uint64_t)v1.accounts,
+          "a mid-run acknowledgement changed the driver or account drop count");
+    /* The v1 margin-call read keeps its 1.13.0 answers (append-only ABI): an
+     * ordinal below the window reads PF_NATIVE_ABSENT; "dropped" is reported
+     * only by strategy_native_events_dropped_v1 above. */
+    CHECK_EQ_INT(window.below_window_margin, PF_NATIVE_ABSENT,
+                 "a retired ordinal changed the v1 margin-call answer");
+    {
+        uint64_t count = 7u;
+        CHECK_EQ_INT(strategy_native_events_dropped_v1(NULL, PF_NATIVE_EVENT_ACCOUNT, &count),
+                     PF_NATIVE_E_HANDLE, "a NULL handle's dropped count was accepted");
+        CHECK(count == 7u, "a refused dropped count wrote its output");
+    }
     /* The two symbols refuse what they cannot read. */
     CHECK_EQ_INT(strategy_native_acknowledge_events_v1(NULL, 0u), PF_NATIVE_E_HANDLE,
                  "a NULL handle's acknowledgement was accepted");

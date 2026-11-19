@@ -137,7 +137,7 @@ directly, so a Pine-layer symbol reaching one is a link error.
 
 The counts below describe the current API, including recorded outputs and the report sink; recorded outputs are not part of 1.4.0.
 
-The public C surface is **171 `PF_API` declarations** across the six installed headers that declare any:
+The public C surface is **172 `PF_API` declarations** across the six installed headers that declare any:
 
 - `<pineforge/pineforge.h>` — **115**: 95 of the 106 runtime implementations (the other eleven are declared in `execution_observer.h`, `selected_window.h` and `report_sink.h`) plus twenty
   per-strategy generated exports (`strategy_declares_bar_magnifier` only in a
@@ -145,7 +145,7 @@ The public C surface is **171 `PF_API` declarations** across the six installed h
   strategy `.so` exports and what a harness calls. Older modules lack the six
   opt-in checked-settings exports (repository guide: `docs/checked-settings.md`)
   and two execution-capability exports (`docs/strategy-capabilities.md`).
-- `<pineforge/native_c_api.h>` (included by `pineforge.h`) — **43**: the other
+- `<pineforge/native_c_api.h>` (included by `pineforge.h`) — **44**: the other
   direction, where the host drives the kernel itself. Submit, replace, cancel,
   execute, read the book, read the lots. Additive: no symbol, struct or
   behaviour of the first set changes.
@@ -158,7 +158,7 @@ The public C surface is **171 `PF_API` declarations** across the six installed h
 - `<pineforge/selected_window_plan.h>` — two: the selected-window planner's
   version reader and `pf_plan_selected_primary_v1`.
 
-`scripts/check_c_abi_runtime.py` pins both symbol inventories (106 and 43);
+`scripts/check_c_abi_runtime.py` pins both symbol inventories (106 and 44);
 `scripts/check_native_c_api_surface.py` separately pins the host COVERAGE block.
 
 | Group | Symbols | Reference |
@@ -173,7 +173,7 @@ The public C surface is **171 `PF_API` declarations** across the six installed h
 | Native kernel host (C) | `strategy_native_host_create_v1`, `strategy_native_run_v1`, the submit / replace / cancel family, the position, working-book, open-lot, event and state reads, the cohort and subscription calls, and `strategy_configure_native_ext_v1` / `_result_v1` | `native_c_api.h` |
 
 A newly generated PineForge strategy `.so` includes 106 compiled-strategy runtime
-`PF_API` symbols and 43 native-host symbols (41 `strategy_native_*` declarations and two
+`PF_API` symbols and 44 native-host symbols (42 `strategy_native_*` declarations and two
 `strategy_configure_native_ext_*` declarations), alongside the per-strategy
 exports described above and the toolchain
 `std::piecewise_construct` symbol; no project-internal C++ symbol is exported — see

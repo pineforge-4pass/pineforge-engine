@@ -3,7 +3,7 @@
 #   ./scripts/check_corpus_parity.sh && \
 #     python3 scripts/corpus_trades_identity.py --update
 # and carry the evidence in the commit that moves it.
-# corpus 804ef5bc7ce17a561a06ba9a2ac5b464d0501d1b
+# corpus 93d956a2be9e6f7bc359286dcfeda76023176b2a
 
 a72ee904563a1787ca8371f37f98cec74f6fb44163a5dfac169b77755a05ed1a  validation/analyzer-anvil-percent-costs-01/engine_trades.csv
 df7fbdb2082c8982e8c38d8843fc53262df693d4ce8b32bf05bc0acd1ef41a16  validation/analyzer-cashflow-cash-costs-01/engine_trades.csv
@@ -140,7 +140,7 @@ e291aae05df19c4800f63efee58b89ebf749f997bee608a36751767335f86fdc  validation/mtf
 5e78984ab81af2720237486cd135328814b1a2249444391a260e215b19b1f16c  validation/mtf-rangefinder-daily-reference-01/engine_trades.csv
 9d4f35f88b731d8962b502953f1033dc25ca17ad78270604641e84482bbd7ba8  validation/mtf-roll-state-60-240-d-minimal-01/engine_trades.csv
 e23eae8ce63963185602685a0dced35a6cf584cfd142842189fad3025408b6c6  validation/mtf-triple-tf-close-confluence-01/engine_trades.csv
-a08b8af7ef6e04f157c95f7c6ccb582f3fb8ac5ccfa9ffd9a40216f3cd473993  validation/mtf-triple-tf-macd-hist-confluence-01/engine_trades.csv
+61e0b8f7a97a43ffb4808717b8c359dc7acbb409fd83d96251a032c2be6fa5bc  validation/mtf-triple-tf-macd-hist-confluence-01/engine_trades.csv
 4824c2733914c790819f1f5d3038f19458efd040483d07555e66d0485959359a  validation/na-deep-history-int-na-01/engine_trades.csv
 8086613459eab667b644d36c0b7b9df7c74f38db2633d2b86dae9cc3209570ea  validation/na-ledger-history-anchor-01/engine_trades.csv
 8de1ac87e34c71596460622399cd3e6bd0302d8d7a6055a029bf9dc7ee476622  validation/na-nz-fixnan-history-chain-01/engine_trades.csv

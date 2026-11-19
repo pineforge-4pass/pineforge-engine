@@ -1701,7 +1701,11 @@ list(APPEND TEST_SOURCES test_str_number_format)
 # The pending-order fill-quantity
 # probe's AT_FILL partition answers the quantity a default cash / percent entry
 # books at that fill -- fee 0 / 0.1 %, grid none / 0.001, limit and slipped
-# stop entries (differential). Source-bound.
+# stop entries (differential) -- and its close_only is the shape the fill of
+# the same row books (same-bar predecessor, short seed, after-close stop,
+# host-sized order, queued reversal, replaced market, sequential pair,
+# frozen reversal, risk-direction gate).
+# Source-bound.
 list(APPEND TEST_SOURCES test_adapter_fill_qty_probe)
 # A typed per-call entry (qty_type cash /
 # percent_of_equity) is admitted, booked and probed as the contracts its money
@@ -8573,6 +8577,19 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     pineforge_add_unit_test(test_closed_rows_debug_fold_slope)
 endif()
 # --- lane closed-rows-debug-fold-slope end ---
+
+# --- lane entry-quantity-callers begin ---
+# Real source-host modules for the production JSON/LIVE caller tests.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(entry_quantity_percent MODULE entry_quantity_strategy.cpp)
+    target_link_libraries(entry_quantity_percent PRIVATE pineforge)
+    target_compile_definitions(entry_quantity_percent PRIVATE PINEFORGE_ENTRY_PERCENT=1)
+    target_compile_options(entry_quantity_percent PRIVATE -ffp-contract=off)
+    add_library(entry_quantity_explicit MODULE entry_quantity_strategy.cpp)
+    target_link_libraries(entry_quantity_explicit PRIVATE pineforge)
+    target_compile_options(entry_quantity_explicit PRIVATE -ffp-contract=off)
+endif()
+# --- lane entry-quantity-callers end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))

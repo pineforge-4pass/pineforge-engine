@@ -136,8 +136,10 @@ class ExportListTests(unittest.TestCase):
 
         native_names = source_symbols(include_dir / "native_c_api.h")
         native_implementations = source_symbols(ROOT / "src" / "native_c_host.cpp")
-        self.assertEqual(len(native_names), 43)
-        self.assertEqual(len(native_implementations), 43)
+        # expectation corrected: 43 -> 44 (both counts), because the native C API
+        # adds the export strategy_native_events_dropped_v1.
+        self.assertEqual(len(native_names), 44)
+        self.assertEqual(len(native_implementations), 44)
         self.assertEqual(set(native_names), set(native_implementations))
         self.assertTrue(set(native_names).isdisjoint(implemented))
         self.assertEqual(native, sorted(

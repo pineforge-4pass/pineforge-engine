@@ -4084,6 +4084,29 @@ PF_API int strategy_native_event_window_v1(pf_strategy_t s, uint64_t* out_first_
     });
 }
 
+PF_API int strategy_native_events_dropped_v1(pf_strategy_t s, uint32_t kind,
+                                             uint64_t* out_count) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        if (!out_count) return c_refuse(host, PF_NATIVE_E_ARGUMENT);
+        pineforge::NativeEventKind cpp = pineforge::NativeEventKind::Command;
+        if (kind == static_cast<uint32_t>(PF_NATIVE_EVENT_DRIVER_POINT))
+            cpp = pineforge::NativeEventKind::Driver;
+        else if (kind == static_cast<uint32_t>(PF_NATIVE_EVENT_ACCOUNT))
+            cpp = pineforge::NativeEventKind::Account;
+        // Driver points and account rows are mapped above; every other kind
+        // in [ACCEPTED, RISK] is a command. A kind appended to the event
+        // enumeration after RISK needs this bound (or the mapping above)
+        // changed, or it is refused here.
+        else if (kind < static_cast<uint32_t>(PF_NATIVE_EVENT_ACCEPTED)
+                 || kind > static_cast<uint32_t>(PF_NATIVE_EVENT_RISK))
+            return c_refuse(host, PF_NATIVE_E_TAG);
+        *out_count = host->native_events_dropped(cpp);
+        return PF_NATIVE_OK;
+    });
+}
+
 PF_API int strategy_native_continuation_hash_v1(pf_strategy_t s, uint64_t* out) {
     return guarded([&] {
         auto* host = host_of(s);

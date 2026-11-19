@@ -456,6 +456,18 @@ public:
     // event_window_start is the oldest ordinal a read can still return.
     void acknowledge_events(uint64_t through_ordinal) noexcept;
     uint64_t event_window_start() const noexcept { return requests_.retired_through() + 1; }
+    // The events of `kind` this run produced that the window let go unread
+    // (NativeStrategyHost::native_events_dropped): a command retired before
+    // the host acknowledged anything, and every driver point or account row
+    // the run's retention does not keep. Zero for every kind under Full.
+    uint64_t events_dropped(NativeEventKind kind) const noexcept {
+        switch (kind) {
+        case NativeEventKind::Command: return dropped_commands_;
+        case NativeEventKind::Driver: return dropped_drivers_;
+        case NativeEventKind::Account: return dropped_accounts_;
+        }
+        return 0;
+    }
     // NativeStrategyHost::declare_native_bar_open_hook /
     // declare_native_precommit_hook (the optional-hook and quiet-point changes): which optional hooks the
     // host implements. A capability of the host, not of a run, so it is kept
@@ -766,7 +778,7 @@ public:
     // declares, from the next begin on (nullopt restores the spec's). For a
     // test that reads a whole run's events from a host whose spec it does not
     // write -- the Pine host declares Window -- a readback choice alone: the
-    // spec, its digest and every decision are the spec's. No host reaches it.
+    // spec, its digest and every decision are the spec's. The live runner calls it too.
     void set_retention_override(std::optional<NativeEventRetention> retention) noexcept {
         retention_override_ = retention;
     }
@@ -2129,6 +2141,11 @@ private:
     // nothing. Reset at begin.
     bool events_acknowledged_ = false;
     uint64_t acknowledged_through_ = 0;
+    // What the window let go unread, per kind (events_dropped). Reader
+    // bookkeeping like the acknowledgement above: folded into nothing.
+    uint64_t dropped_commands_ = 0;
+    uint64_t dropped_drivers_ = 0;
+    uint64_t dropped_accounts_ = 0;
     // L4: the resting kernel liquidation and the modeled script path it is
     // sized against. Both are folded into the continuation digest only when
     // the run spec declares a margin model.

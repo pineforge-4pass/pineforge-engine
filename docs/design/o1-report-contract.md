@@ -597,7 +597,7 @@ and `scripts/test_emit_abi_export_list.py` pin the same 126/106.
 The additive `pf_report_cache_stats` query reads command-cache and ledger
 resident bytes and optional-allocation bypasses without changing any envelope
 or existing C struct.
-The separate native-C inventory remains 43 declarations / 43 implementations.
+The separate native-C inventory is now 44 declarations / 44 implementations.
 The envelope changes no existing C struct, README symbol table or legacy
 ctypes report stride.
 

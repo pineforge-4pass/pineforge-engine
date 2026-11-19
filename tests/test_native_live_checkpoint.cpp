@@ -398,6 +398,148 @@ void oversized_checkpoint_keeps_full_fallback() {
                               CheckpointFailureCode::invalid_payload, inputs);
 }
 
+// Above the tree-fold cursor a checkpoint is folded through spooled arrays.
+// With stream_large_checkpoints a payload above the JSON frame is written
+// into the row in pieces and stored as a BLOB; without it (the default) it is
+// one string stored as TEXT, as in 1.13.0. Every case stores exactly the
+// bytes of the tree fold, under the same hash, and a payload above the frame
+// reaches the same parser refusal either way.
+void spooled_checkpoints_store_the_tree_fold(bool stream) {
+    TempDir temp;
+    const auto path = temp.file(stream ? "spooled-stream.sqlite" : "spooled-text.sqlite");
+    constexpr std::uint64_t interval = 600, inputs = 1200;
+    LedgerOptions options;
+    options.report_checkpoint_interval = interval;
+    options.stream_large_checkpoints = stream;
+    Ledger ledger(path, "checkpoint-test", options);
+    ledger.verify_report(0, growing_report(0));
+    auto expected = parse_json(growing_report(0));
+    const std::string item(1024, 'x');
+    for (std::uint64_t cursor = 1; cursor <= inputs; ++cursor) {
+        Json items;
+        items.kind = Json::Kind::Array;
+        items.items.push_back(Json::string(item));
+        const auto patch = Json::object({
+            {"offset", Json::number(std::to_string(cursor))}, {"items", items}});
+        ledger.commit_input(cursor - 1, "{}", cursor, {}, Json::object({
+            {"schema_version", Json::string("pineforge-native-report-delta/v1")},
+            {"fields", Json::object({})},
+            {"arrays", Json::object({{"equity_curve", patch}})},
+        }).dump());
+        expected.members["report"].members["equity_curve"].items.push_back(Json::string(item));
+        if (cursor != interval && cursor != inputs) continue;
+        const auto payload = expected.dump();
+        const bool framed = payload.size() <= 1024u * 1024u;
+        CHECK_OP(framed, ==, cursor == interval);
+        const auto row = "FROM report_checkpoints WHERE input_cursor=" + std::to_string(cursor);
+        CHECK_OP(scalar(path, ("SELECT length(CAST(payload AS BLOB)) " + row).c_str()), ==,
+                 payload.size());
+        CHECK_OP(scalar(path, ("SELECT COUNT(*) " + row + " AND payload_hash='" +
+                               sha256_hex(payload) + "'").c_str()), ==, 1u);
+        CHECK_OP(scalar(path, ("SELECT COUNT(*) " + row + " AND typeof(payload)='" +
+                               (framed || !stream ? "text" : "blob") + "'").c_str()), ==, 1u);
+        CHECK_OP(ledger.checkpoint_diagnostic().has_value(), ==, false);
+        if (framed) {
+            // A payload within the frame is verified and compared byte for byte.
+            CHECK_OP(ledger.verified_report_checkpoint(cursor).value_or(0), ==, cursor);
+            ledger.verify_report_checkpoint(cursor, payload);
+        } else {
+            // Above the frame the stored bytes are hashed in pieces: a match
+            // with the fold's hash reaches the parser refusal, as before.
+            expect_checkpoint_failure([&] { ledger.verified_report_checkpoint(cursor); },
+                                      CheckpointFailureCode::invalid_payload, cursor);
+        }
+    }
+    CHECK_OP(LedgerView(path).report_json(inputs), ==, expected.dump());
+    CHECK_OP(scalar(path, "SELECT COUNT(*) FROM report_checkpoints"), ==, 2u);
+}
+
+// A streamed checkpoint (cursor above 512, payload above the 1 MiB frame)
+// under a byte budget is admitted whole before its first write
+// (try_report_checkpoint, runner/store.cpp: admit(payload_bytes, page_count,
+// reserved_limit)). admit() asks, for a payload of P bytes on pages of S
+// bytes, for at least 2 * (8P / (S - 64)) WAL frames of S + 24 bytes plus 32
+// bytes, and at most that plus the ledger's cached pages (<= page_count),
+// four pages of leaf rounding, the 64 KiB sector padding, the logical-main
+// debt (<= page_count * S) and the WAL-index regions. A budget below the
+// lower bound is refused before anything is written; one at the upper bound
+// is admitted and the row is written whole. The startup checkpoint of a
+// ledger without checkpoints (checkpoint_recovered_report) drives the path.
+void streamed_checkpoint_budget_boundary() {
+    constexpr std::uint64_t inputs = 1200;
+    const std::string item(1024, 'x');
+    auto build = [&](const std::string& path) {
+        LedgerOptions options;
+        options.report_checkpoint_interval = std::uint64_t{1} << 40; // no boundary below it
+        Ledger ledger(path, "checkpoint-test", options);
+        ledger.verify_report(0, growing_report(0));
+        auto expected = parse_json(growing_report(0));
+        for (std::uint64_t cursor = 1; cursor <= inputs; ++cursor) {
+            Json items;
+            items.kind = Json::Kind::Array;
+            items.items.push_back(Json::string(item));
+            const auto patch = Json::object({
+                {"offset", Json::number(std::to_string(cursor))}, {"items", items}});
+            ledger.commit_input(cursor - 1, "{}", cursor, {}, Json::object({
+                {"schema_version", Json::string("pineforge-native-report-delta/v1")},
+                {"fields", Json::object({})},
+                {"arrays", Json::object({{"equity_curve", patch}})},
+            }).dump());
+            expected.members["report"].members["equity_curve"].items.push_back(Json::string(item));
+        }
+        return expected.dump();
+    };
+    const auto bytes_of = [](const std::string& file) -> std::uint64_t {
+        std::error_code error;
+        const auto size = std::filesystem::file_size(file, error);
+        return error ? 0 : static_cast<std::uint64_t>(size);
+    };
+    for (const bool inside : {false, true}) {
+        TempDir temp;
+        const auto path = temp.file(inside ? "budget-inside.sqlite" : "budget-refused.sqlite");
+        const auto payload = build(path);
+        const std::uint64_t P = payload.size();
+        CHECK_OP(P, >, 1024u * 1024u);
+        CHECK_OP(scalar(path, "SELECT COUNT(*) FROM report_checkpoints"), ==, 0u);
+        const std::uint64_t S = scalar(path, "PRAGMA page_size");
+        const std::uint64_t pages = scalar(path, "PRAGMA page_count");
+        const std::uint64_t used = bytes_of(path) + bytes_of(path + "-wal") + bytes_of(path + "-shm");
+        const std::uint64_t payload_frames = 2 * ((P * 8) / (S - 64));
+        const std::uint64_t lower = payload_frames * (S + 24);
+        const std::uint64_t padding = (65536 + S + 23) / (S + 24);
+        const std::uint64_t wal_frames = pages + (P * 8) / (S - 64) + 4 + padding;
+        const std::uint64_t index = ((used / (S + 24) + wal_frames) * 8 / 32768 + 2) * 32768;
+        const std::uint64_t upper = 2 * wal_frames * (S + 24) + 32 + pages * S + index;
+        // The refused budget leaves less than the lower bound for this write;
+        // the admitted one leaves the upper bound plus 1 MiB for the open's
+        // own schema transaction.
+        const std::uint64_t budget = inside ? used + upper + (1u << 20) : used + lower;
+        LedgerOptions streaming;
+        streaming.stream_large_checkpoints = true;
+        Ledger ledger(path, "checkpoint-test", budget, streaming);
+        const auto diagnostic = ledger.checkpoint_diagnostic();
+        const auto rows = scalar(path, "SELECT COUNT(*) FROM report_checkpoints");
+        if (inside) {
+            CHECK_OP(diagnostic.has_value(), ==, false);
+            CHECK_OP(rows, ==, 1u);
+            const auto row = "FROM report_checkpoints WHERE input_cursor=" + std::to_string(inputs);
+            CHECK_OP(scalar(path, ("SELECT length(CAST(payload AS BLOB)) " + row).c_str()), ==, P);
+            CHECK_OP(scalar(path, ("SELECT COUNT(*) " + row + " AND payload_hash='" +
+                                   sha256_hex(payload) + "' AND typeof(payload)='blob'").c_str()), ==, 1u);
+        } else {
+            CHECK_OP(diagnostic.has_value(), ==, true);
+            if (diagnostic) {
+                CHECK_OP(diagnostic->reason == CheckpointWriteFailureReason::budget, ==, true);
+                CHECK_OP(diagnostic->budget_count, ==, 1u);
+                CHECK_OP(diagnostic->cursor, ==, inputs);
+            }
+            CHECK_OP(rows, ==, 0u);
+            // The refusal is the optional checkpoint's: the ledger still reads.
+            CHECK_OP(ledger.input_count(), ==, inputs);
+        }
+    }
+}
+
 void reports_without_checkpoint_verify_whole_ledger() {
     struct Corruption {
         const char* sql;
@@ -662,6 +804,9 @@ int main() {
         corrupt_checkpoint_hash_falls_back();
         consistent_checkpoint_edit_requires_replay_equality();
         oversized_checkpoint_keeps_full_fallback();
+        spooled_checkpoints_store_the_tree_fold(true);
+        spooled_checkpoints_store_the_tree_fold(false);
+        streamed_checkpoint_budget_boundary();
         reports_without_checkpoint_verify_whole_ledger();
         missing_and_invalid_reports_keep_base_errors();
         old_ledger_migrates_at_open();

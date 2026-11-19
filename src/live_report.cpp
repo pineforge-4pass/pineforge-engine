@@ -1,12 +1,12 @@
 #include "live_report.hpp"
 #include "engine_internal.hpp"
 #include "native_execution_consumer.hpp"
+#include "report_scratch.hpp"
 #include "report_value_invalid.hpp"
 #include <pineforge/metrics_stream.hpp>
 
 #include <algorithm>
 #include <cstring>
-#include <deque>
 #include <limits>
 #include <stdexcept>
 
@@ -21,23 +21,54 @@ struct LiveReportAccumulator::State {
     double capital = 0.0, net_prefix = 0.0;
     std::unique_ptr<metrics::TradeStatsAccumulator> all, longs, shorts;
     metrics::EquityMetricsFold equity_fold;
-    // Raw engine points, including its held point. Presentation is confined
-    // to a value copy of the fold and the contiguous ratio workspace.
-    std::deque<pf_equity_point_t> curve;
+    // Raw engine points staged so far, including its held point. Presentation
+    // is confined to a value copy of the fold and the ratio workspace.
+    std::size_t points = 0;
     // Reuse the presentation suffix and the batch ratio workspace on each
-    // read. The workspace carries the raw prefix and a presented held point.
+    // read. The workspace carries the raw prefix and a presented held point:
+    // a resident array, or (scratch) the engine's binary curve scratch file,
+    // which keeps one fixed batch of points in the process.
     std::vector<TradeC> trade_rows;
     std::vector<pf_equity_point_t> ratio_curve;
+    const bool scratch = false;
+    std::unique_ptr<report_sink::ScratchCurveWriter> scratch_curve;
+    // The stream's engine when the points this reader has taken leave its own
+    // vector too. engine.equity_curve_[k] is then report point retired + k.
+    BacktestEngine* const released = nullptr;
+    std::size_t retired = 0;
     pf_equity_stats_t ratios{};
     bool have_ratios = false;
     std::uint64_t ratios_cursor = 0;
     report::LiveReportWork work;
 
     explicit State(std::uint64_t k) : interval(k) {}
+    // Opens the scratch file here, so a directory that cannot back it (a
+    // memory filesystem, no permission) is refused before any report read.
+    State(std::uint64_t k, const std::string& directory, BacktestEngine* engine)
+        : interval(k), scratch(true),
+          scratch_curve(std::make_unique<report_sink::ScratchCurveWriter>(directory)),
+          released(engine) {}
+
+    report_sink::ScratchCurveWriter& writer() { return *scratch_curve; }
+    void stage_append(const pf_equity_point_t& point) {
+        if (scratch) writer().append(point);
+        else ratio_curve.push_back(point);
+        ++points;
+    }
+    void stage_last(const pf_equity_point_t& point) {
+        if (scratch) writer().replace_last(point);
+        else ratio_curve.back() = point;
+    }
 };
 
 LiveReportAccumulator::LiveReportAccumulator(std::uint64_t ratio_interval)
     : state_(std::make_unique<State>(ratio_interval)) {
+    if (!ratio_interval) throw std::invalid_argument("ratio-interval must be positive");
+}
+LiveReportAccumulator::LiveReportAccumulator(
+        std::uint64_t ratio_interval, const std::string& scratch_directory,
+        BacktestEngine* released)
+    : state_(std::make_unique<State>(ratio_interval, scratch_directory, released)) {
     if (!ratio_interval) throw std::invalid_argument("ratio-interval must be positive");
 }
 LiveReportAccumulator::~LiveReportAccumulator() = default;
@@ -50,6 +81,11 @@ report::LiveReportPatch LiveReportAccumulator::update(
     return NativeExecutionConsumer::fill_live_report_patch(engine, *this, input_index, final_input);
 }
 
+void keep_live_event_window(BacktestEngine& engine, NativeEventRetention retention) {
+    // A configured native host has bound its consumer: nothing is created here.
+    NativeExecutionConsumer::bound(engine).set_retention_override(retention);
+}
+
 report::LiveReportPatch NativeExecutionConsumer::fill_live_report_patch(
         const BacktestEngine& engine, LiveReportAccumulator& accumulator,
         std::uint64_t input_index, bool final_input) try {
@@ -60,7 +96,19 @@ report::LiveReportPatch NativeExecutionConsumer::fill_live_report_patch(
     const auto* consumer = static_cast<const NativeExecutionConsumer*>(
         engine.execution_consumer_slot_.ptr.get());
     auto& state = *accumulator.state_;
+    if (state.released && state.released != &engine)
+        throw std::logic_error("live report scratch is bound to another engine");
     const auto fallback = [&] {
+        if (state.retired) {
+            // A whole-report read needs the whole curve: put the points this
+            // reader took back in front of the ones the engine still holds.
+            std::vector<pf_equity_point_t> prefix(state.retired);
+            report_sink::read_scratch_points(state.writer().region(), 0, prefix.data(),
+                                             static_cast<std::int64_t>(prefix.size()));
+            auto& curve = state.released->equity_curve_;
+            curve.insert(curve.begin(), prefix.begin(), prefix.end());
+            state.retired = 0;
+        }
         ReportC full{};
         struct Release {
             ReportC& value;
@@ -153,6 +201,8 @@ report::LiveReportPatch NativeExecutionConsumer::fill_live_report_patch(
     const auto generation = consumer ? consumer->selected_epoch_.generation_counter : 0;
     const std::size_t closed = engine.trades_.size();
     const std::size_t open = engine.range_end_trades_.size();
+    // Report points: the ones this reader took out of the engine, then its own.
+    const std::size_t engine_points = state.retired + engine.equity_curve_.size();
     if (closed > static_cast<std::size_t>(std::numeric_limits<int>::max())
         || open > static_cast<std::size_t>(std::numeric_limits<int>::max()) - closed)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
@@ -172,7 +222,7 @@ report::LiveReportPatch NativeExecutionConsumer::fill_live_report_patch(
             metrics::TradeFilter::SHORT, state.capital);
     } else if (state.owner != &engine || state.consumer != consumer
                || state.generation != generation || input_index < state.cursor
-               || closed < state.closed || engine.equity_curve_.size() < state.curve.size()
+               || closed < state.closed || engine_points < state.points
                || engine.broker_state_hashes_.size() < state.hashes) {
         throw std::logic_error("carried live report stream or immutable prefix changed");
     }
@@ -197,23 +247,21 @@ report::LiveReportPatch NativeExecutionConsumer::fill_live_report_patch(
         ++state.work.trade_rows_folded;
     }
 
-    const auto old_points = state.curve.size();
+    const auto old_points = state.points;
     patch.equity.offset = old_points ? old_points - 1 : 0;
-    patch.equity.logical_length = engine.equity_curve_.size();
+    patch.equity.logical_length = engine_points;
     for (std::size_t i = patch.equity.offset; i < patch.equity.logical_length; ++i) {
-        const auto& point = engine.equity_curve_[i];
+        const auto& point = engine.equity_curve_[i - state.retired];
         ++state.work.equity_rows_materialized;
         const auto key = metrics::equity_month_key(point.time_ms, engine.chart_timezone_);
         if (i < old_points) {
             state.equity_fold.replace_last(point, key);
-            state.curve[i] = point;
             // Restore the previous presented tail before it becomes prefix.
-            state.ratio_curve[i] = point;
+            state.stage_last(point);
             ++state.work.ratio_points_supplied;
         } else {
             state.equity_fold.fold(point, key);
-            state.curve.push_back(point);
-            state.ratio_curve.push_back(point);
+            state.stage_append(point);
             ++state.work.ratio_points_supplied;
         }
         ++state.work.equity_rows_folded;
@@ -252,7 +300,7 @@ report::LiveReportPatch NativeExecutionConsumer::fill_live_report_patch(
             "live report presentation must preserve its suffix and held-point views");
     if (!patch.equity.rows.empty()) {
         patch.equity.rows.back() = tail;
-        state.ratio_curve.back() = tail;
+        state.stage_last(tail);
         ++state.work.ratio_points_supplied;
     }
 
@@ -295,15 +343,26 @@ report::LiveReportPatch NativeExecutionConsumer::fill_live_report_patch(
         // passes and their validation/NaN rules. Its cost is accounted apart.
         if (input_index == 0) ++state.work.warmup_ratio_recomputations;
         else ++state.work.ratio_recomputations;
-        // A mutable pointer would select the structural-source template.
-        // The existing array entry point takes a pointer to const points.
-        const pf_equity_point_t* ratio_points =
-            state.ratio_curve.empty() ? nullptr : state.ratio_curve.data();
-        state.ratios = metrics::compute_equity_stats(
-            ratio_points,
-            static_cast<std::int64_t>(state.ratio_curve.size()), state.capital,
-            engine.chart_timezone_, inputs.first_open, inputs.last_close,
-            engine.bars_in_market_, presented.net_profit);
+        if (state.scratch && state.points) {
+            // The same metric body and operation order as the array entry
+            // point, reading the scratch curve through its one fixed window.
+            const auto region = state.writer().region();
+            const metrics::SpillCurve ratio_points(region);
+            state.ratios = metrics::compute_equity_stats<metrics::SpillCurve>(
+                ratio_points, region.point_count, state.capital,
+                engine.chart_timezone_, inputs.first_open, inputs.last_close,
+                engine.bars_in_market_, presented.net_profit);
+        } else {
+            // A mutable pointer would select the structural-source template.
+            // The existing array entry point takes a pointer to const points.
+            const pf_equity_point_t* ratio_points =
+                state.ratio_curve.empty() ? nullptr : state.ratio_curve.data();
+            state.ratios = metrics::compute_equity_stats(
+                ratio_points,
+                static_cast<std::int64_t>(state.ratio_curve.size()), state.capital,
+                engine.chart_timezone_, inputs.first_open, inputs.last_close,
+                engine.bars_in_market_, presented.net_profit);
+        }
         state.ratios_cursor = input_index;
         state.have_ratios = true;
     }
@@ -363,6 +422,39 @@ report::LiveReportPatch NativeExecutionConsumer::fill_live_report_patch(
     state.names = name_count;
     state.reported_points = patch.equity.logical_length;
     state.cursor = input_index;
+    if (state.released && engine.equity_curve_.size() > 1) {
+        // Every point below the held one is in this patch and in the scratch
+        // curve. Keep only the held point; the vector's own storage stays.
+        // Nothing else walks the whole vector in a realtime stream: a
+        // whole-report read comes through fallback() above, which puts the
+        // points back first, and the range-end refold of the curve runs only
+        // before the stream is realtime (this route requires realtime).
+        // Points may leave only a realtime stream: erased before it, a later
+        // range-end refold (pine_strategy_host.cpp, stream_phase_ != REALTIME)
+        // would walk a curve that is no longer whole.
+        // Readers of the whole engine curve, and why none sees it released:
+        // fill_report (src/engine_report.cpp), through fill_snapshot_report
+        // (src/native_execution_consumer.cpp), is reached on this stream
+        // only through fallback() above (the runner's direct
+        // strategy_stream_fill_report serves modules without the stamp,
+        // which never release); the selected and observer captures
+        // (capture_presentation, same file, from terminal_success) run only
+        // with a window or observer registered, which the runner never
+        // sets; the full refolds (same file) run from the range-end refold
+        // (src/source/pine_strategy_host.cpp) only outside realtime, or
+        // with a report sink, which this route refuses
+        // (report_sink_state_.enabled, above), as does the sink restore
+        // (same file). The envelope's count (include/pineforge/engine.hpp)
+        // is read only by fill_report_envelope_v1 (src/engine_report.cpp),
+        // which the runner never calls; other readers take the held point
+        // only (last_equity_point, src/native_execution_consumer.cpp).
+        if (!engine.stream_is_realtime())
+            throw std::logic_error("live report released equity points before the stream is realtime");
+        auto& curve = state.released->equity_curve_;
+        const auto taken = curve.size() - 1;
+        curve.erase(curve.begin(), curve.begin() + static_cast<std::ptrdiff_t>(taken));
+        state.retired += taken;
+    }
     return patch;
 } catch (const std::exception& error) {
     if (!engine.last_error().empty()

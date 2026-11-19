@@ -246,11 +246,12 @@ EXPECTED_NATIVE_C_API = frozenset({
     "strategy_native_sized_units_v1",
     "strategy_native_acknowledge_events_v1",
     "strategy_native_event_window_v1",
+    "strategy_native_events_dropped_v1",
     "strategy_native_timeframe_bar_interval_v1",
 })
 
-EXPECTED_NATIVE_C_API_DECLARATIONS = 43
-EXPECTED_NATIVE_C_API_IMPLEMENTATIONS = 43
+EXPECTED_NATIVE_C_API_DECLARATIONS = 44
+EXPECTED_NATIVE_C_API_IMPLEMENTATIONS = 44
 
 _PF_API_DECL = re.compile(r"^\s*PF_API\b.+\b(\w+)\s*\(")
 _EXTERN_PF_API_DECL = re.compile(r'^\s*extern\s+"C"\s+PF_API\b.+\b(\w+)\s*\(')

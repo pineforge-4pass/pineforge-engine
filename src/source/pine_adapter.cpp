@@ -17346,11 +17346,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
             result.shape = native_order::OpeningShape::Transact;
             return result;
         }
-        if (finite_positive(source.frozen_reversal_transaction)
-            && source.placement_cycle == current_position_cycle_
-            && std::abs(facts.position.signed_units - (source.is_long
-                ? -source.frozen_reversal_transaction : source.frozen_reversal_transaction))
-                < 1e-12) {
+        if (frozen_reversal_closes(source, facts.position.signed_units)) {
             result.units = source.frozen_reversal_transaction;
             result.shape = native_order::OpeningShape::CloseOpposite;
         } else {
@@ -17414,7 +17410,6 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         // ab9714be pine_policy_members.cpp:282: default sizing units divides equity by price, pointvalue, and currency fx
         result.units = default_sizing_units(sizing);
     }
-    const auto created_side = static_cast<PositionSide>(source.projection_position_side);
     if (source.family == PineOrderFamily::Entry) {
         const bool opposite = facts.position.signed_units != 0.0
             && ((facts.position.signed_units > 0.0) != source.is_long);
@@ -17750,35 +17745,13 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         }
         return result;
     }
-    if (source.family == PineOrderFamily::Entry && source.sequential_group != 0
-        && source.sequential_rank != 0 && source.has_full_entry_bracket) {
-        bool paired = false;
-        // The group's entries are kept while a member is live or queued
-        // (erase_retired_rows, K7).
-        const auto pairs = [&](const PlacementSnapshot& peer) {
-            return peer.family == PineOrderFamily::Entry
-                && peer.sequential_group == source.sequential_group
-                && peer.sequential_rank != 0 && peer.sequential_rank != source.sequential_rank
-                && peer.has_full_entry_bracket
-                && !(source.is_long && peer.replaced_opening
-                     && peer.replacement_predecessor_market);
-        };
-        PINEFORGE_AUDIT_PLACEMENT_SCAN(placement_,
-            [&](std::uint64_t, const PlacementSnapshot& peer) { return pairs(peer); });
-        for (const auto& row : placement_) {
-            if (pairs(row.second)) {
-                paired = true;
-                break;
-            }
-        }
-        if (paired) {
-            const bool opposite = facts.position.signed_units != 0.0
-                && ((facts.position.signed_units > 0.0) != source.is_long);
-            if (source.sequential_rank == 1 && opposite)
-                result.units = std::max(std::abs(facts.position.signed_units), *result.units);
-            result.shape = native_order::OpeningShape::Transact;
-            return result;
-        }
+    if (sequential_pair_member(source)) {
+        const bool opposite = facts.position.signed_units != 0.0
+            && ((facts.position.signed_units > 0.0) != source.is_long);
+        if (source.sequential_rank == 1 && opposite)
+            result.units = std::max(std::abs(facts.position.signed_units), *result.units);
+        result.shape = native_order::OpeningShape::Transact;
+        return result;
     }
     // A same-id replacement of a live MARKET entry over an opposite open book
     // is a source transaction (reduce the carried side by its own size, open
@@ -17789,16 +17762,6 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
     // every quantity kind: default percent, fixed and cash, and an explicit
     // qty (R1, tests/fixtures/same_bar_reissue). The sell default-percent
     // scope before it is kept for a priced reissue.
-    const bool opposite_at_fill = facts.position.signed_units != 0.0
-        && ((facts.position.signed_units > 0.0) != source.is_long);
-    const auto live_side = facts.position.signed_units > 0.0
-        ? PositionSide::LONG : (facts.position.signed_units < 0.0
-            ? PositionSide::SHORT : PositionSide::FLAT);
-    const bool prior_cycle_close_only = opposite_at_fill
-        && created_side != live_side
-        && !source.projection_opposite_market_predecessor
-        && (finite_positive(source.exit_levels.stop)
-            || finite_positive(source.exit_levels.limit));
     const bool deferred_flip_from_flat = facts.position.signed_units == 0.0
         && source.projection_position_side
             != static_cast<std::int32_t>(PositionSide::FLAT)
@@ -17815,45 +17778,110 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         result.units = *result.units + source.projection_tv_carry_qty;
         result.shape = native_order::OpeningShape::Transact;
     }
-    if (opposite_at_fill) {
-        const bool source_close_precedes = source.projection_after_close;
-        const bool replacement_transaction = source.reverse_to
-            && source.replaced_opening
-            && source.replacement_predecessor_market
-            && (std::holds_alternative<native_order::Market>(trigger)
-                || (!source.is_long && !std::isfinite(source.requested_qty)
-                    && config_.default_qty_type
-                        == static_cast<int>(QtyType::PERCENT_OF_EQUITY)));
-        // A flat stop entry is kept while a live or queued entry shares its
-        // placement bar (erase_retired_rows, K8).
-        const auto dual_stop_peer = [&](std::uint64_t incarnation, const PlacementSnapshot& peer) {
-            return incarnation != facts.target.incarnation && peer.opening
-                && peer.family == PineOrderFamily::Entry
-                && peer.projection_position_side
-                    == static_cast<std::int32_t>(PositionSide::FLAT)
-                && peer.projection_created_bar == source.projection_created_bar
-                && peer.is_long != source.is_long
-                && finite_positive(peer.exit_levels.stop)
-                && !finite_positive(peer.exit_levels.limit);
-        };
-        const bool flat_dual_candidate = source.projection_position_side
-                == static_cast<std::int32_t>(PositionSide::FLAT)
-            && finite_positive(source.exit_levels.stop)
-            && !finite_positive(source.exit_levels.limit);
-        if (flat_dual_candidate)
-            PINEFORGE_AUDIT_PLACEMENT_SCAN(placement_, dual_stop_peer);
-        const bool flat_dual_stop = flat_dual_candidate
-            && std::any_of(placement_.begin(), placement_.end(),
-                [&](const auto& row) { return dual_stop_peer(row.first, row.second); });
-        result.shape = source_close_precedes || replacement_transaction
-            ? native_order::OpeningShape::Transact
-            : prior_cycle_close_only
-            ? native_order::OpeningShape::CloseOpposite
-            : flat_dual_stop
-            ? native_order::OpeningShape::Transact
-            : native_order::OpeningShape::ReverseTo;
-    }
+    if (const auto shape = opposite_opening_shape(source, facts.target.incarnation,
+            facts.position.signed_units, std::holds_alternative<native_order::Market>(trigger),
+            source.projection_position_side, source.projection_after_close))
+        result.shape = *shape;
     return result;
+}
+
+// The fill's shape decisions, shared by resolve_source_terms and the
+// fill-quantity probe (PendingIntentView::probe_fill_qty), so that the shapes
+// the probe models come from these rules instead of a second copy of them.
+// The fill's earlier returns (money guards, fill-time affordability, the
+// margin-call surplus, a refused signal price, unified admission) are not here
+// and the probe does not model them.
+// A priced reversal's frozen transaction is consumed exactly by the live book.
+bool PineExecutionAdapter::frozen_reversal_closes(const PlacementSnapshot& source,
+                                                  double signed_units) const noexcept {
+    return finite_positive(source.frozen_reversal_transaction)
+        && source.placement_cycle == current_position_cycle_
+        && std::abs(signed_units - (source.is_long
+            ? -source.frozen_reversal_transaction : source.frozen_reversal_transaction))
+            < 1e-12;
+}
+
+// A bracketed member of a sequential pair whose other member is still kept.
+bool PineExecutionAdapter::sequential_pair_member(const PlacementSnapshot& source) const {
+    if (!(source.family == PineOrderFamily::Entry && source.sequential_group != 0
+          && source.sequential_rank != 0 && source.has_full_entry_bracket)) return false;
+    // The group's entries are kept while a member is live or queued
+    // (erase_retired_rows, K7).
+    const auto pairs = [&](const PlacementSnapshot& peer) {
+        return peer.family == PineOrderFamily::Entry
+            && peer.sequential_group == source.sequential_group
+            && peer.sequential_rank != 0 && peer.sequential_rank != source.sequential_rank
+            && peer.has_full_entry_bracket
+            && !(source.is_long && peer.replaced_opening
+                 && peer.replacement_predecessor_market);
+    };
+    PINEFORGE_AUDIT_PLACEMENT_SCAN(placement_,
+        [&](std::uint64_t, const PlacementSnapshot& peer) { return pairs(peer); });
+    return std::any_of(placement_.begin(), placement_.end(),
+        [&](const auto& row) { return pairs(row.second); });
+}
+
+// The prior-cycle close-only predicate: a priced entry facing an opposite
+// position of a cycle it was not created in, with no earlier same-bar
+// opposite market. `created_side` is the PositionSide the order was placed on.
+bool PineExecutionAdapter::prior_cycle_close_only(const PlacementSnapshot& source,
+        double signed_units, std::int32_t created_side) noexcept {
+    const bool opposite_at_fill = signed_units != 0.0
+        && ((signed_units > 0.0) != source.is_long);
+    const auto live_side = signed_units > 0.0
+        ? PositionSide::LONG : (signed_units < 0.0 ? PositionSide::SHORT : PositionSide::FLAT);
+    return opposite_at_fill
+        && static_cast<PositionSide>(created_side) != live_side
+        && !source.projection_opposite_market_predecessor
+        && (finite_positive(source.exit_levels.stop)
+            || finite_positive(source.exit_levels.limit));
+}
+
+// The shape of a host-resolved entry reaching the end of resolve_source_terms
+// against an opposite position; nullopt when the position is not opposite.
+std::optional<native_order::OpeningShape> PineExecutionAdapter::opposite_opening_shape(
+        const PlacementSnapshot& source, std::uint64_t target_incarnation, double signed_units,
+        bool market_trigger, std::int32_t created_side, bool after_close) const {
+    const bool opposite_at_fill = signed_units != 0.0
+        && ((signed_units > 0.0) != source.is_long);
+    if (!opposite_at_fill) return std::nullopt;
+    const bool closes_only = prior_cycle_close_only(source, signed_units, created_side);
+    const bool source_close_precedes = after_close;
+    const bool replacement_transaction = source.reverse_to
+        && source.replaced_opening
+        && source.replacement_predecessor_market
+        && (market_trigger
+            || (!source.is_long && !std::isfinite(source.requested_qty)
+                && config_.default_qty_type
+                    == static_cast<int>(QtyType::PERCENT_OF_EQUITY)));
+    // A flat stop entry is kept while a live or queued entry shares its
+    // placement bar (erase_retired_rows, K8).
+    const auto dual_stop_peer = [&](std::uint64_t incarnation, const PlacementSnapshot& peer) {
+        return incarnation != target_incarnation && peer.opening
+            && peer.family == PineOrderFamily::Entry
+            && peer.projection_position_side
+                == static_cast<std::int32_t>(PositionSide::FLAT)
+            && peer.projection_created_bar == source.projection_created_bar
+            && peer.is_long != source.is_long
+            && finite_positive(peer.exit_levels.stop)
+            && !finite_positive(peer.exit_levels.limit);
+    };
+    const bool flat_dual_candidate = created_side
+            == static_cast<std::int32_t>(PositionSide::FLAT)
+        && finite_positive(source.exit_levels.stop)
+        && !finite_positive(source.exit_levels.limit);
+    if (flat_dual_candidate)
+        PINEFORGE_AUDIT_PLACEMENT_SCAN(placement_, dual_stop_peer);
+    const bool flat_dual_stop = flat_dual_candidate
+        && std::any_of(placement_.begin(), placement_.end(),
+            [&](const auto& row) { return dual_stop_peer(row.first, row.second); });
+    return source_close_precedes || replacement_transaction
+        ? native_order::OpeningShape::Transact
+        : closes_only
+        ? native_order::OpeningShape::CloseOpposite
+        : flat_dual_stop
+        ? native_order::OpeningShape::Transact
+        : native_order::OpeningShape::ReverseTo;
 }
 
 bool PineExecutionAdapter::partial_exit_sibling_live(
@@ -28821,17 +28849,89 @@ int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
         *partition = 3;
     }
 
-    // The fill's rule (resolve_source_terms): priced entries, no earlier same-bar opposite market.
-    const bool prior_cycle_close_only = snapshot.family == PineOrderFamily::Entry
-        && opposite
-        && snapshot.projection_position_side
-            != (physical.signed_units > 0.0
-                ? static_cast<std::int32_t>(PositionSide::LONG)
-                : static_cast<std::int32_t>(PositionSide::SHORT))
-        && !snapshot.projection_opposite_market_predecessor
-        && (finite_positive(snapshot.exit_levels.stop)
-            || finite_positive(snapshot.exit_levels.limit));
-    *close_only = (snapshot.affordability_close_only || prior_cycle_close_only
+    // The fill's shapes this probe models (resolve_source_terms), through the
+    // same helpers; the fill's earlier Entry-block returns (money guards,
+    // fill-time affordability, margin-call surplus, refused signal price,
+    // unified admission) are not modelled. A queued row is stamped at its
+    // flush (submit_or_replace) with the live side and any same-bar close;
+    // the probe takes both as of now.
+    const bool queued = handle.incarnation == 0;
+    const std::int32_t live_side = physical.signed_units > 0.0
+        ? static_cast<std::int32_t>(PositionSide::LONG)
+        : (physical.signed_units < 0.0 ? static_cast<std::int32_t>(PositionSide::SHORT)
+                                       : static_cast<std::int32_t>(PositionSide::FLAT));
+    const std::int32_t created_side = queued ? live_side : snapshot.projection_position_side;
+    const bool after_close = snapshot.projection_after_close
+        || (queued && owner_->pending_same_bar_close_qty_ > 0.0);
+    bool market_trigger = false;
+    bool host_resolved = false;
+    const auto read_request = [&](const native_order::Request& request) {
+        market_trigger = std::holds_alternative<native_order::Market>(request.trigger);
+        host_resolved = std::holds_alternative<native_order::HostSized>(request.intent)
+            || std::holds_alternative<native_order::Sized>(request.intent);
+    };
+    if (!queued) {
+        try {
+            if (auto* consumer = owner_->bound_consumer()) {
+                if (const auto* live = as_native_consumer(*consumer).request_core().find_live(handle))
+                    read_request(live->request());
+            }
+        } catch (...) {
+            host_resolved = false;
+        }
+    } else {
+        const auto queued_request = [&](const auto& rows) {
+            for (const auto& queued_row : rows) {
+                if (&queued_row.snapshot == row) read_request(queued_row.request);
+            }
+        };
+        queued_request(owner_->pending_same_bar_commands_);
+        queued_request(owner_->pending_entries_);
+        queued_request(owner_->pending_coof_requests_);
+    }
+    // The prior-cycle predicate alone: the answer for an explicit intent, a
+    // row whose request was not read, and the fallback below.
+    const auto prior_cycle_only = [&]() noexcept {
+        return snapshot.family == PineOrderFamily::Entry
+            && PineExecutionAdapter::prior_cycle_close_only(
+                snapshot, physical.signed_units, created_side);
+    };
+    bool fill_close_only = false;
+    // The shape helpers can throw (a PINEFORGE_PLACEMENT_AUDIT build copies
+    // the placement container in its scan); this function is noexcept, so an
+    // exception falls back to the prior-cycle predicate instead of
+    // std::terminate. Nothing in the try changes an answer when nothing throws.
+    try {
+        if (!host_resolved) {
+            // An explicit intent books its own transaction; the fill takes no
+            // shape decision, so the prior-cycle predicate alone is reported.
+            fill_close_only = prior_cycle_only();
+        } else if (snapshot.family == PineOrderFamily::Order) {
+            // A host-sized strategy.order closes against an opposite position.
+            fill_close_only = opposite;
+        } else if (snapshot.family != PineOrderFamily::Entry) {
+            fill_close_only = false;
+        } else if ((owner_->risk_.direction > 0 && !snapshot.is_long)
+                   || (owner_->risk_.direction < 0 && snapshot.is_long)) {
+            fill_close_only = opposite;
+        } else if (snapshot.terms_priced_reverse) {
+            fill_close_only = opposite
+                && owner_->frozen_reversal_closes(snapshot, physical.signed_units);
+            // Its fill books CloseOpposite of the frozen transaction
+            // (resolve_source_terms), not the requested quantity.
+            if (fill_close_only) {
+                *qty = snapshot.frozen_reversal_transaction;
+                *partition = 1;
+            }
+        } else if (!owner_->sequential_pair_member(snapshot)) {
+            const auto shape = owner_->opposite_opening_shape(snapshot, handle.incarnation,
+                physical.signed_units, market_trigger, created_side, after_close);
+            fill_close_only = shape && *shape == native_order::OpeningShape::CloseOpposite;
+        }
+    } catch (...) {
+        fill_close_only = prior_cycle_only();
+    }
+    *close_only = (snapshot.affordability_close_only || fill_close_only
                    || kernel_close_only) ? 1 : 0;
     return 0;
 }
