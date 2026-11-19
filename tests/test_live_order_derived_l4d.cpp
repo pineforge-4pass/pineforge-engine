@@ -4,9 +4,7 @@
 #include "oracle_fixture_config_shim.hpp"
 #define PineStrategyHost L4dPineHost
 #define PendingOrder L4dPendingOrder
-#define pending_orders_ l4d_pending_rows()
 #define OrderType L4dOrderType
-#define ShortSeedCollisionRole L4dShortSeedRole
 #define is_first_tick_ is_first_tick()
 #define coof_fill_recalc_active_ l4d_coof_fill_recalc_active()
 #define coof_cursor_is_bar_close_ l4d_coof_cursor_is_bar_close()
@@ -134,7 +132,9 @@ void test_explicit_bracket() {
 
 // ---------------------------------------------------------------------------
 // B. DEFAULT percent_of_equity <= 100 pure STOP entry placed from flat:
-// partition DEFAULT_STOP_PLACEMENT with the round-7 family-K snapshot
+// expectation corrected: partition 2 -> 1, because the shipped engine returns
+// FROZEN_PLACEMENT (1) for this stop (src/source/pine_adapter.cpp:28789-28792). The header
+// documents 1 and reserves code 2 (include/pineforge/pineforge.h:1405-1409). The snapshot is
 // qty = floor_step(equity * pct / tick(level)) = floor(10000 / 101) = 99
 // (default_stop_placement_qty, engine_strategy_commands.cpp). A non-positive
 // fill print falls back to AT_FILL and calc_qty returns 0 there.
@@ -160,11 +160,11 @@ void test_default_stop_placement() {
     CHECK(near(o.default_stop_placement_qty, 99.0));
     double qty = 0; int close_only = -1, partition = -1;
     CHECK(s.probe_fill_qty(0, 101.0, &qty, &close_only, &partition) == 0);
-    CHECK(near(qty, 99.0) && partition == kDefaultStopPlacement && close_only == 0);
+    CHECK(near(qty, 99.0) && partition == kFrozenPlacement && close_only == 0);
     CHECK(qty == o.default_stop_placement_qty);
     // A gap-through open above the level dispatches the same placement qty.
     CHECK(s.probe_fill_qty(0, 105.0, &qty, &close_only, &partition) == 0);
-    CHECK(near(qty, 99.0) && partition == kDefaultStopPlacement);
+    CHECK(near(qty, 99.0) && partition == kFrozenPlacement);
     // use_default_stop_placement_qty requires fill_price > 0: a zero print
     // falls back to calc_qty_for_type(slipped 0) == calc_qty(0) == 0. This
     // pins only the fallback; the meaningful AT_FILL quantities are pinned
@@ -264,19 +264,28 @@ public:
     }
 };
 
+// The public POD uses ENTRY for both market and priced strategy.entry orders.
+int find_projected_order(const source::PineStrategyHost& host, const std::string& id,
+                         OrderType type, pf_pending_order_v1_t& row) {
+    for (int i = 0; i < host.pending_order_count(); ++i) {
+        if (host.observe_pending_copy_v1(i, &row) == 0 && id == row.id
+            && row.type == static_cast<int>(type)) return i;
+    }
+    return -1;
+}
+
 void test_prior_cycle_close_only() {
     std::vector<Bar> bars = {flat_bar(100, 0), flat_bar(100, 60'000), flat_bar(100, 120'000)};
     PriorCycleProbe s; s.set_syminfo_mintick(0.01); s.run(bars.data(), 3);
     CHECK(s.position_cycle_seq() >= 1);
     CHECK(near(s.position_avg_price(), 100.0));
-    int idx = -1;
-    for (int i = 0; i < s.pending_order_count(); ++i)
-        if (s.pending_order_at(i).id == "S" && s.pending_order_at(i).type == OrderType::ENTRY) idx = i;
+    pf_pending_order_v1_t stop{};
+    const int idx = find_projected_order(s, "S", OrderType::ENTRY, stop);
     CHECK(idx >= 0);
     if (idx >= 0) {
         const PendingOrder& o = s.pending_order_at(idx);
         CHECK(o.created_position_side == PositionSide::FLAT);
-        CHECK(!placement_has_opposite_market_predecessor(s.market_admission_journal(), o));
+        CHECK(stop.reverses_same_bar_market_from_flat == 0);
         double qty = 0; int close_only = -1, partition = -1;
         CHECK(s.probe_fill_qty(idx, 95.0, &qty, &close_only, &partition) == 0);
         CHECK(near(qty, 1.0) && partition == kExplicit && close_only == 1);
@@ -440,86 +449,8 @@ void test_sbmt_kernels() {
 }
 
 // ---------------------------------------------------------------------------
-// G. The exact SHORT-seed default-FIFO close collision's final short
-// (short_seed_collision_final_short_is_live, finding 272): the kernel closes
-// both physical LONG lots (entry lot L and the materialized min(S, L)) and
-// re-opens SHORT the residual L - min(S, L) iff > kQtyEpsilon. The predicate
-// is true only INSIDE the fill loop of the bar after placement -- the two
-// lots fill at that bar's open and the final short right after them, so no
-// post-run book can hold the shape. The test therefore installs the exact
-// two-lot state through the subclass's protected-member access (position,
-// pyramid lots, the three role-tagged orders the predicate re-proves) on a
-// handle that has run two bars, and pins the residual from the rule.
-PendingOrder make_order(const std::string& id, OrderType type, bool is_long, int created_bar) {
-    PendingOrder o{};
-    o.id = id; o.type = type; o.is_long = is_long;
-    o.legs.set_limit_price(o.legs.set_stop_price(o.legs.set_trail_points(o.legs.set_trail_offset(kNaN))));
-    o.qty = kNaN; o.qty_type = -1; o.qty_percent = 100.0; o.oca_type = 0;
-    o.created_bar = created_bar;
-    return o;
-}
-
-class ShortSeedProbe final : public pineforge::source::PineStrategyHost {
-public:
-    ShortSeedProbe() { default_qty_type_ = QtyType::FIXED; default_qty_value_ = 1.0; }
-    void on_source_bar(const Bar&) override {}
-    int bar() const { return bar_index_; }
-    // Long lot L (id "Long"), materialized lot min(S, L) (id "__close__Short"),
-    // both filled on the current bar; the final short "Short" (MARKET, born
-    // last bar, seed S snapshotted in tv_carry_qty) still pending.
-    void install(double L, double S) {
-        position_side_ = PositionSide::LONG;
-        position_open_bar_ = bar_index_;
-        position_entry_count_ = 2;
-        position_cycle_seq_ = 1;
-        PyramidEntry a{};
-        a.price = 100.0; a.time = current_bar_.timestamp; a.qty = L;
-        a.entry_id = "Long"; a.entry_bar_index = bar_index_;
-        PyramidEntry b = a;
-        b.qty = std::min(S, L); b.entry_id = "__close__Short";
-        pyramid_entries_ = {a, b};
-        position_qty_ = a.qty + b.qty;
-        position_entry_price_ = 100.0;
-        PendingOrder longe = make_order("Long", OrderType::MARKET, true, bar_index_ - 1);
-        longe.short_seed_collision_role = ShortSeedCollisionRole::LONG_ENTRY;
-        PendingOrder fin = make_order("Short", OrderType::MARKET, false, bar_index_ - 1);
-        fin.short_seed_collision_role = ShortSeedCollisionRole::FINAL_SHORT;
-        fin.tv_carry_qty = S;
-        PendingOrder mat = make_order("__close__Short", OrderType::MARKET, false, bar_index_ - 1);
-        mat.short_seed_collision_role = ShortSeedCollisionRole::MATERIALIZE_LONG;
-        pending_orders_ = {longe, fin, mat};
-    }
-};
-
-void test_short_seed_final_short() {
-    const std::vector<Bar> bars = {flat_bar(100, 0), flat_bar(100, 60'000)};
-    double qty = 0; int close_only = -1, partition = -1;
-    {   // L 3, S 1: lots 3 + 1 = 4 close, residual 3 - 1 = 2 re-opens SHORT.
-        ShortSeedProbe s; s.set_syminfo_mintick(0.01); s.run(bars.data(), 2);
-        CHECK(s.bar() == 1);
-        s.install(3.0, 1.0);
-        CHECK(s.probe_fill_qty(1, 100.0, &qty, &close_only, &partition) == 0);
-        // The generic chain would say FIXED default 1 / AT_FILL: 2 / partition
-        // 1 proves the collision kernel was taken.
-        CHECK(near(qty, 2.0) && partition == kFrozenPlacement && close_only == 0);
-        CHECK(near(s.position_avg_price(), 100.0));
-    }
-    {   // L 1, S 1 (the FIXED cohort): residual 0 -> both lots close, nothing
-        // re-opens.
-        ShortSeedProbe s; s.set_syminfo_mintick(0.01); s.run(bars.data(), 2);
-        s.install(1.0, 1.0);
-        CHECK(s.probe_fill_qty(1, 100.0, &qty, &close_only, &partition) == 0);
-        CHECK(near(qty, 0.0) && partition == kFrozenPlacement && close_only == 1);
-    }
-    {   // The LONG_ENTRY-role sibling on the same book is not the final short
-        // (the predicate's is_long / FINAL_SHORT-role clauses fail), so it
-        // keeps the ordinary chain: FIXED default 1 at the fill.
-        ShortSeedProbe s; s.set_syminfo_mintick(0.01); s.run(bars.data(), 2);
-        s.install(3.0, 1.0);
-        CHECK(s.probe_fill_qty(0, 100.0, &qty, &close_only, &partition) == 0);
-        CHECK(near(qty, 1.0) && partition == kAtFill && close_only == 0);
-    }
-}
+// G. The rows that answered from an invented book are gone. A real replay in
+// tests/test_adapter_fill_qty_probe.cpp checks the collision's final-short probe.
 
 // ---------------------------------------------------------------------------
 // H. The limit_route re-derivation (the one accessor branch not copied from
@@ -571,7 +502,6 @@ int main() {
     test_prior_cycle_close_only();
     test_trail_activation_short();
     test_sbmt_kernels();
-    test_short_seed_final_short();
     test_limit_route_slippage();
     if (failures) std::fprintf(stderr, "%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
@@ -580,8 +510,6 @@ int main() {
 #undef coof_cursor_is_bar_close_
 #undef coof_fill_recalc_active_
 #undef is_first_tick_
-#undef ShortSeedCollisionRole
 #undef OrderType
-#undef pending_orders_
 #undef PendingOrder
 #undef PineStrategyHost

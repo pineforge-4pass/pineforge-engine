@@ -263,6 +263,7 @@ version number follows semantic versioning over the surfaces the
   miss is probed once. Every value a script reads is unchanged.
 - Known issue ([#836](https://github.com/pineforge-4pass/pineforge-engine/issues/836)): the parity scoreboard counts unmatched trades net instead of gross, so a probe with one engine-only and one TradingView-only trade still grades excellent; counted gross, 24 of the 7,989 graded probes (7,959 excellent and 30 strong instead of 7,983 and 6) and 10 of the 312 open reference probes (301 excellent instead of 311) grade one tier lower, with no trade list changed, and the corrected grader is planned for 1.13.1.
 - The pending-order fill-quantity probe reported close-only for some entries that the fill then used to reverse the position; it now uses the same rule as the fill. Fills are unchanged. (#905)
+- The C header and docs documented partition 2 for a pure percent-of-equity stop; every release since 1.0.0 returns 1. The documentation now matches the shipped value; behaviour and ABI are unchanged.
 
 ## 1.13.0
 

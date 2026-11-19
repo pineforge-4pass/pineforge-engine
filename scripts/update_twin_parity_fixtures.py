@@ -25,6 +25,7 @@ OBSERVABLE_REWRITES = {
     "test_exit_lifecycle_clock": "fixture-owner clock reads are rewritten through the fixture facade",
     "test_exit_lifecycle_reflection": "retired reflection fields are rewritten to the live lifecycle facade",
     "test_integration": "legacy owner reads in the integration TU are rewritten to source-host projections",
+    "test_live_order_derived": "the invented short-seed book and its fixture probe answers are removed (the final-short probe is checked against a real replay in the probe differential), the predecessor stub becomes a read of the exported row bit, and the default stop partition follows the shipped value 1",
     "test_live_pending_order_mirror": "PendingOrder reads are rewritten to the frozen public C row",
     "test_live_state_hash": "retired source-book mutations are rewritten to adapter-owned state transitions",
     "test_margin_admission_gate": "private admission-book mutations are rewritten to public command outcomes",
