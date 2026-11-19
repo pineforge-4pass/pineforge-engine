@@ -33,7 +33,7 @@ The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pinefo
 - **Open runtime.** The engine and native live runner are Apache-2.0. The separately distributed [PineForge compiler](https://github.com/pineforge-4pass/pineforge-codegen-oss/blob/main/LICENSE) is source-available under the PineForge Source License 1.2 from its release 1.3.0 (release 1.2.0 keeps the PineForge Source License 1.1, and releases up to 1.1.0 keep the PolyForm Noncommercial terms they shipped with); personal trading is free, and commercial use requires a separate license; the capital in an account a proprietary-trading firm or funded-trader program provides or allocates, including a challenge, evaluation or simulated account, is investment capital. Public reference strategies, benchmarks and validation tooling are available in their respective repositories; the community-script test set is not redistributed.
 - **Fast.** In-process, no interpreter: median **36× faster than PyneCore** on the 200 strategies both engines time (100 corpus probes and 100 held-out private strategies), measured at engine `35db01c8` on 2026-09-29 on an AWS c7a.8xlarge with PyneCore timed as a subprocess, its interpreter start-up included (PineForge runs a median 807k bars/s per strategy over its 201 slots with the bar magnifier on; [method](benchmarks/results/speed.md)). Parameter sweeps re-run a loaded `.so` with new inputs — no recompile, no fork.
 - **Deterministic to the bit.** Two runs with the same inputs produce identical trade lists.
-- **Yours to embed.** 171 `PF_API` declarations across six installed headers — `pineforge.h`'s 115 (95 of the 106 runtime exports and up to 20 per-strategy functions a generated module defines), eleven more runtime declarations in `execution_observer.h`, `selected_window.h` and `report_sink.h` (three, three and five), `native_c_api.h`'s 43 native-host declarations and `selected_window_plan.h`'s two planner declarations — an ABI that is append-only within a major version from 1.0 on. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
+- **Yours to embed.** 172 `PF_API` declarations across six installed headers — `pineforge.h`'s 115 (95 of the 106 runtime exports and up to 20 per-strategy functions a generated module defines), eleven more runtime declarations in `execution_observer.h`, `selected_window.h` and `report_sink.h` (three, three and five), `native_c_api.h`'s 44 native-host declarations and `selected_window_plan.h`'s two planner declarations — an ABI that is append-only within a major version from 1.0 on. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
 
 Recorded outputs and their additional API declarations described here are
 part of **1.5.0**.
@@ -238,7 +238,7 @@ report. Each is a CTest row in a build with `-DPINEFORGE_BUILD_EXAMPLES=ON` (the
 Hand the runtime a callback table and drive the kernel from any language with
 a C FFI — no C++ in your own code. The complete file is
 [`examples/native/hello_kernel_c.c`](examples/native/hello_kernel_c.c); the
-41 `strategy_native_*` functions (plus two `strategy_configure_native_ext_*`
+42 `strategy_native_*` functions (plus two `strategy_configure_native_ext_*`
 functions) are declared in
 [`include/pineforge/native_c_api.h`](include/pineforge/native_c_api.h) and
 summarised in [Driving the kernel from C](#driving-the-kernel-from-c) below.
@@ -553,10 +553,10 @@ is in [CHANGELOG.md](CHANGELOG.md).
 The counts below describe the current API, including recorded outputs, the report sink and scratch-table selection; recorded outputs are not part of 1.4.0.
 
 A newly generated strategy `.so` exposes 122 compiled-strategy `PF_API` declarations
-(106 runtime implementations plus sixteen generated exports) plus 43 native-host
-declarations: 165 `PF_API` exports in total; `use_bar_magnifier = true` adds
+(106 runtime implementations plus sixteen generated exports) plus 44 native-host
+declarations: 166 `PF_API` exports in total; `use_bar_magnifier = true` adds
 `strategy_declares_bar_magnifier` and a module that records [outputs](docs/outputs.md) its
-three outputs exports, bringing the inventories to at most 126 and 169. Older modules lack the six opt-in
+three outputs exports, bringing the inventories to at most 126 and 170. Older modules lack the six opt-in
 [checked-settings exports](docs/checked-settings.md). Older modules can also lack
 the two opt-in [execution-capability exports](docs/strategy-capabilities.md).
 In an optimized build `nm -gU` also shows libc++'s
@@ -614,7 +614,7 @@ inventories are pinned by `scripts/check_c_abi_runtime.py`:
 
 ### Driving the kernel from C
 
-`<pineforge/native_c_api.h>` (included by `pineforge.h`) adds **43 further
+`<pineforge/native_c_api.h>` (included by `pineforge.h`) adds **44 further
 `PF_API` functions** for the other direction: a host that is not written in
 C++ hands the runtime a callback table and drives the kernel itself — submit,
 replace, cancel, execute, read the book — instead of loading a compiled
@@ -631,6 +631,7 @@ strategy. They are additive; no symbol, struct or behaviour above changes, and
 | `strategy_native_open_lot_count_v1` / `_open_lot_get_v1` | The physical book lot by lot (`pf_native_open_lot_v1`: identity, entry facts, signed units, entry fee, fee-net P&L and excursions at a mark) — `strategy.opentrades.*` for a C host |
 | `strategy_native_events_v1` / `_state_v1` | Poll the recorded event history by ordinal; read the lifecycle and its typed failure |
 | `strategy_native_acknowledge_events_v1` / `strategy_native_event_window_v1` | Under the `WINDOW` event retention: say which events the host has read, so the kernel drops those command events at the next script-bar boundary; read the oldest ordinal a poll can still return |
+| `strategy_native_events_dropped_v1` | How many events of one kind (command, driver point, account row) the window let go before the host read them: the explicit signal of a poller that fell behind; every command kind, `PF_NATIVE_EVENT_RISK` included (the kernel records a risk event as a command event), answers the one command count; 0 for every kind under `FULL` |
 | `strategy_native_timeframe_bar_interval_v1` | From inside `on_timeframe_bar`, the delivered bucket's own calendar interval (`pf_native_timeframe_interval_v1`: the C++ `NativeTimeframeBarContext::interval`); `PF_NATIVE_E_STATE` anywhere else |
 | `strategy_native_partial_bar_v1` / `_series_bar_v1` / `_trail_state_v1` / `_liquidation_price_v1` | The four optional reads — the bar so far through the last path point consumed, a declared higher-timeframe series' latest bucket, a live trail's projection, the solved liquidation level. Each answers `PF_NATIVE_ABSENT` where the C++ `std::optional` is empty |
 | `strategy_native_risk_state_v1` / `_marked_equity_v1` / `_recalculations_v1` / `_continuation_hash_v1` | The generic risk ledger, marked equity at a mark, the driven/suppressed recalculation counters, and the run's continuation identity |

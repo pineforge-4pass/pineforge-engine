@@ -638,13 +638,36 @@ if(PINEFORGE_BUILD_TESTS)
         test_native_live_report_interval_ratio_recovery PROPERTIES TIMEOUT 0)
     add_test(NAME test_native_live_report_memory COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> memory)
+    # The same flat-memory row under a finite --max-ledger-bytes (budgeted mode).
+    add_test(NAME test_native_live_report_memory_budgeted COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> memory-budgeted)
     # The sanitizer and Debug builds run two sizes (PINEFORGE_REPORT_MEMORY_SIZES in the
-    # test); the other builds run its default three. LABELS memory-flat selects the row.
+    # test); the other builds run its default three. LABELS memory-flat selects the rows.
     if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR PINEFORGE_LIVE_TSAN OR PINEFORGE_ENABLE_SANITIZERS)
-        set_property(TEST test_native_live_report_memory PROPERTY ENVIRONMENT "PINEFORGE_REPORT_MEMORY_SIZES=1000,10000")
+        set_property(TEST test_native_live_report_memory test_native_live_report_memory_budgeted
+            PROPERTY ENVIRONMENT "PINEFORGE_REPORT_MEMORY_SIZES=1000,10000")
     endif()
-    set_tests_properties(test_native_live_report_memory PROPERTIES
+    set_tests_properties(test_native_live_report_memory test_native_live_report_memory_budgeted PROPERTIES
         TIMEOUT 0 SKIP_RETURN_CODE 77 LABELS memory-flat)
+    add_test(NAME test_native_live_report_event_retention COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> event-retention)
+    set_tests_properties(test_native_live_report_event_retention PROPERTIES TIMEOUT 0)
+    # A default run's equity export, pinned to the 1.13.0 build's SHA-256; 77 = not x86-64 Linux.
+    add_test(NAME test_native_live_report_default_equity_export COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> default-equity-export)
+    set_tests_properties(test_native_live_report_default_equity_export PROPERTIES TIMEOUT 0 SKIP_RETURN_CODE 77)
+    # A ledger on tmpfs (/dev/shm) warns that the spooled rows stay in memory; 77 = no tmpfs.
+    add_test(NAME test_native_live_report_tmpfs_spool_warning COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> tmpfs-spool-warning)
+    set_tests_properties(test_native_live_report_tmpfs_spool_warning PROPERTIES TIMEOUT 0 SKIP_RETURN_CODE 77)
+    # A default run opens no curve scratch file; the window run does. 77 = not Linux.
+    add_test(NAME test_native_live_report_default_no_curve_scratch COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> default-no-curve-scratch)
+    set_tests_properties(test_native_live_report_default_no_curve_scratch PROPERTIES TIMEOUT 0 SKIP_RETURN_CODE 77)
+    # Spool writes that fail mid-run (test seam PINEFORGE_LIVE_TEST_SPOOL_FILE_LIMIT): the run finishes, same bytes.
+    add_test(NAME test_native_live_report_spool_write_failure COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> spool-write-failure)
+    set_tests_properties(test_native_live_report_spool_write_failure PROPERTIES TIMEOUT 0)
     add_executable(test_native_live_report_curve_staging_work
         ${PROJECT_SOURCE_DIR}/tests/test_native_live_report_curve_staging_work.cpp)
     target_include_directories(test_native_live_report_curve_staging_work PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -20,6 +20,11 @@ inline constexpr std::uint64_t kDefaultReportCheckpointInterval = 1024;
 struct LedgerOptions {
     // First boundary; later boundaries double: K, 2K, 4K, ...
     std::uint64_t report_checkpoint_interval = kDefaultReportCheckpointInterval;
+    // When true, a report checkpoint payload above 1 MiB (folded past cursor
+    // 512) is written into its row in pieces and stored as a BLOB, so the
+    // payload is never one string in memory. When false it is built as one
+    // string and stored as TEXT, as in 1.13.0. Same bytes and hash either way.
+    bool stream_large_checkpoints = false;
 };
 
 enum class CheckpointFailureCode {

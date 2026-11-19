@@ -31,6 +31,9 @@
 #include <thread>
 #include <unistd.h>
 #include <vector>
+#if defined(__linux__)
+#include <sys/vfs.h>
+#endif
 
 extern char** environ;
 
@@ -160,6 +163,24 @@ public:
         }
     }
     std::string errors() const { return read_file(errors_); }
+#if defined(__linux__)
+    // Open files of this live runner that sit in `directory` and have no name
+    // (O_TMPFILE, or mkstemp then unlink): /proc shows "<path> (deleted)".
+    std::size_t unnamed_files_in(const fs::path& directory) const {
+        const std::string prefix = directory.string() + "/";
+        const std::string suffix = " (deleted)";
+        std::size_t count = 0;
+        for (const auto& entry : fs::directory_iterator("/proc/" + std::to_string(pid_) + "/fd")) {
+            std::error_code error;
+            const auto target = fs::read_symlink(entry.path(), error).string();
+            if (error || target.size() < prefix.size() + suffix.size()) continue;
+            if (target.compare(0, prefix.size(), prefix) == 0 &&
+                target.compare(target.size() - suffix.size(), suffix.size(), suffix) == 0)
+                ++count;
+        }
+        return count;
+    }
+#endif
     bool exited() const {
         require(pid_ > 0, "cannot inspect a reaped runner");
         siginfo_t information{};
@@ -231,7 +252,8 @@ public:
         require(WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL,
                 "expected SIGKILL, actual wait status=" + std::to_string(status) + ": " + errors());
     }
-    std::string finish(int expected = 0, std::uint64_t* exit_peak_kib = nullptr) {
+    std::string finish(int expected = 0, std::uint64_t* exit_peak_kib = nullptr,
+                       std::uint64_t* cpu_microseconds = nullptr) {
         close(input_);
         input_ = -1;
         while (!eof_) pull();
@@ -242,6 +264,14 @@ public:
         require(waited == pid_, "waitpid failed");
         pid_ = -1;
         if (exit_peak_kib) *exit_peak_kib = static_cast<std::uint64_t>(usage.ru_maxrss);
+        if (cpu_microseconds) {
+            // This exact child's own processor time, user and system.
+            const auto micros = [](const timeval& value) {
+                return static_cast<std::uint64_t>(value.tv_sec) * 1000000u +
+                       static_cast<std::uint64_t>(value.tv_usec);
+            };
+            *cpu_microseconds = micros(usage.ru_utime) + micros(usage.ru_stime);
+        }
         require(WIFEXITED(status) && WEXITSTATUS(status) == expected,
                 "runner exit status " + std::to_string(status) + ": " + errors());
         return pending_;
@@ -1181,12 +1211,19 @@ void ratio_body_replay(Fixture& fixture) {
 }
 
 // The input counts of the memory row, strictly ascending. The default proves
-// flat resident growth over 1000, 10000 and 100000 inputs; the environment
-// variable PINEFORGE_REPORT_MEMORY_SIZES ("1000,10000") replaces the list for
-// the builds that cannot afford the largest size (the sanitizers).
+// flat resident growth over 1000, 10000 and 30000 inputs. The largest default
+// size is bounded by the bytes the row reads: each cumulative line repeats
+// every row so far, so the output grows with the square of the input count
+// (2.67 GB measured at 10000 inputs, so about 24 GB at 30000; 268.6 GB
+// measured at 100000). The environment variable PINEFORGE_REPORT_MEMORY_SIZES
+// replaces the list: "1000,10000,100000" runs the full-size proof, and the
+// Debug and sanitizer builds set "1000,10000". Cost, measured 2026-11-19 on a
+// 128-core host, Release: in three runs of this change's successive sources this row took 160
+// to 173 s at 1000, 10000 and 30000 inputs, and 4,577 s at 1000, 10000 and 100000; the row at
+// the 1.13.0 sources took about 6,100 s at 1000, 10000 and 100000, its default sizes then.
 std::vector<std::uint64_t> memory_sizes() {
     const char* text = std::getenv("PINEFORGE_REPORT_MEMORY_SIZES");
-    if (!text || !*text) return {1000, 10000, 100000};
+    if (!text || !*text) return {1000, 10000, 30000};
     const std::string list(text);
     std::vector<std::uint64_t> sizes;
     std::size_t start = 0;
@@ -1206,16 +1243,30 @@ std::vector<std::uint64_t> memory_sizes() {
     return sizes;
 }
 
-void report_memory(Fixture& fixture) {
+// `budgeted` runs the same stream under a finite --max-ledger-bytes (large
+// enough never to stop the run: a parameter, not a cap), the service mode in
+// which SQLite holds a transaction's pages until COMMIT.
+void report_memory(Fixture& fixture, bool budgeted = false) {
     std::uint64_t previous_n = 0, previous_peak = 0, largest_n = 0, largest_peak = 0;
+    double previous_cost = 0, largest_cost = 0;
+    const std::string mode = budgeted ? "memory-budgeted-" : "memory-";
     // Every size must complete; external job control owns hangs.
     for (const std::uint64_t count : memory_sizes()) {
-        const auto name = "memory-" + std::to_string(count);
+        const auto name = mode + std::to_string(count);
         const auto status = fixture.temporary.path / (name + ".status");
-        Runner child(fixture.command(fixture.temporary.path / (name + ".sqlite"), status, "--report-jsonl", 0),
-                     fixture.temporary.path / (name + ".stderr"), /*measure_rss=*/true);
+        auto command = fixture.command(fixture.temporary.path / (name + ".sqlite"), status, "--report-jsonl", 0);
+        // Bounded memory is the opt-in window's property: the default keeps
+        // the spec's whole event record, a row per driver point.
+        command.push_back("--native-event-retention");
+        command.push_back("window");
+        if (budgeted) {
+            command.push_back("--max-ledger-bytes");
+            command.push_back(std::to_string(std::uint64_t{1} << 50));
+        }
+        Runner child(std::move(command), fixture.temporary.path / (name + ".stderr"), /*measure_rss=*/true);
         wait_ready(status, 0, child);
         std::uint32_t seed = 12345;
+        std::uint64_t carried_bytes = 0;
         for (std::uint64_t cursor = 1; cursor <= count; ++cursor) {
             child.send(seeded_input(cursor, seed) + "\n");
             // Drain each cumulative line without retaining reports in the
@@ -1224,25 +1275,61 @@ void report_memory(Fixture& fixture) {
             require(line.find("\"input_cursor\":" + std::to_string(cursor) + ",") != std::string::npos &&
                     line.find("\"schema_version\":\"pineforge-native-report/v1\"") != std::string::npos,
                     "memory witness did not run the default cumulative stream");
+            carried_bytes += line.size() + 1;
         }
         const auto terminal_hwm = child.resident_high_water_kib();
-        std::uint64_t exit_hwm = 0;
-        check_summary(child.finish(0, &exit_hwm), count, count);
+        std::uint64_t exit_hwm = 0, cpu_us = 0;
+        check_summary(child.finish(0, &exit_hwm, &cpu_us), count, count);
         // VmHWM disappears with the process's mm at exit. Read it at the
         // held-open-stdin exit barrier, and include any later peak from wait4
         // for this exact child, never the parent's cumulative child usage.
         const auto peak = std::max(terminal_hwm, exit_hwm);
-        std::cout << "mem n=" << count << " peak_rss_kib=" << peak << '\n' << std::flush;
-        previous_n = largest_n; previous_peak = largest_peak;
-        largest_n = count; largest_peak = peak;
+        // The runner's own processor time per byte of cumulative output: each
+        // line repeats every row so far, so the bytes are the work the report
+        // must do. The build kind cancels out of the ratio of two sizes
+        // measured by the same build.
+        const auto cost = carried_bytes ? 1000.0 * static_cast<double>(cpu_us) /
+                                              static_cast<double>(carried_bytes) : 0.0;
+        std::cout << "mem " << (budgeted ? "budgeted " : "") << "n=" << count
+                  << " peak_rss_kib=" << peak << " cpu_us=" << cpu_us
+                  << " output_bytes=" << carried_bytes << " cpu_ns_per_output_byte=" << cost
+                  << '\n' << std::flush;
+        previous_n = largest_n; previous_peak = largest_peak; previous_cost = largest_cost;
+        largest_n = count; largest_peak = peak; largest_cost = cost;
     }
     require(previous_n && largest_n > previous_n, "memory row needs at least two measured sizes");
-    require(largest_peak < 2ULL * 1024 * 1024, "runner peak RSS exceeds the 2 GiB sanity ceiling");
     const auto growth = largest_peak > previous_peak ? largest_peak - previous_peak : 0;
-    // A deliberate generous ceiling, not a measured baseline: a retained full
-    // document per input (quadratic storage) must fail, ordinary O(report) may
-    // grow. Both quantities are KiB, so 4 means 4 KiB per additional input.
-    require(growth < 4 * (largest_n - previous_n), "runner RSS growth exceeds 4 KiB per input");
+    // Flat: the peak at the largest size is within a fixed constant of the
+    // peak at the size before it, with no per-input term. 8 MiB covers
+    // allocator and page-cache noise; a sanitizer's shadow memory and
+    // allocator slack get 32 MiB. One retained row per input (the 1.13.0
+    // defect) fails at any default size pair: this row, run against the
+    // 1.13.0 sources on 2026-11-19 on a 128-core host (Release), measured
+    // 25,472 / 42,888 / 68,616 KiB at 1000 / 10000 / 30000 inputs, about
+    // 1.9 KiB per input from 1000 to 10000 and about 1.3 KiB per input from
+    // 10000 to 30000, so the last step of the default list (20000 inputs)
+    // grew 68,616 - 42,888 = 25,728 KiB against the flat 8,192 KiB.
+    const std::uint64_t flat_kib = kUnderAsan ? 32 * 1024 : 8 * 1024;
+    require(growth <= flat_kib,
+            "runner RSS grows with the input count: " + std::to_string(growth) + " KiB from n=" +
+            std::to_string(previous_n) + " to n=" + std::to_string(largest_n) +
+            " exceeds the flat " + std::to_string(flat_kib) + " KiB");
+    // The per-input time property: the processor time per output byte at the
+    // largest size stays within a small factor of the size before it. The
+    // check reads the runner's processor time (wait4), not wall time, so a
+    // busy host's waiting does not count. It catches work per output byte
+    // that grows with the input count, for example a step quadratic in the
+    // cursor on top of the output. It does not catch a walk of retained state
+    // that is linear in the cursor at every input: the default exact ratios
+    // already walk the whole curve at every input and each cumulative line is
+    // linear in the cursor too, so such a walk keeps this ratio constant.
+    // Measured 2026-11-19 on a 128-core host (Release, this row at 1000,
+    // 10000 and 100000 inputs): 18.77, 3.09 and
+    // 1.66 ns per output byte; 4 x 3.09 + 1 = 13.36 ns is 8 times the 1.66 ns.
+    require(largest_cost <= 4.0 * previous_cost + 1.0,
+            "runner time per output byte grows with the input count: " +
+            std::to_string(largest_cost) + " ns at n=" + std::to_string(largest_n) + " vs " +
+            std::to_string(previous_cost) + " ns at n=" + std::to_string(previous_n));
 }
 
 void ready_child_exit(Fixture& fixture) {
@@ -1274,6 +1361,244 @@ void ready_child_exit(Fixture& fixture) {
         require(exit_peak_kib > 0, "readiness observation lost the child's wait4 RSS");
     }
 }
+
+// --native-event-retention: admission, and a retention changes no report byte.
+// The cumulative stream under window, commands and full (each opt-in) is
+// byte-identical, line for line, to the stream without the option.
+void event_retention_option(Fixture& fixture) {
+    {
+        auto bad = fixture.command(fixture.temporary.path / "retention-bad.sqlite",
+                                   fixture.temporary.path / "retention-bad.status", "", 0);
+        bad.push_back("--native-event-retention");
+        bad.push_back("unbounded");
+        Runner child(std::move(bad), fixture.temporary.path / "retention-bad.stderr");
+        require(child.finish(1).empty(), "invalid retention printed stdout");
+        require(child.errors() ==
+                    "pineforge-live: native-event-retention must be window, commands or full\n",
+                "wrong retention usage error: " + child.errors());
+    }
+    std::vector<std::string> baseline;
+    for (const std::string retention : {"", "window", "commands", "full"}) {
+        const auto name = "retention-" + (retention.empty() ? std::string("default") : retention);
+        const auto status = fixture.temporary.path / (name + ".status");
+        auto command = fixture.command(fixture.temporary.path / (name + ".sqlite"), status,
+                                       "--report-jsonl", 0);
+        if (!retention.empty()) {
+            command.push_back("--native-event-retention");
+            command.push_back(retention);
+        }
+        Runner child(std::move(command), fixture.temporary.path / (name + ".stderr"));
+        wait_ready(status, 0, child);
+        std::vector<std::string> lines;
+        for (const auto& input : fixture.inputs) {
+            child.send(input + "\n");
+            lines.push_back(child.line());
+        }
+        check_summary(child.finish(0), fixture.inputs.size(), fixture.inputs.size());
+        if (retention.empty()) baseline = std::move(lines);
+        else require(lines == baseline, "--native-event-retention " + retention + " changed report bytes");
+    }
+}
+
+#if defined(__linux__) && defined(__x86_64__)
+// SHA-256 of the default run's equity export on the 1.13.0 build. The same
+// row, unchanged, was built against the 1.13.0 sources (tag 438924f9) and run
+// there with its three arguments (the runner, the example module and the case
+// name `default-equity-export`); it printed the digest below.
+constexpr const char* kTagEquityExportSha256 =
+    "7ffe927ae86c56bc3f4250f66268a06f812615e4bbac66559d1f4262a59c2807";
+
+// A default run (no retention option) of 1000 seeded inputs, past cursor 512:
+// spooled fold and spooled stdout lines, engine curve kept in memory (only
+// window retention releases its points). The equity export is the `report.equity_curve` member of the
+// `report --ledger` export at the last input, serialized as the export prints
+// it; its SHA-256 must equal the 1.13.0 build's. The row uses only options
+// that 1.13.0 has, so the same file runs on the tag.
+void default_equity_export(Fixture& fixture) {
+    constexpr std::uint64_t count = 1000;
+    const auto ledger = fixture.temporary.path / "default-equity.sqlite";
+    const auto status = fixture.temporary.path / "default-equity.status";
+    Runner child(fixture.command(ledger, status, "--report-jsonl", 0),
+                 fixture.temporary.path / "default-equity.stderr");
+    wait_ready(status, 0, child);
+    std::uint32_t seed = 12345;
+    for (std::uint64_t cursor = 1; cursor <= count; ++cursor) {
+        child.send(seeded_input(cursor, seed) + "\n");
+        // Drain each cumulative line so the pipe never fills.
+        require(child.line().find("\"input_cursor\":" + std::to_string(cursor) + ",") != std::string::npos,
+                "default equity run skipped a committed input");
+    }
+    check_summary(child.finish(0), count, count);
+    Runner reader({fixture.runner, "report", "--ledger", ledger.string(),
+                   "--at-input", std::to_string(count)},
+                  fixture.temporary.path / "default-equity-export.stderr");
+    const auto exported = parse_json(reader.finish());
+    const auto& curve = exported.at("report").at("equity_curve");
+    require(curve.kind == Json::Kind::Array && curve.items.size() > count,
+            "the default run's export has no whole equity curve");
+    const auto digest = sha256_hex(curve.dump());
+    std::cerr << "equity-export n=" << count << " sha256=" << digest << '\n' << std::flush;
+    require(digest == kTagEquityExportSha256,
+            "the default run's equity export differs from the 1.13.0 build's: " + digest);
+}
+#endif
+
+// Spool files that stop taking bytes part way through a default run (the test
+// seam PINEFORGE_LIVE_TEST_SPOOL_FILE_LIMIT caps each one at 4096 bytes and
+// then fails its write with EFBIG, as a per-file limit of the kernel would; a
+// real RLIMIT_FSIZE cannot be used here, because the ledger file outgrows any
+// spool file and would fail first). The run finishes with status 0, prints
+// one warning for the spool, and its report lines, ledger report rows, the
+// checkpoint at cursor 1024 and its export equal an unconstrained run's.
+struct SpoolRun {
+    std::vector<std::string> lines;
+    fs::path ledger;
+    std::string errors;
+};
+
+SpoolRun spool_run(Fixture& fixture, const std::string& name, std::uint64_t count, const char* limit) {
+    SpoolRun result;
+    result.ledger = fixture.temporary.path / (name + ".sqlite");
+    const auto status = fixture.temporary.path / (name + ".status");
+    if (limit) require(setenv("PINEFORGE_LIVE_TEST_SPOOL_FILE_LIMIT", limit, 1) == 0, "setenv failed");
+    Runner child(fixture.command(result.ledger, status, "--report-jsonl", 0),
+                 fixture.temporary.path / (name + ".stderr"));
+    if (limit) require(unsetenv("PINEFORGE_LIVE_TEST_SPOOL_FILE_LIMIT") == 0, "unsetenv failed");
+    wait_ready(status, 0, child);
+    std::uint32_t seed = 12345;
+    for (std::uint64_t cursor = 1; cursor <= count; ++cursor) {
+        child.send(seeded_input(cursor, seed) + "\n");
+        result.lines.push_back(child.line());
+    }
+    check_summary(child.finish(0), count, count);
+    result.errors = child.errors();
+    return result;
+}
+
+std::size_t occurrences(const std::string& text, const std::string& part) {
+    std::size_t found = 0;
+    for (auto at = text.find(part); at != std::string::npos; at = text.find(part, at + part.size()))
+        ++found;
+    return found;
+}
+
+void spool_write_failure_finishes(Fixture& fixture) {
+    constexpr std::uint64_t count = 1100;
+    const auto base = spool_run(fixture, "spool-unconstrained", count, nullptr);
+    const auto capped = spool_run(fixture, "spool-capped", count, "4096");
+    const std::string warning = "pineforge-live: warning: the live report's settled rows stay in memory: ";
+    require(occurrences(base.errors, "cumulative report spool write failed") == 0,
+            "the unconstrained run's spool failed: " + base.errors);
+    require(occurrences(capped.errors, warning + "cumulative report spool write failed: ") == 1 &&
+                occurrences(capped.errors, warning) == occurrences(base.errors, warning) + 1,
+            "the capped run did not warn exactly once for its spool: " + capped.errors);
+    require(capped.lines == base.lines, "a failed spool write changed the report lines");
+    for (std::uint64_t cursor = 1; cursor <= count; ++cursor)
+        require(stored_delta(capped.ledger, cursor) == stored_delta(base.ledger, cursor),
+                "a failed spool write changed the ledger report row " + std::to_string(cursor));
+    require(stored_delta(capped.ledger, 1024, true) == stored_delta(base.ledger, 1024, true),
+            "a failed spool write changed the checkpoint at cursor 1024");
+    std::string exports[2];
+    for (int which = 0; which < 2; ++which) {
+        const auto& run = which ? capped : base;
+        Runner reader({fixture.runner, "report", "--ledger", run.ledger.string(),
+                       "--at-input", std::to_string(count)},
+                      fixture.temporary.path / ("spool-export-" + std::to_string(which) + ".stderr"));
+        exports[which] = reader.finish();
+    }
+    require(!exports[0].empty() && exports[1] == exports[0], "a failed spool write changed the export");
+}
+
+#if defined(__linux__)
+// A ledger on tmpfs: the spool probe admits the directory (O_TMPFILE works
+// there), so the runner must warn that the settled rows stay in memory
+// (runner/main.cpp, the statfs check after the ReportSpool probe). Returns
+// false (skip) when /dev/shm is absent or not tmpfs on this machine.
+bool tmpfs_spool_warns(Fixture& fixture) {
+    struct statfs shm{};
+    if (::statfs("/dev/shm", &shm) != 0 || static_cast<std::uint32_t>(shm.f_type) != UINT32_C(0x01021994))
+        return false;
+    std::string pattern = "/dev/shm/pineforge-report-cli-XXXXXX";
+    std::vector<char> name(pattern.begin(), pattern.end());
+    name.push_back('\0');
+    require(mkdtemp(name.data()) != nullptr, "cannot create a tmpfs fixture directory");
+    const fs::path directory = name.data();
+    struct Remove {
+        fs::path path;
+        ~Remove() { std::error_code ignored; fs::remove_all(path, ignored); }
+    } cleanup{directory};
+    const auto status = fixture.temporary.path / "tmpfs.status";
+    // A default run keeps the curve in memory and opens no curve scratch, so
+    // only the settled rows' warning is printed.
+    Runner child(fixture.command(directory / "tmpfs.sqlite", status, "", 0),
+                 fixture.temporary.path / "tmpfs.stderr");
+    wait_ready(status, 0, child);
+    child.send(fixture.inputs.front() + "\n");
+    check_summary(child.finish(0), 1, 1);
+    require(child.errors().find("pineforge-live: warning: the live report's settled rows stay in memory: "
+                                "the ledger's directory is on tmpfs\n") != std::string::npos,
+            "no tmpfs warning for the spooled rows: " + child.errors());
+    require(child.errors().find("pineforge-live: warning: the live report's equity curve stays in memory: ")
+                == std::string::npos,
+            "a default run tried the curve scratch: " + child.errors());
+    // The opt-in window tries the curve scratch, which refuses a memory
+    // filesystem: both warnings, and the run still finishes.
+    const auto window_status = fixture.temporary.path / "tmpfs-window.status";
+    auto window_command = fixture.command(directory / "tmpfs-window.sqlite", window_status, "", 0);
+    window_command.push_back("--native-event-retention");
+    window_command.push_back("window");
+    Runner window(std::move(window_command), fixture.temporary.path / "tmpfs-window.stderr");
+    wait_ready(window_status, 0, window);
+    window.send(fixture.inputs.front() + "\n");
+    check_summary(window.finish(0), 1, 1);
+    require(window.errors().find("pineforge-live: warning: the live report's settled rows stay in memory: "
+                                 "the ledger's directory is on tmpfs\n") != std::string::npos,
+            "no tmpfs warning for the spooled rows in window mode: " + window.errors());
+    require(window.errors().find("pineforge-live: warning: the live report's equity curve stays in memory: ")
+                != std::string::npos,
+            "no curve warning in window mode on tmpfs: " + window.errors());
+    return true;
+}
+
+// The curve scratch belongs to the opt-in window only. Both runs get the same
+// 1,100 inputs, so both hold the same settled-row spool files; those cancel
+// out, and the window run's extra unnamed file is the curve scratch. A default
+// run must hold strictly fewer unnamed files beside its ledger. Returns false
+// (skip) when the fixture directory is a memory filesystem, where the window
+// run keeps its curve in memory too.
+bool default_run_has_no_curve_scratch(Fixture& fixture) {
+    struct statfs backing{};
+    if (::statfs(fixture.temporary.path.c_str(), &backing) != 0 ||
+        static_cast<std::uint32_t>(backing.f_type) == UINT32_C(0x01021994) ||
+        static_cast<std::uint32_t>(backing.f_type) == UINT32_C(0x858458f6))
+        return false;
+    constexpr std::uint64_t count = 1100;
+    std::size_t held[2] = {0, 0};
+    for (int mode = 0; mode < 2; ++mode) {
+        const fs::path directory = fixture.temporary.path / (mode ? "scratch-window" : "scratch-default");
+        fs::create_directories(directory);
+        const auto status = directory / "run.status";
+        auto command = fixture.command(directory / "run.sqlite", status, "--report-jsonl", 0);
+        if (mode) {
+            command.push_back("--native-event-retention");
+            command.push_back("window");
+        }
+        Runner child(std::move(command), directory / "run.stderr");
+        wait_ready(status, 0, child);
+        std::uint32_t seed = 12345;
+        for (std::uint64_t cursor = 1; cursor <= count; ++cursor) {
+            child.send(seeded_input(cursor, seed) + "\n");
+            child.line();
+        }
+        // The runner is held on stdin after its last committed line.
+        held[mode] = child.unnamed_files_in(fs::weakly_canonical(directory));
+        check_summary(child.finish(0), count, count);
+    }
+    require(held[1] > held[0], "the window run holds no more unnamed files than the default run (default " +
+            std::to_string(held[0]) + ", window " + std::to_string(held[1]) + ")");
+    return true;
+}
+#endif
 
 void options_are_strict(Fixture& fixture) {
     for (const std::string option : {"--report-jsonl=unsupported", "--report-jsonl=", "--report-jsonl=DELTA"}) {
@@ -1308,7 +1633,7 @@ int main(int argc, char** argv) {
             return 0;
         }
 #if !defined(__linux__)
-        if (test_case == "memory") {
+        if (test_case == "memory" || test_case == "memory-budgeted") {
             std::cout << "SKIP report memory: runner VmHWM requires Linux /proc/<pid>/status\n";
             return 77;
         }
@@ -1343,6 +1668,39 @@ int main(int argc, char** argv) {
             ratio_body_replay(fixture);
         } else if (test_case == "memory") {
             report_memory(fixture);
+        } else if (test_case == "memory-budgeted") {
+            report_memory(fixture, true);
+        } else if (test_case == "event-retention") {
+            event_retention_option(fixture);
+        } else if (test_case == "default-equity-export") {
+#if defined(__linux__) && defined(__x86_64__)
+            default_equity_export(fixture);
+#else
+            std::cout << "SKIP default equity export: the pinned digits come from an x86-64 Linux build\n";
+            return 77;
+#endif
+        } else if (test_case == "spool-write-failure") {
+            spool_write_failure_finishes(fixture);
+        } else if (test_case == "tmpfs-spool-warning") {
+#if defined(__linux__)
+            if (!tmpfs_spool_warns(fixture)) {
+                std::cout << "SKIP tmpfs spool warning: /dev/shm is not a tmpfs mount here\n";
+                return 77;
+            }
+#else
+            std::cout << "SKIP tmpfs spool warning: the memory-filesystem check is Linux-only\n";
+            return 77;
+#endif
+        } else if (test_case == "default-no-curve-scratch") {
+#if defined(__linux__)
+            if (!default_run_has_no_curve_scratch(fixture)) {
+                std::cout << "SKIP default curve scratch: the fixture directory is a memory filesystem\n";
+                return 77;
+            }
+#else
+            std::cout << "SKIP default curve scratch: the open-file check reads /proc, Linux-only\n";
+            return 77;
+#endif
         } else {
             throw std::runtime_error("unknown test case");
         }

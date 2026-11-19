@@ -83,6 +83,7 @@ static void check_native_run(void) {
     pf_native_event_v1 events[16];
     double units = 0.0;
     uint64_t window = 0;
+    uint64_t dropped = 7u;
     int written, i, applied = 0;
 
     memset(&host, 0, sizeof(host));
@@ -160,6 +161,21 @@ static void check_native_run(void) {
           "the C99 acknowledgement was refused");
     CHECK(strategy_native_event_window_v1(host.handle, NULL) == PF_NATIVE_E_ARGUMENT,
           "a NULL window out-parameter was accepted");
+    /* The dropped-event count: the v1 spec keeps the whole record (FULL), so
+     * the window let nothing go, for any kind; a kind outside the event
+     * enumeration and a NULL out-parameter are refused. */
+    CHECK(strategy_native_events_dropped_v1(host.handle, PF_NATIVE_EVENT_DRIVER_POINT, &dropped)
+              == PF_NATIVE_OK && dropped == 0u,
+          "the C99 FULL run counted a dropped driver point");
+    dropped = 7u;
+    CHECK(strategy_native_events_dropped_v1(host.handle, PF_NATIVE_EVENT_APPLIED, &dropped)
+              == PF_NATIVE_OK && dropped == 0u,
+          "the C99 FULL run counted a dropped command");
+    CHECK(strategy_native_events_dropped_v1(host.handle, 0u, &dropped) == PF_NATIVE_E_TAG,
+          "an out-of-range dropped-count kind was accepted");
+    CHECK(strategy_native_events_dropped_v1(host.handle, PF_NATIVE_EVENT_ACCOUNT, NULL)
+              == PF_NATIVE_E_ARGUMENT,
+          "a NULL dropped-count out-parameter was accepted");
     CHECK(strategy_native_acknowledge_events_v1(NULL, 0u) == PF_NATIVE_E_HANDLE,
           "a NULL handle's acknowledgement was accepted");
     CHECK(strategy_native_position_v1(host.handle, &units, NULL, NULL) == PF_NATIVE_OK

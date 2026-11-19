@@ -175,6 +175,7 @@
  *   [C]  native_events                     strategy_native_events_v1
  *   [C]  native_acknowledge_events         strategy_native_acknowledge_events_v1
  *   [C]  native_event_window_start         strategy_native_event_window_v1
+ *   [C]  native_events_dropped             strategy_native_events_dropped_v1
  *   [C]  native_decision_floor             pf_native_state_v1::decision_floor_ms
  *   [C]  native_consumed_high_water        pf_native_state_v1::consumed_high_water
  *   [C]  native_continuation_hash          strategy_native_continuation_hash_v1
@@ -2945,6 +2946,24 @@ PF_API int strategy_native_acknowledge_events_v1(pf_strategy_t s, uint64_t throu
  *  @return PF_NATIVE_OK, PF_NATIVE_E_ARGUMENT for a NULL @p out_first_ordinal,
  *  or another negative status. */
 PF_API int strategy_native_event_window_v1(pf_strategy_t s, uint64_t* out_first_ordinal);
+
+/** How many events of @p kind the window let go before the host read them —
+ *  `native_events_dropped()` — written to @p out_count: the explicit signal of
+ *  a poller that fell behind. @p kind is #PF_NATIVE_EVENT_DRIVER_POINT,
+ *  #PF_NATIVE_EVENT_ACCOUNT, or any command kind (every command kind answers
+ *  the one command count). #PF_NATIVE_EVENT_RISK is a command kind: the
+ *  kernel records a risk event as a command event (`NativeRiskEvent`, the
+ *  last alternative of `native_order::CommandEvent`), so it answers the
+ *  command count too. Commands count when the window retired them
+ *  before the host acknowledged anything; driver points and account rows
+ *  count whenever the retention does not keep them (WINDOW keeps neither,
+ *  COMMANDS keeps account rows). 0 for every kind under FULL. Reset at each
+ *  run begin.
+ *  @return PF_NATIVE_OK, PF_NATIVE_E_ARGUMENT for a NULL @p out_count,
+ *  PF_NATIVE_E_TAG for a @p kind outside #pf_native_event_kind_t, or another
+ *  negative status. */
+PF_API int strategy_native_events_dropped_v1(pf_strategy_t s, uint32_t kind,
+                                             uint64_t* out_count);
 
 /** Read the run's lifecycle and typed failure into @p out.
  *

@@ -152,7 +152,7 @@ The counts below describe the current API, including recorded outputs and the re
 
 The stable inventory contains 126 compiled-strategy `PF_API` declarations
 (106 implementations in `src/c_abi.cpp` plus twenty generated declarations)
-and 43 native-host declarations. A module supplies the generated symbols it
+and 44 native-host declarations. A module supplies the generated symbols it
 supports; a script that declares
 `use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, and a
 module that records outputs its three outputs exports. `nm -gU` also reports libc++'s
