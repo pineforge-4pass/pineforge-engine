@@ -31,6 +31,7 @@
  * and plain binary64 both refuse the lot the source's rule admits.
  */
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -73,14 +74,14 @@ std::uint64_t bits(double value) {
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
-Bar mk_bar(int index, double o, double h, double l, double c) {
+Bar mk_bar(int index, double o, double h, double l, double c, std::int64_t interval_ms = 300'000) {
     Bar b;
     b.open = o;
     b.high = h;
     b.low = l;
     b.close = c;
     b.volume = 1.0;
-    b.timestamp = 300000LL * index;
+    b.timestamp = interval_ms * index;
     return b;
 }
 
@@ -236,6 +237,198 @@ void the_money_band_price_is_not_the_kernel_conversion() {
     CHECK(equity / lots < price);
 }
 
+bool near(double a, double b) { return std::fabs(a - b) <= 1e-9; }
+
+// mirror_order_type exports the command family: even a market strategy.entry is an ENTRY.
+constexpr std::int32_t kEntryRow = 1, kExitRow = 2;
+
+struct PendingProbe {
+    int index = -1, rc = -1;
+    double qty = kNaN;
+    int close_only = -1, partition = -1, predecessor = -1;
+    std::uint64_t incarnation = 0;
+
+    void print(const char* shape, const char* order) const {
+        std::fprintf(stderr, "%s %s: index=%d rc=%d qty=%.17g close_only=%d partition=%d "
+                     "predecessor=%d incarnation=%llu\n", shape, order, index, rc, qty,
+                     close_only, partition, predecessor, static_cast<unsigned long long>(incarnation));
+    }
+};
+
+PendingProbe probe_order(const source::PineStrategyHost& host, const char* id,
+                         std::int32_t type, double price) {
+    PendingProbe probe;
+    pf_pending_order_v1_t row{};
+    for (int i = 0; i < host.pending_order_count(); ++i) {
+        if (host.observe_pending_copy_v1(i, &row) != 0 || row.type != type
+            || std::strcmp(row.id, id) != 0) continue;
+        probe.index = i;
+        probe.incarnation = row.incarnation;
+        probe.predecessor = row.reverses_same_bar_market_from_flat;
+        probe.rc = host.probe_fill_qty(i, price, &probe.qty, &probe.close_only, &probe.partition);
+        break;
+    }
+    return probe;
+}
+
+// These replays close each named lot once on bar 2.
+double closed_lot_qty(const source::PineStrategyHost& host, const char* entry, const char* exit,
+                      bool is_long, int entry_bar, double fill_price) {
+    for (int i = 0; i < host.trade_count(); ++i) {
+        const Trade t = host.get_trade(i);
+        if (t.entry_id == entry && t.exit_id == exit && t.is_long == is_long
+            && t.entry_bar_index == entry_bar && t.exit_bar_index == 2) {
+            std::fprintf(stderr, "bar 2 fill %s->%s: qty=%.17g price=%.17g\n",
+                         entry, exit, t.qty, t.exit_price);
+            CHECK(near(t.exit_price, fill_price));
+            return t.qty;
+        }
+    }
+    return kNaN;
+}
+
+class SameBarPredecessor final : public pineforge::source::PineStrategyHost {
+public:
+    explicit SameBarPredecessor(bool market_first) : market_first_(market_first) {
+        set_syminfo_mintick(0.01);
+    }
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() != 0) return;
+        if (market_first_) strategy_entry("L", true, kNaN, kNaN, 1.0);
+        strategy_entry("S", false, kNaN, 95.0);
+        if (!market_first_) strategy_entry("L", true, kNaN, kNaN, 1.0);
+    }
+private:
+    bool market_first_;
+};
+
+void test_same_bar_predecessor(bool market_first) {
+    const Bar bars[] = {
+        mk_bar(0, 100, 100, 100, 100, 60'000),
+        mk_bar(1, 100, 100, 100, 100, 60'000),
+        mk_bar(2, 100, 101, 94, 96, 60'000),
+    };
+    SameBarPredecessor p(market_first), f(market_first);
+    p.run(bars, 2);
+    const auto stop = probe_order(p, "S", kEntryRow, 95.0);
+    f.run(bars, 3);
+    const double closed = closed_lot_qty(f, "L", "S", true, 1, 95.0);
+    const double before = p.live_position_size(), after = f.live_position_size();
+    const char* shape = market_first ? "market then stop" : "stop then market";
+    stop.print(shape, "S at 95");
+    std::fprintf(stderr, "%s fill: L->S closed=%.17g position_before=%.17g position_after=%.17g "
+                 "probe_error='%s' fill_error='%s'\n", shape, closed, before, after,
+                 p.last_error().c_str(), f.last_error().c_str());
+    CHECK(p.last_error().empty() && f.last_error().empty());
+    CHECK(stop.index >= 0 && stop.rc == 0);
+    CHECK(stop.predecessor == (market_first ? 1 : 0));
+    CHECK(near(before, 1.0) && closed > 0.0 && near(closed, before));
+    CHECK(after <= 0.0);
+    CHECK(stop.close_only == (after == 0.0 ? 1 : 0));
+    CHECK(near(stop.qty, after == 0.0 ? closed : -after));
+}
+
+// At placement the seed is still short. Only after __close__Short fills at the
+// next open can the probe see the two long lots the final Short will face.
+class ShortSeedReplay final : public pineforge::source::PineStrategyHost {
+public:
+    explicit ShortSeedReplay(QtyType sizing) {
+        source::PineStrategyConfig config;
+        config.initial_capital = 1'000'000.0;
+        config.default_qty_type = static_cast<int>(sizing);
+        config.default_qty_value = sizing == QtyType::FIXED ? 1.0 : 10.0;
+        config.pyramiding = 1;
+        config.commission_value = 0.0;
+        config.slippage = 0;
+        configure_pine_strategy(config);
+        set_syminfo_mintick(0.01);
+    }
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() == 0) strategy_entry("Short", false);
+        if (pine_bar_index() == 1) {
+            strategy_entry("Long", true);
+            strategy_entry("Short", false);
+            strategy_close("Long");
+            strategy_close("Short");
+        }
+    }
+    PendingProbe at_final_short;
+    double before_final = kNaN;
+    double average_before_final = kNaN;
+    std::uint64_t filled_short = 0;
+
+protected:
+    void on_native_applied_event(const native_order::ExecutionAppliedEvent& event,
+                                 const NativeDecisionContext&) override {
+        if (event.interval_index() != 2) return;
+        if (event.request().label == "__close__Short") {
+            before_final = live_position_size();
+            average_before_final = position_avg_price();
+            at_final_short = probe_order(*this, "Short", kEntryRow, event.resolved_price);
+        } else if (event.request().label == "Short") {
+            filled_short = event.handle().incarnation;
+        }
+    }
+};
+
+void test_short_seed_replay(QtyType sizing) {
+    const bool fixed = sizing == QtyType::FIXED;
+    const Bar bars[] = {
+        mk_bar(1, 100, 100, 100, 100, 600'000),
+        fixed ? mk_bar(2, 100, 100, 100, 100, 600'000) : mk_bar(2, 100, 100.5, 89.5, 90, 600'000),
+        fixed ? mk_bar(3, 100, 100, 100, 100, 600'000) : mk_bar(3, 90, 90.5, 89.5, 90, 600'000),
+    };
+    const double price = bars[2].open;
+    ShortSeedReplay p(sizing), f(sizing);
+    p.run(bars, 2);
+    const auto long_entry = probe_order(p, "Long", kEntryRow, price);
+    const auto queued_short = probe_order(p, "Short", kEntryRow, price);
+    const auto materialize = probe_order(p, "__close__Short", kExitRow, price);
+    f.run(bars, 3);
+    const auto& final_short = f.at_final_short;
+    const double seed = closed_lot_qty(f, "Short", "Long", false, 1, price);
+    const double first = closed_lot_qty(f, "Long", "Short", true, 2, price);
+    const double second = closed_lot_qty(f, "__close__Short", "Short", true, 2, price);
+    const double after = f.live_position_size();
+    const char* shape = fixed ? "fixed short seed" : "percent short seed";
+    long_entry.print(shape, "Long queued");
+    queued_short.print(shape, "Short queued");
+    materialize.print(shape, "__close__Short queued");
+    final_short.print(shape, "Short after __close__Short");
+    std::fprintf(stderr, "%s fill: expected_open=%.17g seed=%.17g Long=%.17g __close__Short=%.17g "
+                 "position_before_Short=%.17g avg_price=%.17g position_after_Short=%.17g "
+                 "Short_incarnation=%llu probe_error='%s' fill_error='%s'\n", shape, price,
+                 seed, first, second, f.before_final, f.average_before_final, after,
+                 static_cast<unsigned long long>(f.filled_short), p.last_error().c_str(), f.last_error().c_str());
+
+    CHECK(p.last_error().empty() && f.last_error().empty());
+    CHECK(p.pine_bar_index() == 1);
+    CHECK(long_entry.index >= 0 && long_entry.rc == 0);
+    CHECK(queued_short.index >= 0 && queued_short.rc == 0);
+    CHECK(materialize.index >= 0 && materialize.rc == 1);
+    CHECK(std::isnan(materialize.qty) && materialize.close_only == 0 && materialize.partition == -1);
+    CHECK(seed > 0.0 && first > 0.0 && second > 0.0);
+    CHECK(near(p.live_position_size(), -seed));
+    CHECK(long_entry.close_only == 0 && near(long_entry.qty, first));
+    CHECK(near(second, std::min(seed, first)));
+    CHECK(near(f.before_final, first + second));
+    CHECK(near(f.average_before_final, price));
+    CHECK(final_short.index >= 0 && final_short.rc == 0);
+    CHECK(f.filled_short != 0 && queued_short.incarnation == f.filled_short
+          && final_short.incarnation == f.filled_short);
+    // On the seed side the queued Short reports the whole frozen transaction.
+    CHECK(queued_short.close_only == 0 && near(queued_short.qty, first + second - after));
+    // Against both longs it reports only what that same sell reopens.
+    CHECK(after <= 0.0 && near(-after, first - second));
+    CHECK(final_short.partition == PF_FILL_QTY_PARTITION_FROZEN_PLACEMENT && near(final_short.qty, -after));
+    CHECK(final_short.close_only == (after == 0.0 ? 1 : 0));
+    if (fixed) {
+        CHECK(near(first, seed) && after == 0.0);
+    } else {
+        CHECK(first > seed && after < 0.0);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -243,6 +436,10 @@ int main() {
     a_default_entry_probe_answers_its_booked_quantity();
     std::printf("-- the money band's affordable price is not the kernel conversion (SZ10)\n");
     the_money_band_price_is_not_the_kernel_conversion();
+    test_same_bar_predecessor(true);
+    test_same_bar_predecessor(false);
+    test_short_seed_replay(QtyType::FIXED);
+    test_short_seed_replay(QtyType::PERCENT_OF_EQUITY);
     std::printf("R5 B-ADAPTER fill-quantity probe: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

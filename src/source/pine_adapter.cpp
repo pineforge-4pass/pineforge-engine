@@ -28821,13 +28821,16 @@ int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
         *partition = 3;
     }
 
+    // The fill's rule (resolve_source_terms): priced entries, no earlier same-bar opposite market.
     const bool prior_cycle_close_only = snapshot.family == PineOrderFamily::Entry
         && opposite
         && snapshot.projection_position_side
             != (physical.signed_units > 0.0
                 ? static_cast<std::int32_t>(PositionSide::LONG)
                 : static_cast<std::int32_t>(PositionSide::SHORT))
-        && !snapshot.projection_predecessor_market;
+        && !snapshot.projection_opposite_market_predecessor
+        && (finite_positive(snapshot.exit_levels.stop)
+            || finite_positive(snapshot.exit_levels.limit));
     *close_only = (snapshot.affordability_close_only || prior_cycle_close_only
                    || kernel_close_only) ? 1 : 0;
     return 0;
