@@ -1273,7 +1273,11 @@ class RealTree(unittest.TestCase):
         # on the book for an opening that fills, the market adds a cover fill
         # leaves without an order, and the comment and OCA name text those
         # lists and the file's order copies carry. All remain OPEN.
-        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4
+        # expectation corrected: 1633 -> 1636, because U1878-U1880 add three
+        # unreviewed groups in src/live_report.cpp: the points a whole-report
+        # read puts back in front of the engine's curve, the curve scratch
+        # writer's allocation and its append. All remain OPEN.
+        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3
         self.assertEqual(c['OPEN'], expected_open)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])

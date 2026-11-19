@@ -16555,18 +16555,6 @@
   },
   {
    "file": "src/live_report.cpp",
-   "symbol": "curve",
-   "scope": [
-    "namespace pineforge #1",
-    "inline namespace engine_script_run_v20 #1",
-    "struct LiveReportAccumulator :: State #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < pf_equity_point_t >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/live_report.cpp",
    "symbol": "trade_rows",
    "scope": [
     "namespace pineforge #1",
@@ -16591,6 +16579,44 @@
   },
   {
    "file": "src/live_report.cpp",
+   "symbol": "scratch_curve",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "struct LiveReportAccumulator :: State #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "writer",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "struct LiveReportAccumulator :: State #1",
+    "void stage_append ( const pf_equity_point_t & point ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "writer . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "ratio_curve",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "struct LiveReportAccumulator :: State #1",
+    "void stage_append ( const pf_equity_point_t & point ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "ratio_curve . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
    "symbol": "state_",
    "scope": [
     "namespace pineforge #1",
@@ -16598,6 +16624,45 @@
    ],
    "cls": "alloc",
    "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "state_",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 2
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "prefix",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "const auto fallback = [ & ] #1",
+    "if ( state . retired ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < pf_equity_point_t >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "curve",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "const auto fallback = [ & ] #1",
+    "if ( state . retired ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "curve . insert ( . . . )",
    "ordinal": 1
   },
   {
@@ -16691,34 +16756,6 @@
    ],
    "cls": "grow",
    "spelling": "rows . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/live_report.cpp",
-   "symbol": "curve",
-   "scope": [
-    "namespace pineforge #1",
-    "inline namespace engine_script_run_v20 #1",
-    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
-    "+ + i ) #2",
-    "else #1"
-   ],
-   "cls": "grow",
-   "spelling": "curve . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/live_report.cpp",
-   "symbol": "ratio_curve",
-   "scope": [
-    "namespace pineforge #1",
-    "inline namespace engine_script_run_v20 #1",
-    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
-    "+ + i ) #2",
-    "else #1"
-   ],
-   "cls": "grow",
-   "spelling": "ratio_curve . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -42470,6 +42507,17 @@
    ],
    "cls": "grow",
    "spelling": "indexes . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "queued",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "int PendingIntentView :: probe_fill_qty ( int index , double fill_price , double * qty , int * close_only , int * partition ) const noexcept #1"
+   ],
+   "cls": "assign",
+   "spelling": "queued = . . .",
    "ordinal": 1
   },
   {

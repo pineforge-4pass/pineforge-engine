@@ -194,9 +194,9 @@ them for the record only. "Linux aarch64" is the maintainers' Cortex-A725 host.
 K4, the batch log pre-size. Since V19-B's step 6 (`08e71bae`) a run under the
 default `NativeEventRetention::Window` keeps no driver point and retires its
 journal at every script-bar boundary, so K4 has nothing to size.
-`reserve_driver_log` (`src/native_execution_consumer.cpp:3698-3709`) returns
+`reserve_driver_log` (`src/native_execution_consumer.cpp:3709-3719`) returns
 unless the retention is Full, and `presize_logs`
-(`src/native_execution_consumer.cpp:11206-11218`) sizes no journal under Window.
+(`src/native_execution_consumer.cpp:11214-11226`) sizes no journal under Window.
 `NativeRunSpec::event_retention` (`include/pineforge/native_run_spec.hpp:714`)
 defaults to Window, and the Pine adapter declares
 `NativeEventRetention::Window` (`src/source/pine_adapter.cpp:3322`). K4 still
@@ -241,7 +241,7 @@ Mac's 489 and 412 and 1003 of 1249, and no Mac output moved.
 
 - **PERF-L4's retired reader slots.** `event_high_water_reader_` and
   `terminal_receipt_high_water_reader_`
-  (`include/pineforge/source/pine_adapter.hpp:2743-2744`), with their type
+  (`include/pineforge/source/pine_adapter.hpp:2742-2743`), with their type
   `ReceiptHighWaterReader`, are storage nothing reads or writes since PERF-L4:
   they keep `PineExecutionAdapter`'s layout, which is part of
   `PineStrategyHost`'s and so of the generated script's ABI. They go at the next
