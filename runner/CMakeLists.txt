@@ -153,6 +153,12 @@ if(PINEFORGE_BUILD_TESTS)
         ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
     target_compile_options(live_contract_old_layout PRIVATE -fvisibility=hidden)
     set_target_properties(live_contract_old_layout PROPERTIES PREFIX "")
+    add_library(live_contract_prior_release_layout MODULE
+        ${PROJECT_SOURCE_DIR}/tests/test_live_contract_prior_release_layout_plugin.cpp)
+    target_include_directories(live_contract_prior_release_layout PRIVATE
+        ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
+    target_compile_options(live_contract_prior_release_layout PRIVATE -fvisibility=hidden)
+    set_target_properties(live_contract_prior_release_layout PROPERTIES PREFIX "")
     if(PINEFORGE_BUILD_SOURCE_LAYER)
         add_test(NAME native_live_startup_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_startup_e2e.py $<TARGET_FILE:pineforge-live>
@@ -731,6 +737,14 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
         $<TARGET_FILE:live_contract_native_no_export> $<TARGET_FILE:live_contract_old_layout>
         $<TARGET_FILE:test_native_live_report_cli> old-layout-report)
     add_dependencies(test_native_live_report_cli live_contract_old_layout)
+    # A module built against 1.13.x headers declares stamp 4: the runner refuses it.
+    add_test(NAME native_live_prior_release_layout_e2e COMMAND ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/native_live_startup_e2e.py $<TARGET_FILE:pineforge-live>
+        $<TARGET_FILE:native_live_example> $<TARGET_FILE:native_market_example>
+        $<TARGET_FILE:live_contract_absent> $<TARGET_FILE:live_contract_unknown>
+        $<TARGET_FILE:live_contract_native_no_export> $<TARGET_FILE:live_contract_prior_release_layout>
+        $<TARGET_FILE:test_native_live_report_cli> prior-release-layout-report)
+    add_dependencies(test_native_live_report_cli live_contract_prior_release_layout)
 endif()
 
 if(PINEFORGE_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux"

@@ -109,7 +109,7 @@ def module_layout(probe, module):
 
 
 def engine_layout_proof(probe):
-    assert module_layout(probe, native_example) == {'has_stamp': True, 'version': 4}, (
+    assert module_layout(probe, native_example) == {'has_stamp': True, 'version': 5}, (
         'the normally linked native example must export the current engine layout stamp')
     with tempfile.TemporaryDirectory(prefix='pineforge-engine-layout-') as temporary:
         root = Path(temporary)
@@ -141,15 +141,17 @@ def engine_layout_proof(probe):
     print('native engine layout: stamped module uses interval accumulator and EOF refresh')
 
 
-def old_layout_refusal_proof(probe):
+def old_layout_refusal_proof(probe, declared=2):
     # Module admission (runner/main.cpp, Strategy::load, and runner/README.md):
     # a module that declares a nonzero engine layout stamp other than the
     # runtime's own is refused before strategy_create, so the run ends with
     # exit status 1 and the one message line below, writes no output and
     # creates no ledger. Modules that omit the stamp or declare 0 are admitted
-    # on the public report path (opaque_report_proof covers that case).
-    assert module_layout(probe, stub) == {'has_stamp': True, 'version': 2}, (
-        'the old-layout control module must export the prior engine layout stamp')
+    # on the public report path (opaque_report_proof covers that case). The
+    # control module declares 2 by default; the prior-release control declares
+    # 4, the stamp a module built against 1.13.x headers carries.
+    assert module_layout(probe, stub) == {'has_stamp': True, 'version': declared}, (
+        'the old-layout control module must export the stamp it is built to declare')
     with tempfile.TemporaryDirectory(prefix='pineforge-old-layout-') as temporary:
         root = Path(temporary)
         write_fixture(root)
@@ -159,14 +161,15 @@ def old_layout_refusal_proof(probe):
         assert result.returncode == 1, (
             'a mismatched engine layout stamp must end the run with status 1',
             result.returncode, result.stdout, result.stderr)
-        refusal = 'pineforge-live: strategy engine layout mismatch: module=2 runtime=4'
+        refusal = f'pineforge-live: strategy engine layout mismatch: module={declared} runtime=5'
         assert refusal in result.stderr.decode('utf-8', 'replace').splitlines(), (
             'the refusal line is missing', result.stderr)
         assert result.stdout == b'', ('a refused module must produce no output', result.stdout)
         assert [entry.name for entry in root.iterdir() if entry.name.startswith('ledger')] == [], (
             'a refused module must not create a ledger',
             sorted(entry.name for entry in root.iterdir()))
-    print('old layout: a stamp-2 module is refused at admission, with no output and no ledger')
+    print(f'old layout: a stamp-{declared} module is refused at admission, with no output and no ledger: '
+          f'{refusal}')
 
 
 def opaque_report_proof(probe):
@@ -235,6 +238,8 @@ if len(sys.argv) > 8:
         opaque_report_proof(probe)
     elif proof == 'old-layout-report':
         old_layout_refusal_proof(probe)
+    elif proof == 'prior-release-layout-report':
+        old_layout_refusal_proof(probe, declared=4)
     else:
         raise AssertionError(f'unknown layout proof: {proof}')
     sys.exit(0)
