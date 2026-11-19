@@ -46701,7 +46701,7 @@
    "scope": [
     "namespace pineforge #3",
     "struct source :: PineStrategyHost :: CurrencyConversion #1",
-    "void warn ( BacktestEngine & host ) const noexcept #1",
+    "void warn ( BacktestEngine & host , int site_id = kCurrencyRateWarningSite ) const noexcept #1",
     "try #1",
     "if ( value . code = = RunFailureCode :: currency_conversion_rate_unavailable && value . args ) #1"
    ],

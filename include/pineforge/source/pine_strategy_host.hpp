@@ -1676,6 +1676,23 @@ public:
                                  const std::string& account_currency, std::int64_t at_ms,
                                  bool ignore_invalid_currency = false);
 
+    // strategy.convert_to_account / strategy.convert_to_symbol as the generated
+    // code lowers them today (#376): the already evaluated `value` comes back
+    // unchanged on every path; no rate is read and nothing is multiplied. When
+    // the rule above has no answer for the call (no supplied rate in effect at
+    // `at_ms`, a pair the rate does not join, an invalid code) the run records
+    // currency_conversion_rate_unavailable with the refusal's arguments as a
+    // run warning instead of stopping, once per `call_site` per run (the first
+    // executed bar that lacked a rate). The same currency or a supplied rate
+    // records nothing. `call_site` is the generated code's ordinal (>= 0) of
+    // this conversion call in the script.
+    enum class CurrencyConversionDirection : int { to_account = 0, to_symbol = 1 };
+    double strategy_convert_identity_or_warn(double value,
+                                             CurrencyConversionDirection direction,
+                                             int call_site,
+                                             const std::string& account_currency,
+                                             std::int64_t at_ms);
+
 private:
     // One conversion decided under the rule above: the supplied rate it reads,
     // or the refusal it ends in (pine_strategy_host.cpp).
@@ -1724,3 +1741,5 @@ using FixtureIntentKind = PineStrategyHost::FixtureIntentKind;
 // and nothing else: a host without a supplied rate refuses those calls, so it
 // never selects an identity or any other substitute implementation.
 #define PINEFORGE_HAS_HOST_CURRENCY_CONVERSION_V1 1
+// PineStrategyHost::strategy_convert_identity_or_warn is declared (#376).
+#define PINEFORGE_HOST_CONVERT_IDENTITY_OR_WARN 1
