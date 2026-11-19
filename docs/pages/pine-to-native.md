@@ -380,7 +380,7 @@ kernel, and `cancel_outcome` says whether a cancel was commanded at all. Pine's
 each leg is its own `strategy_native_submit_v1` native_c_api.h:2755 with
 `PF_NATIVE_OWNER_WAIT_FOR_APPLIED` native_c_api.h:471, and its `first_match`
 and `scope` are the request's `arm_first_match` / `arm_scope`
-native_c_api.h:2234-2235, so a C bracket child arms after its owner's print or over
+native_c_api.h:2234-2235, so a C bracket child arms after its parent's print or over
 the whole book exactly as a C++ one does.
 
 The Pine adapter lowers its own queued relative legs exactly this way — a

@@ -438,20 +438,20 @@ public:
         for (const auto& [name, patch] : delta.at("arrays").members) {
             check_report_array_patch(v2, name, patch);
             const bool root = name == "closed_trades";
-            auto& owner = root ? scalars_ : scalars_.members["report"];
-            owner.kind = Json::Kind::Object;
+            auto& holder = root ? scalars_ : scalars_.members["report"];
+            holder.kind = Json::Kind::Object;
             auto& arrays = root ? root_arrays_ : report_arrays_;
             auto found = arrays.find(name);
             if (found == arrays.end()) {
                 found = arrays.try_emplace(name, directory_).first;
                 // A whole-document row leaves its arrays in the scalar tree.
                 // The first patch of one moves it here, with the same items.
-                const auto member = owner.members.find(name);
-                if (member != owner.members.end()) {
+                const auto member = holder.members.find(name);
+                if (member != holder.members.end()) {
                     std::vector<std::string> items;
                     items.reserve(member->second.items.size());
                     for (const auto& item : member->second.items) items.push_back(item.dump());
-                    owner.members.erase(member);
+                    holder.members.erase(member);
                     found->second.patch(0, std::move(items));
                 }
             }
