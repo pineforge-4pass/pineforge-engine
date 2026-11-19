@@ -8578,6 +8578,19 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 endif()
 # --- lane closed-rows-debug-fold-slope end ---
 
+# --- lane entry-quantity-callers begin ---
+# Real source-host modules for the production JSON/LIVE caller tests.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(entry_quantity_percent MODULE entry_quantity_strategy.cpp)
+    target_link_libraries(entry_quantity_percent PRIVATE pineforge)
+    target_compile_definitions(entry_quantity_percent PRIVATE PINEFORGE_ENTRY_PERCENT=1)
+    target_compile_options(entry_quantity_percent PRIVATE -ffp-contract=off)
+    add_library(entry_quantity_explicit MODULE entry_quantity_strategy.cpp)
+    target_link_libraries(entry_quantity_explicit PRIVATE pineforge)
+    target_compile_options(entry_quantity_explicit PRIVATE -ffp-contract=off)
+endif()
+# --- lane entry-quantity-callers end ---
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")

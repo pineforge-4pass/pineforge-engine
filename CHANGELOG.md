@@ -17,6 +17,9 @@ version number follows semantic versioning over the surfaces the
 - Documentation: runner/README.md described a work deadline for the memory row and sizes it omitted, which the row at 1.13.0 no longer had (its sizes were 1,000, 10,000 and 100,000 inputs, every one run); it now describes the row as it is.
 - `--native-event-retention window|commands|full` is a new opt-in runner option (with `--native-config` only); without it nothing changes from 1.13.0 in what a native host reads from `native_events()`. `window` is what bounds memory, and what it trades: a host that polls `native_events()` without acknowledging no longer reads the whole run. Command events a host has not acknowledged are retired at each script bar when it has never acknowledged (acknowledging from its run begin, `native_acknowledge_events(0)`, keeps every unread command), and no driver point or account row is kept, acknowledged or not. `commands` keeps the whole command journal and every account row; `full` keeps every event of the run. The run spec, its digest, every state hash and every report byte are the same under each choice. `NativeStrategyHost::native_events_dropped(kind)` and the new C export `strategy_native_events_dropped_v1` count, per kind, every event a narrower retention let go unread; every existing export, `strategy_native_margin_call_v1` included, answers as before.
 - Checkpoints for `ta.sma`, biased `ta.stdev`, `ta.bb`, `math.sum` and `ta.change` now copy contiguous owning window buffers and reuse them on restore, preserving the arithmetic and rewind rules (#809).
+- The JSON harness and live runner now forward the symbol's quantity-step metadata for default `strategy.entry(..., qty=na)` sizing (#716 item 1).
+- The same quantity-step metadata is now forwarded for explicit `strategy.entry(..., qty=...)` quantities (#716 item 2).
+
 - Explicit `strategy.order()` quantities now floor executable units at declared decimal quantity steps while preserving the source quantity; the boundary control is not measured against TradingView (#716 item 2).
 - `strategy.order()` now carries its comment, TradingView's eighth argument: it is the signal text of the order's fills in the trade list, on the entry row of a trade the order opens and on the exit row of a trade it closes, and a comment that is not valid UTF-8 is refused like the comment of every other order command. The seven-argument call is unchanged and is the call with an empty comment.
 - The prebuilt Linux archives need glibc 2.35 or newer (for example Ubuntu 22.04 or Debian 12 and later), and the release check now refuses an archive that needs a newer glibc.
@@ -45,6 +48,11 @@ version number follows semantic versioning over the surfaces the
   `path_order` modes outside 0, 1 and 2, now produce typed refusals instead of
   being ignored or reset to AUTO. An invalid `mintick` is refused as `symbol_feeds_refused` with reason
   `syminfo_mintick_invalid`; an invalid point value uses the existing symbol metadata error, `symbol_metadata_rejected` with field `point_value`.
+- The JSON harness now honors explicit `qty_step`; both `qty_step` and
+  `mincontract` require positive finite JSON numbers. The explicit step takes
+  precedence while the minimum retains its own value, and minimum-only inputs
+  keep their previous behavior. `pineforge-live` also accepts
+  `--syminfo mincontract=...`.
 - `strategy_get_run_warnings` exposes one named warning per `request.security` call site whose requested timeframe is not a multiple of its evaluator's feed timeframe; values, trades and run acceptance are unchanged (#718).
 - The Docker report and `scripts/run_strategy.py` now show the engine's run warnings as `diagnostics.warnings` when a run has any, and are unchanged otherwise (#718).
 - A percent-of-equity default quantity above 100 percent is now capped at 100 percent of equity when `margin_long` and `margin_short` are both 0 (#805).
