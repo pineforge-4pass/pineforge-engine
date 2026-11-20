@@ -24,20 +24,16 @@ namespace source {
 
 namespace {
 
-// "Error on bar N: " as TradingView prefixes a runtime error, when an
-// evaluation context names the bar.
-std::string bar_prefix() {
-    const ta::BarContext& ctx = ta::bar_context();
-    if (!ctx.installed) return std::string();
-    return "Error on bar " + std::to_string(ctx.bar_index) + ": ";
-}
-
+// Use the run-failure prefix for both evaluated calls and validation before
+// an evaluation context exists.
 [[noreturn]] void length_not_positive(long long value, const char* function,
                                       const char* argument) {
     throw coded<std::runtime_error>(
         RunFailureCode::pine_invalid_argument,
-        {{"function", function}, {"argument", argument}, {"rule", "must_be_positive"}},
-        bar_prefix() + "Invalid value of the '" + argument +
+        {{"function", function},
+         {"argument", argument},
+         {"rule", "must_be_positive"}},
+        run_error_bar_prefix() + "Invalid value of the '" + argument +
             "' argument (" + std::to_string(value) + ") in the '" +
             function + "' function. It must be > 0.");
 }
@@ -45,8 +41,10 @@ std::string bar_prefix() {
 [[noreturn]] void length_na(const char* function, const char* argument) {
     throw coded<std::runtime_error>(
         RunFailureCode::pine_invalid_argument,
-        {{"function", function}, {"argument", argument}, {"rule", "must_not_be_na"}},
-        bar_prefix() + "Invalid value of the '" + argument +
+        {{"function", function},
+         {"argument", argument},
+         {"rule", "must_not_be_na"}},
+        run_error_bar_prefix() + "Invalid value of the '" + argument +
             "' argument in the '" + function +
             "' function. It must not be na");
 }
@@ -55,7 +53,7 @@ std::string bar_prefix() {
     throw coded<std::runtime_error>(
         RunFailureCode::pine_runtime_limit,
         {{"limit", "max_bars_back"}, {"max", SeriesWindowExtreme::kMaxBarsBack}},
-        bar_prefix() +
+        run_error_bar_prefix() +
         "The script attempts to reference historical data that is too far from "
         "the current bar (" + std::to_string(length - 1) +
         " bars back). The historical buffer's limit is " +
@@ -82,8 +80,10 @@ bool length_value(double value, long long& out) {
     }
     throw coded<std::runtime_error>(
         RunFailureCode::pine_invalid_argument,
-        {{"function", "supertrend"}, {"argument", "factor"}, {"rule", "must_be_positive"}},
-        bar_prefix() + "Invalid value of the 'factor' argument (" + text +
+        {{"function", "supertrend"},
+         {"argument", "factor"},
+         {"rule", "must_be_positive"}},
+        run_error_bar_prefix() + "Invalid value of the 'factor' argument (" + text +
             ") in the 'supertrend' function. It must be > 0.");
 }
 
