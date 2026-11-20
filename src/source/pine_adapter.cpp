@@ -29054,8 +29054,26 @@ int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
     // quantity, bounded by the position (resolve_source_terms, the Order
     // rows). A row whose request was not read has no plan and keeps the
     // answer above. No shape helper is used, so this also follows a fallback.
+    // A close the script placed before the order on the same bar that has not
+    // filled fills first: it is a market order, and at one point the book
+    // matches its oldest request first (RequestDefinition::priority). The
+    // order then meets the position that close leaves, not this one, so no
+    // plan is made against this one and the row keeps the answer above.
+    const auto close_pending_before = [&]() noexcept {
+        for (const auto& live_handle : owner_->live_handles_) {
+            const auto found = owner_->placement_.find(live_handle.incarnation);
+            if (found == owner_->placement_.end()) continue;
+            const PlacementSnapshot& prior = found->second;
+            if ((prior.family == PineOrderFamily::Close
+                 || prior.family == PineOrderFamily::CloseAll)
+                && !prior.immediately
+                && prior.placement_script_open_ms == snapshot.placement_script_open_ms
+                && prior.command_sequence < snapshot.command_sequence) return true;
+        }
+        return false;
+    };
     if (opposite && snapshot.family == PineOrderFamily::Order
-        && std::isfinite(snapshot.requested_qty)) {
+        && std::isfinite(snapshot.requested_qty) && !close_pending_before()) {
         const double executable = std::max(0.0, snapshot.oca_type == 1
             ? explicit_entry_quantity_floor(std::abs(snapshot.requested_qty),
                                             owner_->staged_.quantity_grid)
