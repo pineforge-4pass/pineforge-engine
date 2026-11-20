@@ -1,5 +1,6 @@
 #include <pineforge/detail/run_quota.hpp>
 #include <pineforge/owned_storage.hpp>
+#include "timezone.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -248,11 +249,13 @@ const char* marker_fd(const char* text, int& fd) noexcept {
 
 void capture_host_marker(HostMarker& marker) noexcept {
     marker.capture_number = host_marker_capture_count.fetch_add(1, std::memory_order_relaxed) + 1;
-    const char* setting = std::getenv(kRunQuotaModeEnv);
-    const char* native = std::getenv(kRunQuotaNativeFdEnv);
-    const char* python = std::getenv(kRunQuotaPythonFdEnv);
-    // getenv inspects process memory. No descriptors, locks, heap or syscalls
-    // are touched when all three marker components are absent.
+    const char* setting = tz_util::environment_value(kRunQuotaModeEnv);
+    const char* native = tz_util::environment_value(kRunQuotaNativeFdEnv);
+    const char* python = tz_util::environment_value(kRunQuotaPythonFdEnv);
+    // Each lookup inspects process memory under the environment lock, which a
+    // zone switch in another thread also holds. No descriptors or heap are
+    // touched when all three marker components are absent, and no syscall is
+    // made unless that lock is contended.
     if (!setting && !native && !python) {
         marker.mode = QuotaMode::unmanaged;
         marker.status = QuotaStatus::ok;

@@ -1,5 +1,7 @@
 #include <pineforge/native_calendar.hpp>
 
+#include <chrono>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -7,9 +9,12 @@
 #include <ctime>
 #include <fcntl.h>
 #include <limits.h>
+#include <poll.h>
+#include <signal.h>
 #include <string>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <thread>
 #include <unistd.h>
 #include <utility>
 
@@ -56,6 +61,10 @@ constexpr int64_t kNyMar9_1700 = 1741554000000;        // 2025-03-09 17:00 EDT
 constexpr int64_t kNyMar8_1800 = 1741474800000;        // 2025-03-08 18:00 EST
 constexpr int64_t kNyMar8_2200 = 1741489200000;        // 2025-03-08 22:00 EST
 constexpr int64_t kNyMar9_0300 = 1741503600000;        // 2025-03-09 03:00 EDT (first >= 02:00)
+constexpr int64_t kNyMar9_0100 = 1741500000000;        // 2025-03-09 01:00 EST
+constexpr int64_t kNyMar9_0130 = 1741501800000;        // 2025-03-09 01:30 EST
+constexpr int64_t kNyMar10_0100 = 1741582800000;       // 2025-03-10 01:00 EDT
+constexpr int64_t kNyMar9Ordinal = 20156;              // 2025-03-09 Gregorian day ordinal
 constexpr int64_t kNyMar9_0030 = 1741498200000;        // 2025-03-09 00:30 EST
 constexpr int64_t kNyMar9_1200 = 1741536000000;        // 2025-03-09 12:00 EDT
 constexpr int64_t kNyMar9_0159 = 1741503540000;        // 2025-03-09 01:59 EST
@@ -1016,6 +1025,148 @@ static int64_t libc_civil_ms(const char* tzdir, const char* tz, int y, int mo, i
     return got == static_cast<ssize_t>(sizeof(ms)) ? ms : static_cast<int64_t>(-1);
 }
 
+struct UncachedBatchResult {
+    std::int64_t origin_ms = 0;
+    std::int64_t next_origin_ms = 0;
+    std::int64_t ordinal = 0;
+    std::int64_t span_start_ms = 0;
+    std::int64_t span_end_ms = 0;
+    int has_day = 0;
+    int span_count = 0;
+};
+
+// The five-second monotonic bound is the existing timezone-lock regression
+// bound. The live-runner test's 100 ms poll is only a retry interval.
+static bool uncached_batch_watchdog(UncachedBatchResult& result, bool& timed_out) {
+    int fds[2];
+    if (::pipe(fds) != 0) return false;
+    const pid_t pid = ::fork();
+    if (pid < 0) {
+        ::close(fds[0]);
+        ::close(fds[1]);
+        return false;
+    }
+    if (pid == 0) {
+        ::close(fds[0]);
+        UncachedBatchResult child_result;
+        const auto calendar = parse_session("0100-0200", "America/New_York");
+        if (calendar) {
+            const auto day = session_day_at(*calendar, kNyMar9_0130);
+            if (day) {
+                child_result.has_day = 1;
+                child_result.origin_ms = day->origin_ms;
+                child_result.next_origin_ms = day->next_origin_ms;
+                child_result.ordinal = day->ordinal;
+                child_result.span_count = static_cast<int>(day->spans.size());
+                if (!day->spans.empty()) {
+                    child_result.span_start_ms = day->spans.front().first;
+                    child_result.span_end_ms = day->spans.front().second;
+                }
+            }
+        }
+        const ssize_t written = ::write(fds[1], &child_result, sizeof(child_result));
+        ::close(fds[1]);
+        ::_exit(written == static_cast<ssize_t>(sizeof(child_result)) ? 0 : 2);
+    }
+    ::close(fds[1]);
+    timed_out = false;
+    bool complete = false;
+    bool failed = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    const int flags = ::fcntl(fds[0], F_GETFL, 0);
+    if (flags < 0 || ::fcntl(fds[0], F_SETFL, flags | O_NONBLOCK) != 0) failed = true;
+    std::size_t received_bytes = 0;
+    char* result_bytes = reinterpret_cast<char*>(&result);
+    while (!complete && !failed) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            timed_out = true;
+            break;
+        }
+        const auto remaining =
+            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+        int wait_ms = static_cast<int>(remaining.count());
+        if (std::chrono::milliseconds(wait_ms) < remaining) ++wait_ms;
+        if (wait_ms < 1) wait_ms = 1;
+        struct pollfd watch{fds[0], POLLIN | POLLHUP | POLLERR, 0};
+        const int ready = ::poll(&watch, 1, wait_ms);
+        if (ready == 0 || (ready < 0 && errno == EINTR)) continue;
+        if (ready < 0 || (watch.revents & POLLNVAL)) {
+            failed = true;
+            break;
+        }
+        if ((watch.revents & (POLLIN | POLLHUP | POLLERR)) == 0) continue;
+        ssize_t received;
+        do {
+            received = ::read(fds[0], result_bytes + received_bytes,
+                              sizeof(result) - received_bytes);
+        } while (received < 0 && errno == EINTR
+                 && std::chrono::steady_clock::now() < deadline);
+        if (received > 0) {
+            received_bytes += static_cast<std::size_t>(received);
+            complete = received_bytes == sizeof(result);
+        } else if (received == 0) {
+            failed = true;
+        } else if (errno == EINTR && std::chrono::steady_clock::now() >= deadline) {
+            timed_out = true;
+            break;
+        } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            failed = true;
+        }
+        if (complete) {
+            continue;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            timed_out = true;
+            break;
+        }
+    }
+    ::close(fds[0]);
+    int status = 0;
+    bool exited = false;
+    if (complete && !failed && !timed_out) {
+        for (;;) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                timed_out = true;
+                break;
+            }
+            const pid_t waited = ::waitpid(pid, &status, WNOHANG);
+            if (waited == pid) {
+                exited = true;
+                break;
+            }
+            if (waited < 0 && errno != EINTR) {
+                failed = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    if (!complete || failed || timed_out || !exited) {
+        (void)::kill(pid, SIGKILL);
+        pid_t reaped;
+        do { reaped = ::waitpid(pid, &status, 0); } while (reaped < 0 && errno == EINTR);
+        return false;
+    }
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+static void test_uncached_nonutc_batch_watchdog() {
+    std::printf("test_uncached_nonutc_batch_watchdog\n");
+    UncachedBatchResult result;
+    bool timed_out = false;
+    const bool completed = uncached_batch_watchdog(result, timed_out);
+    CHECK(!timed_out);
+    CHECK(completed);
+    CHECK(result.has_day == 1);
+    CHECK(result.span_count == 1);
+    CHECK_EQ(result.origin_ms, kNyMar9_0100);
+    CHECK_EQ(result.next_origin_ms, kNyMar10_0100);
+    CHECK_EQ(result.ordinal, kNyMar9Ordinal);
+    CHECK_EQ(result.span_start_ms, kNyMar9_0100);
+    CHECK_EQ(result.span_end_ms, kNyMar9_0300);
+}
+
 static std::string independent_zoneinfo_root() {
     char buf[PATH_MAX];
 #if defined(__APPLE__)
@@ -1316,6 +1467,10 @@ static void test_timezone_tzdir_root() {
 }
 
 int main() {
+    test_uncached_nonutc_batch_watchdog();
+    if (g_fail != 0) {
+        return 1;
+    }
     test_timeframe_forms();
     test_pairings();
     test_session_parse();

@@ -15,6 +15,15 @@
 #include <sys/mount.h>
 #endif
 
+namespace pineforge::tz_util {
+// std::getenv(name) with the lookup made under the engine's environment lock
+// (src/timezone.cpp). The engine switches and restores the process TZ under
+// that lock, so an environment read that takes it never runs while this
+// engine image is rewriting the environment. Defined in the engine library,
+// like the other engine symbols the callers of this header already link.
+const char* environment_value(const char* name) noexcept;
+}  // namespace pineforge::tz_util
+
 namespace pineforge::detail {
 
 inline const char* scratch_memory_filesystem_name(std::uint64_t type) noexcept {
@@ -156,7 +165,7 @@ inline std::string resolve_scratch_directory(const std::string& configured,
         refusal.insert(0, "scratch requires disk backing; ");
         return {};
     }
-    const char* temporary = std::getenv("TMPDIR");
+    const char* temporary = tz_util::environment_value("TMPDIR");
     const bool has_temporary = temporary && *temporary;
     const std::string first = has_temporary ? temporary : "/tmp";
     if (!reject(first, has_temporary ? "TMPDIR" : "legacy /tmp (TMPDIR unset or empty)"))

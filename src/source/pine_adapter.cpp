@@ -12969,6 +12969,90 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
     // remember() ranks each by it or by the predecessor it replaces. Only a
     // slot reserved for the call's own definition travels with them;
     // allocating one here would advance ordinary exits twice.
+    //
+    // A leg that names its quantity is queued (submit_one) and submitted when
+    // the calculation ends, so its place in the exit queue would be the one
+    // of that submission: behind an exit a later call placed at once, though
+    // the queue is in the order the exits were created (exit_queue_rank).
+    // A full exit placed that way, re-issued, then reserved the units the
+    // earlier one held, and the earlier one's own re-issue, left nothing,
+    // removed it. So, before a leg of a full exit that opens a new place in
+    // the queue is placed, each such queued leg of an opening its entry holds
+    // takes the slot ahead of it, in the order the queue submits them
+    // (flush_pending_bracket_legs). A full exit names no quantity and no
+    // share below the whole, as the reservation reads the call
+    // (compute_exit_reservation, kFullPercentEps). Only the place is issued:
+    // the queued leg is still submitted, and takes its own source sequence,
+    // when the queue is flushed, and remember() keeps the slot for it and for
+    // every re-issue that replaces it. Where no later full exit opens a new
+    // place nothing is issued, and every sequence stays where it was: an exit
+    // of a share below the whole placed after a queued leg ranks ahead of it,
+    // as before. A void call opens no place and a void leg takes none; a call
+    // the reservation refuses never comes here; a leg already placed, or one
+    // that replaces another, keeps the place it has; and a leg that waits for
+    // an entry order still to fill is ranked where that fill submits it.
+    // Beside a close this calculation has already called, the exits are sized
+    // as they were and no place is issued either.
+    const auto rank_queued_explicit_legs = [&] {
+        const bool full_exit = dynamic
+            && (!std::isfinite(requested_qty_percent)
+                || requested_qty_percent >= 100.0 - internal::kFullPercentEps);
+        if (!full_exit || void_issue || from_entry.empty() || only_opening != nullptr
+            || materializing_relative_ || reserved_slot != 0
+            || pending_same_bar_close_qty_ > 0.0) {
+            return;
+        }
+        const auto held = cohorts_by_id_.find_resident(from_entry);
+        if (held == cohorts_by_id_.end()) return;
+        const auto& opened = held->second.opened;
+        const auto exit_leg = [](const PlacementSnapshot& row) {
+            return row.family == PineOrderFamily::ExitLimit
+                || row.family == PineOrderFamily::ExitStop
+                || row.family == PineOrderFamily::ExitTrail;
+        };
+        std::vector<std::size_t> unranked;
+        for (std::size_t index = 0; index < pending_bracket_legs_.size(); ++index) {
+            const auto& row = pending_bracket_legs_[index].snapshot;
+            if (exit_leg(row) && row.from_entry == from_entry && !row.void_issue
+                && std::isfinite(row.requested_qty) && row.source_sequence == 0
+                && row.projection_predecessor == 0 && row.chain_origin_sequence == 0
+                && row.placement_cycle == current_position_cycle_
+                && std::find(opened.begin(), opened.end(), row.bracket_origin)
+                    != opened.end()) {
+                unranked.push_back(index);
+            }
+        }
+        if (unranked.empty()) return;
+        // An exit that has an order of its own, working or waiting, or a
+        // level still waiting for its entry's fill, keeps the place that
+        // order holds or will be given, as before: only an exit with none
+        // opens a new place here.
+        const auto own_order = [&](const PlacementSnapshot& row) {
+            return exit_leg(row) && !row.void_issue && row.source_id == exit_id
+                && row.from_entry == from_entry;
+        };
+        for (const auto& handle : live_handles_) {
+            const auto row = placement_.find(handle.incarnation);
+            if (row != placement_.end() && own_order(row->second)) return;
+        }
+        for (const auto& pending : pending_bracket_legs_)
+            if (own_order(pending.snapshot)) return;
+        for (const auto& pending : pending_coof_requests_)
+            if (own_order(pending.snapshot)) return;
+        for (const auto& delayed : delayed_market_orders_)
+            if (own_order(delayed.snapshot)) return;
+        for (const auto& pending : pending_relative_exits_)
+            if (pending.exit_id == exit_id && pending.from_entry == from_entry) return;
+        std::stable_sort(unranked.begin(), unranked.end(),
+            [&](std::size_t left, std::size_t right) {
+                return pending_bracket_legs_[left].snapshot.bracket_origin.incarnation
+                    < pending_bracket_legs_[right].snapshot.bracket_origin.incarnation;
+            });
+        for (const auto index : unranked) {
+            pending_write(pending_bracket_legs_[index].snapshot).chain_origin_sequence =
+                next_queue_sequence();
+        }
+    };
     const auto source_point = detail::callback_point(require_host());
     const OrderBirth exit_birth = capture_order_birth();
     const auto exit_birth_reach = compat::pine::select_historical_birth_reach(
@@ -13639,14 +13723,30 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
                 == live_by_source_key_.end()) {
                 // A new queued leg has no issued queue slot: it carries only a
                 // slot reserved for its own definition (reserved_slot), and
-                // remember() assigns the rank when the leg is submitted.
+                // remember() assigns the rank when the leg is submitted. A leg
+                // that names its quantity and queues again in the place of one
+                // a later full exit was placed behind keeps the slot that one
+                // was given (rank_queued_explicit_legs).
                 auto queued = std::find_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
                     [&](const PendingBracketLeg& row) { return row.replacement_key == replacement_key; });
+                if (queued != pending_bracket_legs_.end() && snapshot.chain_origin_sequence == 0
+                    && !snapshot.void_issue && std::isfinite(snapshot.requested_qty)
+                    && !queued->snapshot.void_issue
+                    && std::isfinite(queued->snapshot.requested_qty)
+                    && queued->snapshot.source_sequence == 0
+                    && queued->snapshot.projection_predecessor == 0
+                    && queued->snapshot.placement_cycle == snapshot.placement_cycle) {
+                    snapshot.chain_origin_sequence = queued->snapshot.chain_origin_sequence;
+                }
                 PendingBracketLeg staged{std::move(request), std::move(snapshot), replacement_key, family_key};
                 if (queued == pending_bracket_legs_.end()) pending_write(pending_bracket_legs_).push_back(std::move(staged));
                 else pending_write(*queued) = std::move(staged);
                 return;
             }
+            // This leg is placed at once: where it is a full exit's and opens
+            // a new place in the exit queue, the queued legs created before
+            // it take theirs first.
+            rank_queued_explicit_legs();
             // ab9714be src/source/pine_strategy_commands.cpp:2627-2648 keys a
             // source bracket by (exit id, from_entry) and a reissue replaces
             // the stored leg rather than adding a second one.  A leg that was
@@ -28173,41 +28273,41 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 const auto family = bracket_families_.find(family_key);
                 return family != bracket_families_.end() && family->second.filled_on(add);
             };
-            // One shape keeps the cover although the add has orders of its own:
-            // a stop fill, where the quantity-named exit orders the entry id
-            // still has at that same stop would close everything the position
-            // holds at this point anyway. The cover then closes the units
-            // those orders would close, on the same bar and at the same
-            // price; only the rows differ (one row for the add's whole lot,
-            // where the orders make one row each). That is the engine's
-            // long-standing outcome there and no capture is of this shape.
-            // Not where the script runs again after every fill: its calls
-            // there can replace those orders before they fill.
-            const double held_now = std::abs(detail::run_position(require_host()).signed_units);
-            double same_stop_units = 0.0;
-            if (placement_snapshot->family == PineOrderFamily::ExitStop
-                && !config_.calc_on_order_fills && !coof_recalc_active_
-                && !config_.close_entries_rule_any
-                && placement_snapshot->bracket_origin.incarnation != 0
-                && finite_positive(placement_snapshot->requested_qty)) {
-                for (const auto& handle : live_handles_) {
-                    if (handle == event.handle()) continue;
-                    const auto row = placement_.find(handle.incarnation);
-                    if (row == placement_.end()) continue;
-                    const auto& other = row->second;
-                    if (other.family == PineOrderFamily::ExitStop
-                        && other.from_entry == placement_snapshot->from_entry
-                        && other.bracket_origin.incarnation != 0 && other.per_entry_origin == 0
-                        && !other.immediately && !other.void_issue
-                        && finite_positive(other.requested_qty)
-                        && same_double_bits(other.exit_levels.stop,
-                                            placement_snapshot->exit_levels.stop)) {
-                        same_stop_units += other.requested_qty;
-                    }
-                }
-            }
-            const bool book_closes_position = held_now > internal::kQtyEpsilon
-                && same_stop_units + internal::kQtyEpsilon >= held_now;
+            // A stop fill is no exception to that. Where the quantity-named
+            // exit orders the entry id still has at that same stop would close
+            // everything the position holds at this point, each is still an
+            // order of its own, and an add that has its order is not covered.
+            // The captures (tests/fixtures/global_exit_children, OANDA:XAUUSD
+            // 15, first in first out): an entry of 2 with two qty-1 exits T1
+            // and T2, then a 2-unit market add of the same id with both exits
+            // called again in the same calculation, the add's bar crossing
+            // their stop.
+            //   siblings-02, -10, -11, -12 and -49: T1 had filled 1 at its
+            //     limit before the add. At the stop T2 fills 1 from the older
+            //     lot, then T1 and T2 fill 1 each from the add's lot.
+            //   siblings-03: neither exit had filled. T1 and T2 fill 1 each
+            //     from the older lot, then 1 each from the add's lot.
+            //   siblings-05: the exits are called T2 first. T2 fills the older
+            //     lot's unit, then T2 and T1 fill 1 each from the add's lot.
+            //   siblings-06: the script calls strategy.cancel_all before the
+            //     add and its exits. The rows are those of siblings-02.
+            // Each list has four rows. The older opening's orders fill before
+            // the add's, the add's in the order of their calls, and each
+            // takes its own quantity from the oldest open lot. No code orders
+            // those fills: the older opening's orders are on the book before
+            // the add opens, the add's own are placed when it opens, and the
+            // book fills the orders one point reaches in the order they were
+            // placed (the same four fills as on a later bar,
+            // tests/test_exit_bracket_pending_entry_leg.cpp).
+            // Until this rule such a stop fill kept the cover although the
+            // add had orders of its own. It closed the add's whole lot in one
+            // row under the id of the order that filled first, and the add's
+            // own orders ended with the position: three rows for
+            // TradingView's four at the same bar, price and total quantity,
+            // and in siblings-03 a row from the add's lot while a unit of the
+            // older lot was still open. The any-entry close rule never kept
+            // it (siblings-09 was already TradingView's list), nor a script
+            // that runs again after every fill.
             double units = 0.0;
             // The scratch rows below are written as they always were, every
             // add of the bar and in this order: the scratch store is part of
@@ -28227,7 +28327,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 const native_order::RequestHandle add{adds.context().run, lot.entry_incarnation};
                 adds.push_back(add);
                 selected_adds.put(lot.entry_incarnation, 0);
-                if (!book_closes_position && has_own_order(lot.entry_incarnation)) {
+                if (has_own_order(lot.entry_incarnation)) {
                     every_add_covered = false;
                     continue;
                 }
@@ -28248,8 +28348,8 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                         == detail::ExitScratchIndex::absent);
             }
             if (!covered.empty() && units > 0.0 && drained_older) {
-                const bool own_order = !book_closes_position
-                    && placement_snapshot->bracket_origin.incarnation != 0
+                const bool own_order =
+                    placement_snapshot->bracket_origin.incarnation != 0
                     && !config_.close_entries_rule_any
                     && finite_positive(placement_snapshot->requested_qty);
                 if (own_order) {
@@ -28865,19 +28965,30 @@ int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
         || (queued && owner_->pending_same_bar_close_qty_ > 0.0);
     bool market_trigger = false;
     bool host_resolved = false;
-    const auto read_request = [&](const native_order::Request& request) {
+    // The signed units an explicit Transact request still books: its own, or
+    // what a reduce group has left of them on a live row
+    // (LiveRequest::remaining, the quantity the kernel's candidate transacts).
+    double transaction = kNaN;
+    const auto read_request = [&](const native_order::Request& request,
+                                  const native_order::RemainingUnits* left = nullptr) {
         market_trigger = std::holds_alternative<native_order::Market>(request.trigger);
         host_resolved = std::holds_alternative<native_order::HostSized>(request.intent)
             || std::holds_alternative<native_order::Sized>(request.intent);
+        if (const auto* own = std::get_if<native_order::Transact>(&request.intent)) {
+            const double units = left ? left->q : std::abs(own->signed_units);
+            transaction = own->signed_units < 0.0 ? -units : units;
+        }
     };
     if (!queued) {
         try {
             if (auto* consumer = owner_->bound_consumer()) {
                 if (const auto* live = as_native_consumer(*consumer).request_core().find_live(handle))
-                    read_request(live->request());
+                    read_request(live->request(),
+                                 std::get_if<native_order::RemainingUnits>(&live->remaining));
             }
         } catch (...) {
             host_resolved = false;
+            transaction = kNaN;
         }
     } else {
         const auto queued_request = [&](const auto& rows) {
@@ -28904,10 +29015,12 @@ int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
     try {
         if (!host_resolved) {
             // An explicit intent books its own transaction; the fill takes no
-            // shape decision, so the prior-cycle predicate alone is reported.
+            // shape decision, so the prior-cycle predicate alone is reported
+            // here. An own-quantity strategy.order is answered below.
             fill_close_only = prior_cycle_only();
         } else if (snapshot.family == PineOrderFamily::Order) {
-            // A host-sized strategy.order closes against an opposite position.
+            // A host-sized strategy.order closes against an opposite position;
+            // one with its own quantity is bounded below.
             fill_close_only = opposite;
         } else if (snapshot.family != PineOrderFamily::Entry) {
             fill_close_only = false;
@@ -28930,6 +29043,49 @@ int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
         }
     } catch (...) {
         fill_close_only = prior_cycle_only();
+    }
+    // A strategy.order with its own quantity against an opposite position
+    // reports the kernel's plan for what its fill books (order_action::plan,
+    // the decomposition the settlement checks). An explicit Transact takes no
+    // shape decision at its fill (resolve_source_terms returns before one):
+    // the kernel books the units left on it as one signed transaction, which
+    // closes against the position and opens only what exceeds it. A cancel
+    // group's order is host-sized instead, and its fill closes its executable
+    // quantity, bounded by the position (resolve_source_terms, the Order
+    // rows). A row whose request was not read has no plan and keeps the
+    // answer above. No shape helper is used, so this also follows a fallback.
+    // A close the script placed before the order on the same bar that has not
+    // filled fills first: it is a market order, and at one point the book
+    // matches its oldest request first (RequestDefinition::priority). The
+    // order then meets the position that close leaves, not this one, so no
+    // plan is made against this one and the row keeps the answer above.
+    const auto close_pending_before = [&]() noexcept {
+        for (const auto& live_handle : owner_->live_handles_) {
+            const auto found = owner_->placement_.find(live_handle.incarnation);
+            if (found == owner_->placement_.end()) continue;
+            const PlacementSnapshot& prior = found->second;
+            if ((prior.family == PineOrderFamily::Close
+                 || prior.family == PineOrderFamily::CloseAll)
+                && !prior.immediately
+                && prior.placement_script_open_ms == snapshot.placement_script_open_ms
+                && prior.command_sequence < snapshot.command_sequence) return true;
+        }
+        return false;
+    };
+    if (opposite && snapshot.family == PineOrderFamily::Order
+        && std::isfinite(snapshot.requested_qty) && !close_pending_before()) {
+        const double executable = std::max(0.0, snapshot.oca_type == 1
+            ? explicit_entry_quantity_floor(std::abs(snapshot.requested_qty),
+                                            owner_->staged_.quantity_grid)
+            : snapshot.requested_qty);
+        const auto booked = host_resolved
+            ? order_action::plan(physical.signed_units, order_action::Reduce{executable})
+            : order_action::plan(physical.signed_units, order_action::Transact{transaction});
+        if (booked) {
+            fill_close_only = booked->open_units() == 0.0;
+            *qty = host_resolved ? booked->close_units() : std::abs(transaction);
+            *partition = 0;
+        }
     }
     *close_only = (snapshot.affordability_close_only || fill_close_only
                    || kernel_close_only) ? 1 : 0;

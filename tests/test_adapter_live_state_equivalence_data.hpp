@@ -454,6 +454,11 @@
 // the same: its events differ). It takes a digest the released v1.12.0 tree never had; 39 of 108 rows still differ from
 // v1.12.0, as above, and every other row is retained byte for byte. This table is the engine's own transcript, not a
 // TradingView measurement.
+// Re-harvested with PINEFORGE_V19E_HARVEST after each quantity exit order of a same-id market add, called again in the
+// same calculation, fills as its own trade row at a stop the add's bar crosses: one row changes against the table
+// above, the brackets row 65, and only its digest (its trades, commands and rows placed are the same: its events
+// differ). Every other row is retained byte for byte. This table is the engine's own transcript, not a TradingView
+// measurement.
 constexpr std::uint64_t kTranscriptDigests[] = {
     12661738067797988009ull,  // reversals seed 104729, 113 trades, 388 commands, 427 rows placed
     11278941354291081133ull,  // reversals seed 209458, 123 trades, 379 commands, 415 rows placed
@@ -520,7 +525,7 @@ constexpr std::uint64_t kTranscriptDigests[] = {
     17438466113612922142ull,  // brackets seed 2827684, 59 trades, 552 commands, 524 rows placed
     13812924034617961226ull,  // brackets seed 2932413, 75 trades, 529 commands, 571 rows placed
     4954453971814348355ull,  // brackets seed 3037142, 58 trades, 525 commands, 567 rows placed
-    11176058037637225005ull,  // brackets seed 3141871, 100 trades, 534 commands, 638 rows placed
+    651912924188056499ull,  // brackets seed 3141871, 100 trades, 534 commands, 638 rows placed
     14548195767317138154ull,  // brackets seed 3246600, 104 trades, 645 commands, 875 rows placed
     12631950418581532625ull,  // brackets seed 3351329, 74 trades, 545 commands, 582 rows placed
     5210800925457725663ull,  // brackets seed 3456058, 81 trades, 509 commands, 562 rows placed

@@ -37,6 +37,13 @@
  * reversal, a host-sized strategy.order, a row probed in the callback that
  * queued it, a priced replacement of a market entry, a sequential pair member
  * and an entry against the allowed risk direction.
+ *
+ * Section 6 replays issue 910's shapes 1 and 3 as the issue words them -- a
+ * stop entry placed behind a same-bar close of a SHORT, and a strategy.order
+ * with its OWN quantity placed against a short, alone, in an OCA cancel group
+ * and behind a same-bar close -- and compares the report's close_only and
+ * quantity with the units the fill of the same row closes and opens and the
+ * position it leaves.
  */
 
 #include <algorithm>
@@ -817,6 +824,264 @@ void shape_direction_gated_entry_closes_only() {
     CHECK(r.probe.close_only == 1);
 }
 
+// Issue #910's shapes 1 and 3 as the issue words them. Besides the report,
+// each replay records what the row's own fill then books: the units it closes
+// and opens (ExecutionAppliedEvent) and the position it leaves.
+struct BookedFill {
+    std::uint64_t incarnation = 0;  // of the row that filled
+    double closed = kNaN, opened = kNaN, after = kNaN;
+
+    void record(const native_order::ExecutionAppliedEvent& event, double position) {
+        incarnation = event.handle().incarnation;
+        closed = event.closed_units;
+        opened = event.opened_units;
+        after = position;
+    }
+};
+
+// Shape 1 as worded: the position is SHORT and, on one bar, the script closes
+// the short and then places a long stop entry with the default quantity
+// (CloseThenStop above closes a LONG, so its L2 is on the held side and is
+// submitted at once). Here L2 opposes the position it is placed against: it
+// waits behind the close and is submitted when the close fills, stamped
+// after-close. The issue's numbers -- a reported quantity of 1 that leaves 0.5
+// long -- need a 0.5 short at the fill, which opens on the next bar. L2's fill
+// is then a Transact of its own unit: it closes 0.5 and opens 0.5, and the
+// report, read while that short is open, says quantity 1 and not close-only.
+class CloseShortThenStop final : public pineforge::source::PineStrategyHost {
+public:
+    CloseShortThenStop() {
+        source::PineStrategyConfig config;
+        config.initial_capital = 1'000'000.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        config.pyramiding = 1;
+        configure_pine_strategy(config);
+        set_syminfo_mintick(0.01);
+    }
+    PendingProbe probe;
+    BookedFill fill;
+    double closed_against = kNaN;  // position when the script closes it
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() == 0) strategy_entry("S", false, kNaN, kNaN, 1.0);
+        if (pine_bar_index() == 1) {
+            closed_against = live_position_size();
+            strategy_close("S");
+            strategy_entry("L2", true, kNaN, 105.0);
+        }
+        if (pine_bar_index() == 2) strategy_entry("S2", false, kNaN, kNaN, 0.5);
+    }
+
+protected:
+    void on_native_applied_event(const native_order::ExecutionAppliedEvent& event,
+                                 const NativeDecisionContext&) override {
+        const std::string& label = event.request().label;
+        if (label == "S2" && probe.index < 0) probe = probe_order(*this, "L2", kEntryRow, 105.0);
+        if (label == "L2" && fill.incarnation == 0) fill.record(event, live_position_size());
+    }
+};
+
+void shape_close_short_then_stop_reports_the_fills_transaction() {
+    CloseShortThenStop host;
+    const Bar bars[] = {
+        mk_bar(10, 100, 100, 100, 100, 60'000),
+        mk_bar(11, 100, 100, 100, 100, 60'000),
+        mk_bar(12, 100, 100, 100, 100, 60'000),
+        mk_bar(13, 100, 106, 100, 105, 60'000),
+        mk_bar(14, 105, 105, 105, 105, 60'000),
+    };
+    host.run(bars, 5);
+    const auto& fill = host.fill;
+    host.probe.print("close short then stop", "L2 after S2");
+    std::printf("  close short then stop: L2's fill closed %.17g, opened %.17g, position after "
+                "%.17g, error '%s'\n", fill.closed, fill.opened, fill.after,
+                host.last_error().c_str());
+    CHECK(host.last_error().empty());
+    // The shape was built: the script closed a short of 1.
+    CHECK(near(host.closed_against, -1.0));
+    CHECK(host.probe.index >= 0 && host.probe.rc == 0 && fill.incarnation != 0
+          && fill.incarnation == host.probe.incarnation);
+    // The fill: a transaction of L2's own unit against the 0.5 short.
+    CHECK(near(fill.closed, 0.5) && near(fill.opened, 0.5));
+    CHECK(near(fill.after, 0.5));
+    // The report: that transaction, which opens.
+    CHECK(host.probe.close_only == 0);
+    CHECK(near(host.probe.qty, 1.0));
+}
+
+// mirror_order_type exports a strategy.order row as 3.
+constexpr std::int32_t kOrderRow = 3;
+
+// Shape 3 as worded: the position is short and the script places a long
+// strategy.order WITH ITS OWN QUANTITY (OrderAgainstShort above gives none and
+// places its order while still flat). The order is placed on bar 1, against the
+// short of 1 that bar 0's market entry opened, and is probed on bar 2 while it
+// rests; bar 13's low of 94 fills its limit at 95.
+//   - Outside an OCA cancel group the request is an explicit Transact: the
+//     fill takes no shape decision and the kernel books the units as one
+//     signed transaction, closing the short and opening only what exceeds it.
+//   - In an OCA cancel group (oca_type 1) the request is host-sized and the
+//     fill closes the smaller of its quantity and the short, opening nothing.
+class OwnQuantityOrder final : public pineforge::source::PineStrategyHost {
+public:
+    OwnQuantityOrder(double qty, bool oca_cancel) : qty_(qty), oca_cancel_(oca_cancel) {
+        source::PineStrategyConfig config;
+        config.initial_capital = 1'000'000.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        config.pyramiding = 1;
+        configure_pine_strategy(config);
+        set_syminfo_mintick(0.01);
+    }
+    PendingProbe probe;
+    BookedFill fill;
+    double placed_against = kNaN;  // position when the script places O
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() == 0) strategy_entry("S", false, kNaN, kNaN, 1.0);
+        if (pine_bar_index() == 1) {
+            placed_against = live_position_size();
+            if (oca_cancel_) strategy_order("O", true, qty_, 95.0, kNaN, "G", 1);
+            else strategy_order("O", true, qty_, 95.0);
+        }
+        if (pine_bar_index() == 2) probe = probe_order(*this, "O", kOrderRow, 95.0);
+    }
+
+protected:
+    void on_native_applied_event(const native_order::ExecutionAppliedEvent& event,
+                                 const NativeDecisionContext&) override {
+        if (event.request().label == "O" && fill.incarnation == 0)
+            fill.record(event, live_position_size());
+    }
+
+private:
+    double qty_;
+    bool oca_cancel_;
+};
+
+// Runs the replay and checks what every variant shares: no error, the order
+// was placed against the short of 1, and the probed row is the row that fills,
+// reported in the explicit partition.
+void run_own_quantity_order(OwnQuantityOrder& host, const char* shape) {
+    host.run(kShapeBars, 5);
+    host.probe.print(shape, "O against the short");
+    std::printf("  %s: O's fill closed %.17g, opened %.17g, position after %.17g, error '%s'\n",
+                shape, host.fill.closed, host.fill.opened, host.fill.after,
+                host.last_error().c_str());
+    CHECK(host.last_error().empty());
+    CHECK(near(host.placed_against, -1.0));
+    CHECK(host.probe.index >= 0 && host.probe.rc == 0 && host.fill.incarnation != 0
+          && host.fill.incarnation == host.probe.incarnation);
+    CHECK(host.probe.partition == PF_FILL_QTY_PARTITION_EXPLICIT);
+}
+
+// The issue's shape 3: an own quantity equal to the short. The fill only
+// closes and ends flat; the report must say so, with that quantity.
+void shape_own_quantity_order_reports_its_close() {
+    OwnQuantityOrder host(1.0, false);
+    run_own_quantity_order(host, "own-quantity order");
+    CHECK(near(host.fill.closed, 1.0) && near(host.fill.opened, 0.0));
+    CHECK(near(host.fill.after, 0.0));
+    CHECK(host.probe.close_only == 1);
+    CHECK(near(host.probe.qty, 1.0));
+}
+
+// The other branch of the same transaction: an own quantity of 2 against the
+// short of 1 closes 1 and opens the remaining 1, so it is not close-only and
+// the reported quantity is the whole transaction.
+void shape_own_quantity_order_larger_than_the_short_opens_the_remainder() {
+    OwnQuantityOrder host(2.0, false);
+    run_own_quantity_order(host, "larger own-quantity order");
+    CHECK(near(host.fill.closed, 1.0) && near(host.fill.opened, 1.0));
+    CHECK(near(host.fill.after, 1.0));
+    CHECK(host.probe.close_only == 0);
+    CHECK(near(host.probe.qty, 2.0));
+}
+
+// The OCA cancel-group variant of shape 3: host-sized, it closes only.
+void shape_own_quantity_oca_cancel_order_reports_its_close() {
+    OwnQuantityOrder host(1.0, true);
+    run_own_quantity_order(host, "own-quantity OCA cancel order");
+    CHECK(near(host.fill.closed, 1.0) && near(host.fill.opened, 0.0));
+    CHECK(near(host.fill.after, 0.0));
+    CHECK(host.probe.close_only == 1);
+    CHECK(near(host.probe.qty, 1.0));
+}
+
+// An OCA cancel-group order of 2 against the short of 1 still closes only the
+// short: the reported quantity is the 1 its fill transacts, not the 2 asked.
+void shape_own_quantity_oca_cancel_order_closes_at_most_the_short() {
+    OwnQuantityOrder host(2.0, true);
+    run_own_quantity_order(host, "larger own-quantity OCA cancel order");
+    CHECK(near(host.fill.closed, 1.0) && near(host.fill.opened, 0.0));
+    CHECK(near(host.fill.after, 0.0));
+    CHECK(host.probe.close_only == 1);
+    CHECK(near(host.probe.qty, 1.0));
+}
+
+// The same order behind a same-bar close: the position is short 1 and, on one
+// bar, the script closes the short and then places the long strategy.order of
+// its own quantity 1. The report is read in that callback, while the close is
+// still pending. The close is a market order placed first, so it fills at the
+// next open, ahead of the order; the order then fills from flat and opens a
+// long of 1. The report must say what that fill does: not close-only, 1.
+class OwnQuantityOrderBehindClose final : public pineforge::source::PineStrategyHost {
+public:
+    OwnQuantityOrderBehindClose() {
+        source::PineStrategyConfig config;
+        config.initial_capital = 1'000'000.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        config.pyramiding = 1;
+        configure_pine_strategy(config);
+        set_syminfo_mintick(0.01);
+    }
+    PendingProbe probe;
+    BookedFill fill;
+    double before_close = kNaN;  // position when the script closes it
+    double at_probe = kNaN;      // position when the report is read
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() == 0) strategy_entry("S", false, kNaN, kNaN, 1.0);
+        if (pine_bar_index() == 1) {
+            before_close = live_position_size();
+            strategy_close("S");
+            strategy_order("O", true, 1.0, 95.0);
+            at_probe = live_position_size();
+            probe = probe_order(*this, "O", kOrderRow, 95.0);
+        }
+    }
+
+protected:
+    void on_native_applied_event(const native_order::ExecutionAppliedEvent& event,
+                                 const NativeDecisionContext&) override {
+        if (event.request().label == "O" && fill.incarnation == 0)
+            fill.record(event, live_position_size());
+    }
+};
+
+void shape_own_quantity_order_behind_a_same_bar_close_opens() {
+    OwnQuantityOrderBehindClose host;
+    host.run(kShapeBars, 5);
+    const auto& fill = host.fill;
+    host.probe.print("own-quantity order behind a close", "O before the close fills");
+    std::printf("  own-quantity order behind a close: report close_only=%d expected 0, "
+                "qty=%.17g expected 1; O's fill closed %.17g, opened %.17g, position after "
+                "%.17g, error '%s'\n", host.probe.close_only, host.probe.qty, fill.closed,
+                fill.opened, fill.after, host.last_error().c_str());
+    CHECK(host.last_error().empty());
+    // The shape was built: short 1 when the script closed it, and still short 1
+    // when the report was read, before the close filled.
+    CHECK(near(host.before_close, -1.0) && near(host.at_probe, -1.0));
+    CHECK(host.probe.index >= 0 && host.probe.rc == 0 && fill.incarnation != 0
+          && fill.incarnation == host.probe.incarnation);
+    CHECK(host.probe.partition == PF_FILL_QTY_PARTITION_EXPLICIT);
+    // The fill: the close filled first, so the order opens a long of 1 from flat.
+    CHECK(near(fill.closed, 0.0) && near(fill.opened, 1.0));
+    CHECK(near(fill.after, 1.0));
+    // The report: that fill, which opens.
+    CHECK(host.probe.close_only == 0);
+    CHECK(near(host.probe.qty, 1.0));
+}
+
 }  // namespace
 
 int main() {
@@ -840,6 +1105,13 @@ int main() {
     shape_priced_replacement_of_a_market_entry_closes_only();
     shape_sequential_pair_member_is_not_close_only();
     shape_direction_gated_entry_closes_only();
+    std::printf("-- issue 910's shapes 1 and 3 as worded: the report and the fill agree\n");
+    shape_close_short_then_stop_reports_the_fills_transaction();
+    shape_own_quantity_order_reports_its_close();
+    shape_own_quantity_order_larger_than_the_short_opens_the_remainder();
+    shape_own_quantity_oca_cancel_order_reports_its_close();
+    shape_own_quantity_oca_cancel_order_closes_at_most_the_short();
+    shape_own_quantity_order_behind_a_same_bar_close_opens();
     std::printf("R5 B-ADAPTER fill-quantity probe: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

@@ -343,9 +343,14 @@ account for checks the fill makes at fill time against equity, price and margin
 cases the fill can differ from the report. The report also does not model a
 margin-call surplus, the close quantity a reversal keeps when a margin call was
 booked after the script, a refused signal price, or fills of other orders
-earlier in the same pass. A row whose request names its own quantity, or whose
+earlier in the same pass. An entry that names its own quantity, or a row whose
 request cannot be read (a row held in the source's shadow queue), is reported
-by the prior-cycle rule alone.
+by the prior-cycle rule alone. A `strategy.order` with its own quantity against
+an opposite position reports the quantity its fill transacts, floored to the
+quantity step, and `close_only` 1 exactly when that fill opens nothing (in an
+OCA cancel group, always), unless a close the script placed before it on the
+same bar is still pending: that close fills first, and the report then gives
+the order's quantity as written with `close_only` 0 (1 in an OCA cancel group).
 
 ## Evidence {#live_surface_evidence}
 

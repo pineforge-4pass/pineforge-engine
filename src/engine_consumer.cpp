@@ -1,7 +1,7 @@
 #include "engine_internal.hpp"
 #include "native_execution_consumer.hpp"
 #include "cache_policy_validation.hpp"
-
+#include "timezone.hpp"
 #include <pineforge/execution_consumer.hpp>
 #include <pineforge/native_host.hpp>
 
@@ -177,8 +177,8 @@ const ScratchIoPolicy& BacktestEngine::scratch_io_policy_for_run() const {
 }
 
 void BacktestEngine::run(const Bar* bars, int n) {
-    const WindowCacheScope cache_scope(numeric_window_capacity(
-        cache_policy_config().ta_history_pages, scratch_io_policy_config()));
+    const tz_util::ZoneRestoreScope zone_scope;
+    const WindowCacheScope cache_scope(numeric_window_capacity(cache_policy_config().ta_history_pages, scratch_io_policy_config()));
     execution_consumer().run_simple(*this, bars, n);
 }
 
@@ -188,8 +188,8 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
                          bool bar_magnifier,
                          int magnifier_samples,
                          MagnifierDistribution magnifier_dist) {
-    const WindowCacheScope cache_scope(numeric_window_capacity(
-        cache_policy_config().ta_history_pages, scratch_io_policy_config()));
+    const tz_util::ZoneRestoreScope zone_scope;
+    const WindowCacheScope cache_scope(numeric_window_capacity(cache_policy_config().ta_history_pages, scratch_io_policy_config()));
     execution_consumer().run_tf(*this, input_bars, n_input, input_tf, script_tf,
                                 bar_magnifier, magnifier_samples, magnifier_dist);
 }
@@ -203,8 +203,8 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
                          bool bar_magnifier,
                          int magnifier_samples,
                          MagnifierDistribution magnifier_dist) {
-    const WindowCacheScope cache_scope(numeric_window_capacity(
-        cache_policy_config().ta_history_pages, scratch_io_policy_config()));
+    const tz_util::ZoneRestoreScope zone_scope;
+    const WindowCacheScope cache_scope(numeric_window_capacity(cache_policy_config().ta_history_pages, scratch_io_policy_config()));
     execution_consumer().run_rich(*this, input_bars, n_input, input_tf, script_tf,
                                   inputs, syminfo, overrides, bar_magnifier,
                                   magnifier_samples, magnifier_dist);
@@ -213,39 +213,39 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
 bool BacktestEngine::stream_begin(const Bar* warmup_bars, int n_warmup,
                                   const std::string& input_tf,
                                   const std::string& script_tf) {
-    const WindowCacheScope cache_scope(numeric_window_capacity(
-        cache_policy_config().ta_history_pages, scratch_io_policy_config()));
+    const tz_util::ZoneRestoreScope zone_scope;
+    const WindowCacheScope cache_scope(numeric_window_capacity(cache_policy_config().ta_history_pages, scratch_io_policy_config()));
     return execution_consumer().stream_begin(*this, warmup_bars, n_warmup,
                                              input_tf, script_tf);
 }
 
 bool BacktestEngine::stream_push_bar(const Bar& bar) {
-    const WindowCacheScope cache_scope(numeric_window_capacity(
-        cache_policy_for_run().ta_history_pages, scratch_io_policy_for_run()));
+    const tz_util::ZoneRestoreScope zone_scope;
+    const WindowCacheScope cache_scope(numeric_window_capacity(cache_policy_for_run().ta_history_pages, scratch_io_policy_for_run()));
     return execution_consumer().stream_push_bar(*this, bar);
 }
 
 bool BacktestEngine::stream_push_tick(const TradeTick& tick) {
-    const WindowCacheScope cache_scope(numeric_window_capacity(
-        cache_policy_for_run().ta_history_pages, scratch_io_policy_for_run()));
+    const tz_util::ZoneRestoreScope zone_scope;
+    const WindowCacheScope cache_scope(numeric_window_capacity(cache_policy_for_run().ta_history_pages, scratch_io_policy_for_run()));
     return execution_consumer().stream_push_tick(*this, tick);
 }
 
 bool BacktestEngine::stream_push_ticks(const TradeTick* ticks, int n) {
-    const WindowCacheScope cache_scope(numeric_window_capacity(
-        cache_policy_for_run().ta_history_pages, scratch_io_policy_for_run()));
+    const tz_util::ZoneRestoreScope zone_scope;
+    const WindowCacheScope cache_scope(numeric_window_capacity(cache_policy_for_run().ta_history_pages, scratch_io_policy_for_run()));
     return execution_consumer().stream_push_ticks(*this, ticks, n);
 }
 
 bool BacktestEngine::stream_advance_time(int64_t timestamp_ms) {
-    const WindowCacheScope cache_scope(numeric_window_capacity(
-        cache_policy_for_run().ta_history_pages, scratch_io_policy_for_run()));
+    const tz_util::ZoneRestoreScope zone_scope;
+    const WindowCacheScope cache_scope(numeric_window_capacity(cache_policy_for_run().ta_history_pages, scratch_io_policy_for_run()));
     return execution_consumer().stream_advance_time(*this, timestamp_ms);
 }
 
 bool BacktestEngine::stream_end(bool finalize_partial_input_bar) {
-    const WindowCacheScope cache_scope(numeric_window_capacity(
-        cache_policy_for_run().ta_history_pages, scratch_io_policy_for_run()));
+    const tz_util::ZoneRestoreScope zone_scope;
+    const WindowCacheScope cache_scope(numeric_window_capacity(cache_policy_for_run().ta_history_pages, scratch_io_policy_for_run()));
     return execution_consumer().stream_end(*this, finalize_partial_input_bar);
 }
 

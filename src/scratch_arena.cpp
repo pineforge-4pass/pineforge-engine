@@ -3,7 +3,7 @@
 #endif
 
 #include <pineforge/detail/scratch_arena.hpp>
-
+#include "timezone.hpp"
 #include <algorithm>
 #include <cerrno>
 #include <cstdlib>
@@ -173,7 +173,7 @@ struct ScratchArena::Impl {
         const auto page = static_cast<std::uint64_t>(page_result);
         if (page > kChunkBytes || kChunkBytes % page != 0)
             arena_error(EINVAL, "scratch arena page size", "arena_backing");
-        const char* configured = std::getenv("PF_SCRATCH_WINDOW_BYTES");
+        const char* configured = tz_util::environment_value("PF_SCRATCH_WINDOW_BYTES");
         const auto requested = configured
             ? decimal(configured, "scratch arena window size") : kDefaultWindowBytes;
         const auto cap = requested - requested % page;
@@ -393,13 +393,13 @@ void ScratchArena::attach(int fd, std::uint64_t bytes) {
 }
 
 void ScratchArena::attach_from_environment() {
-    const char* fd = std::getenv("PF_SCRATCH_ARENA_FD");
+    const char* fd = tz_util::environment_value("PF_SCRATCH_ARENA_FD");
     if (!fd) return;
     if (decimal(fd, "scratch arena environment fd") != kInheritedFd)
         arena_error(EINVAL, "scratch arena environment fd", "arena_backing");
-    const auto bytes = decimal(std::getenv("PF_SCRATCH_ARENA_BYTES"),
+    const auto bytes = decimal(tz_util::environment_value("PF_SCRATCH_ARENA_BYTES"),
                                "scratch arena environment bytes");
-    const char* profile = std::getenv("PF_SCRATCH_ARENA_JAILED");
+    const char* profile = tz_util::environment_value("PF_SCRATCH_ARENA_JAILED");
     const bool jailed = profile && std::strcmp(profile, "1") == 0;
     if (profile && !jailed && std::strcmp(profile, "0") != 0)
         arena_error(EINVAL, "scratch arena seals (jailed)", "arena_backing");

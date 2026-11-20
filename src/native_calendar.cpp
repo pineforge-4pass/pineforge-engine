@@ -175,6 +175,10 @@ bool epoch_to_stamp_utc(int64_t ms, CivilStamp& out) {
     return true;
 }
 
+// A zoned conversion below takes the zone's ScopedTimezone for itself. Under a
+// guard its caller already holds for the same zone (session_day_from_open,
+// one per session day) that inner guard finds the zone in force: it takes the
+// recursive environment lock again and neither switches nor restores TZ.
 bool epoch_to_stamp_local(int64_t ms, const std::string& tz, CivilStamp& out) {
     int64_t secs = ms / 1000;
     if (ms < 0 && ms % 1000 != 0) --secs;
@@ -396,6 +400,30 @@ int64_t last_span_end(const std::vector<EpochSpan>& spans, int64_t origin_ms) {
     return last;
 }
 
+// The part of session_day_from_open that asks libc: the cycle's two origins,
+// and each civil span of `civil_union` rewritten in place as the instants it
+// resolves to (a span that does not resolve is left empty). False when the
+// cycle has no positive length.
+bool resolve_session_day_instants(const SessionCalendar& cal, const CivilDate& open_date,
+                                  int64_t& cycle_start, int64_t& cycle_end,
+                                  std::vector<EpochSpan>& civil_union) {
+    const auto start = origin_on(cal, open_date);
+    const auto end = origin_on(cal, add_days(open_date, 1));
+    if (!start || !end || *end <= *start) return false;
+    cycle_start = *start;
+    cycle_end = *end;
+    for (EpochSpan& civ : civil_union) {
+        const auto a = resolve_civil_minutes(cal.timezone(), civ.start_ms);
+        const auto b = resolve_civil_minutes(cal.timezone(), civ.end_ms);
+        if (!a || !b) {
+            civ = EpochSpan{};
+            continue;
+        }
+        civ = EpochSpan{*a, *b};
+    }
+    return true;
+}
+
 std::optional<SessionDay> session_day_from_open(const SessionCalendar& cal,
                                                 const CivilDate& open_date) {
     if (!cal.valid()) return std::nullopt;
@@ -427,15 +455,32 @@ std::optional<SessionDay> session_day_from_open(const SessionCalendar& cal,
         trading = civil_from_days(floor_div(last_cm - 1, 1440));
     }
 
-    auto cycle_start = origin_on(cal, open_date);
-    auto cycle_end = origin_on(cal, add_days(open_date, 1));
-    if (!cycle_start || !cycle_end) return std::nullopt;
-    if (*cycle_end <= *cycle_start) return std::nullopt;
-
+    int64_t cycle_start = 0;
+    int64_t cycle_end = 0;
     std::vector<EpochSpan> resolved;
+    // A zoned calendar holds its zone for the whole day: at most one switch of
+    // the process TZ before the first conversion and one restore after the
+    // last (made by the thread's ZoneRestoreScope where one is open), whatever
+    // the number of conversions between them. A UTC calendar takes no guard.
+    const bool zoned = !is_utc_zone(cal.timezone());
+    bool cycle_found = false;
+    if (zoned) {
+        const tz_util::ScopedTimezone day_zone(cal.timezone());
+        cycle_found = resolve_session_day_instants(cal, open_date, cycle_start, cycle_end,
+                                                   civil_union);
+    }
+    if (!zoned) {
+        cycle_found = resolve_session_day_instants(cal, open_date, cycle_start, cycle_end,
+                                                   civil_union);
+    }
+    if (!cycle_found) return std::nullopt;
     for (const EpochSpan& civ : civil_union) {
-        auto a = resolve_civil_minutes(cal.timezone(), civ.start_ms);
-        auto b = resolve_civil_minutes(cal.timezone(), civ.end_ms);
+        const auto a = civ.end_ms > civ.start_ms
+                           ? std::optional<int64_t>(civ.start_ms)
+                           : std::nullopt;
+        const auto b = civ.end_ms > civ.start_ms
+                           ? std::optional<int64_t>(civ.end_ms)
+                           : std::nullopt;
         if (!a || !b || *b <= *a) continue;
         resolved.push_back(EpochSpan{*a, *b});
     }
@@ -443,8 +488,8 @@ std::optional<SessionDay> session_day_from_open(const SessionCalendar& cal,
 
     SessionDay day;
     day.open_date = open_date;
-    day.origin_ms = *cycle_start;
-    day.next_origin_ms = *cycle_end;
+    day.origin_ms = cycle_start;
+    day.next_origin_ms = cycle_end;
     day.trading_date = trading;
     if (!resolved.empty() && day_allowed(cal, trading)) {
         day.spans = std::move(resolved);
@@ -575,7 +620,7 @@ bool same_calendar_value(const SessionCalendar& a, const SessionCalendar& b) {
 // The set of this calendar value under the zone database root in force, made
 // when the calling thread holds none.
 IntervalDays& interval_days_set(const SessionCalendar& calendar) {
-    const char* const root_text = std::getenv("TZDIR");
+    const char* const root_text = tz_util::environment_value("TZDIR");
     const std::string_view root(root_text != nullptr ? root_text : "");
     for (const std::unique_ptr<IntervalDays>& held : tl_interval_days) {
         if (std::string_view(held->zone_root) == root
@@ -1056,7 +1101,9 @@ std::string tzdir_canonical(TzLookupFailure* failure = nullptr) {
     if (tzdir_realpath_dir("/usr/share/zoneinfo", out, failure)) return out;
     return {};
 #elif defined(__GLIBC__)
-    const char* env = std::getenv("TZDIR");
+    // Looked up under the environment lock: another thread's zone switch or
+    // restore rewrites the environment, and the lookup must not walk it then.
+    const char* env = tz_util::environment_value("TZDIR");
     if (env != nullptr && env[0] != '\0') {
         if (tzdir_realpath_dir(env, out, failure)) return out;
         return {};
@@ -1907,7 +1954,7 @@ void forget_interval_days() noexcept {
 // therefore read when the set is made and not again while it is held. The
 // pointer is good until the calling thread's sets are next released.
 const SessionCalendar* kept_calendar(std::string_view session, std::string_view timezone) {
-    const char* const root_text = std::getenv("TZDIR");
+    const char* const root_text = tz_util::environment_value("TZDIR");
     const std::string_view root(root_text != nullptr ? root_text : "");
     // parse_session keeps the session text as given and names an empty timezone UTC.
     const std::string_view zone = timezone.empty() ? std::string_view("UTC") : timezone;

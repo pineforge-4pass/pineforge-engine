@@ -1386,8 +1386,8 @@ typedef enum pf_fill_qty_partition_e {
  *    - `0` EXPLICIT -- a script-supplied qty: for `strategy.entry` the
  *      lot-floored contracts (`apply_qty_step`) of a fixed qty, or the
  *      explicit percent/cash budget sized at the fill for a per-call
- *      qty_type override; a `strategy.order` explicit qty is dispatched
- *      verbatim (no lot step).
+ *      qty_type override; for a `strategy.order` the qty as written (no lot
+ *      step), or against an opposite position the lot-floored qty its fill books.
  *    - `1` FROZEN_PLACEMENT -- a quantity fixed before the fill, never
  *      re-derived from the fill price: the default percent_of_equity /
  *      cash MARKET (or strategy.order) size frozen at the signal close
@@ -1408,39 +1408,39 @@ typedef enum pf_fill_qty_partition_e {
  *    - `2` DEFAULT_STOP_PLACEMENT -- reserved for ABI compatibility;
  *      no current route in the native engine writes it.
  *    - `3` AT_FILL -- default sizing at the slipped fill.
- *  @p close_only receives 1 when the kernel's close-only predicate fires
- *  -- the fill closes against the live opposite position and that
- *  predicate opens no leg of its own: the order's
- *  `affordability_close_only` (entry leg declined at placement), the
- *  fill's prior-cycle predicate for a priced entry together with the
- *  shapes it modelled from the fill (the same-bar close, sequential-pair,
- *  replacement and direction shapes, the frozen reversal, a host-sized
- *  order; a row still queued is judged on the live side and same-bar close
- *  as of the probe), the
- *  same-cycle frozen explicit-FIXED transaction the close consumes exactly,
- *  a finalized flat MARKET pair against an opposite position, or one of the
- *  two reversal kernels above opening nothing. Where the order was created
- *  FLAT the engine's close-only branch can open a remainder: a
- *  transaction larger than the live position still opens the remainder, so
- *  a consumer compares @p qty with the live position. A replaced
- *  default-percent short is dispatched
- *  with its `frozen_default_qty`:
- *  @p qty is that transaction, @p close_only 0. The probe answers for the
- *  order filling against the CURRENT book and position. The report is made
- *  before the fill and does not account for checks the fill makes at fill
- *  time against equity, price and margin (for example, an entry the account
- *  cannot afford in whole units). In those cases the fill can differ from
- *  the report. Not modelled: the fill-time money guards (whole-lot tie,
- *  low-value or fractional lot), affordability at the fill, the
- *  margin-call surplus, the close quantity a reversal keeps when a margin
- *  call was booked after the script, a refused signal price, an admission
- *  refusal, fills that an earlier order in the same pass would make first,
- *  and a row whose request names its own quantity or cannot be read (an
- *  explicit-quantity row, a row held in the source's shadow queue), which
- *  is judged by the prior-cycle rule alone.
- *  NOT folded into @p qty: the deferred-flip
- *  carry (`tv_carry_qty`, added on a priced entry from FLAT whose
- *  placement side is the opposite of the
+ *  @p close_only receives 1 when the kernel's close-only predicate fires -- the
+ *  fill closes against the live opposite position and that predicate opens no
+ *  leg of its own: the order's `affordability_close_only` (entry leg declined
+ *  at placement), the fill's prior-cycle predicate for a priced entry together
+ *  with the shapes it modelled from the fill (the same-bar close, sequential-pair,
+ *  replacement and direction shapes, the frozen reversal, a host-sized order; a
+ *  row still queued is judged on the live side and same-bar close as of the
+ *  probe), the same-cycle frozen explicit-FIXED transaction the close consumes
+ *  exactly, a finalized flat MARKET pair against an opposite position, or one of
+ *  the two reversal kernels above opening nothing. Where the order was created
+ *  FLAT the engine's close-only branch can open a remainder: a transaction larger
+ *  than the live position still opens the remainder, so a consumer compares
+ *  @p qty with the live position. A replaced default-percent short is dispatched
+ *  with its `frozen_default_qty`: @p qty is that transaction, @p close_only 0.
+ *  For a `strategy.order` with its own quantity against an opposite position,
+ *  @p qty is the quantity its fill transacts and @p close_only is 1 exactly when
+ *  that fill opens nothing (in an OCA cancel group, always), unless a close the
+ *  script placed before it on the same bar is still pending: that close fills
+ *  first, and the report is then the qty as written with @p close_only 0 (1 in
+ *  an OCA cancel group). The probe answers for the order filling against the
+ *  CURRENT book and position. The report is made before the fill and does not
+ *  account for checks the fill makes at fill time against equity, price and
+ *  margin (for example, an entry the account cannot afford in whole units). In
+ *  those cases the fill can differ from the report. Not modelled: the fill-time
+ *  money guards (whole-lot tie, low-value or fractional lot), affordability at
+ *  the fill, the margin-call surplus, the close quantity a reversal keeps when a
+ *  margin call was booked after the script, a refused signal price, an admission
+ *  refusal, fills that an earlier order in the same pass would make first, and an
+ *  entry that names its own quantity or a row whose request cannot be read (one
+ *  held in the source's shadow queue), which is judged by the prior-cycle rule
+ *  alone.
+ *  NOT folded into @p qty: the deferred-flip carry (`tv_carry_qty`, added on
+ *  a priced entry from FLAT whose placement side is the opposite of the
  *  requested side) -- read `tv_carry_qty` / `created_position_side` from
  *  the mirror. Returns 0 on success; 1 -- with @p qty NaN, @p close_only 0,
  *  @p partition -1 (#PF_FILL_QTY_PARTITION_EXIT) -- when the order is an EXIT (its fill quantity is
