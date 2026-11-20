@@ -348,8 +348,8 @@ request cannot be read (a row held in the source's shadow queue), is reported
 by the prior-cycle rule alone. A `strategy.order` with its own quantity against
 an opposite position reports the quantity its fill transacts, floored to the
 quantity step, and `close_only` 1 exactly when that fill opens nothing (in an
-OCA cancel group, always), unless a close the script placed before it on the
-same bar is still pending: that close fills first, and the report then gives
+OCA cancel group, always), unless a close the script placed on the same bar is
+still waiting to fill ahead of it: that close fills first, and the report then gives
 the order's quantity as written with `close_only` 0 (1 in an OCA cancel group).
 
 ## Evidence {#live_surface_evidence}
