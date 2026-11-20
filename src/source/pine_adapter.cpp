@@ -28965,19 +28965,30 @@ int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
         || (queued && owner_->pending_same_bar_close_qty_ > 0.0);
     bool market_trigger = false;
     bool host_resolved = false;
-    const auto read_request = [&](const native_order::Request& request) {
+    // The signed units an explicit Transact request still books: its own, or
+    // what a reduce group has left of them on a live row
+    // (LiveRequest::remaining, the quantity the kernel's candidate transacts).
+    double transaction = kNaN;
+    const auto read_request = [&](const native_order::Request& request,
+                                  const native_order::RemainingUnits* left = nullptr) {
         market_trigger = std::holds_alternative<native_order::Market>(request.trigger);
         host_resolved = std::holds_alternative<native_order::HostSized>(request.intent)
             || std::holds_alternative<native_order::Sized>(request.intent);
+        if (const auto* own = std::get_if<native_order::Transact>(&request.intent)) {
+            const double units = left ? left->q : std::abs(own->signed_units);
+            transaction = own->signed_units < 0.0 ? -units : units;
+        }
     };
     if (!queued) {
         try {
             if (auto* consumer = owner_->bound_consumer()) {
                 if (const auto* live = as_native_consumer(*consumer).request_core().find_live(handle))
-                    read_request(live->request());
+                    read_request(live->request(),
+                                 std::get_if<native_order::RemainingUnits>(&live->remaining));
             }
         } catch (...) {
             host_resolved = false;
+            transaction = kNaN;
         }
     } else {
         const auto queued_request = [&](const auto& rows) {
@@ -29004,10 +29015,12 @@ int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
     try {
         if (!host_resolved) {
             // An explicit intent books its own transaction; the fill takes no
-            // shape decision, so the prior-cycle predicate alone is reported.
+            // shape decision, so the prior-cycle predicate alone is reported
+            // here. An own-quantity strategy.order is answered below.
             fill_close_only = prior_cycle_only();
         } else if (snapshot.family == PineOrderFamily::Order) {
-            // A host-sized strategy.order closes against an opposite position.
+            // A host-sized strategy.order closes against an opposite position;
+            // one with its own quantity is bounded below.
             fill_close_only = opposite;
         } else if (snapshot.family != PineOrderFamily::Entry) {
             fill_close_only = false;
@@ -29030,6 +29043,31 @@ int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
         }
     } catch (...) {
         fill_close_only = prior_cycle_only();
+    }
+    // A strategy.order with its own quantity against an opposite position
+    // reports the kernel's plan for what its fill books (order_action::plan,
+    // the decomposition the settlement checks). An explicit Transact takes no
+    // shape decision at its fill (resolve_source_terms returns before one):
+    // the kernel books the units left on it as one signed transaction, which
+    // closes against the position and opens only what exceeds it. A cancel
+    // group's order is host-sized instead, and its fill closes its executable
+    // quantity, bounded by the position (resolve_source_terms, the Order
+    // rows). A row whose request was not read has no plan and keeps the
+    // answer above. No shape helper is used, so this also follows a fallback.
+    if (opposite && snapshot.family == PineOrderFamily::Order
+        && std::isfinite(snapshot.requested_qty)) {
+        const double executable = std::max(0.0, snapshot.oca_type == 1
+            ? explicit_entry_quantity_floor(std::abs(snapshot.requested_qty),
+                                            owner_->staged_.quantity_grid)
+            : snapshot.requested_qty);
+        const auto booked = host_resolved
+            ? order_action::plan(physical.signed_units, order_action::Reduce{executable})
+            : order_action::plan(physical.signed_units, order_action::Transact{transaction});
+        if (booked) {
+            fill_close_only = booked->open_units() == 0.0;
+            *qty = host_resolved ? booked->close_units() : std::abs(transaction);
+            *partition = 0;
+        }
     }
     *close_only = (snapshot.affordability_close_only || fill_close_only
                    || kernel_close_only) ? 1 : 0;
