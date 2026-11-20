@@ -633,6 +633,13 @@ if(PINEFORGE_BUILD_TESTS)
         target_link_options(test_report_spool_unlink_failure PRIVATE "LINKER:--wrap=open" "LINKER:--wrap=unlink")
         add_test(NAME test_report_spool_unlink_failure COMMAND test_report_spool_unlink_failure)
     endif()
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(test_service_unlink_failure ../tests/test_service_unlink_failure.cpp)
+        target_link_libraries(test_service_unlink_failure PRIVATE pineforge_live_support)
+        target_link_options(test_service_unlink_failure PRIVATE "LINKER:--wrap=unlink")
+        add_test(NAME test_service_unlink_failure COMMAND test_service_unlink_failure)
+    endif()
     add_executable(test_live_report_accumulator
         ${PROJECT_SOURCE_DIR}/tests/test_live_report_accumulator.cpp)
     target_include_directories(test_live_report_accumulator PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
