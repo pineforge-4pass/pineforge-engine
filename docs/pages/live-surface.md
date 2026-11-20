@@ -372,5 +372,5 @@ libraries already built (`SKIP_RUN=1 SKIP_VERIFY=1 JOBS=8
 scripts/run_corpus.sh`); see each script's own `--help` / module docstring
 for flags.
 
-@see @ref streaming for why the live runtime does not use the
-`strategy_stream_*` lifecycle instead of this surface.
+@see @ref streaming for the `strategy_stream_*` lifecycle used by the native
+`pineforge-live` runner.
