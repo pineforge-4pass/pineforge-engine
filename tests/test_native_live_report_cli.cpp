@@ -1485,6 +1485,55 @@ std::size_t occurrences(const std::string& text, const std::string& part) {
     return found;
 }
 
+void window_checkpoint_storage(Fixture& fixture, const char* unstamped_module) {
+    constexpr std::uint64_t count = 1024;
+    const std::string warning = "pineforge-live: warning: --native-event-retention is not applied to this module: "
+        "no current engine layout stamp (strategy_stream_engine_layout_version); "
+        "keeping the whole event record and TEXT checkpoint storage\n";
+    const auto check = [&](bool stamped) {
+        const std::string name = stamped ? "window-stamped" : "window-unstamped";
+        const auto ledger = fixture.temporary.path / (name + ".sqlite");
+        const auto status = fixture.temporary.path / (name + ".status");
+        auto command = fixture.command(ledger, status, "", 0);
+        command.insert(command.end(), {"--native-event-retention", "window", "--checkpoint-interval",
+                                       std::to_string(count), "--ratio-interval", std::to_string(count)});
+        Runner child(std::move(command), fixture.temporary.path / (name + ".stderr"));
+        wait_ready(status, 0, child);
+        std::uint32_t seed = 12345;
+        // Each batch is one ledger input. The stamped module records one
+        // equity point per bar; the opaque module also adds one closed trade.
+        const std::uint64_t bars_per_input = stamped ? 24 : 3;
+        for (std::uint64_t input = 0; input < count; ++input) {
+            std::string batch = "{\"type\":\"batch\",\"events\":[";
+            for (std::uint64_t bar = 1; bar <= bars_per_input; ++bar) {
+                if (bar != 1) batch += ',';
+                batch += seeded_input(input * bars_per_input + bar, seed);
+            }
+            child.send(batch + "]}\n");
+        }
+        check_summary(child.finish(), count, count);
+        auto database = open_database(ledger, SQLITE_OPEN_READONLY);
+        sqlite3_stmt* raw = nullptr;
+        require(sqlite3_prepare_v2(database.get(),
+                    "SELECT typeof(payload), length(CAST(payload AS BLOB)) "
+                    "FROM report_checkpoints WHERE input_cursor=?", -1, &raw, nullptr) == SQLITE_OK,
+                "cannot inspect the stored checkpoint");
+        std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)> query(raw, sqlite3_finalize);
+        require(sqlite3_bind_int64(raw, 1, count) == SQLITE_OK && sqlite3_step(raw) == SQLITE_ROW,
+                "checkpoint at the requested boundary is missing: " + child.errors());
+        require(sqlite3_column_int64(raw, 1) > 1024 * 1024, "checkpoint did not exceed 1 MiB");
+        const std::string storage(reinterpret_cast<const char*>(sqlite3_column_text(raw, 0)));
+        const auto errors = child.errors();
+        require(storage == (stamped ? "blob" : "text") &&
+                    occurrences(errors, "--native-event-retention is not applied") == (stamped ? 0u : 1u) &&
+                    (stamped || occurrences(errors, warning) == 1),
+                name + " checkpoint is " + storage + "; startup messages: " + errors);
+    };
+    check(true);
+    fixture.library = unstamped_module;
+    check(false);
+}
+
 void spool_write_failure_finishes(Fixture& fixture) {
     constexpr std::uint64_t count = 1100;
     const auto base = spool_run(fixture, "spool-unconstrained", count, nullptr);
@@ -1680,9 +1729,17 @@ void options_are_strict(Fixture& fixture) {
 
 int main(int argc, char** argv) {
     try {
-        require(argc == 4, "expected runner, native module and test case");
+        require(argc == 4 || argc == 5, "expected runner, native module and test case");
         std::signal(SIGPIPE, SIG_IGN);
         const std::string test_case = argv[3];
+        if (test_case == "window-checkpoint-storage") {
+            require(argc == 5, "expected an unstamped module for the checkpoint case");
+            Fixture fixture(argv[1], argv[2]);
+            window_checkpoint_storage(fixture, argv[4]);
+            std::cout << "PASS " << test_case << '\n';
+            return 0;
+        }
+        require(argc == 4, "unexpected extra module");
         if (test_case == "module-layout") {
             // Probe in a C++ process so instrumented modules use its runtime.
             std::unique_ptr<void, decltype(&dlclose)> library(

@@ -658,6 +658,11 @@ if(PINEFORGE_BUILD_TESTS)
     add_test(NAME test_native_live_report_event_retention COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> event-retention)
     set_tests_properties(test_native_live_report_event_retention PROPERTIES TIMEOUT 0)
+    add_test(NAME test_native_live_report_window_checkpoint_storage COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> window-checkpoint-storage
+        $<TARGET_FILE:live_contract_native_stub>)
+    set_tests_properties(test_native_live_report_window_checkpoint_storage PROPERTIES TIMEOUT 0)
+    add_dependencies(test_native_live_report_cli live_contract_native_stub)
     # A default run's equity export, pinned to the 1.13.0 build's SHA-256; 77 = not x86-64 Linux.
     add_test(NAME test_native_live_report_default_equity_export COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> default-equity-export)
@@ -734,7 +739,6 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
         COMMAND ${_pf_layout_proof_command} opaque-report)
     set_tests_properties(native_live_engine_layout_e2e native_live_opaque_report_e2e
         PROPERTIES TIMEOUT 0)
-    add_dependencies(test_native_live_report_cli live_contract_native_stub)
     add_test(NAME native_live_old_layout_report_e2e COMMAND ${Python3_EXECUTABLE}
         ${PROJECT_SOURCE_DIR}/tests/native_live_startup_e2e.py $<TARGET_FILE:pineforge-live>
         $<TARGET_FILE:native_live_example> $<TARGET_FILE:native_market_example>

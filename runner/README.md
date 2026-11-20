@@ -110,10 +110,11 @@ modules whose optional `strategy_stream_engine_layout_version()` export matches
 keeps the public-report path: full `strategy_stream_fill_report` snapshots and exact
 ratios at every input, even for K > 1. It adds neither `ratios_as_of_input` nor
 `ratio_context` and emits no terminal interval refresh. The runner prints no
-warning about a missing stamp. A nonzero mismatched stamp is refused during
-module admission, before `strategy_create` or any C++ handle read. Runtime
-contexts require stamp 5; modules declaring a lower stamp must be rebuilt with the
-exact paired engine and its script-run epoch.
+warning about a missing stamp, except when `--native-event-retention` is given
+(see that option). A nonzero mismatched stamp is refused during module
+admission, before `strategy_create` or any C++ handle read. Runtime contexts
+require stamp 5; modules declaring a lower stamp must be rebuilt with the exact
+paired engine and its script-run epoch.
 
 The runner-owned accumulator carries trade-stat folds and the equity series
 needed for exact ratios. For modules with the matching stamp, the report's
@@ -557,9 +558,11 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   until COMMIT either.
 - `--native-event-retention window|commands|full` (with `--native-config`
   only; opt-in) chooses what the stream keeps of the kernel's event record
-  for `native_events()`. Without it the runner keeps the record the
-  configuration declares (the whole record for the v1 configuration), as
-  1.13.0 did, and nothing is counted as dropped. Pass
+  for `native_events()` when the module has the current engine layout stamp.
+  If the stamp is missing or zero, the runner warns once and keeps the whole
+  event record and TEXT checkpoint storage. Without the option the runner
+  keeps the record the configuration declares (the whole record for the v1
+  configuration), as 1.13.0 did, and nothing is counted as dropped. Pass
   `--native-event-retention window` to keep memory bounded: `window` keeps
   the commands a host has not yet acknowledged and no driver point or account
   row, flat in the input count, so a host that polls without acknowledging

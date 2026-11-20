@@ -1152,7 +1152,15 @@ int run(Config c) {
     // overridden and what native_events() returns is the 1.13.0 record. The
     // spec and every hash are unchanged; a module without the layout stamp
     // keeps the whole record.
-    if (c.native.present && c.native_event_retention && strategy.has_current_engine_layout)
+    const bool apply_event_retention = c.native.present && c.native_event_retention &&
+                                       strategy.has_current_engine_layout;
+    const bool window_retention = apply_event_retention &&
+                                  c.native_event_retention == pineforge::NativeEventRetention::Window;
+    if (c.native_event_retention && !strategy.has_current_engine_layout)
+        std::cerr << "pineforge-live: warning: --native-event-retention is not applied to this module: "
+                     "no current engine layout stamp (strategy_stream_engine_layout_version); "
+                     "keeping the whole event record and TEXT checkpoint storage\n";
+    if (apply_event_retention)
         pineforge::keep_live_event_window(*static_cast<pineforge::BacktestEngine*>(strategy.state),
                                           *c.native_event_retention);
     const auto settings_receipt = strategy.effective_settings();
@@ -1226,8 +1234,7 @@ int run(Config c) {
     ledger_options.report_checkpoint_interval = c.checkpoint_interval;
     // Only the opt-in window streams a large checkpoint into a BLOB; every
     // other run stores it as TEXT from one string, as 1.13.0 did.
-    ledger_options.stream_large_checkpoints =
-        c.native_event_retention == pineforge::NativeEventRetention::Window;
+    ledger_options.stream_large_checkpoints = window_retention;
     Ledger ledger(c.ledger, deployment, c.max_ledger_bytes, ledger_options);
     ServiceFile service(c.status_file, c.status_interval * 1000);
     ledger.bind_routing(c.routing.stored_document());
@@ -1278,8 +1285,7 @@ int run(Config c) {
     ReportDeltas report_deltas(true, c.report_jsonl == ReportJsonlMode::DeltaV2, c.chart_timezone,
                                report_scratch);
     std::unique_ptr<pineforge::LiveReportAccumulator> accumulator;
-    if (strategy.has_current_engine_layout &&
-        c.native_event_retention == pineforge::NativeEventRetention::Window) {
+    if (window_retention) {
         if (report_scratch.empty()) {
             std::cerr << "pineforge-live: warning: the live report's equity curve stays in memory: "
                       << "the ledger's directory cannot hold scratch files\n";
