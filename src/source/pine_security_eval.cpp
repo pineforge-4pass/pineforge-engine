@@ -979,6 +979,21 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         return;
     }
 
+    const auto projection_at_input = [&]() -> const HistoricalSecurityProjection* {
+        if (!historical_security_lookahead_projection_active_
+            || pine.historical_projections.empty()) return nullptr;
+        // On a split feed, the first retained child is keyed by its first
+        // auxiliary input, rather than by the chart bar's timestamp.
+        while (pine.historical_projection_cursor + 1 < pine.historical_projections.size()
+               && pine.historical_projections[pine.historical_projection_cursor + 1]
+                      .first_child_ms <= input_bar.timestamp) {
+            ++pine.historical_projection_cursor;
+            pine.historical_projection_dispatched = false;
+        }
+        const auto& projection = pine.historical_projections[pine.historical_projection_cursor];
+        return projection.first_child_ms <= input_bar.timestamp ? &projection : nullptr;
+    };
+
     if (pine_native_fixed_security_clock(state)) {
         const auto& consumer = NativeExecutionConsumer::bound(*this);
         const Bar* calling = nullptr;
@@ -988,51 +1003,9 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         const auto chart = consumer.script_calendar_interval(
             calling ? calling->timestamp : input_bar.timestamp);
         if (!chart) return;
+        const auto previous_chart = pine.native_gap_chart_open;
         pine_begin_native_fixed_chart(state, chart->open_ms);
-        if (pine.lookahead_on) {
-            // Historical publication follows the chart OPEN, even when its
-            // finer inputs have already entered the next requested period.
-            // It must not project that next period back onto this chart.
-            const auto label = state.aggregator.bucket_open_ms(chart->open_ms);
-            const auto native = state.native_bars_by_label.find(label);
-            if (native != state.native_bars_by_label.end()) {
-                ++state.feed_count;
-                if (state.eval_complete_count > 0 && pine.last_published_label == label) return;
-                // Advance the requested expression through every authoritative
-                // period, including a session tail no chart OPEN selected.
-                // Only after the selected period is evaluated can the body
-                // observe the value; its history must include those tails.
-                // Each period reads the feed through its routing index, and
-                // only while the feed list is the one the run was routed on:
-                // the Pine host's feed setter stays usable during a run.
-                for (;;) {
-                    if (native_security_feeds_changed_ || static_cast<std::size_t>(
-                            state.native_feed_index) >= native_security_feeds_.size())
-                        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
-                            "native security feeds changed during the run");
-                    const auto& bars = native_security_feeds_[
-                        static_cast<std::size_t>(state.native_feed_index)].bars;
-                    const auto next = state.fixed_clock.cursor_ms
-                        ? std::upper_bound(bars.begin(), bars.end(), *state.fixed_clock.cursor_ms,
-                            [](std::int64_t stamp, const Bar& bar) { return stamp < bar.timestamp; })
-                        : std::lower_bound(bars.begin(), bars.end(), label,
-                            [](const Bar& bar, std::int64_t stamp) { return bar.timestamp < stamp; });
-                    if (next == bars.end() || next->timestamp > label) break;
-                    Bar projected = *next;
-                    substitute_native_security_bar(state, projected);
-                    state.fixed_clock.cursor_ms = projected.timestamp;
-                    if (pine.heikinashi) apply_ha(projected, true);
-                    state.current_bar = projected;
-                    state.current_sub_bar_count = 1;
-                    ++state.eval_complete_count;
-                    pine.last_published_label = projected.timestamp;
-                    dispatch_pine_request(state, projected, true, state.eval_complete_count - 1, true);
-                }
-                return;
-            }
-            // No authoritative row for this period: retain the established
-            // progressive aggregate rather than manufacturing a final price.
-        } else {
+        const auto input_horizon = [&] {
             std::optional<native_calendar::NativeInterval> input;
             if (calling) {
                 const auto calendar = native_calendar::parse_session(syminfo_.session, syminfo_.timezone);
@@ -1042,52 +1015,162 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
             } else {
                 input = consumer.accepted_input_interval(input_bar.timestamp);
             }
-            // Tick observations and out-of-session raw labels supply no
-            // completed input. They cannot advance this confirmed clock.
-            if (!input) return;
+            if (!input) return input_bar.timestamp;
             auto horizon = std::min(std::min(input->last_traded_close_ms, input->next_period_open_ms),
                                     std::min(chart->last_traded_close_ms, chart->next_period_open_ms));
             if (security_next_input_ms_ > input_bar.timestamp)
                 horizon = std::min(horizon, security_next_input_ms_);
-            if (horizon <= input_bar.timestamp) return;
-            if (!state.fixed_clock.cursor_ms) state.fixed_clock.cursor_ms = input_bar.timestamp;
-            pine_drain_native_fixed_security(state, std::min(input_bar.timestamp, horizon));
-            state.aggregator.observe_fixed(state.fixed_clock, input_bar);
+            return horizon;
+        };
+        if (pine.lookahead_on) {
+            // The chart open selects the value. Finer inputs can already
+            // belong to a later request; retain those observations for that
+            // period without publishing them on this chart.
+            const auto label = state.aggregator.bucket_open_ms(chart->open_ms);
+            const auto input_label = state.aggregator.bucket_open_ms(input_bar.timestamp);
+            auto& clock = state.fixed_clock;
             ++state.feed_count;
-            // Now observed, this input and the accepted one after it (the
-            // next primary bar, or the next auxiliary bar across chart bars;
-            // 0 at the feed's end) say whether it was its session-day's last:
-            // the early-close context of the bucket it leaves open.
-            pine_drain_native_fixed_security(
-                state, horizon, input_bar.timestamp, security_next_input_ms_);
+            bool delivered_earlier_period = false;
+            const auto evaluate = [&](Bar bar, std::int64_t period, bool complete) {
+                const auto slot = state.eval_complete_count;
+                const bool rewrite = state.eval_partial_count > 0 && state.ta_bar_index == slot
+                    && state.aggregator.bucket_open_ms(state.current_bar.timestamp) == period;
+                if (pine.heikinashi) apply_ha(bar, complete);
+                state.current_bar = bar;
+                state.current_sub_bar_count = rewrite ? 2 : 1;
+                if (complete) {
+                    ++state.eval_complete_count;
+                    clock.cursor_ms = period;
+                    pine.last_published_label = period;
+                } else {
+                    ++state.eval_partial_count;
+                }
+                dispatch_pine_request(state, bar, complete, slot, complete);
+                delivered_earlier_period = period < label;
+            };
+            const auto publish_native_through = [&](std::int64_t through) {
+                // Retain requested-history order even for a native session
+                // tail that no chart open selected.
+                if (clock.cursor_ms && *clock.cursor_ms >= through) return;
+                const auto first = std::min(through,
+                    state.aggregator.bucket_open_ms(previous_chart.value_or(chart->open_ms)));
+                // Each evaluation can call the feed setter. Recheck the
+                // routing before acquiring the next row from the feed.
+                for (;;) {
+                    if (native_security_feeds_changed_ || static_cast<std::size_t>(
+                            state.native_feed_index) >= native_security_feeds_.size())
+                        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                            "native security feeds changed during the run");
+                    const auto& bars = native_security_feeds_[
+                        static_cast<std::size_t>(state.native_feed_index)].bars;
+                    const auto next = clock.cursor_ms
+                        ? std::upper_bound(bars.begin(), bars.end(), *clock.cursor_ms,
+                            [](std::int64_t stamp, const Bar& bar) { return stamp < bar.timestamp; })
+                        : std::lower_bound(bars.begin(), bars.end(), first,
+                            [](const Bar& bar, std::int64_t stamp) { return bar.timestamp < stamp; });
+                    if (next == bars.end() || next->timestamp > through) break;
+                    Bar projected = *next;
+                    substitute_native_security_bar(state, projected);
+                    const auto period = projected.timestamp;
+                    evaluate(projected, period, true);
+                    if (period == through) break;
+                }
+            };
+
+            // Here cursor_ms is the last completed delivery. The pending
+            // aggregate has a separate identity: the period of its first
+            // contributing input, and exists only when it has observations.
+            const auto observed_label = [&] {
+                return state.aggregator.bucket_open_ms(clock.observed.timestamp);
+            };
+            const auto clear_observations = [&] {
+                clock.observed = Bar{};
+                clock.observed_count = 0;
+            };
+
+            // A historical projection is itself a deliberate aggregate of
+            // chart inputs. It can fill the selected period even when the
+            // finer feed has no observations there.
+            const auto* projection = state.native_bars_by_label.count(label) == 0
+                ? projection_at_input() : nullptr;
+            if (projection && state.aggregator.bucket_open_ms(projection->bar.timestamp) != label)
+                projection = nullptr;
+            if (clock.observed_count > 0 && observed_label() < input_label) {
+                const auto ended = observed_label();
+                if (ended <= label && (!projection || ended != label)
+                    && (!clock.cursor_ms || *clock.cursor_ms < ended)) {
+                    publish_native_through(ended);
+                    Bar fallback = clock.observed;
+                    fallback.timestamp = ended;
+                    ++diag_native_security_misses_;
+                    evaluate(fallback, ended, true);
+                }
+                clear_observations();
+            }
+
+            const bool needs_observation = (!clock.cursor_ms || *clock.cursor_ms < input_label)
+                && (!projection || input_label != label)
+                && state.native_bars_by_label.count(input_label) == 0;
+            const auto horizon = needs_observation ? input_horizon() : input_bar.timestamp;
+            if (horizon > input_bar.timestamp) {
+                FixedPeriodClock pending{clock.observed_count > 0
+                    ? clock.observed.timestamp : input_bar.timestamp,
+                    clock.observed, clock.observed_count};
+                state.aggregator.observe_fixed(pending, input_bar);
+                clock.observed = pending.observed;
+                clock.observed_count = pending.observed_count;
+            }
+            publish_native_through(label);
+            if (projection) {
+                if (clock.observed_count > 0 && observed_label() == label) clear_observations();
+                if (!pine.historical_projection_dispatched) {
+                    pine.historical_projection_dispatched = true;
+                    if (!clock.cursor_ms || *clock.cursor_ms < label) {
+                        if (projection->is_complete) ++diag_native_security_misses_;
+                        evaluate(projection->bar, label, projection->is_complete);
+                    }
+                }
+            } else if (clock.observed_count > 0 && observed_label() == label
+                       && (!clock.cursor_ms || *clock.cursor_ms < label)) {
+                FixedPeriodClock pending{clock.observed.timestamp, clock.observed,
+                                         clock.observed_count};
+                const auto completed = state.aggregator.next_fixed_completion(
+                    pending, horizon, input_bar.timestamp, security_next_input_ms_);
+                if (completed && completed->sub_bar_count > 0 && completed->bar.timestamp == label) {
+                    clear_observations();
+                    ++diag_native_security_misses_;
+                    evaluate(completed->bar, label, true);
+                } else {
+                    Bar fallback = clock.observed;
+                    fallback.timestamp = label;
+                    evaluate(fallback, label, false);
+                }
+            } else if (delivered_earlier_period && pine.gaps_on) {
+                // Earlier completions advance requested history, but they
+                // do not fill a gap in the chart's selected period.
+                clear_security(state.sec_id);
+            }
             return;
         }
+        // A tick or an out-of-session input supplies no confirmed horizon.
+        const auto horizon = input_horizon();
+        if (horizon <= input_bar.timestamp) return;
+        if (!state.fixed_clock.cursor_ms) state.fixed_clock.cursor_ms = input_bar.timestamp;
+        pine_drain_native_fixed_security(state, input_bar.timestamp);
+        state.aggregator.observe_fixed(state.fixed_clock, input_bar);
+        ++state.feed_count;
+        // This input and its accepted successor say whether it was its
+        // session-day's last: the early-close context of the bucket it leaves open.
+        pine_drain_native_fixed_security(
+            state, horizon, input_bar.timestamp, security_next_input_ms_);
+        return;
     }
 
     if (historical_security_lookahead_projection_active_
             && !pine.historical_projections.empty()) {
-        // Keyed by the input's instant, not by a feed-call index: on the
-        // split-feed path this evaluator is fed the finer auxiliary slice
-        // (hundreds of inputs per chart bar), and the projection of a bucket
-        // is dispatched on the first input at or after its first retained
-        // child (that child's own first auxiliary bar) -- exactly the chart
-        // bar TradingView's lookahead_on leaks the bucket's FINAL values
-        // from. On the single-feed path the first input at or after the
-        // child's timestamp is that child itself, as the index cut was.
-        const int64_t input_ms = input_bar.timestamp;
-        while (pine.historical_projection_cursor + 1
-                    < pine.historical_projections.size()
-                && pine.historical_projections[
-                       pine.historical_projection_cursor + 1]
-                       .first_child_ms <= input_ms) {
-            ++pine.historical_projection_cursor;
-            pine.historical_projection_dispatched = false;
-        }
-        const auto& projection = pine.historical_projections[
-            pine.historical_projection_cursor];
+        const auto* projection = projection_at_input();
         state.feed_count++;
-        if (pine.historical_projection_dispatched
-                || input_ms < projection.first_child_ms) {
+        if (!projection || pine.historical_projection_dispatched) {
             // gaps_off holds the first-child projection unchanged until the
             // next HTF bucket. No evaluator call means TA/security histories
             // also advance exactly once per projected bucket.
@@ -1095,7 +1178,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         }
         pine.historical_projection_dispatched = true;
 
-        Bar projected_bar = projection.bar;
+        Bar projected_bar = projection->bar;
         // A projected bucket is the exchange's bar wherever a native feed
         // serves this timeframe -- complete or not. TradingView's
         // lookahead_on leaks the period's FINAL values from its first chart
@@ -1106,25 +1189,25 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         // with no native bar keeps the available aggregate, uncounted as a
         // miss.
         substitute_native_security_bar(state, projected_bar,
-                                       /*count_miss=*/projection.is_complete);
+                                       /*count_miss=*/projection->is_complete);
         if (pine.heikinashi) {
-            apply_ha(projected_bar, projection.is_complete);
+            apply_ha(projected_bar, projection->is_complete);
         }
         state.current_bar = projected_bar;
         // The projected HTF bucket is introduced on its first chart child, so
         // generated security series must allocate a fresh history/TA slot even
         // though projected_bar itself already contains every available child.
         state.current_sub_bar_count = 1;
-        if (projection.is_complete) {
+        if (projection->is_complete) {
             state.eval_complete_count++;
         } else {
             state.eval_partial_count++;
         }
         dispatch_pine_request(
-            state, projected_bar, projection.is_complete,
-            projection.is_complete ? state.eval_complete_count - 1
-                                   : state.eval_complete_count,
-            projection.is_complete);
+            state, projected_bar, projection->is_complete,
+            projection->is_complete ? state.eval_complete_count - 1
+                                    : state.eval_complete_count,
+            projection->is_complete);
         return;
     }
 
