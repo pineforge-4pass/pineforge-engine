@@ -28273,41 +28273,41 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 const auto family = bracket_families_.find(family_key);
                 return family != bracket_families_.end() && family->second.filled_on(add);
             };
-            // One shape keeps the cover although the add has orders of its own:
-            // a stop fill, where the quantity-named exit orders the entry id
-            // still has at that same stop would close everything the position
-            // holds at this point anyway. The cover then closes the units
-            // those orders would close, on the same bar and at the same
-            // price; only the rows differ (one row for the add's whole lot,
-            // where the orders make one row each). That is the engine's
-            // long-standing outcome there and no capture is of this shape.
-            // Not where the script runs again after every fill: its calls
-            // there can replace those orders before they fill.
-            const double held_now = std::abs(detail::run_position(require_host()).signed_units);
-            double same_stop_units = 0.0;
-            if (placement_snapshot->family == PineOrderFamily::ExitStop
-                && !config_.calc_on_order_fills && !coof_recalc_active_
-                && !config_.close_entries_rule_any
-                && placement_snapshot->bracket_origin.incarnation != 0
-                && finite_positive(placement_snapshot->requested_qty)) {
-                for (const auto& handle : live_handles_) {
-                    if (handle == event.handle()) continue;
-                    const auto row = placement_.find(handle.incarnation);
-                    if (row == placement_.end()) continue;
-                    const auto& other = row->second;
-                    if (other.family == PineOrderFamily::ExitStop
-                        && other.from_entry == placement_snapshot->from_entry
-                        && other.bracket_origin.incarnation != 0 && other.per_entry_origin == 0
-                        && !other.immediately && !other.void_issue
-                        && finite_positive(other.requested_qty)
-                        && same_double_bits(other.exit_levels.stop,
-                                            placement_snapshot->exit_levels.stop)) {
-                        same_stop_units += other.requested_qty;
-                    }
-                }
-            }
-            const bool book_closes_position = held_now > internal::kQtyEpsilon
-                && same_stop_units + internal::kQtyEpsilon >= held_now;
+            // A stop fill is no exception to that. Where the quantity-named
+            // exit orders the entry id still has at that same stop would close
+            // everything the position holds at this point, each is still an
+            // order of its own, and an add that has its order is not covered.
+            // The captures (tests/fixtures/global_exit_children, OANDA:XAUUSD
+            // 15, first in first out): an entry of 2 with two qty-1 exits T1
+            // and T2, then a 2-unit market add of the same id with both exits
+            // called again in the same calculation, the add's bar crossing
+            // their stop.
+            //   siblings-02, -10, -11, -12 and -49: T1 had filled 1 at its
+            //     limit before the add. At the stop T2 fills 1 from the older
+            //     lot, then T1 and T2 fill 1 each from the add's lot.
+            //   siblings-03: neither exit had filled. T1 and T2 fill 1 each
+            //     from the older lot, then 1 each from the add's lot.
+            //   siblings-05: the exits are called T2 first. T2 fills the older
+            //     lot's unit, then T2 and T1 fill 1 each from the add's lot.
+            //   siblings-06: the script calls strategy.cancel_all before the
+            //     add and its exits. The rows are those of siblings-02.
+            // Each list has four rows. The older opening's orders fill before
+            // the add's, the add's in the order of their calls, and each
+            // takes its own quantity from the oldest open lot. No code orders
+            // those fills: the older opening's orders are on the book before
+            // the add opens, the add's own are placed when it opens, and the
+            // book fills the orders one point reaches in the order they were
+            // placed (the same four fills as on a later bar,
+            // tests/test_exit_bracket_pending_entry_leg.cpp).
+            // Until this rule such a stop fill kept the cover although the
+            // add had orders of its own. It closed the add's whole lot in one
+            // row under the id of the order that filled first, and the add's
+            // own orders ended with the position: three rows for
+            // TradingView's four at the same bar, price and total quantity,
+            // and in siblings-03 a row from the add's lot while a unit of the
+            // older lot was still open. The any-entry close rule never kept
+            // it (siblings-09 was already TradingView's list), nor a script
+            // that runs again after every fill.
             double units = 0.0;
             // The scratch rows below are written as they always were, every
             // add of the bar and in this order: the scratch store is part of
@@ -28327,7 +28327,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 const native_order::RequestHandle add{adds.context().run, lot.entry_incarnation};
                 adds.push_back(add);
                 selected_adds.put(lot.entry_incarnation, 0);
-                if (!book_closes_position && has_own_order(lot.entry_incarnation)) {
+                if (has_own_order(lot.entry_incarnation)) {
                     every_add_covered = false;
                     continue;
                 }
@@ -28348,8 +28348,8 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                         == detail::ExitScratchIndex::absent);
             }
             if (!covered.empty() && units > 0.0 && drained_older) {
-                const bool own_order = !book_closes_position
-                    && placement_snapshot->bracket_origin.incarnation != 0
+                const bool own_order =
+                    placement_snapshot->bracket_origin.incarnation != 0
                     && !config_.close_entries_rule_any
                     && finite_positive(placement_snapshot->requested_qty);
                 if (own_order) {
