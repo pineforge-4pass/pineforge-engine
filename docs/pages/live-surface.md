@@ -29,7 +29,7 @@ these recomputation controls.
 | Symbol | Purpose | Default | Changes history when off? |
 | --- | --- | --- | --- |
 | `strategy_request_abort` | Set a cooperative abort flag, consumed by the run in progress, checked at the top of the batch run's ordinary and aggregated paths. | N/A — an action, not configuration; cleared at `run()` entry. | No |
-| `strategy_last_run_status` | `0` completed, `1` `NOT_COMPLETED` (aborted), `-1` if `s` is `NULL`. | N/A — read-only. | No |
+| `strategy_last_run_status` | `0` completed, `1` `NOT_COMPLETED` (failed, aborted, or void setter failure), `-1` if `s` is `NULL`. A zero status alone does not establish success; read `strategy_get_last_error` and `strategy_get_last_error_code` after every start. | N/A — read-only. | No |
 | `strategy_set_realtime_tail` | Mark the array's last bar as a still-forming tail (§3.1 semantics below). | Off (`on == 0`). | No |
 | `strategy_set_probe_suppress_tail_logic` | Run only the broker's pre-`on_bar` steps on the last bar and stop (§3.2 below). | Off (`on == 0`). | No |
 | `strategy_set_path_order` | Force the intrabar leg order used by every OHLC-path helper (§3.3 below). | `0` AUTO (the unchanged TV-emulator "nearer-to-open" rule). | No |
@@ -265,8 +265,10 @@ existed.
 by the run in progress and cleared at `run()` entry (a no-op when idle),
 checked at the top of every batch path and stream input loop.
 `strategy_last_run_status(s)` (an append-only status accessor) reports
-whether the most recent run completed
-(`0`) or was aborted (`1`, `NOT_COMPLETED`); `-1` if `s` is `NULL`. The CTest row `test_live_flags_off_identity` pins
+whether the handle is complete (`0`) or `NOT_COMPLETED` (`1`, for a failed
+or aborted run or a void setter failure); `-1` if `s` is `NULL`. A zero
+status alone does not establish success, so read `strategy_get_last_error`
+and `strategy_get_last_error_code` after every start. The CTest row `test_live_flags_off_identity` pins
 **"abort before run → run completes"**: requesting an abort before a run
 starts must not prevent that run from completing, since the flag is
 cleared fresh at `run()` entry.
