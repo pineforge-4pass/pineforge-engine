@@ -49,6 +49,13 @@ struct CivilStamp {
     int second = 0;
 };
 
+// A non-UTC session-day resolution may hold one ScopedTimezone across all of
+// its libc conversions. The pointer is never owned here: the owner keeps the
+// guard alive until every helper using this context has returned.
+struct TimezoneBatch {
+    tz_util::ScopedTimezone* guard = nullptr;
+};
+
 struct EpochSpan {
     int64_t start_ms = 0;
     int64_t end_ms = 0;
@@ -145,6 +152,20 @@ bool is_utc_zone(std::string_view tz) {
     return n.empty() || n == "UTC" || n == "Etc/UTC";
 }
 
+class ScopedTimezoneBatch {
+public:
+    explicit ScopedTimezoneBatch(const std::string& tz) {
+        if (!is_utc_zone(tz)) guard_.emplace(tz);
+        batch_.guard = guard_ ? &*guard_ : nullptr;
+    }
+
+    TimezoneBatch* context() noexcept { return &batch_; }
+
+private:
+    std::optional<tz_util::ScopedTimezone> guard_;
+    TimezoneBatch batch_;
+};
+
 int64_t utc_civil_ms(const CivilStamp& c) {
     const int64_t days = days_from_civil(c.year, static_cast<unsigned>(c.month),
                                          static_cast<unsigned>(c.day));
@@ -175,13 +196,16 @@ bool epoch_to_stamp_utc(int64_t ms, CivilStamp& out) {
     return true;
 }
 
-bool epoch_to_stamp_local(int64_t ms, const std::string& tz, CivilStamp& out) {
+bool epoch_to_stamp_local(int64_t ms, const std::string& tz, CivilStamp& out,
+                          TimezoneBatch* batch = nullptr) {
     int64_t secs = ms / 1000;
     if (ms < 0 && ms % 1000 != 0) --secs;
     const time_t t = static_cast<time_t>(secs);
     if (static_cast<int64_t>(t) != secs) return false;
     std::tm loc{};
-    if (is_utc_zone(tz)) {
+    if (batch != nullptr && batch->guard != nullptr) {
+        if (localtime_r(&t, &loc) == nullptr) return false;
+    } else if (is_utc_zone(tz)) {
         if (gmtime_r(&t, &loc) == nullptr) return false;
     } else {
         tz_util::ScopedTimezone guard(tz);
@@ -201,7 +225,9 @@ bool stamp_matches_tm(const CivilStamp& c, const std::tm& t) {
            && t.tm_hour == c.hour && t.tm_min == c.minute && t.tm_sec == c.second;
 }
 
-std::optional<int64_t> mktime_candidate(const CivilStamp& c, int isdst, const std::string& tz) {
+std::optional<int64_t> mktime_candidate(const CivilStamp& c, int isdst,
+                                         const std::string& tz,
+                                         TimezoneBatch* batch = nullptr) {
     std::tm t{};
     t.tm_year = c.year - 1900;
     t.tm_mon = c.month - 1;
@@ -215,7 +241,8 @@ std::optional<int64_t> mktime_candidate(const CivilStamp& c, int isdst, const st
         // timegm is not required: UTC civil is exact integer math.
         return utc_civil_ms(c);
     }
-    tz_util::ScopedTimezone guard(tz);
+    std::optional<tz_util::ScopedTimezone> guard;
+    if (batch == nullptr || batch->guard == nullptr) guard.emplace(tz);
     sec = mktime(&t);
     if (sec == static_cast<time_t>(-1)) return std::nullopt;
     std::tm back{};
@@ -227,7 +254,8 @@ std::optional<int64_t> mktime_candidate(const CivilStamp& c, int isdst, const st
 }
 
 std::optional<int64_t> first_representable_at_or_after(const CivilStamp& declared,
-                                                       const std::string& tz) {
+                                                       const std::string& tz,
+                                                       TimezoneBatch* batch = nullptr) {
     const int64_t naive = utc_civil_ms(declared);
     int64_t lo = 0;
     int64_t hi = 0;
@@ -236,7 +264,7 @@ std::optional<int64_t> first_representable_at_or_after(const CivilStamp& declare
     }
     auto ge = [&](int64_t ms) -> int {
         CivilStamp got{};
-        if (!epoch_to_stamp_local(ms, tz, got)) return 1;
+        if (!epoch_to_stamp_local(ms, tz, got, batch)) return 1;
         return cmp_stamp(got, declared);
     };
     // Leftmost epoch with local civil >= declared, inside [lo, hi].
@@ -249,12 +277,13 @@ std::optional<int64_t> first_representable_at_or_after(const CivilStamp& declare
             lo = mid + 1;
     }
     CivilStamp got{};
-    if (!epoch_to_stamp_local(lo, tz, got)) return std::nullopt;
+    if (!epoch_to_stamp_local(lo, tz, got, batch)) return std::nullopt;
     if (cmp_stamp(got, declared) < 0) return std::nullopt;
     return lo;
 }
 
-std::optional<CivilResolution> resolve_stamp(const std::string& tz, const CivilStamp& c) {
+std::optional<CivilResolution> resolve_stamp(const std::string& tz, const CivilStamp& c,
+                                             TimezoneBatch* batch = nullptr) {
     if (!valid_civil_date(c.year, c.month, c.day)) return std::nullopt;
     if (c.hour < 0 || c.hour > 23 || c.minute < 0 || c.minute > 59 || c.second < 0
         || c.second > 59) {
@@ -268,7 +297,7 @@ std::optional<CivilResolution> resolve_stamp(const std::string& tz, const CivilS
     }
     std::vector<int64_t> hits;
     for (int isdst : {0, 1}) {
-        if (auto ms = mktime_candidate(c, isdst, tz)) {
+        if (auto ms = mktime_candidate(c, isdst, tz, batch)) {
             if (std::find(hits.begin(), hits.end(), *ms) == hits.end()) hits.push_back(*ms);
         }
     }
@@ -279,10 +308,10 @@ std::optional<CivilResolution> resolve_stamp(const std::string& tz, const CivilS
         std::sort(hits.begin(), hits.end());
         return CivilResolution{hits.front(), CivilKind::Fold};
     }
-    auto gap = first_representable_at_or_after(c, tz);
+    auto gap = first_representable_at_or_after(c, tz, batch);
     if (!gap) return std::nullopt;
     CivilStamp got{};
-    if (!epoch_to_stamp_local(*gap, tz, got)) return std::nullopt;
+    if (!epoch_to_stamp_local(*gap, tz, got, batch)) return std::nullopt;
     if (cmp_stamp(got, c) == 0) {
         // Unique that mktime(0/1) missed; still Unique.
         return CivilResolution{*gap, CivilKind::Unique};
@@ -292,7 +321,8 @@ std::optional<CivilResolution> resolve_stamp(const std::string& tz, const CivilS
 
 std::optional<int64_t> resolve_hms(const std::string& tz,
                                    CivilDate date,
-                                   int minutes_from_midnight) {
+                                   int minutes_from_midnight,
+                                   TimezoneBatch* batch = nullptr) {
     if (minutes_from_midnight >= 1440) {
         date = add_days(date, minutes_from_midnight / 1440);
         minutes_from_midnight %= 1440;
@@ -300,7 +330,8 @@ std::optional<int64_t> resolve_hms(const std::string& tz,
     if (minutes_from_midnight < 0) return std::nullopt;
     auto r = resolve_stamp(tz,
                            CivilStamp{date.year, date.month, date.day, minutes_from_midnight / 60,
-                                      minutes_from_midnight % 60, 0});
+                                      minutes_from_midnight % 60, 0},
+                           batch);
     if (!r) return std::nullopt;
     return r->epoch_ms;
 }
@@ -340,10 +371,11 @@ bool civil_window_instance(const SessionWindow& w,
     return end_cm > start_cm;
 }
 
-std::optional<int64_t> resolve_civil_minutes(const std::string& tz, int64_t cm) {
+std::optional<int64_t> resolve_civil_minutes(const std::string& tz, int64_t cm,
+                                             TimezoneBatch* batch = nullptr) {
     const int64_t days = floor_div(cm, 1440);
     const int minutes = static_cast<int>(cm - days * 1440);
-    return resolve_hms(tz, civil_from_days(days), minutes);
+    return resolve_hms(tz, civil_from_days(days), minutes, batch);
 }
 
 std::vector<EpochSpan> merge_spans(std::vector<EpochSpan> spans) {
@@ -378,8 +410,9 @@ int64_t first_overlap_open(int64_t open_ms,
     return eligible;
 }
 
-std::optional<int64_t> origin_on(const SessionCalendar& cal, const CivilDate& open_date) {
-    return resolve_hms(cal.timezone(), open_date, cal.origin_minutes());
+std::optional<int64_t> origin_on(const SessionCalendar& cal, const CivilDate& open_date,
+                                 TimezoneBatch* batch = nullptr) {
+    return resolve_hms(cal.timezone(), open_date, cal.origin_minutes(), batch);
 }
 
 std::optional<CivilStamp> local_stamp(const std::string& tz, int64_t ms);
@@ -427,15 +460,34 @@ std::optional<SessionDay> session_day_from_open(const SessionCalendar& cal,
         trading = civil_from_days(floor_div(last_cm - 1, 1440));
     }
 
-    auto cycle_start = origin_on(cal, open_date);
-    auto cycle_end = origin_on(cal, add_days(open_date, 1));
-    if (!cycle_start || !cycle_end) return std::nullopt;
-    if (*cycle_end <= *cycle_start) return std::nullopt;
-
+    int64_t cycle_start = 0;
+    int64_t cycle_end = 0;
     std::vector<EpochSpan> resolved;
+    {
+        ScopedTimezoneBatch timezone_batch(cal.timezone());
+        TimezoneBatch* const batch = timezone_batch.context();
+        const auto start = origin_on(cal, open_date, batch);
+        const auto end = origin_on(cal, add_days(open_date, 1), batch);
+        if (!start || !end || *end <= *start) return std::nullopt;
+        cycle_start = *start;
+        cycle_end = *end;
+        for (EpochSpan& civ : civil_union) {
+            auto a = resolve_civil_minutes(cal.timezone(), civ.start_ms, batch);
+            auto b = resolve_civil_minutes(cal.timezone(), civ.end_ms, batch);
+            if (!a || !b) {
+                civ = EpochSpan{};
+                continue;
+            }
+            civ = EpochSpan{*a, *b};
+        }
+    }
     for (const EpochSpan& civ : civil_union) {
-        auto a = resolve_civil_minutes(cal.timezone(), civ.start_ms);
-        auto b = resolve_civil_minutes(cal.timezone(), civ.end_ms);
+        const auto a = civ.end_ms > civ.start_ms
+                           ? std::optional<int64_t>(civ.start_ms)
+                           : std::nullopt;
+        const auto b = civ.end_ms > civ.start_ms
+                           ? std::optional<int64_t>(civ.end_ms)
+                           : std::nullopt;
         if (!a || !b || *b <= *a) continue;
         resolved.push_back(EpochSpan{*a, *b});
     }
@@ -443,8 +495,8 @@ std::optional<SessionDay> session_day_from_open(const SessionCalendar& cal,
 
     SessionDay day;
     day.open_date = open_date;
-    day.origin_ms = *cycle_start;
-    day.next_origin_ms = *cycle_end;
+    day.origin_ms = cycle_start;
+    day.next_origin_ms = cycle_end;
     day.trading_date = trading;
     if (!resolved.empty() && day_allowed(cal, trading)) {
         day.spans = std::move(resolved);

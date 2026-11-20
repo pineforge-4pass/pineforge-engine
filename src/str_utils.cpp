@@ -679,10 +679,10 @@ std::string str_format_time(long long timestamp_ms,
     if (!timezone.empty() && timezone != "UTC" && timezone != "Etc/UTC") {
         tz_util::ScopedTimezone guard(timezone);
         localtime_r(&secs, &tm_buf);
-    } else {
-        gmtime_r(&secs, &tm_buf);
-        tm_buf.tm_gmtoff = 0;
+        return time_format_pattern(format, tm_buf);
     }
+    gmtime_r(&secs, &tm_buf);
+    tm_buf.tm_gmtoff = 0;
     return time_format_pattern(format, tm_buf);
 }
 

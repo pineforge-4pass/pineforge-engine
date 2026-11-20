@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <cctype>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -180,6 +181,9 @@ ScopedTimezone::ScopedTimezone(const std::string& tz)
         return;  // lock stays held until destruction
     }
 
+    if (active_tz != nullptr) {
+        previous_tz_.emplace(active_tz);
+    }
     // POSIX setenv leaves the environment unchanged on failure. In particular,
     // ENOMEM would otherwise make the caller read the previous zone.
     if (::setenv("TZ", target.c_str(), 1) != 0) {
@@ -191,12 +195,29 @@ ScopedTimezone::ScopedTimezone(const std::string& tz)
             RunFailureCode::engine_unclassified_error, {},
             std::system_error(error, std::generic_category(), "setenv(TZ) failed"));
     }
+    changed_ = true;
     ::tzset();
 }
 
-ScopedTimezone::~ScopedTimezone() {
-    // lock_ releases the mutex here. TZ is intentionally NOT restored —
-    // the next scope checks the process environment before skipping setenv/tzset.
+ScopedTimezone::~ScopedTimezone() noexcept {
+    if (!changed_) return;
+
+    const int restored = previous_tz_ ? ::setenv("TZ", previous_tz_->c_str(), 1)
+                                      : ::unsetenv("TZ");
+    if (restored == 0) {
+        ::tzset();
+    } else {
+        const char* zone = previous_tz_ ? previous_tz_->c_str() : "<unset>";
+        ::flockfile(stderr);
+        std::fputs("pineforge: could not restore TZ to '", stderr);
+        for (; *zone; ++zone) {
+            const auto byte = static_cast<unsigned char>(*zone);
+            if (byte >= 32 && byte < 127) std::fputc(byte, stderr);
+            else std::fprintf(stderr, "\\x%02x", static_cast<unsigned>(byte));
+        }
+        std::fputs("'\n", stderr);
+        ::funlockfile(stderr);
+    }
 }
 
 }  // namespace tz_util

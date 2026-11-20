@@ -208,7 +208,12 @@ ceilings:
   # holds at most one position for each leg waiting at that call (:13014), a
   # number the calculation's own strategy.exit calls set and no fixed input
   # bounds; it does not follow the length of the run.
-  unreviewed: 1460
+  # expectation corrected: 1460 -> 1462, because the timezone guard adds two
+  # OPEN entries (1460 + 2): one optional owning string in
+  # src/timezone.hpp:46, constructed from the old environment at
+  # src/timezone.cpp:185. The copy lives for one guard; the prior TZ length
+  # is an environment input, so there is no fixed byte cap.
+  unreviewed: 1462
   pending-flat-memory: 179
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1394,15 +1399,17 @@ entries:
   - {id: "U1507", file: "src/timeframe.cpp", symbol: "starts", ops: ["decl"], container: "std::vector<int>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", note: "CR150-CX 10-26 (c171d), class: scratch of one call. Local in SessionDaySchedule::parse_many (more than 8 windows only): sized by the number of windows in ONE session string, an input value; freed on return; nothing is retained across bars. Bound not argued, so OPEN.", line: 1930}
   - {id: "U1183", file: "src/timeframe.cpp", symbol: "trade_instants", ops: ["decl"], container: "std::vector<int64_t>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1770}
   - {id: "U1184", file: "src/timeframe.cpp", symbol: "tz", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", note: "Partition setup copies the caller timezone into one p.tz string in the explicit-cache overload. Payload length follows the input string, with no proved byte cap; other timezone declarations stay inventoried.", line: 200}
-  - {id: "U1851", file: "src/timezone.cpp", symbol: "<temp:string>", ops: ["temp"], container: "unresolved by the index: std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 83}
-  - {id: "U1186", file: "src/timezone.cpp", symbol: "body", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 71}
-  - {id: "U1852", file: "src/timezone.cpp", symbol: "english", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 83}
-  - {id: "U1188", file: "src/timezone.cpp", symbol: "hour_s", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 72}
-  - {id: "U1189", file: "src/timezone.cpp", symbol: "minute_s", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 73}
-  - {id: "U1190", file: "src/timezone.cpp", symbol: "normalize_timezone_for_posix", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 50}
-  - {id: "U1191", file: "src/timezone.cpp", symbol: "out", ops: ["append", "decl"], container: "std::ostringstream", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 100}
-  - {id: "U1192", file: "src/timezone.cpp", symbol: "target", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 120}
-  - {id: "U1193", file: "src/timezone.hpp", symbol: "normalize_timezone_for_posix", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 10}
+  - {id: "U1851", file: "src/timezone.cpp", symbol: "<temp:string>", ops: ["temp"], container: "unresolved by the index: std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 86}
+  - {id: "U1186", file: "src/timezone.cpp", symbol: "body", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 130}
+  - {id: "U1852", file: "src/timezone.cpp", symbol: "english", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 86}
+  - {id: "U1188", file: "src/timezone.cpp", symbol: "hour_s", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 131}
+  - {id: "U1189", file: "src/timezone.cpp", symbol: "minute_s", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 132}
+  - {id: "U1190", file: "src/timezone.cpp", symbol: "normalize_timezone_for_posix", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 109}
+  - {id: "U1191", file: "src/timezone.cpp", symbol: "out", ops: ["append", "decl"], container: "std::ostringstream", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 159}
+  - {id: "U1192", file: "src/timezone.cpp", symbol: "target", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 177}
+  - {id: "U1900", file: "src/timezone.cpp", symbol: "previous_tz_", ops: ["grow"], container: "std::optional<std::string>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", note: "Copies the old process TZ once when set and different from the target. Logical string length is the old environment value length at this call; no fixed length is asserted. The optional owns the copy only until guard destruction, not across guards.", line: 185}
+  - {id: "U1193", file: "src/timezone.hpp", symbol: "normalize_timezone_for_posix", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 20}
+  - {id: "U1901", file: "src/timezone.hpp", symbol: "previous_tz_", ops: ["decl"], container: "std::optional<std::string>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", note: "One initially disengaged optional per guard; the copy at src/timezone.cpp:185 can own one environment-sized string. No fixed payload cap is proved. The optional is not retained after the guard unlocks and is destroyed.", line: 46}
   - {id: "U1194", file: "tutorial/macd/generated.cpp", symbol: "<temp:string>", ops: ["temp"], container: "unresolved by the index: std::string", owner: "generated-cpp", phase: "unclassified", state: "unreviewed", line: 175}
   - {id: "U1195", file: "tutorial/macd/generated.cpp", symbol: "_pf_derive_country", ops: ["decl"], container: "std::string", owner: "generated-cpp", phase: "unclassified", state: "unreviewed", line: 49}
   - {id: "U1196", file: "tutorial/macd/generated.cpp", symbol: "_pf_derive_main_tickerid", ops: ["decl"], container: "std::string", owner: "generated-cpp", phase: "unclassified", state: "unreviewed", line: 32}

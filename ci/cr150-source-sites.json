@@ -49706,6 +49706,19 @@
   },
   {
    "file": "src/timezone.cpp",
+   "symbol": "previous_tz_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace tz_util #1",
+    "ScopedTimezone :: ScopedTimezone ( const std :: string & tz ) : lock_ ( timezone_mutex ( ) ) #1",
+    "if ( active_tz ! = nullptr ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "previous_tz_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/timezone.cpp",
    "symbol": "normalize_timezone_for_posix",
    "scope": [
     "namespace pineforge #1"
@@ -49723,6 +49736,18 @@
    ],
    "cls": "decl",
    "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/timezone.hpp",
+   "symbol": "previous_tz_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace tz_util #1",
+    "class ScopedTimezone #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: optional < std :: string >",
    "ordinal": 1
   },
   {

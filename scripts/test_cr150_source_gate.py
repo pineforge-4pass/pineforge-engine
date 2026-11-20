@@ -1289,7 +1289,11 @@ class RealTree(unittest.TestCase):
         # group (#810) in src/source/pine_adapter.cpp: the local list of queued
         # exit legs that one full strategy.exit call gives a queue slot (its
         # declaration and its one insertion). It remains OPEN.
-        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3 + 1 + 1 + 1
+        # expectation corrected: 1639 -> 1641, because the timezone guard adds
+        # two OPEN groups, U1900 for the copy from TZ at src/timezone.cpp:185
+        # and U1901 for its owner at src/timezone.hpp:46. The copy follows the
+        # input length; neither group is bounded here.
+        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3 + 1 + 1 + 1 + 2
         self.assertEqual(c['OPEN'], expected_open)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
