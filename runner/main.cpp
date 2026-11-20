@@ -1235,16 +1235,6 @@ int run(Config c) {
     // Only the opt-in window streams a large checkpoint into a BLOB; every
     // other run stores it as TEXT from one string, as 1.13.0 did.
     ledger_options.stream_large_checkpoints = window_retention;
-    Ledger ledger(c.ledger, deployment, c.max_ledger_bytes, ledger_options);
-    ServiceFile service(c.status_file, c.status_interval * 1000);
-    ledger.bind_routing(c.routing.stored_document());
-    // All modes fold the same carried patches. Only cumulative output, legacy
-    // verification and checkpoint equality need to serialize the document.
-    // Rows the report has settled leave the process in every mode: they go to
-    // anonymous spool files beside the ledger. Only the opt-in window also
-    // moves the curve to a scratch file there; a default run keeps it in
-    // memory, as 1.13.0 did.
-    auto report_scratch = fs::weakly_canonical(fs::absolute(c.ledger)).parent_path().string();
     // A spool file that later cannot be created or written (a full disk, a
     // file-size limit) keeps its rows in memory, as 1.13.0 kept them all; the
     // run goes on with the same bytes and says so once.
@@ -1259,14 +1249,24 @@ int run(Config c) {
             throw std::invalid_argument("PINEFORGE_LIVE_TEST_SPOOL_FILE_LIMIT must be a byte count");
         pineforge::live::report_spool_file_limit().store(std::stoull(text));
     }
+    Ledger ledger(c.ledger, deployment, c.max_ledger_bytes, ledger_options);
+    ServiceFile service(c.status_file, c.status_interval * 1000);
+    ledger.bind_routing(c.routing.stored_document());
+    // All modes fold the same carried patches. Only cumulative output, legacy
+    // verification and checkpoint equality need to serialize the document.
+    // Rows the report has settled leave the process in every mode: they go to
+    // anonymous spool files beside the ledger. Only the opt-in window also
+    // moves the curve to a scratch file there; a default run keeps it in
+    // memory, as 1.13.0 did.
+    auto report_scratch = fs::weakly_canonical(fs::absolute(c.ledger)).parent_path().string();
     try {
         ReportSpool probe(report_scratch); // Can this directory hold an unnamed file?
     } catch (const std::exception& error) {
-        std::cerr << "pineforge-live: warning: the live report's settled rows stay in memory: "
-                  << error.what() << '\n';
+        // The recovery fold can already have warned about the same refusal.
+        if (!pineforge::live::report_spool_failure_reported().exchange(true))
+            std::cerr << "pineforge-live: warning: the live report's settled rows stay in memory: "
+                      << error.what() << '\n';
         report_scratch.clear();
-        // This is the one warning; a checkpoint fold there falls back silently.
-        pineforge::live::report_spool_failure_reported().store(true);
     }
 #if defined(__linux__)
     // O_TMPFILE and mkstemp both work on a memory filesystem, so the probe

@@ -688,6 +688,14 @@ if(PINEFORGE_BUILD_TESTS)
             $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> spool-probe-failure)
         set_tests_properties(test_native_live_report_spool_probe_failure PROPERTIES TIMEOUT 0)
     endif()
+    add_executable(test_native_live_recovery_spool_warning
+        ${PROJECT_SOURCE_DIR}/tests/test_native_live_recovery_spool_warning.cpp)
+    target_link_libraries(test_native_live_recovery_spool_warning PRIVATE ${_pf_sqlite_target} Threads::Threads)
+    target_compile_options(test_native_live_recovery_spool_warning PRIVATE -UNDEBUG)
+    add_test(NAME test_native_live_recovery_spool_warning COMMAND test_native_live_recovery_spool_warning
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example>)
+    set_tests_properties(test_native_live_recovery_spool_warning PROPERTIES TIMEOUT 0)
+    add_dependencies(test_native_live_recovery_spool_warning pineforge-live native_live_report_example)
     add_executable(test_native_live_report_curve_staging_work
         ${PROJECT_SOURCE_DIR}/tests/test_native_live_report_curve_staging_work.cpp)
     target_include_directories(test_native_live_report_curve_staging_work PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
