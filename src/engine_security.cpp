@@ -51,6 +51,7 @@ void BacktestEngine::register_security_eval(int sec_id, const std::string& reque
 
     const std::string& evaluator_input_tf =
         security_input_tf_.empty() ? input_tf : security_input_tf_;
+    state.evaluator_input_tf = evaluator_input_tf;
     if (!evaluator_input_tf.empty()) {
         int ratio = tf_ratio(evaluator_input_tf, requested_tf);
         if (ratio > 1) {
@@ -97,6 +98,36 @@ void BacktestEngine::dispatch_security_eval(SecurityEvalState& state,
     evaluate_security(state.sec_id, bar, publish);
 }
 
+
+bool BacktestEngine::native_fixed_security_clock(const SecurityEvalState& state) const {
+    if (state.native_feed_index < 0 || !state.aggregator.supports_fixed_completion())
+        return false;
+    const auto requested = tf_to_seconds(state.tf);
+    const auto input = tf_to_seconds(state.evaluator_input_tf);
+    if (input > 0 && requested % input != 0) return true;
+    // Fine input can divide the request while its observable chart does not.
+    // Ordinary divisible and calendar subscriptions keep their old step.
+    const auto view = NativeExecutionConsumer::bound(*this).view();
+    const auto chart = native_calendar::parse_timeframe(
+        view.spec ? view.spec->script_tf : script_tf_);
+    if (!chart || !chart->is_fixed()) return false;
+    const auto chart_seconds = static_cast<std::int64_t>(chart->count())
+        * (chart->unit() == native_calendar::TimeframeUnit::Minute ? 60 : 1);
+    return chart_seconds > 0 && requested > chart_seconds && requested % chart_seconds != 0;
+}
+
+std::optional<AggregatedBar> BacktestEngine::next_native_fixed_security_bar(
+        SecurityEvalState& state, int64_t horizon_ms,
+        int64_t input_ms, int64_t next_input_ms) {
+    while (auto completed = state.aggregator.next_fixed_completion(
+               state.fixed_clock, horizon_ms, input_ms, next_input_ms)) {
+        const bool native = substitute_native_security_bar(
+            state, completed->bar, completed->sub_bar_count > 0);
+        if (native || completed->sub_bar_count > 0) return completed;
+        // An unobserved period with no authoritative row has no payload.
+    }
+    return std::nullopt;
+}
 
 void BacktestEngine::feed_security_eval_state(
         SecurityEvalState& state, const Bar& input_bar) {

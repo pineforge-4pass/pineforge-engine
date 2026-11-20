@@ -1493,6 +1493,11 @@ protected:
         // span, label and completion bar are the native bar's own.
         int native_feed_index = -1;
         std::unordered_map<int64_t, Bar> native_bars_by_label;
+        // Registration cadence, retained even when the legacy integer ratio
+        // chose passthrough. Native preparation can then distinguish e.g.
+        // a strictly coarser fractional ratio from an equal/finer request.
+        std::string evaluator_input_tf;
+        FixedPeriodClock fixed_clock;
     };
 
     std::vector<SecurityEvalState> security_eval_states_;
@@ -1620,6 +1625,10 @@ protected:
     // contributing bars, independently of the primary input's timeframe.
     void feed_security_eval_state(SecurityEvalState& state, const Bar& input_bar,
                                   const std::string& feed_tf);
+    bool native_fixed_security_clock(const SecurityEvalState&) const;
+    std::optional<AggregatedBar> next_native_fixed_security_bar(
+        SecurityEvalState&, int64_t horizon_ms, int64_t input_ms = 0, int64_t next_input_ms = 0);
+    bool hash_fixed_security_clocks(BrokerStateHashSink&) const noexcept;
 
     // A new batch run (including stream_begin's historical warmup) starts a
     // fresh script lifecycle. Called once after broker reset, before any
@@ -2999,6 +3008,13 @@ protected:
     // A sink hook receives only range-end rows. Re-summing an edited tail
     // starts with this closed-row left fold, never a separately summed tail.
     double report_closed_net_profit() const;
+
+    // Set by every change of native_security_feeds_ (an install, a
+    // replacement or a removal, through set_native_security_feed or the
+    // execution consumer's removal of its own feeds) and cleared when
+    // prepare_native_security_feeds routes a run. A fixed-period read refuses
+    // the run while it is set: the feed list changed after that routing.
+    bool native_security_feeds_changed_ = false;
 
     // Optional sequence retention. The default is
     // the historical owning-array path, byte-identical to before. SummaryOnly

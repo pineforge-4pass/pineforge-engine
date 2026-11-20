@@ -10,10 +10,13 @@
 #include <pineforge/ta.hpp>
 #include <pineforge/ta_compare_band.hpp>
 #include <pineforge/na.hpp>
+#include <pineforge/run_failure.hpp>
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <numeric>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -526,8 +529,43 @@ BBResult BB::compute(double src) {
 
 // --- KC (Keltner Channels) ---
 
+namespace {
+
+int check_channel_arguments(int length, double mult, const char* function) {
+    if (is_na(length)) {
+        throw coded<std::runtime_error>(
+            RunFailureCode::pine_invalid_argument,
+            {{"function", function}, {"argument", "length"}, {"rule", "must_not_be_na"}},
+            (bar_context().installed ? run_error_bar_prefix() : std::string()) +
+                "Invalid value of the 'length' argument in the '" + function +
+                "' function. It must not be na");
+    }
+    if (length <= 0 || mult <= 0.0) {
+        const bool bad_length = length <= 0;
+        const char* argument = bad_length ? "length" : "mult";
+        char value[64];
+        const auto formatted = bad_length
+            ? std::to_chars(value, value + sizeof value, length)
+            : std::to_chars(value, value + sizeof value, mult, std::chars_format::general);
+        throw coded<std::runtime_error>(
+            RunFailureCode::pine_invalid_argument,
+            {{"function", function}, {"argument", argument}, {"rule", "must_be_positive"}},
+            (bar_context().installed ? run_error_bar_prefix() : std::string()) +
+                "Invalid value of the '" + argument + "' argument (" +
+                std::string(value, formatted.ptr) + ") in the '" + function +
+                "' function. It must be > 0.");
+    }
+    return length;
+}
+
+}  // namespace
+
 KC::KC(int length, double mult, bool use_true_range)
-    : mult_(mult), use_true_range_(use_true_range), ema_(length), range_ema_(length) {}
+    : KC(length, mult, use_true_range, "kc") {}
+
+KC::KC(int length, double mult, bool use_true_range, const char* function)
+    : mult_(mult), use_true_range_(use_true_range),
+      ema_(check_channel_arguments(length, mult, function)), range_ema_(length) {}
 
 // The range of the current bar: the true range against the previous bar's
 // close, na when that close is (ta.tr with handle_na = false) -- the current
@@ -618,7 +656,8 @@ double BBW::compute(double src) {
 // KCW (Keltner Channel Width)
 // ============================================================================
 
-KCW::KCW(int length, double mult, bool use_true_range) : kc_(length, mult, use_true_range) {}
+KCW::KCW(int length, double mult, bool use_true_range)
+    : kc_(length, mult, use_true_range, "kcw") {}
 
 double KCW::compute(double src, double high, double low, double close) {
     auto r = kc_.compute(src, high, low, close);

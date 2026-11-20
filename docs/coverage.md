@@ -379,6 +379,11 @@ adds it lowers that call, and earlier releases refuse it. A call inside an `if`
 appends only when it runs, and no TradingView tape pins that shape or the
 replay of the retained values when the length changes.
 
+`PineEma`, `PineTsi`, `PineMacd`, `PineKc` and `PineKcw` in the same header
+(`pineforge/source/pine_ta_length.hpp`) compute the values of `ta::EMA`,
+`ta::TSI`, `ta::MACD`, `ta::KC` and `ta::KCW` and stop the first call with an
+`na`, zero or negative length.
+
 ### Tuple-returning TA classes
 
 

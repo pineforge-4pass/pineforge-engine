@@ -638,6 +638,110 @@ void rerun_reset_and_diagnostic_dedup() {
                                         "USDT", later[0].timestamp)));
 }
 
+// #376: strategy_convert_identity_or_warn returns each bar's own input, and a
+// call site that lacked a rate warns once per run with that call's first time;
+// the same currency, a supplied rate and an unexecuted site stay quiet.
+void convert_identity_or_warn_sites() {
+    using Dir = source::PineStrategyHost::CurrencyConversionDirection;
+    const auto bars = tape(5);
+
+    // EUR account, USDT symbol, no rate: two executed sites, plus a third that
+    // starts executing only on bar 3, plus a site that never executes.
+    ConversionHost host;
+    symbol_currency(host, "USDT");
+    std::vector<double> in_acct, out_acct, in_sym, out_sym, late_out;
+    int late_calls = 0;
+    host.body = [&](ConversionHost& self, const Bar& bar) {
+        const double a = bar.close * 1.5 + self.calculations;  // varies per bar
+        const double s = (bar.high + bar.low) / 2.0 * 1.5;
+        in_acct.push_back(a);
+        out_acct.push_back(self.strategy_convert_identity_or_warn(a, Dir::to_account, 0, "EUR",
+                                                                  bar.timestamp));
+        in_sym.push_back(s);
+        out_sym.push_back(self.strategy_convert_identity_or_warn(s, Dir::to_symbol, 1, "EUR",
+                                                                 bar.timestamp));
+        if (self.calculations >= 3) {
+            ++late_calls;
+            late_out.push_back(self.strategy_convert_identity_or_warn(
+                -a, Dir::to_symbol, 2, "EUR", bar.timestamp));
+        }
+        if (self.calculations < 0) {  // never: site 3 stays unexecuted
+            (void)self.strategy_convert_identity_or_warn(a, Dir::to_account, 3, "EUR",
+                                                         bar.timestamp);
+        }
+    };
+    run(host, bars);
+    CHECK(host.last_run_status() == 0);
+    CHECK(host.last_error().empty());
+    CHECK(host.calculations == 5);
+    CHECK(out_acct.size() == 5 && out_sym.size() == 5);
+    for (std::size_t i = 0; i < out_acct.size(); ++i) {
+        CHECK(out_acct[i] == in_acct[i]);
+        CHECK(out_sym[i] == in_sym[i]);
+    }
+    CHECK(in_acct[0] != in_acct[1]);
+    CHECK(late_calls == 3);
+    for (std::size_t i = 0; i < late_out.size(); ++i) CHECK(late_out[i] == -in_acct[i + 2]);
+    // Sites ordered by identity: -4 (site 2), -3 (site 1), -2 (site 0).
+    CHECK(warnings(host)
+          == "[{\"args\":" + refusal_args("convert_to_symbol", "rate_unavailable", "EUR", "USDT",
+                                          "EUR", "USDT", bars[2].timestamp)
+                 + ",\"code\":\"" + kCode + "\"},{\"args\":"
+                 + refusal_args("convert_to_symbol", "rate_unavailable", "EUR", "USDT", "EUR",
+                                "USDT", bars[0].timestamp)
+                 + ",\"code\":\"" + kCode + "\"},{\"args\":"
+                 + refusal_args("convert_to_account", "rate_unavailable", "USDT", "EUR", "EUR",
+                                "USDT", bars[0].timestamp)
+                 + ",\"code\":\"" + kCode + "\"}]");
+
+    // Rerun with a supplied rate: same returned values, no warning.
+    CHECK(set_scalar(host, 1.25) == 0);
+    in_acct.clear(); out_acct.clear(); in_sym.clear(); out_sym.clear(); late_out.clear();
+    late_calls = 0;
+    host.calculations = 0;
+    run(host, bars);
+    CHECK(host.last_run_status() == 0);
+    for (std::size_t i = 0; i < out_acct.size(); ++i) {
+        CHECK(out_acct[i] == in_acct[i]);
+        CHECK(out_sym[i] == in_sym[i]);
+    }
+    CHECK(warnings(host) == "[]");
+
+    // The same currency on both sides: identity, quiet, no rate needed.
+    ConversionHost same;
+    symbol_currency(same, "USDT");
+    std::vector<double> same_in, same_out;
+    same.body = [&](ConversionHost& self, const Bar& bar) {
+        same_in.push_back(bar.open - 7.25);
+        same_out.push_back(self.strategy_convert_identity_or_warn(
+            same_in.back(), Dir::to_account, 0, "USDT", bar.timestamp));
+        same_out.push_back(self.strategy_convert_identity_or_warn(
+            same_in.back(), Dir::to_symbol, 1, "USDT", bar.timestamp));
+    };
+    run(same, bars);
+    CHECK(same.last_run_status() == 0);
+    CHECK(same_out.size() == 2 * same_in.size());
+    for (std::size_t i = 0; i < same_in.size(); ++i) {
+        CHECK(same_out[2 * i] == same_in[i]);
+        CHECK(same_out[2 * i + 1] == same_in[i]);
+    }
+    CHECK(warnings(same) == "[]");
+
+    // No call at all: quiet.
+    ConversionHost none;
+    symbol_currency(none, "USDT");
+    run(none, bars);
+    CHECK(none.last_run_status() == 0);
+    CHECK(warnings(none) == "[]");
+
+    // The strict builtins are unchanged: still the coded refusal.
+    ConversionHost strict;
+    symbol_currency(strict, "USDT");
+    expect_refusal(
+        outcome_of([&] { return strict.strategy_convert_to_account(1.0, "EUR", kStartMs); }),
+        kToAccountNoRate, "USDT", "EUR", "EUR", "USDT", kStartMs);
+}
+
 struct BarAnswer {
     std::int64_t time_ms;
     bool has_rate;
@@ -884,6 +988,7 @@ int main() {
         {"ignored_invalid_returns_na_with_diagnostic",
          ignored_invalid_returns_na_with_diagnostic},
         {"rerun_reset_and_diagnostic_dedup", rerun_reset_and_diagnostic_dedup},
+        {"convert_identity_or_warn_sites", convert_identity_or_warn_sites},
         {"immutable_native_curve_presence", immutable_native_curve_presence},
         {"stream_warmup_rejection", stream_warmup_rejection},
         {"source_state_hash_presence_coverage", source_state_hash_presence_coverage},

@@ -3698,6 +3698,19 @@
   },
   {
    "file": "include/pineforge/engine.hpp",
+   "symbol": "evaluator_input_tf",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #2",
+    "class BacktestEngine #1",
+    "struct SecurityEvalState #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/engine.hpp",
    "symbol": "security_eval_states_",
    "scope": [
     "namespace pineforge #1",
@@ -12392,6 +12405,73 @@
     "namespace source #1",
     "template < class T > class FirstCallBound #1",
     "public : template < class Make > T & bind ( Make && make ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "object_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_length.hpp",
+   "symbol": "object_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "class PineEma #1",
+    "ta :: EMA & bound ( ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "object_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_length.hpp",
+   "symbol": "object_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "class PineTsi #1",
+    "ta :: TSI & bound ( ) #1",
+    "if ( ! object_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "object_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_length.hpp",
+   "symbol": "object_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "class PineMacd #1",
+    "ta :: MACD & bound ( ) #1",
+    "if ( ! object_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "object_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_length.hpp",
+   "symbol": "object_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "class PineKc #1",
+    "ta :: KC & bound ( ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "object_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_length.hpp",
+   "symbol": "object_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "class PineKcw #1",
+    "ta :: KCW & bound ( ) #1"
    ],
    "cls": "grow",
    "spelling": "object_ . emplace ( . . . )",
@@ -21136,6 +21216,62 @@
     "if ( subscription . auxiliary ) #1",
     "+ + i ) #1",
     "const auto record = [ & subscription ] ( const Bar & bucket , int first_index , std :: int64_t first_ms , NativeCompletionKind completion ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "projected_completion . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "projected_bars",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "bool NativeExecutionConsumer :: project_timeframe_subscription ( BacktestEngine & engine , TimeframeSubscription & subscription , const Bar * input_bars , int n_input ) #1",
+    "if ( engine . native_fixed_security_clock ( state ) ) #1",
+    "const auto record = [ & subscription ] ( const Bar & bucket , int first_index , std :: int64_t first_ms , NativeCompletionKind kind ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "projected_bars . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "projected_first_index",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "bool NativeExecutionConsumer :: project_timeframe_subscription ( BacktestEngine & engine , TimeframeSubscription & subscription , const Bar * input_bars , int n_input ) #1",
+    "if ( engine . native_fixed_security_clock ( state ) ) #1",
+    "const auto record = [ & subscription ] ( const Bar & bucket , int first_index , std :: int64_t first_ms , NativeCompletionKind kind ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "projected_first_index . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "projected_first_ms",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "bool NativeExecutionConsumer :: project_timeframe_subscription ( BacktestEngine & engine , TimeframeSubscription & subscription , const Bar * input_bars , int n_input ) #1",
+    "if ( engine . native_fixed_security_clock ( state ) ) #1",
+    "const auto record = [ & subscription ] ( const Bar & bucket , int first_index , std :: int64_t first_ms , NativeCompletionKind kind ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "projected_first_ms . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "projected_completion",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "bool NativeExecutionConsumer :: project_timeframe_subscription ( BacktestEngine & engine , TimeframeSubscription & subscription , const Bar * input_bars , int n_input ) #1",
+    "if ( engine . native_fixed_security_clock ( state ) ) #1",
+    "const auto record = [ & subscription ] ( const Bar & bucket , int first_index , std :: int64_t first_ms , NativeCompletionKind kind ) #1"
    ],
    "cls": "grow",
    "spelling": "projected_completion . push_back ( . . . )",
@@ -44636,6 +44772,20 @@
   },
   {
    "file": "src/source/pine_security_eval.cpp",
+   "symbol": "tf",
+   "scope": [
+    "namespace pineforge #1",
+    "void source :: PineStrategyHost :: pine_feed_security_eval_state ( SecurityEvalState & state , const Bar & input_bar , bool calling_bar_complete ) #1",
+    "if ( pine_native_fixed_security_clock ( state ) ) #1",
+    "else #1",
+    "if ( calling ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "tf = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_security_eval.cpp",
    "symbol": "canonical_symbol_timeframe",
    "scope": [
     "namespace pineforge #1",
@@ -46701,7 +46851,7 @@
    "scope": [
     "namespace pineforge #3",
     "struct source :: PineStrategyHost :: CurrencyConversion #1",
-    "void warn ( BacktestEngine & host ) const noexcept #1",
+    "void warn ( BacktestEngine & host , int site_id = kCurrencyRateWarningSite ) const noexcept #1",
     "try #1",
     "if ( value . code = = RunFailureCode :: currency_conversion_rate_unavailable && value . args ) #1"
    ],
@@ -48855,6 +49005,48 @@
    "cls": "grow",
    "spelling": "buffer . push_back ( . . . )",
    "ordinal": 1
+  },
+  {
+   "file": "src/ta_volatility_trend.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "namespace #2",
+    "int check_channel_arguments ( int length , double mult , const char * function ) #1",
+    "if ( is_na ( length ) ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_volatility_trend.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "namespace #2",
+    "int check_channel_arguments ( int length , double mult , const char * function ) #1",
+    "if ( length < = 0 || mult < = 0 . 0 ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_volatility_trend.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "namespace #2",
+    "int check_channel_arguments ( int length , double mult , const char * function ) #1",
+    "if ( length < = 0 || mult < = 0 . 0 ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 2
   },
   {
    "file": "src/ta_volatility_trend.cpp",

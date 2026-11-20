@@ -9463,7 +9463,7 @@ static void check_csurface_create_and_configure_refusals(void) {
 #define PX_MAX_TRADES 8
 #define PX_MAX_POINTS 64
 #define PX_SENTINEL (-777)
-#define PX_NOT_READY_TEXT "native run requires configure_native"
+#define PX_NOT_READY_TEXT "native run requires configure_native before each run"
 #define PX_SPEC_REJECTED_TEXT "native run spec rejected"
 #define PX_KEY_CHANGED_TEXT "native session key cannot change on a reused host"
 #define PX_INTRABAR_TEXT "native intrabar path failed validation"

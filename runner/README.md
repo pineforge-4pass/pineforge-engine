@@ -112,7 +112,7 @@ ratios at every input, even for K > 1. It adds neither `ratios_as_of_input` nor
 `ratio_context` and emits no terminal interval refresh. The runner prints no
 warning about a missing stamp. A nonzero mismatched stamp is refused during
 module admission, before `strategy_create` or any C++ handle read. Runtime
-contexts require stamp 4; modules declaring stamp 3 must be rebuilt with the
+contexts require stamp 5; modules declaring a lower stamp must be rebuilt with the
 exact paired engine and its script-run epoch.
 
 The runner-owned accumulator carries trade-stat folds and the equity series

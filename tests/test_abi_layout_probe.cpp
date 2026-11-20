@@ -78,7 +78,7 @@ static_assert(sizeof(Adapter) == 90760, "PineExecutionAdapter size changed");
 // passing ABI gate.
 static_assert(sizeof(Host) == 109840, "PineStrategyHost size changed; measure and pin the final layout");
 #endif
-static_assert(PF_STREAM_ENGINE_LAYOUT_VERSION == 4u, "runtime contexts require layout stamp 4");
+static_assert(PF_STREAM_ENGINE_LAYOUT_VERSION == 5u, "runtime contexts require layout stamp 5");
 static_assert(!HasRosterRoots<Scratch>::value,
               "RetiredRowScratch::roster_roots must be absent");
 #endif

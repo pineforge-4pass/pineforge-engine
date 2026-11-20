@@ -868,6 +868,11 @@ list(APPEND TEST_SOURCES test_native_sizing_bases)
 # shapes a kernel-sized opening may name.
 list(APPEND TEST_SOURCES test_native_sizing_price_rule)
 
+# Checked EMA-family source adapters (PineEma, PineTsi, PineMacd, PineKc,
+# PineKcw; codegen #291): legacy values for a valid length, the coded
+# invalid-length stop at the first call.
+list(APPEND TEST_SOURCES test_checked_ema_family)
+
 # R5 R2 re-lowering of the Pine adapter's default quantity onto the core's
 # Sized intent: the classification, the neutrality of the re-lowering and the
 # core-plus-override differential.

@@ -1,0 +1,6 @@
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_aggregated_add_exit_leg_birth)
+    pineforge_add_unit_test(test_aggregated_add_exit_leg_birth)
+    list(APPEND TEST_SOURCES test_aggregated_chart_add_exit_differential)
+    pineforge_add_unit_test(test_aggregated_chart_add_exit_differential)
+endif()

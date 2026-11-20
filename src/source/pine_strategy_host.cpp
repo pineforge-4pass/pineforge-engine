@@ -4349,6 +4349,12 @@ constexpr CurrencyRefusal kCurrencyPairUnsupported{
 // refused request and a repeat adds nothing.
 constexpr int kCurrencyRateWarningSite = -1;
 
+// strategy.convert_to_account / convert_to_symbol call sites lowered to
+// strategy_convert_identity_or_warn: site n records under -2 - n, below both
+// request.security sites (>= 0) and request.currency_rate (-1), so each
+// conversion call site warns once per run and never hides another's record.
+constexpr int kConvertIdentityWarningSiteBase = -2;
+
 // A currency code two sides can be compared by: letters and digits, as
 // TradingView spells its codes. An empty code, any other text and Pine's
 // currency.NONE name no currency, so they never prove two sides equal.
@@ -4406,13 +4412,13 @@ struct source::PineStrategyHost::CurrencyConversion {
     // The same code and arguments as a run warning, for the request that was
     // told to answer na instead of stopping. A warning that cannot be
     // recorded marks the run's warnings unavailable: it is never dropped.
-    void warn(BacktestEngine& host) const noexcept {
+    void warn(BacktestEngine& host, int site_id = kCurrencyRateWarningSite) const noexcept {
         try {
             const RunFailureValue value = failure();
             if (value.code == RunFailureCode::currency_conversion_rate_unavailable
                 && value.args) {
                 NativeExecutionConsumer::bound(host).record_live_run_warning(
-                    kCurrencyRateWarningSite, run_failure_code_name(value.code),
+                    site_id, run_failure_code_name(value.code),
                     std::string(*value.args));
                 return;
             }
@@ -4485,6 +4491,31 @@ double source::PineStrategyHost::strategy_convert_to_symbol(
         syminfo_.currency, account_currency, at_ms);
     if (conversion.reason != nullptr) conversion.refuse();
     return conversion.identity ? value : value / conversion.account_per_symbol;
+}
+
+double source::PineStrategyHost::strategy_convert_identity_or_warn(
+        double value, CurrencyConversionDirection direction, int call_site,
+        const std::string& account_currency, std::int64_t at_ms) {
+    // The value comes back as it came in on every path. Only the decision of
+    // the rule above is read, to say whether this executed call lacked a rate.
+    const bool to_account = direction == CurrencyConversionDirection::to_account;
+    const CurrencyConversion conversion =
+        to_account ? currency_conversion("convert_to_account", "strategy.convert_to_account",
+                                         syminfo_.currency, account_currency,
+                                         account_currency, at_ms)
+                   : currency_conversion("convert_to_symbol", "strategy.convert_to_symbol",
+                                         account_currency, syminfo_.currency,
+                                         account_currency, at_ms);
+    if (conversion.reason != nullptr) {
+        // A negative ordinal is not a generated site: it shares site 0's
+        // identity rather than colliding with request.currency_rate's. The
+        // upper clamp keeps -2 - n inside int.
+        const int ordinal = call_site < 0 ? 0
+            : std::min(call_site, std::numeric_limits<int>::max() + kConvertIdentityWarningSiteBase);
+        const int site = kConvertIdentityWarningSiteBase - ordinal;
+        conversion.warn(*this, site);
+    }
+    return value;
 }
 
 double source::PineStrategyHost::request_currency_rate(

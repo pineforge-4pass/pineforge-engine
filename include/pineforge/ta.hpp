@@ -677,6 +677,8 @@ struct KCResult {
 // close is) or, with use_true_range = false, high - low. Omitting the flag is
 // the true range, value for value.
 class KC {
+    friend class KCW;
+
     double mult_;
     bool use_true_range_;
     EMA ema_;
@@ -684,9 +686,11 @@ class KC {
     double prev_close_ = na<double>();
     double saved_prev_close_ = na<double>();
 
+    KC(int length, double mult, bool use_true_range, const char* function);
     double range_of(double high, double low) const;
 
 public:
+    // Refuses invalid lengths and nonpositive multipliers.
     KC(int length, double mult, bool use_true_range = true);
     KCResult compute(double src, double high, double low, double close);
     KCResult recompute(double src, double high, double low, double close);
@@ -1157,6 +1161,7 @@ class KCW {
     KC kc_;
 
 public:
+    // Uses the same argument checks as KC, with its own function name.
     KCW(int length, double mult, bool use_true_range = true);
     double compute(double src, double high, double low, double close);
     double recompute(double src, double high, double low, double close);
