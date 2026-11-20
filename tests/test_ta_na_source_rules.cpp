@@ -254,6 +254,23 @@ static void test_ema_seeding_named_per_instance() {
     CHECK(!ta::ema_na_warmup_flag());                   // left as found
 }
 
+static void test_ema_simple_average_exact_seed() {
+    constexpr double tiny = 1e-16;
+    ta::EMA ema(5, ta::EmaSeeding::SimpleAverage);
+    for (double src : {1e16, 1.0, tiny, -1e16}) {
+        CHECK(is_na(ema.compute(src)));
+    }
+    // The two large values and the two unit values cancel. The small term
+    // is the exact sum before division by the length.
+    CHECK(ema.compute(-1.0) == tiny / 5.0);
+
+    // Retry the seed bar through a missing observation and a different
+    // source. The prefix must survive both replacements.
+    CHECK(is_na(ema.recompute(na<double>())));
+    CHECK(ema.recompute(1.0) == 2.0 / 5.0);
+    CHECK(ema.recompute(-1.0) == tiny / 5.0);
+}
+
 int main() {
     test_ema_warm_na_returns_na_and_resumes();          // R1
     test_sma_seeded_na_returns_held_mean();             // R2
@@ -264,6 +281,7 @@ int main() {
     test_sma_32bar_na_run_holds();                      // G5 (RED on HEAD)
     test_ema_na_warmup_preseed_unaffected();            // G6
     test_ema_seeding_named_per_instance();              // G7
+    test_ema_simple_average_exact_seed();
 
     std::printf("\ntest_ta_na_source_rules: %d passed, %d failed\n",
                 tests_passed, tests_failed);
