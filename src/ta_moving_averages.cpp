@@ -394,6 +394,19 @@ inline double ema_step(double alpha, double src, double previous) {
     return previous + alpha * (src - previous);
 }
 
+double ema_seed_sum(const std::vector<double>& sources, double fallback) {
+    double partials[detail::kWindowSumPartialCapacity];
+    std::size_t parts = 0;
+    const auto partial = [&partials](std::size_t i) -> double& { return partials[i]; };
+    for (double src : sources) {
+        if (!detail::expand_window_sum(src, parts, partial)) return fallback;
+    }
+    const double sum = detail::round_window_sum(parts, partial).sum;
+    // Keep the previous result for nonfinite or overflowing seeds and
+    // normalize an exact zero the same way as fixed SMA.
+    return std::isfinite(sum) ? sum + 0.0 : fallback;
+}
+
 }  // namespace
 
 EMA::EMA(int length)
@@ -417,9 +430,6 @@ double EMA::compute(double src) {
 
 double EMA::compute(double src, bool input_ready) {
     save();
-    if (input_ready && std::isfinite(src) && ready_count_ < length_) {
-        ++ready_count_;
-    }
     // An instance that named no seeding latches the ambient default once, on
     // its first compute(), so a host that raises the default around one
     // evaluation context gets that context's instances SMA-seeded for life
@@ -437,8 +447,14 @@ double EMA::compute(double src, bool input_ready) {
         return na<double>();
     }
 
+    if (na_warmup_ && is_na(output_val) && bar_count < length_) {
+        seed_sources_.push_back(src);
+    }
+    if (input_ready && std::isfinite(src) && ready_count_ < length_) {
+        ++ready_count_;
+    }
     if (na_warmup_) {
-        // EmaSeeding::SimpleAverage: na until `length` finite inputs have
+        // EmaSeeding::SimpleAverage: na until `length` non-na inputs have
         // accumulated since the series start, then seed with their mean, then
         // run the ordinary recursion — the warm-up RMA::compute / SMA already
         // have, so a series truncated at its start reads na for its whole
@@ -449,8 +465,9 @@ double EMA::compute(double src, bool input_ready) {
             if (bar_count < length_) {
                 return na<double>();
             }
-            // bar_count == length_: seed = SMA of the first `length_` values.
-            output_val = sum / static_cast<double>(length_);
+            // At the seed, use the exact sum rounded once, as in fixed SMA.
+            const double seed_sum = seed_sources_.empty() ? sum : ema_seed_sum(seed_sources_, sum);
+            output_val = seed_sum / static_cast<double>(length_);
             return output_val;
         }
         output_val = ema_step(alpha, src, output_val);
@@ -646,12 +663,18 @@ void EMA::save() {
     saved_sum_ = sum;
     saved_bar_count_ = bar_count;
     saved_ready_count_ = ready_count_;
+    // A post-seed snapshot can no longer rewind into the seed window.
+    if (seed_sources_.capacity() != 0 && bar_count >= length_)
+        std::vector<double>().swap(seed_sources_);
 }
 void EMA::restore() {
     output_val = saved_output_val_;
     sum = saved_sum_;
     bar_count = saved_bar_count_;
     ready_count_ = saved_ready_count_;
+    // A warm-up observation can append one source after the saved count.
+    if (seed_sources_.size() > static_cast<std::size_t>(saved_bar_count_))
+        seed_sources_.pop_back();
 }
 double EMA::recompute(double src) {
     return recompute(src, true);

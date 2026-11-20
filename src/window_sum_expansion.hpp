@@ -2,9 +2,17 @@
 
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <utility>
 
 namespace pineforge::detail {
+
+// Nonoverlapping partials have distinct highest set bits. Allow one slot per
+// binary64 bit position, a zero, and room for the next insert.
+inline constexpr std::size_t kWindowSumPartialCapacity =
+    std::numeric_limits<double>::max_exponent -
+    std::numeric_limits<double>::min_exponent +
+    std::numeric_limits<double>::digits + 2;
 
 // Insert a source into an expansion of nonoverlapping doubles, smallest first
 // (Shewchuk's expansion sum, as in math.fsum). Each window supplies its own

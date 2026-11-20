@@ -728,7 +728,7 @@ existing `ta_number` overloads (include/pineforge/source/pine_ta_length.hpp:68)
 for `double`, `int` and `std::int64_t`, so integer `na` sentinels reach the
 adapter as a double NaN.
 
-`compute` (src/source/pine_ta_length.cpp:531) makes one logical update per call,
+`compute` (src/source/pine_ta_length.cpp:528) makes one logical update per call,
 starting at the site's first execution. A non-`na` source appends one retained
 observation; an `na` source contributes no sample. Each call uses its current
 length to select the last N non-`na` observations and returns `na` while fewer
@@ -748,7 +748,7 @@ above 15001 throws the family's `max_bars_back_exceeded` error with
 `pine_runtime_limit`. Invalid calls leave the logical checkpoint unchanged.
 For a valid length, warm-up returns `na` until N non-`na` samples are retained.
 
-`recompute` (src/source/pine_ta_length.cpp:552) replaces the most recent logical
+`recompute` (src/source/pine_ta_length.cpp:549) replaces the most recent logical
 update from its pre-update ring head/count, including the oldest value evicted
 by a full-ring push. Replacing a value with `na` restores that evicted value;
 replacing `na` with a value inserts one observation, evicting the oldest if
