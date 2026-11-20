@@ -1,5 +1,6 @@
 #include "command_scratch_production.hpp"
 #include "command_scratch_cache.hpp"
+#include "timezone.hpp"
 
 #include <pineforge/detail/scratch_file.hpp>
 #include <pineforge/run_failure.hpp>
@@ -93,7 +94,7 @@ thread_local CommandScratchByteCap command_scratch_byte_cap;
 thread_local std::weak_ptr<CommandScratchByteBudget> command_scratch_environment_budget;
 
 std::uint64_t environment_byte_cap() {
-    const char* selected = std::getenv("PINEFORGE_COMMAND_SCRATCH_MAX_BYTES");
+    const char* selected = tz_util::environment_value("PINEFORGE_COMMAND_SCRATCH_MAX_BYTES");
     if (!selected) return 0;
     std::uint64_t bytes = 0;
     for (const char* digit = selected; *digit; ++digit) {
@@ -234,7 +235,7 @@ class CommandScratchFile final : public ScratchBacking {
 public:
     CommandScratchFile(std::size_t size, ScratchIoObserver observer)
         : ScratchBacking(ScratchBackingKind::disk, size, observer) {
-        const char* selected = std::getenv("PINEFORGE_COMMAND_SCRATCH_DIR");
+        const char* selected = tz_util::environment_value("PINEFORGE_COMMAND_SCRATCH_DIR");
         std::string refusal;
         int directory_error = 0;
         std::string path = resolve_scratch_directory(selected ? selected : "", refusal,

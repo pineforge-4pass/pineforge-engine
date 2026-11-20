@@ -683,6 +683,11 @@ std::string str_format_time(long long timestamp_ms,
     }
     gmtime_r(&secs, &tm_buf);
     tm_buf.tm_gmtoff = 0;
+    // strftime may read TZ (libc is allowed to call tzset for it, and "%s"
+    // goes through mktime), so the UTC fields are formatted under the
+    // environment lock too: no TZ switch, and no read while another thread
+    // switches or restores.
+    const tz_util::EnvironmentLock environment;
     return time_format_pattern(format, tm_buf);
 }
 

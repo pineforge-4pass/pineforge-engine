@@ -13,7 +13,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <limits>
-
+#include "timezone.hpp"
 namespace pineforge {
 
 // ─── Auto-detect timeframe from bar timestamps ────────────────────────────────
@@ -1076,7 +1076,7 @@ static long session_period_key(int64_t ms, const std::string& tz,
 // every calendar bucket, and the switch is a process-start setting, so no
 // call re-reads the environment.
 static bool security_trace_enabled() {
-    static const bool enabled = std::getenv("PF_SEC_TRACE") != nullptr;
+    static const bool enabled = tz_util::environment_value("PF_SEC_TRACE") != nullptr;
     return enabled;
 }
 
