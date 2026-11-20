@@ -35,6 +35,15 @@ int main(void) {
     CHECK(v.minor == PINEFORGE_VERSION_MINOR, "version minor mismatch");
     CHECK(v.patch == PINEFORGE_VERSION_PATCH, "version patch mismatch");
     CHECK(v.commit_sha != NULL,               "commit_sha is NULL");
+    if (v.commit_sha != NULL) {
+        if (strcmp(PINEFORGE_GIT_SHA, "unknown") == 0) {
+            CHECK(v.commit_sha[0] == '\0',
+                  "commit_sha must be empty when the Git SHA is unavailable");
+        } else {
+            CHECK(strcmp(v.commit_sha, PINEFORGE_GIT_SHA) == 0,
+                  "commit_sha must match the build's Git SHA");
+        }
+    }
 
     /* ── ABI version ────────────────────────────────────────────── */
     CHECK(pf_abi_version() == PF_ABI_VERSION, "pf_abi_version() != PF_ABI_VERSION");
