@@ -182,10 +182,12 @@ at +0, +5 and +10 minutes with the flag off, and +0 and +5 with it on. The
 bucket opening at +15, which holds only two of its five inputs, appears on
 neither.
 
-`strategy_stream_begin` does not need this flag cleared: it **refuses**
-while either historical override is set, with
-`native stream cannot use historical probe/tail overrides`. A one-bar array
-is all tail, so `run(bars, 1)` under this flag calculates nothing.
+On a Pine handle, both historical overrides must be off before calling
+`strategy_stream_begin`. Clear them with `strategy_set_realtime_tail(s, 0, 0)`
+and `strategy_set_probe_suppress_tail_logic(s, 0)`. If either flag is set,
+stream begin refuses with `native stream cannot use historical probe/tail overrides`.
+
+A one-bar array is all tail, so `run(bars, 1)` under this flag calculates nothing.
 
 Under `process_orders_on_close`, a carried position's margin checkpoints are
 not skipped on the suppressed last bar: the bar-open slice, the kernel's path
