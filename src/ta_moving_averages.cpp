@@ -11,6 +11,7 @@
 #include <pineforge/na.hpp>
 
 #include "runtime_ambient.hpp"
+#include "window_sum_expansion.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -178,20 +179,11 @@ bool KahanWindowSum::add_exact(double v) {
 bool KahanWindowSum::resum() {
     std::size_t parts = 0;
     bool finite = true;
+    const auto partial = [this](std::size_t i) -> double& {
+        return window_[index(i)].addend;
+    };
     for (std::size_t i = 0; i < size_ && finite; ++i) {
-        double x = window_[index(i)].value;
-        std::size_t kept = 0;
-        for (std::size_t j = 0; j < parts; ++j) {
-            double y = window_[index(j)].addend;
-            if (std::fabs(x) < std::fabs(y)) std::swap(x, y);
-            const double high = x + y;
-            const double low = y - (high - x);  // exact: |x| >= |y|
-            if (low != 0.0) window_[index(kept++)].addend = low;
-            x = high;
-        }
-        window_[index(kept++)].addend = x;
-        parts = kept;
-        finite = std::isfinite(x);
+        finite = detail::expand_window_sum(window_[index(i)].value, parts, partial);
     }
     if (!finite) {
         // An infinite source, or a sum beyond the largest double: there is
@@ -204,30 +196,10 @@ bool KahanWindowSum::resum() {
         comp_ = 0.0;
         return false;
     }
-    double high = 0.0;
-    double low = 0.0;
-    std::size_t rest = parts;
-    if (rest > 0) {
-        high = window_[index(--rest)].addend;
-        while (rest > 0) {
-            const double x = high;
-            const double y = window_[index(--rest)].addend;
-            high = x + y;
-            low = y - (high - x);
-            if (low != 0.0) break;
-        }
-        // Exactly halfway between two doubles, the partial sums still below
-        // decide the direction (round half to even otherwise).
-        if (rest > 0 && ((low < 0.0 && window_[index(rest - 1)].addend < 0.0)
-                         || (low > 0.0 && window_[index(rest - 1)].addend > 0.0))) {
-            const double twice = low * 2.0;
-            const double up = high + twice;
-            if (twice == up - high) high = up;
-        }
-    }
-    sum_ = high;
-    comp_ = low;
-    return rest == 0;
+    const auto rounded = detail::round_window_sum(parts, partial);
+    sum_ = rounded.sum;
+    comp_ = rounded.remainder;
+    return rounded.fits_pair;
 }
 
 // The source takes the front slot of the ring (its evicted predecessor has

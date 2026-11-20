@@ -9,6 +9,8 @@
 #include <pineforge/na.hpp>
 #include <pineforge/run_failure.hpp>
 
+#include "window_sum_expansion.hpp"
+
 #include <algorithm>
 #include <climits>
 #include <cmath>
@@ -487,11 +489,34 @@ void SeriesSma::ensure_capacity() {
 double SeriesSma::mean(std::size_t length) const {
     if (length > count_) return na<double>();
 
+    // Nonoverlapping partials have distinct highest set bits. Allow one
+    // slot per binary64 bit position, a zero, and room for the next insert.
+    using Limits = std::numeric_limits<double>;
+    double partials[Limits::max_exponent - Limits::min_exponent + Limits::digits + 2];
+    std::size_t parts = 0;
+    const auto partial = [&partials](std::size_t i) -> double& { return partials[i]; };
+    const auto first = (head_ + kCapacity - length) % kCapacity;
+    const auto source = [this, first](std::size_t i) {
+        return history_.read((first + i) % kCapacity);
+    };
+    std::size_t i = 0;
+    for (; i != length; ++i) {
+        const double value = source(i);
+        if (is_na(value)) return na<double>();
+        if (!::pineforge::detail::expand_window_sum(value, parts, partial)) break;
+    }
+    if (i == length) {
+        const double sum = ::pineforge::detail::round_window_sum(parts, partial).sum;
+        // The fixed SMA starts its sum at positive zero.
+        return (sum + 0.0) / static_cast<double>(length);
+    }
+
+    // Preserve the previous series result for nonfinite sources or an
+    // intermediate overflow, outside the qualified window arithmetic.
     double sum = 0.0;
     double correction = 0.0;
-    const auto first = (head_ + kCapacity - length) % kCapacity;
     for (std::size_t i = 0; i != length; ++i) {
-        const double value = history_.read((first + i) % kCapacity);
+        const double value = source(i);
         if (is_na(value)) return na<double>();
         const double next = sum + value;
         if (std::fabs(sum) >= std::fabs(value))
