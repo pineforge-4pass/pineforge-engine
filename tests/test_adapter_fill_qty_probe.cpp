@@ -40,9 +40,10 @@
  *
  * Section 6 replays issue 910's shapes 1 and 3 as the issue words them -- a
  * stop entry placed behind a same-bar close of a SHORT, and a strategy.order
- * with its OWN quantity placed against a short, alone and in an OCA cancel
- * group -- and compares the report's close_only and quantity with the units
- * the fill of the same row closes and opens and the position it leaves.
+ * with its OWN quantity placed against a short, alone, in an OCA cancel group
+ * and behind a same-bar close -- and compares the report's close_only and
+ * quantity with the units the fill of the same row closes and opens and the
+ * position it leaves.
  */
 
 #include <algorithm>
@@ -1017,6 +1018,70 @@ void shape_own_quantity_oca_cancel_order_closes_at_most_the_short() {
     CHECK(near(host.probe.qty, 1.0));
 }
 
+// The same order behind a same-bar close: the position is short 1 and, on one
+// bar, the script closes the short and then places the long strategy.order of
+// its own quantity 1. The report is read in that callback, while the close is
+// still pending. The close is a market order placed first, so it fills at the
+// next open, ahead of the order; the order then fills from flat and opens a
+// long of 1. The report must say what that fill does: not close-only, 1.
+class OwnQuantityOrderBehindClose final : public pineforge::source::PineStrategyHost {
+public:
+    OwnQuantityOrderBehindClose() {
+        source::PineStrategyConfig config;
+        config.initial_capital = 1'000'000.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        config.pyramiding = 1;
+        configure_pine_strategy(config);
+        set_syminfo_mintick(0.01);
+    }
+    PendingProbe probe;
+    BookedFill fill;
+    double before_close = kNaN;  // position when the script closes it
+    double at_probe = kNaN;      // position when the report is read
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() == 0) strategy_entry("S", false, kNaN, kNaN, 1.0);
+        if (pine_bar_index() == 1) {
+            before_close = live_position_size();
+            strategy_close("S");
+            strategy_order("O", true, 1.0, 95.0);
+            at_probe = live_position_size();
+            probe = probe_order(*this, "O", kOrderRow, 95.0);
+        }
+    }
+
+protected:
+    void on_native_applied_event(const native_order::ExecutionAppliedEvent& event,
+                                 const NativeDecisionContext&) override {
+        if (event.request().label == "O" && fill.incarnation == 0)
+            fill.record(event, live_position_size());
+    }
+};
+
+void shape_own_quantity_order_behind_a_same_bar_close_opens() {
+    OwnQuantityOrderBehindClose host;
+    host.run(kShapeBars, 5);
+    const auto& fill = host.fill;
+    host.probe.print("own-quantity order behind a close", "O before the close fills");
+    std::printf("  own-quantity order behind a close: report close_only=%d expected 0, "
+                "qty=%.17g expected 1; O's fill closed %.17g, opened %.17g, position after "
+                "%.17g, error '%s'\n", host.probe.close_only, host.probe.qty, fill.closed,
+                fill.opened, fill.after, host.last_error().c_str());
+    CHECK(host.last_error().empty());
+    // The shape was built: short 1 when the script closed it, and still short 1
+    // when the report was read, before the close filled.
+    CHECK(near(host.before_close, -1.0) && near(host.at_probe, -1.0));
+    CHECK(host.probe.index >= 0 && host.probe.rc == 0 && fill.incarnation != 0
+          && fill.incarnation == host.probe.incarnation);
+    CHECK(host.probe.partition == PF_FILL_QTY_PARTITION_EXPLICIT);
+    // The fill: the close filled first, so the order opens a long of 1 from flat.
+    CHECK(near(fill.closed, 0.0) && near(fill.opened, 1.0));
+    CHECK(near(fill.after, 1.0));
+    // The report: that fill, which opens.
+    CHECK(host.probe.close_only == 0);
+    CHECK(near(host.probe.qty, 1.0));
+}
+
 }  // namespace
 
 int main() {
@@ -1046,6 +1111,7 @@ int main() {
     shape_own_quantity_order_larger_than_the_short_opens_the_remainder();
     shape_own_quantity_oca_cancel_order_reports_its_close();
     shape_own_quantity_oca_cancel_order_closes_at_most_the_short();
+    shape_own_quantity_order_behind_a_same_bar_close_opens();
     std::printf("R5 B-ADAPTER fill-quantity probe: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
