@@ -1277,7 +1277,9 @@ class RealTree(unittest.TestCase):
         # unreviewed groups in src/live_report.cpp: the points a whole-report
         # read puts back in front of the engine's curve, the curve scratch
         # writer's allocation and its append. All remain OPEN.
-        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3
+        # KC and KCW constructor refusals add one OPEN group (U1930).
+        # The checked adapters use the existing OPEN group U0439.
+        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3 + 1
         self.assertEqual(c['OPEN'], expected_open)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])

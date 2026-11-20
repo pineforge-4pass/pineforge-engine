@@ -12399,6 +12399,73 @@
   },
   {
    "file": "include/pineforge/source/pine_ta_length.hpp",
+   "symbol": "object_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "class PineEma #1",
+    "ta :: EMA & bound ( ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "object_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_length.hpp",
+   "symbol": "object_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "class PineTsi #1",
+    "ta :: TSI & bound ( ) #1",
+    "if ( ! object_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "object_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_length.hpp",
+   "symbol": "object_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "class PineMacd #1",
+    "ta :: MACD & bound ( ) #1",
+    "if ( ! object_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "object_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_length.hpp",
+   "symbol": "object_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "class PineKc #1",
+    "ta :: KC & bound ( ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "object_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_length.hpp",
+   "symbol": "object_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "class PineKcw #1",
+    "ta :: KCW & bound ( ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "object_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_length.hpp",
    "symbol": "history_",
    "scope": [
     "namespace pineforge #1",
@@ -48855,6 +48922,48 @@
    "cls": "grow",
    "spelling": "buffer . push_back ( . . . )",
    "ordinal": 1
+  },
+  {
+   "file": "src/ta_volatility_trend.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "namespace #2",
+    "int check_channel_arguments ( int length , double mult , const char * function ) #1",
+    "if ( is_na ( length ) ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_volatility_trend.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "namespace #2",
+    "int check_channel_arguments ( int length , double mult , const char * function ) #1",
+    "if ( length < = 0 || mult < = 0 . 0 ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_volatility_trend.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "namespace #2",
+    "int check_channel_arguments ( int length , double mult , const char * function ) #1",
+    "if ( length < = 0 || mult < = 0 . 0 ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 2
   },
   {
    "file": "src/ta_volatility_trend.cpp",

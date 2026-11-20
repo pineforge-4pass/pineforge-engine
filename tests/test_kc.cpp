@@ -1,7 +1,10 @@
 #include <pineforge/ta.hpp>
+#include <pineforge/run_failure.hpp>
 
 #include <cmath>
 #include <cstdio>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 using namespace pineforge;
@@ -41,6 +44,44 @@ static double true_range_with_prev_close(double high, double low, double prev_cl
     if (is_na(prev_close)) return na<double>();
     return std::max(high - low,
                     std::max(std::abs(high - prev_close), std::abs(low - prev_close)));
+}
+
+template <class Channel>
+static void expect_constructor_refusal(int length, double mult, const char* function,
+                                       const char* argument, const char* rule,
+                                       const char* detail, const char* prefix) {
+    bool refused = false;
+    try {
+        (void)Channel(length, mult);
+    } catch (const std::runtime_error& error) {
+        refused = true;
+        const auto* info = dynamic_cast<const RunFailureInfo*>(&error);
+        CHECK(info && info->run_failure_code() == RunFailureCode::pine_invalid_argument,
+              "channel constructor must carry the invalid argument code");
+        const std::string args = std::string("{\"argument\":\"") + argument
+            + "\",\"function\":\"" + function + "\",\"rule\":\"" + rule + "\"}";
+        CHECK(info && info->run_failure().args && *info->run_failure().args == args,
+              "channel constructor must identify the refused argument");
+        CHECK(error.what() == std::string(prefix) + "Invalid value of the '" + argument
+              + "' argument" + detail, "channel constructor refusal text");
+    }
+    CHECK(refused, "invalid channel constructor arguments must be refused");
+}
+
+template <class Channel>
+static void test_constructor_validation(const char* function) {
+    const std::string stop = std::string(") in the '") + function + "' function. It must be > 0.";
+    expect_constructor_refusal<Channel>(0, 0.75, function, "length", "must_be_positive",
+                                        (" (0" + stop).c_str(), "");
+    expect_constructor_refusal<Channel>(-2, 1.5, function, "length", "must_be_positive",
+                                        (" (-2" + stop).c_str(), "");
+    expect_constructor_refusal<Channel>(na<int>(), 2.5, function, "length", "must_not_be_na",
+        (std::string(" in the '") + function + "' function. It must not be na").c_str(), "");
+    ta::BarContextScope context(7, 9000);
+    expect_constructor_refusal<Channel>(3, -0.0, function, "mult", "must_be_positive",
+                                        (" (-0" + stop).c_str(), "Error on bar 7: ");
+    expect_constructor_refusal<Channel>(3, -0.25, function, "mult", "must_be_positive",
+                                        (" (-0.25" + stop).c_str(), "Error on bar 7: ");
 }
 
 static void test_kc_uses_ema_of_true_range() {
@@ -125,6 +166,8 @@ static void test_kc_recompute_matches_fresh_compute() {
 }
 
 int main() {
+    test_constructor_validation<ta::KC>("kc");
+    test_constructor_validation<ta::KCW>("kcw");
     test_kc_uses_ema_of_true_range();
     test_kc_recompute_matches_fresh_compute();
 
