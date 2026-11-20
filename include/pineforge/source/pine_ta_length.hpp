@@ -44,6 +44,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -70,6 +71,19 @@ inline double ta_number(int value) {
 }
 inline double ta_number(std::int64_t value) {
     return is_na(value) ? na<double>() : static_cast<double>(value);
+}
+
+// A length argument of the checked adapters below as a double: ta_number for
+// int, int64 and double, the only types whose integer na the adapters know.
+// A length of another integer or floating type, including long long where
+// std::int64_t is long (and the reverse), fails to compile by design; the
+// codegen's own tests show which types generated code passes.
+template <class T>
+double ta_length_number(T value) {
+    static_assert(std::is_same<T, int>::value || std::is_same<T, std::int64_t>::value ||
+                      std::is_same<T, double>::value,
+                  "a TA length is an int, an int64_t or a double");
+    return ta_number(value);
 }
 
 // A fixed-length TA object built on the first execution of its call site
@@ -99,6 +113,159 @@ public:
     template <class Make, class... Args>
     decltype(auto) recompute(Make&& make, Args&&... args) {
         return bind(std::forward<Make>(make)).recompute(std::forward<Args>(args)...);
+    }
+};
+
+// Checked EMA-family adapters: ta.ema, ta.tsi, ta.macd, ta.kc and ta.kcw with
+// the length check of simple_ta_length. The constructor stores the length
+// arguments and never throws, so an invalid length cannot stop a run before
+// its first bar. The first compute() or recompute() checks every length
+// argument with TradingView's function and argument names, in the
+// signature's order (which of two invalid lengths TradingView reports first
+// is not pinned: the signature's order is an assumption), and then builds the
+// fixed-length class of <pineforge/ta.hpp> from the checked lengths. A failed
+// check builds nothing, so the next call checks again. After a passed check
+// every call delegates to that class, so the values for a valid length are
+// the class's own. The ambient ta::ema_na_warmup_flag() is neither read nor
+// changed here: the built class reads it as it always does. A length argument
+// is taken as an int, int64 or double (ta_number keeps an integer na as na);
+// the function names are written without "ta.", as simple_ta_length's other
+// callers write them ("supertrend", "sma"). A length that simple_ta_length
+// limits to INT_MAX (a larger double or int64 value) is passed on as it is,
+// as for every other call of this header; the fixed-length class's own
+// arithmetic on an extreme length (for ta::EMA, 2.0 / (length + 1) is
+// computed in int) is outside these adapters.
+// Covered: the length constructor (explicit only for PineEma, as for the
+// classes), compute, recompute and observe_owned_storage: the paired codegen
+// maps ta.ema, ta.tsi, ta.macd, ta.kc and ta.kcw to these types and its shims
+// call only those members. Not forwarded: the EmaSeeding constructor,
+// input_ready overloads, ready(), save(), restore().
+class PineEma {
+    double length_;
+    std::optional<ta::EMA> object_;
+
+    ta::EMA& bound() {
+        if (!object_) object_.emplace(simple_ta_length(length_, "ema", "length"));
+        return *object_;
+    }
+
+public:
+    // Arithmetic lengths only, so the copy constructor is never shadowed.
+    template <class Length,
+              class = std::enable_if_t<std::is_arithmetic<Length>::value>>
+    explicit PineEma(Length length) : length_(ta_length_number(length)) {}
+    double compute(double src) { return bound().compute(src); }
+    double recompute(double src) { return bound().recompute(src); }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        ::pineforge::observe_owned_storage(out, object_);
+    }
+};
+
+class PineTsi {
+    double short_length_;
+    double long_length_;
+    std::optional<ta::TSI> object_;
+
+    ta::TSI& bound() {
+        if (!object_) {
+            const int short_length = simple_ta_length(short_length_, "tsi", "short_length");
+            const int long_length = simple_ta_length(long_length_, "tsi", "long_length");
+            object_.emplace(short_length, long_length);
+        }
+        return *object_;
+    }
+
+public:
+    template <class Short, class Long>
+    PineTsi(Short short_length, Long long_length)
+        : short_length_(ta_length_number(short_length)),
+          long_length_(ta_length_number(long_length)) {}
+    double compute(double src) { return bound().compute(src); }
+    double recompute(double src) { return bound().recompute(src); }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        ::pineforge::observe_owned_storage(out, object_);
+    }
+};
+
+class PineMacd {
+    double fastlen_;
+    double slowlen_;
+    double siglen_;
+    std::optional<ta::MACD> object_;
+
+    ta::MACD& bound() {
+        if (!object_) {
+            const int fastlen = simple_ta_length(fastlen_, "macd", "fastlen");
+            const int slowlen = simple_ta_length(slowlen_, "macd", "slowlen");
+            const int siglen = simple_ta_length(siglen_, "macd", "siglen");
+            object_.emplace(fastlen, slowlen, siglen);
+        }
+        return *object_;
+    }
+
+public:
+    template <class Fast, class Slow, class Signal>
+    PineMacd(Fast fastlen, Slow slowlen, Signal siglen)
+        : fastlen_(ta_length_number(fastlen)), slowlen_(ta_length_number(slowlen)),
+          siglen_(ta_length_number(siglen)) {}
+    ta::MACDResult compute(double src) { return bound().compute(src); }
+    ta::MACDResult recompute(double src) { return bound().recompute(src); }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        ::pineforge::observe_owned_storage(out, object_);
+    }
+};
+
+class PineKc {
+    double length_;
+    double mult_;
+    bool use_true_range_;
+    std::optional<ta::KC> object_;
+
+    ta::KC& bound() {
+        if (!object_)
+            object_.emplace(simple_ta_length(length_, "kc", "length"), mult_, use_true_range_);
+        return *object_;
+    }
+
+public:
+    template <class Length>
+    PineKc(Length length, double mult, bool use_true_range = true)
+        : length_(ta_length_number(length)), mult_(mult), use_true_range_(use_true_range) {}
+    ta::KCResult compute(double src, double high, double low, double close) {
+        return bound().compute(src, high, low, close);
+    }
+    ta::KCResult recompute(double src, double high, double low, double close) {
+        return bound().recompute(src, high, low, close);
+    }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        ::pineforge::observe_owned_storage(out, object_);
+    }
+};
+
+class PineKcw {
+    double length_;
+    double mult_;
+    bool use_true_range_;
+    std::optional<ta::KCW> object_;
+
+    ta::KCW& bound() {
+        if (!object_)
+            object_.emplace(simple_ta_length(length_, "kcw", "length"), mult_, use_true_range_);
+        return *object_;
+    }
+
+public:
+    template <class Length>
+    PineKcw(Length length, double mult, bool use_true_range = true)
+        : length_(ta_length_number(length)), mult_(mult), use_true_range_(use_true_range) {}
+    double compute(double src, double high, double low, double close) {
+        return bound().compute(src, high, low, close);
+    }
+    double recompute(double src, double high, double low, double close) {
+        return bound().recompute(src, high, low, close);
+    }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        ::pineforge::observe_owned_storage(out, object_);
     }
 };
 

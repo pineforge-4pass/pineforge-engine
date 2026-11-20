@@ -686,9 +686,28 @@ you want to keep into. Pine's `input.*` becomes ordinary constructor
 parameters: `set_input` engine.hpp:2316 exists but its getters are protected,
 and a native host takes its parameters in C++.
 
+### Checked EMA-family source adapters {#pine_to_native_checked_ema_family}
+
+`pineforge::source::PineEma` (include/pineforge/source/pine_ta_length.hpp:143),
+`PineTsi` (include/pineforge/source/pine_ta_length.hpp:164), `PineMacd`
+(include/pineforge/source/pine_ta_length.hpp:190), `PineKc`
+(include/pineforge/source/pine_ta_length.hpp:218) and `PineKcw`
+(include/pineforge/source/pine_ta_length.hpp:245) take the arguments of
+`ta::EMA`, `ta::TSI`, `ta::MACD`, `ta::KC` and `ta::KCW` and expose the same
+`compute` and `recompute` with the same results. The constructor only stores
+the lengths and never stops a run. The first `compute` or `recompute` checks
+every length through `simple_ta_length`
+(include/pineforge/source/pine_ta_length.hpp:62) in the signature's order, so
+an `na`, zero or negative length stops that call with `pine_invalid_argument`
+and TradingView's text; a failed check builds nothing and the next call checks
+again. A passed check builds the `ta::` class, and every call then delegates to
+it, so a valid length gives that class's values. The adapters do not touch
+`ta::ema_na_warmup_flag()`. Codegen's paired change for #291 emits them for
+`ta.ema`, `ta.tsi`, `ta.macd`, `ta.kc` and `ta.kcw`.
+
 ### Series-length SMA source adapter {#pine_to_native_series_sma}
 
-`pineforge::source::SeriesSma` (include/pineforge/source/pine_ta_length.hpp:352)
+`pineforge::source::SeriesSma` (include/pineforge/source/pine_ta_length.hpp:519)
 provides an SMA with a length supplied on every evaluation in the Pine source
 adapter. Keep one instance per written call site and evaluation context. Its
 public signatures are below. This is an unwired library primitive: codegen
@@ -705,7 +724,7 @@ void observe_owned_storage(OwnedStorage& out) const noexcept;
 Both numeric arguments and the result are `double`. The default constructor
 captures the current window cache policy; the explicit constructor takes
 `pineforge::WindowCacheCapacity`. Transport numeric Pine operands through the
-existing `ta_number` overloads (include/pineforge/source/pine_ta_length.hpp:67)
+existing `ta_number` overloads (include/pineforge/source/pine_ta_length.hpp:68)
 for `double`, `int` and `std::int64_t`, so integer `na` sentinels reach the
 adapter as a double NaN.
 
@@ -768,7 +787,7 @@ rollback checkpoint; it does not grow with bars or requested N.
 `ensure_capacity` (src/source/pine_ta_length.cpp:479) lazily creates that fixed
 ring. The cache policy controls residency, and selecting a window takes O(N)
 work. `observe_owned_storage`
-(include/pineforge/source/pine_ta_length.hpp:358) reports owned history through
+(include/pineforge/source/pine_ta_length.hpp:525) reports owned history through
 the existing storage accounting. Allocation, capacity and scratch I/O failures
 propagate. Ring/checkpoint fields are published after required writes
 succeed, including restoration of an evicted oldest value.
