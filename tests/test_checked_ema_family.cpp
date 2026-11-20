@@ -108,7 +108,8 @@ std::string na_text(const char* function, const char* argument) {
 
 // Runs `call` and requires the coded invalid-argument stop with `text`.
 template <class Call>
-void stops(Call call, const std::string& text) {
+void stops(Call call, const std::string& text,
+           const char* prefix = "Error before the first bar: ") {
     bool caught = false;
     try {
         call();
@@ -116,7 +117,7 @@ void stops(Call call, const std::string& text) {
         const auto* failure = dynamic_cast<const RunFailureInfo*>(&error);
         assert(failure != nullptr);
         assert(failure->run_failure_code() == RunFailureCode::pine_invalid_argument);
-        assert(std::string(error.what()) == text);
+        assert(std::string(error.what()) == prefix + text);
         caught = true;
     }
     assert(caught);
@@ -153,10 +154,10 @@ void refusal(Make make, Run run, const char* function, const char* argument) {
                 stops([&] { run(adapter, again); }, text);
                 stops([&] { run(adapter, false); }, text);  // fails again
                 {
-                    // Under an evaluation context the bar prefix is added.
+                    // An evaluation context names the bar in the prefix.
                     ta::BarContextScope scope(17, 0);
                     auto fresh = form == 0 ? make(row.value) : make(na<int>());
-                    stops([&] { run(fresh, again); }, "Error on bar 17: " + text);
+                    stops([&] { run(fresh, again); }, text, "Error on bar 17: ");
                 }
             }
         }
