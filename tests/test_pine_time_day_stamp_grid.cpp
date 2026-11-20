@@ -266,7 +266,10 @@ void test_nyse_intraday_grid_anchored_at_0930() {
     CHECK_EQ_MS(T(utc_ms(2025, 4, 1, 17, 15), "240", NY, RTH), tue_open);
     CHECK_EQ_MS(T(utc_ms(2025, 4, 1, 17, 30), "240", NY, RTH), utc_ms(2025, 4, 1, 17, 30));
     CHECK_EQ_MS(hhmm_ny(T(utc_ms(2025, 4, 1, 19, 45), "240", NY, RTH)), 1330);
-    CHECK_EQ_MS(TC(utc_ms(2025, 4, 1, 17, 30), "240", NY, RTH), utc_ms(2025, 4, 1, 21, 30));
+    // The 13:30 bucket would end at 17:30, past the 16:00 close. time_close is
+    // capped at the session-day end: a TradingView time_close("240") probe on
+    // NYSE:F reads 16:00 (never 17:30) for it.
+    CHECK_EQ_MS(TC(utc_ms(2025, 4, 1, 17, 30), "240", NY, RTH), utc_ms(2025, 4, 1, 20, 0));
     // With a session argument opening at 09:30 the grid is the same.
     CHECK_EQ_MS(pine_time(utc_ms(2025, 4, 1, 14, 0), "60", RTH, "", CHART, NY, RTH), tue_open);
     CHECK_EQ_MS(pine_time(utc_ms(2025, 4, 1, 14, 0), "60", RTH, NY, CHART, NY, RTH), tue_open);
@@ -310,7 +313,9 @@ void test_nse_intraday_grid_anchored_at_0915_ist() {
     CHECK_EQ_MS(T(utc_ms(2025, 4, 1, 7, 30), "240", IST, NSE), tue_open);
     CHECK_EQ_MS(T(utc_ms(2025, 4, 1, 7, 45), "240", IST, NSE), utc_ms(2025, 4, 1, 7, 45));
     CHECK_EQ_MS(hhmm_ny(T(utc_ms(2025, 4, 1, 9, 45), "240", IST, NSE)), 345);
-    CHECK_EQ_MS(TC(utc_ms(2025, 4, 1, 7, 45), "240", IST, NSE), utc_ms(2025, 4, 1, 11, 45));
+    // Likewise the 13:15 bucket would end at 17:15, past the 15:30 close; the
+    // same probe on NSE:NIFTY reads 15:30 (never 17:15).
+    CHECK_EQ_MS(TC(utc_ms(2025, 4, 1, 7, 45), "240", IST, NSE), utc_ms(2025, 4, 1, 10, 0));
     // The epoch grid (04:00Z / 08:00Z) is not it.
     CHECK_EQ_MS(T0(utc_ms(2025, 4, 1, 4, 0), "240"), utc_ms(2025, 4, 1, 4, 0));
     CHECK(T(utc_ms(2025, 4, 1, 4, 0), "240", IST, NSE) != T0(utc_ms(2025, 4, 1, 4, 0), "240"));
@@ -412,7 +417,11 @@ void test_cme_grid_unchanged() {
             const int64_t h4 = T(t, "240", CHI, CME);
             if (!in_set(hhmm_ny(h4), {200, 600, 1000, 1400, 1800, 2200})) ++bad_h4;
             if ((h4 - open_z) % k4h != 0 || h4 > t || t >= h4 + k4h) ++bad_h4;
-            if (TC(t, "240", CHI, CME) != h4 + k4h) ++bad_h4;
+            // The last bucket (13:00 CT) would end at 17:00 CT, past the 16:00 CT
+            // close, so its time_close is capped at the session-day end like
+            // time_close("D") above. Engine expectation: not measured on this symbol.
+            const int64_t h4_end = h4 + k4h < open_z + 23 * k1h ? h4 + k4h : open_z + 23 * k1h;
+            if (TC(t, "240", CHI, CME) != h4_end) ++bad_h4;
             const int64_t h1 = T(t, "60", CHI, CME);
             if (pine_minute(h1, NY) != 0 || hhmm_ny(h1) == 1700 || h1 > t || t >= h1 + k1h) ++bad_h1;
         }
