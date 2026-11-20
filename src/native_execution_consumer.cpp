@@ -10510,19 +10510,34 @@ bool NativeExecutionConsumer::feed_fixed_subscription(
         BacktestEngine& engine, TimeframeSubscription& subscription, int index,
         const Bar* feed_bar, std::int64_t horizon_ms, std::int64_t next_feed_ms,
         Completed&& completed) {
+    const bool has_indexed_input =
+        subscription_input_bars_ != nullptr
+        && index >= 0 && index < subscription_input_n_;
+    const auto member_input_ms = accepted_input_context_
+        ? std::optional<std::int64_t>(
+            accepted_input_context_->input_interval.open_ms)
+        : std::nullopt;
+    const auto indexed_input_ms = has_indexed_input
+        ? std::optional<std::int64_t>(
+            subscription_input_bars_[index].timestamp)
+        : std::nullopt;
+    if (member_input_ms && indexed_input_ms
+        && (accepted_input_context_->input_index != index
+            || *member_input_ms != *indexed_input_ms)) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                   NativeFailureOperation::Input});
+        render(engine, "native timeframe subscription input identity mismatch");
+        return false;
+    }
     auto& state = engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
     auto& clock = state.fixed_clock;
     if (!clock.cursor_ms) {
         if (!feed_bar || horizon_ms <= feed_bar->timestamp) return true;
         clock.cursor_ms = feed_bar->timestamp;
     }
-    const auto completion_input_ms = [&]() -> std::optional<std::int64_t> {
-        if (feed_bar) return feed_bar->timestamp;
-        if (accepted_input_context_) return accepted_input_context_->input_interval.open_ms;
-        if (subscription_input_bars_ && index >= 0 && index < subscription_input_n_)
-            return subscription_input_bars_[index].timestamp;
-        return std::nullopt;
-    }();
+    const auto completion_input_ms = feed_bar
+        ? std::optional<std::int64_t>(feed_bar->timestamp)
+        : member_input_ms ? member_input_ms : indexed_input_ms;
     const auto drain = [&](std::int64_t horizon, std::int64_t observed_ms = 0,
                            std::int64_t next_ms = 0) {
         while (auto bucket = engine.next_native_fixed_security_bar(
@@ -10531,14 +10546,13 @@ bool NativeExecutionConsumer::feed_fixed_subscription(
             const auto first_ms = first_index >= 0
                 ? subscription.bucket_first_ms : bucket->bar.timestamp;
             // next_fixed_completion has already judged the authoritative
-            // observed input, its successor, and this horizon. The kind is
-            // about which accepted input closed the returned bucket: a
-            // pre-observe or no-bar drain may be carrying a bucket across a
-            // tail hole to the first input of a later bucket. Checking the
-            // current input's target bucket keeps that case lazy while an
-            // own-last-input or session-clipped completion stays confirmed.
-            const bool same_input_bucket = completion_input_ms
-                && state.aggregator.bucket_open_ms(*completion_input_ms)
+            // observed input, its successor, and this horizon. A feed-bar
+            // drain is classified on the feed clock; a no-bar drain has no
+            // feed-clock identity to compare. A known primary input carries
+            // that no-bar completion lazily, while an unknown historical
+            // drain keeps the historical Confirmed result.
+            const bool same_feed_bucket = feed_bar
+                && state.aggregator.bucket_open_ms(feed_bar->timestamp)
                     == bucket->bar.timestamp;
             subscription.bucket_first_index = -1;
             subscription.bucket_first_ms = 0;
@@ -10547,8 +10561,9 @@ bool NativeExecutionConsumer::feed_fixed_subscription(
             ++state.eval_complete_count;
             engine.dispatch_security_eval(state, bucket->bar, true, state.eval_complete_count - 1);
             if (!completed(bucket->bar, first_index, first_ms,
-                           same_input_bucket ? NativeCompletionKind::Confirmed
-                                              : NativeCompletionKind::LazyComplete)) {
+                           (!completion_input_ms || same_feed_bucket)
+                               ? NativeCompletionKind::Confirmed
+                               : NativeCompletionKind::LazyComplete)) {
                 return false;
             }
         }
