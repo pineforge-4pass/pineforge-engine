@@ -1472,6 +1472,260 @@ void test_fixed_period_session_hole_is_not_a_close() {
     check_exchange_day_series({30, 30, 5, whole, "stock", true}, holed(30), holed(5));
 }
 
+// A fixed-period bucket whose last input is absent is delivered lazily on the
+// first accepted input of the next period. The complete tape is the matched
+// own-last-input control for the same authoritative bucket.
+void test_fixed_period_late_completion_case(bool late) {
+    namespace day = native_fixed_period_fixture::exchange;
+    scenario = late
+        ? "fixed-period late subscription completion"
+        : "fixed-period late subscription own-last-input control";
+
+    constexpr int kInputStep = 30;
+    constexpr int kTargetMinutes = 75;
+    const int whole_close = day::kCloseMinute;
+    const auto complete_bars = day::bars(kInputStep, whole_close);
+    const auto holed_bars = day::without(
+        complete_bars, 0, 13 * 60, 14 * 60 + 30);
+    CHECK(!complete_bars.empty());
+    CHECK(holed_bars.size() < complete_bars.size());
+    if (complete_bars.empty() || holed_bars.empty()) return;
+
+    std::vector<std::int64_t> missing_inputs;
+    for (const Bar& bar : complete_bars) {
+        const auto present = std::find_if(
+            holed_bars.begin(), holed_bars.end(),
+            [&bar](const Bar& candidate) { return candidate.timestamp == bar.timestamp; });
+        if (present == holed_bars.end()) missing_inputs.push_back(bar.timestamp);
+    }
+    CHECK(missing_inputs.size() >= 2);
+    if (missing_inputs.size() < 2) return;
+    for (std::size_t i = 1; i < missing_inputs.size(); ++i) {
+        CHECK(missing_inputs[i] == missing_inputs[i - 1]
+              + kInputStep * kMinute);
+    }
+
+    const auto first_after_hole = std::find_if(
+        holed_bars.begin(), holed_bars.end(),
+        [last_missing = missing_inputs.back()](const Bar& bar) {
+            return bar.timestamp > last_missing;
+        });
+    CHECK(first_after_hole != holed_bars.end());
+    if (first_after_hole == holed_bars.end()) return;
+    const std::int64_t first_after_hole_ms = first_after_hole->timestamp;
+
+    NativeRunSpec spec = base_spec("30", "30", "native-fixed-late-completion-kind");
+    spec.type = "stock";
+    spec.timezone = day::kTimezone;
+    spec.session = day::kSession;
+    NativeTimeframeSubscription series;
+    series.tf = "75";
+    series.authoritative_bars = day::native(kTargetMinutes, whole_close);
+    spec.subscriptions.push_back(series);
+
+    const auto& tape = late ? holed_bars : complete_bars;
+    SeriesHost host;
+    host.probes = 1;
+    const auto setup = host.configure_native(spec);
+    CHECK(setup.status == NativeSetupStatus::Applied);
+    if (setup.status != NativeSetupStatus::Applied) return;
+    host.run(tape.data(), static_cast<int>(tape.size()), "30", "30", false, 4,
+             MagnifierDistribution::ENDPOINTS);
+    CHECK(host.last_error().empty());
+    CHECK(host.bars_seen == static_cast<int>(tape.size()));
+    if (!host.last_error().empty()) return;
+
+    const auto& rows = series.authoritative_bars;
+    const auto complete_closes =
+        day::row_closes(rows, kTargetMinutes, complete_bars, kInputStep, true);
+    const auto tape_closes =
+        day::row_closes(rows, kTargetMinutes, tape, kInputStep, true);
+    CHECK(complete_closes.size() == rows.size());
+    CHECK(tape_closes.size() == rows.size());
+    if (complete_closes.size() != rows.size() || tape_closes.size() != rows.size())
+        return;
+
+    // Select the bucket whose own last input is the first missing input. This
+    // makes the late route unambiguous even if the same hole leaves another
+    // bucket pending behind it.
+    int target_count = 0;
+    std::size_t target = 0;
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        const auto delivered =
+            day::delivered_at(complete_closes[i], complete_bars, kInputStep);
+        if (delivered == missing_inputs.front()) {
+            ++target_count;
+            target = i;
+        }
+    }
+    CHECK(target_count == 1);
+    if (target_count != 1) return;
+
+    const Bar& target_row = rows[target];
+    const std::int64_t bucket_open_ms = target_row.timestamp;
+    const std::int64_t bucket_end_ms = day::nominal_end(target_row, kTargetMinutes);
+    const std::int64_t complete_delivery_ms =
+        day::delivered_at(complete_closes[target], complete_bars, kInputStep);
+    const std::int64_t tape_delivery_ms =
+        day::delivered_at(tape_closes[target], tape, kInputStep);
+    CHECK(complete_delivery_ms == missing_inputs.front());
+    CHECK(complete_delivery_ms >= bucket_open_ms);
+    CHECK(complete_delivery_ms < bucket_end_ms);
+    CHECK(tape_delivery_ms == (late ? first_after_hole_ms : complete_delivery_ms));
+    if (late) {
+        CHECK(tape_delivery_ms >= bucket_end_ms);
+        CHECK(tape_delivery_ms > complete_delivery_ms);
+        CHECK(std::none_of(
+            holed_bars.begin(), holed_bars.end(),
+            [bucket_end_ms, tape_delivery_ms](const Bar& bar) {
+                return bar.timestamp >= bucket_end_ms
+                    && bar.timestamp < tape_delivery_ms;
+            }));
+    }
+
+    int complete_contributors = 0;
+    int holed_contributors = 0;
+    std::int64_t complete_last_contributor = 0;
+    std::int64_t holed_last_contributor = 0;
+    for (const Bar& bar : complete_bars) {
+        if (bar.timestamp >= bucket_open_ms && bar.timestamp < bucket_end_ms) {
+            ++complete_contributors;
+            complete_last_contributor =
+                std::max(complete_last_contributor, bar.timestamp);
+        }
+    }
+    for (const Bar& bar : holed_bars) {
+        if (bar.timestamp >= bucket_open_ms && bar.timestamp < bucket_end_ms) {
+            ++holed_contributors;
+            holed_last_contributor =
+                std::max(holed_last_contributor, bar.timestamp);
+        }
+    }
+    CHECK(complete_contributors > 0);
+    CHECK(holed_contributors > 0);
+    CHECK(holed_contributors < complete_contributors);
+    CHECK(complete_last_contributor == complete_delivery_ms);
+    CHECK(holed_last_contributor < complete_last_contributor);
+    CHECK(std::none_of(
+        holed_bars.begin(), holed_bars.end(),
+        [complete_delivery_ms](const Bar& bar) {
+            return bar.timestamp == complete_delivery_ms;
+        }));
+
+    int target_delivery_count = 0;
+    std::size_t target_delivery = 0;
+    for (std::size_t i = 0; i < host.deliveries.size(); ++i) {
+        if (host.deliveries[i].bar.timestamp != target_row.timestamp) continue;
+        ++target_delivery_count;
+        target_delivery = i;
+    }
+    CHECK(target_delivery_count == 1);
+    if (target_delivery_count != 1) return;
+    const Delivery& delivery = host.deliveries[target_delivery];
+
+    check_bucket(delivery.bar, target_row, late
+        ? "late fixed-period payload" : "own-last-input control payload");
+    CHECK(delivery.subscription == 0);
+    CHECK(delivery.accessor_matches);
+    CHECK(delivery.context.delivered_at_ms == tape_delivery_ms);
+    CHECK(delivery.context.interval.open_ms == bucket_open_ms);
+    CHECK(delivery.context.interval.next_period_open_ms == bucket_end_ms);
+    CHECK(delivery.context.interval.last_traded_close_ms == bucket_end_ms);
+
+    // series_at_bar records script calculations from SeriesHost::on_native_bar,
+    // not every accepted input. Derive the row population from the fixture's
+    // chart partition and identify this delivery's row by the live count of
+    // calculations already completed before its callback. The fixed drain may
+    // publish more than one bucket on this accepted input; each publication
+    // updates the pull accessor, so the chart probe expects the final visible
+    // row at this chart close, independently of the callback bucket.
+    const auto charts = day::charts(tape, kInputStep, kInputStep);
+    CHECK(host.series_at_bar.size() == charts.size());
+    std::size_t calculated_before_delivery = 0;
+    for (const auto& chart : charts) {
+        if (chart.close_ms <= tape_delivery_ms) ++calculated_before_delivery;
+    }
+    CHECK(calculated_before_delivery
+          == static_cast<std::size_t>(delivery.bars_before));
+    const std::size_t row_index = static_cast<std::size_t>(delivery.bars_before);
+    const auto chart_at_delivery = std::find_if(
+        charts.begin(), charts.end(),
+        [tape_delivery_ms](const auto& chart) {
+            return chart.close_ms > tape_delivery_ms;
+        });
+    CHECK(chart_at_delivery != charts.end());
+    if (chart_at_delivery == charts.end()) return;
+    CHECK(static_cast<std::size_t>(chart_at_delivery - charts.begin()) == row_index);
+    CHECK(row_index < charts.size());
+    CHECK(row_index < host.series_at_bar.size());
+    if (host.series_at_bar.size() != charts.size()
+        || calculated_before_delivery != row_index
+        || row_index >= charts.size()
+        || row_index >= host.series_at_bar.size()) {
+        return;
+    }
+    CHECK(charts[row_index].close_ms > tape_delivery_ms);
+    if (charts[row_index].close_ms <= tape_delivery_ms) return;
+    const int expected_visible_row =
+        day::expected_row(tape_closes, charts[row_index].close_ms, 0, false);
+    CHECK(expected_visible_row >= 0);
+    CHECK(expected_visible_row < static_cast<int>(rows.size()));
+    if (expected_visible_row < 0
+        || expected_visible_row >= static_cast<int>(rows.size())) {
+        return;
+    }
+    if (late) {
+        CHECK(expected_visible_row != static_cast<int>(target));
+    } else {
+        CHECK(expected_visible_row == static_cast<int>(target));
+    }
+    CHECK(host.series_at_bar[row_index].size() == 1);
+    if (host.series_at_bar[row_index].size() != 1) return;
+    const auto& read = host.series_at_bar[row_index][0];
+    CHECK(read.has_value());
+    if (read) {
+        check_bucket(*read, rows[static_cast<std::size_t>(expected_visible_row)],
+                     late ? "late fixed-period visible accessor"
+                          : "own-last-input control accessor");
+    }
+
+    const auto tape_input = std::find_if(
+        tape.begin(), tape.end(),
+        [tape_delivery_ms](const Bar& bar) { return bar.timestamp == tape_delivery_ms; });
+    CHECK(tape_input != tape.end());
+    if (tape_input == tape.end()) return;
+    const int tape_input_index = static_cast<int>(tape_input - tape.begin());
+    CHECK(delivery.bars_before == tape_input_index);
+
+    const std::string input_event =
+        "input:" + std::to_string(tape_input_index) + "@"
+        + std::to_string(tape_delivery_ms);
+    const std::string htf_event =
+        "htf:0@" + std::to_string(target_row.timestamp);
+    const std::string bar_event = "bar@" + std::to_string(tape_delivery_ms);
+    CHECK(std::count(host.log.begin(), host.log.end(), input_event) == 1);
+    CHECK(std::count(host.log.begin(), host.log.end(), htf_event) == 1);
+    CHECK(std::count(host.log.begin(), host.log.end(), bar_event) == 1);
+    const auto input_at = std::find(host.log.begin(), host.log.end(), input_event);
+    const auto htf_at = std::find(host.log.begin(), host.log.end(), htf_event);
+    const auto bar_at = std::find(host.log.begin(), host.log.end(), bar_event);
+    if (input_at != host.log.end() && htf_at != host.log.end()
+        && bar_at != host.log.end()) {
+        CHECK(input_at < htf_at);
+        CHECK(htf_at < bar_at);
+    }
+
+    if (late) {
+        scenario =
+            "fixed-period late subscription completion: expected LazyComplete on next-period first input";
+        CHECK(delivery.context.completion == NativeCompletionKind::LazyComplete);
+    } else {
+        scenario =
+            "fixed-period own-last-input control: expected Confirmed";
+        CHECK(delivery.context.completion == NativeCompletionKind::Confirmed);
+    }
+}
+
 // ---- a supplied fixed-period bar off its requested grid -------------------
 
 // The refusal of a supplied bar that does not open on its requested grid, as
@@ -1577,15 +1831,30 @@ void test_fixed_period_off_grid_classification() {
 }  // namespace
 
 int main(int argc, char** argv) {
-    // --only off-grid-classification runs the off-grid case by itself.
-    if (argc == 3 && std::string(argv[1]) == "--only"
-        && std::string(argv[2]) == "off-grid-classification") {
-        test_fixed_period_off_grid_classification();
+    // Focused selectors keep the failing late-kind assertion and its control
+    // independently runnable for the proof lane.
+    if (argc == 3 && std::string(argv[1]) == "--only") {
+        if (std::string(argv[2]) == "off-grid-classification") {
+            test_fixed_period_off_grid_classification();
+        } else if (std::string(argv[2]) == "late-fixed-subscription-completion") {
+            test_fixed_period_late_completion_case(true);
+        } else if (std::string(argv[2]) == "late-fixed-subscription-control") {
+            test_fixed_period_late_completion_case(false);
+        } else {
+            std::printf(
+                "usage: test_native_htf_subscriptions "
+                "[--only off-grid-classification|late-fixed-subscription-completion|"
+                "late-fixed-subscription-control]\n");
+            return 2;
+        }
         std::printf("native HTF subscriptions: %d checks, %d failures\n", checks, failures);
         return failures == 0 ? 0 : 1;
     }
     if (argc != 1) {
-        std::printf("usage: test_native_htf_subscriptions [--only off-grid-classification]\n");
+        std::printf(
+            "usage: test_native_htf_subscriptions "
+            "[--only off-grid-classification|late-fixed-subscription-completion|"
+            "late-fixed-subscription-control]\n");
         return 2;
     }
     test_hourly_over_quarter_hour();
@@ -1607,6 +1876,7 @@ int main(int argc, char** argv) {
     test_fixed_period_exchange_early_close();
     test_fixed_period_early_close_gate();
     test_fixed_period_session_hole_is_not_a_close();
+    test_fixed_period_late_completion_case(true);
     test_fixed_period_off_grid_classification();
     std::printf("native HTF subscriptions: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

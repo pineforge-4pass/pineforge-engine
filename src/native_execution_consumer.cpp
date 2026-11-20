@@ -10516,6 +10516,13 @@ bool NativeExecutionConsumer::feed_fixed_subscription(
         if (!feed_bar || horizon_ms <= feed_bar->timestamp) return true;
         clock.cursor_ms = feed_bar->timestamp;
     }
+    const auto completion_input_ms = [&]() -> std::optional<std::int64_t> {
+        if (feed_bar) return feed_bar->timestamp;
+        if (accepted_input_context_) return accepted_input_context_->input_interval.open_ms;
+        if (subscription_input_bars_ && index >= 0 && index < subscription_input_n_)
+            return subscription_input_bars_[index].timestamp;
+        return std::nullopt;
+    }();
     const auto drain = [&](std::int64_t horizon, std::int64_t observed_ms = 0,
                            std::int64_t next_ms = 0) {
         while (auto bucket = engine.next_native_fixed_security_bar(
@@ -10523,6 +10530,16 @@ bool NativeExecutionConsumer::feed_fixed_subscription(
             const int first_index = subscription.bucket_first_index;
             const auto first_ms = first_index >= 0
                 ? subscription.bucket_first_ms : bucket->bar.timestamp;
+            // next_fixed_completion has already judged the authoritative
+            // observed input, its successor, and this horizon. The kind is
+            // about which accepted input closed the returned bucket: a
+            // pre-observe or no-bar drain may be carrying a bucket across a
+            // tail hole to the first input of a later bucket. Checking the
+            // current input's target bucket keeps that case lazy while an
+            // own-last-input or session-clipped completion stays confirmed.
+            const bool same_input_bucket = completion_input_ms
+                && state.aggregator.bucket_open_ms(*completion_input_ms)
+                    == bucket->bar.timestamp;
             subscription.bucket_first_index = -1;
             subscription.bucket_first_ms = 0;
             state.current_bar = bucket->bar;
@@ -10530,7 +10547,10 @@ bool NativeExecutionConsumer::feed_fixed_subscription(
             ++state.eval_complete_count;
             engine.dispatch_security_eval(state, bucket->bar, true, state.eval_complete_count - 1);
             if (!completed(bucket->bar, first_index, first_ms,
-                           NativeCompletionKind::Confirmed)) return false;
+                           same_input_bucket ? NativeCompletionKind::Confirmed
+                                              : NativeCompletionKind::LazyComplete)) {
+                return false;
+            }
         }
         return true;
     };
