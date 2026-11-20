@@ -536,7 +536,7 @@ int check_channel_arguments(int length, double mult, const char* function) {
         throw coded<std::runtime_error>(
             RunFailureCode::pine_invalid_argument,
             {{"function", function}, {"argument", "length"}, {"rule", "must_not_be_na"}},
-            (bar_context().installed ? run_error_bar_prefix() : std::string()) +
+            run_error_bar_prefix() +
                 "Invalid value of the 'length' argument in the '" + function +
                 "' function. It must not be na");
     }
@@ -550,7 +550,7 @@ int check_channel_arguments(int length, double mult, const char* function) {
         throw coded<std::runtime_error>(
             RunFailureCode::pine_invalid_argument,
             {{"function", function}, {"argument", argument}, {"rule", "must_be_positive"}},
-            (bar_context().installed ? run_error_bar_prefix() : std::string()) +
+            run_error_bar_prefix() +
                 "Invalid value of the '" + argument + "' argument (" +
                 std::string(value, formatted.ptr) + ") in the '" + function +
                 "' function. It must be > 0.");
