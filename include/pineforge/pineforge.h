@@ -1102,33 +1102,33 @@ PF_API int  strategy_last_run_status(pf_strategy_t s);
  *  for a later plain historical replay must be explicitly turned back off.
  *  Effects when @p on is non-zero:
  *    1. `barstate.islast` is false for that bar.
- *    2. `session.islastbar` is computed from the bucket calendar (no next
- *       bar to peek at, so it evaluates whether the next bucket -- this
- *       bar's timestamp plus one script-TF step -- falls out of session).
+ *    2. `session.islastbar` and `session.islastbar_regular` start from the
+ *       open-ended session-close fact: ending the batch does not by
+ *       itself close the forming bar's session. See the scope below.
  *    3. `bar_index` stays put; `last_bar_index` is frozen at the horizon
  *       bar (`horizon_bars - 1`), when @p horizon_bars > 0. `last_bar_time`
  *       is exact when the horizon bar is in the script-bar array, one
  *       script-TF step per missing bar past the array's last bar
  *       otherwise; under aggregation (input_tf < script_tf) it is
- *       extrapolated from the first bar instead, and the aggregation-path
- *       caveat below applies.
+ *       extrapolated from the first input bar instead.
  *    4. The range-end synthetic close row/trade is skipped (no
  *       `open_at_end` row); the final equity point keeps `open_profit`.
- *    5. Interior bars (every bar before the last) are unaffected, except
- *       effect 2 under aggregation (below).
+ *
  *  Scope: the Pine source host's scheduler applies these where it publishes
- *  a script bar to the generated script. Effects 1, 3 and 4 hold on every
- *  path. Effect 2 is its session-predicate step, which runs for every script
- *  bar of a run whose timeframe is known -- a timeframe-aware overload, or
- *  `run(bars, n)` with at least two bars, whose timeframe it detects from
- *  them; with fewer, `session.ismarket`/`session.islastbar` keep their
- *  reset-state `false` whatever this flag says. The bucket-calendar
- *  lookahead stands in for the next bar wherever the scheduler holds none:
- *  with input_tf == script_tf that is the array's last bar alone, but under
- *  aggregation (input_tf < script_tf) the scheduler holds no next script
- *  bar at all, so the lookahead decides `session.islastbar` on every bar of
- *  the run. Callers must feed an input_tf == script_tf array, matching
- *  #strategy_set_probe_suppress_tail_logic's scope note.
+ *  a script bar to the generated script. The session-predicate step runs
+ *  when the timeframe is supplied or detected from at least two bars in
+ *  `run(bars, n)`. With fewer bars in that overload, `session.ismarket`
+ *  and `session.islastbar` keep their reset-state `false` regardless of @p on.
+ *
+ *  In intraday batches, including under aggregation, the first retained
+ *  input after a script bar maps to its successor. Both session-close
+ *  facts use it when available: an in-session bar closes its day if the
+ *  successor is out of session or belongs to another session day.
+ *  Without a successor, the open-ended fact uses the calendar's next
+ *  eligible input slot, across any declared breaks.
+ *  A supplied Pine symbol calendar can override the close for covered
+ *  regular intraday bars. On extended-hours charts, `session.islastbar`
+ *  can account for pre- and post-market bars.
  *  `strategy_stream_begin` refuses a handle with this flag set.
  *  Default off (@p on == 0): every historical run stays byte-identical to
  *  before this flag existed. The mode belongs to the Pine source host; on
