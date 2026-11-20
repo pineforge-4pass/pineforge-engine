@@ -1285,7 +1285,11 @@ class RealTree(unittest.TestCase):
         # enter existing OPEN groups without adding a group: the four insertions
         # of that clock's projection (U0652-U0655) and one parsed timeframe that
         # a call holds in a local named tf (U1048). All remain OPEN.
-        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3 + 1 + 1
+        # expectation corrected: 1638 -> 1639, because U1931 adds one unreviewed
+        # group (#810) in src/source/pine_adapter.cpp: the local list of queued
+        # exit legs that one full strategy.exit call gives a queue slot (its
+        # declaration and its one insertion). It remains OPEN.
+        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3 + 1 + 1 + 1
         self.assertEqual(c['OPEN'], expected_open)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])

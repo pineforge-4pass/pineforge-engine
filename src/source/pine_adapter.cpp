@@ -12969,6 +12969,90 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
     // remember() ranks each by it or by the predecessor it replaces. Only a
     // slot reserved for the call's own definition travels with them;
     // allocating one here would advance ordinary exits twice.
+    //
+    // A leg that names its quantity is queued (submit_one) and submitted when
+    // the calculation ends, so its place in the exit queue would be the one
+    // of that submission: behind an exit a later call placed at once, though
+    // the queue is in the order the exits were created (exit_queue_rank).
+    // A full exit placed that way, re-issued, then reserved the units the
+    // earlier one held, and the earlier one's own re-issue, left nothing,
+    // removed it. So, before a leg of a full exit that opens a new place in
+    // the queue is placed, each such queued leg of an opening its entry holds
+    // takes the slot ahead of it, in the order the queue submits them
+    // (flush_pending_bracket_legs). A full exit names no quantity and no
+    // share below the whole, as the reservation reads the call
+    // (compute_exit_reservation, kFullPercentEps). Only the place is issued:
+    // the queued leg is still submitted, and takes its own source sequence,
+    // when the queue is flushed, and remember() keeps the slot for it and for
+    // every re-issue that replaces it. Where no later full exit opens a new
+    // place nothing is issued, and every sequence stays where it was: an exit
+    // of a share below the whole placed after a queued leg ranks ahead of it,
+    // as before. A void call opens no place and a void leg takes none; a call
+    // the reservation refuses never comes here; a leg already placed, or one
+    // that replaces another, keeps the place it has; and a leg that waits for
+    // an entry order still to fill is ranked where that fill submits it.
+    // Beside a close this calculation has already called, the exits are sized
+    // as they were and no place is issued either.
+    const auto rank_queued_explicit_legs = [&] {
+        const bool full_exit = dynamic
+            && (!std::isfinite(requested_qty_percent)
+                || requested_qty_percent >= 100.0 - internal::kFullPercentEps);
+        if (!full_exit || void_issue || from_entry.empty() || only_opening != nullptr
+            || materializing_relative_ || reserved_slot != 0
+            || pending_same_bar_close_qty_ > 0.0) {
+            return;
+        }
+        const auto held = cohorts_by_id_.find_resident(from_entry);
+        if (held == cohorts_by_id_.end()) return;
+        const auto& opened = held->second.opened;
+        const auto exit_leg = [](const PlacementSnapshot& row) {
+            return row.family == PineOrderFamily::ExitLimit
+                || row.family == PineOrderFamily::ExitStop
+                || row.family == PineOrderFamily::ExitTrail;
+        };
+        std::vector<std::size_t> unranked;
+        for (std::size_t index = 0; index < pending_bracket_legs_.size(); ++index) {
+            const auto& row = pending_bracket_legs_[index].snapshot;
+            if (exit_leg(row) && row.from_entry == from_entry && !row.void_issue
+                && std::isfinite(row.requested_qty) && row.source_sequence == 0
+                && row.projection_predecessor == 0 && row.chain_origin_sequence == 0
+                && row.placement_cycle == current_position_cycle_
+                && std::find(opened.begin(), opened.end(), row.bracket_origin)
+                    != opened.end()) {
+                unranked.push_back(index);
+            }
+        }
+        if (unranked.empty()) return;
+        // An exit that has an order of its own, working or waiting, or a
+        // level still waiting for its entry's fill, keeps the place that
+        // order holds or will be given, as before: only an exit with none
+        // opens a new place here.
+        const auto own_order = [&](const PlacementSnapshot& row) {
+            return exit_leg(row) && !row.void_issue && row.source_id == exit_id
+                && row.from_entry == from_entry;
+        };
+        for (const auto& handle : live_handles_) {
+            const auto row = placement_.find(handle.incarnation);
+            if (row != placement_.end() && own_order(row->second)) return;
+        }
+        for (const auto& pending : pending_bracket_legs_)
+            if (own_order(pending.snapshot)) return;
+        for (const auto& pending : pending_coof_requests_)
+            if (own_order(pending.snapshot)) return;
+        for (const auto& delayed : delayed_market_orders_)
+            if (own_order(delayed.snapshot)) return;
+        for (const auto& pending : pending_relative_exits_)
+            if (pending.exit_id == exit_id && pending.from_entry == from_entry) return;
+        std::stable_sort(unranked.begin(), unranked.end(),
+            [&](std::size_t left, std::size_t right) {
+                return pending_bracket_legs_[left].snapshot.bracket_origin.incarnation
+                    < pending_bracket_legs_[right].snapshot.bracket_origin.incarnation;
+            });
+        for (const auto index : unranked) {
+            pending_write(pending_bracket_legs_[index].snapshot).chain_origin_sequence =
+                next_queue_sequence();
+        }
+    };
     const auto source_point = detail::callback_point(require_host());
     const OrderBirth exit_birth = capture_order_birth();
     const auto exit_birth_reach = compat::pine::select_historical_birth_reach(
@@ -13639,14 +13723,30 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
                 == live_by_source_key_.end()) {
                 // A new queued leg has no issued queue slot: it carries only a
                 // slot reserved for its own definition (reserved_slot), and
-                // remember() assigns the rank when the leg is submitted.
+                // remember() assigns the rank when the leg is submitted. A leg
+                // that names its quantity and queues again in the place of one
+                // a later full exit was placed behind keeps the slot that one
+                // was given (rank_queued_explicit_legs).
                 auto queued = std::find_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
                     [&](const PendingBracketLeg& row) { return row.replacement_key == replacement_key; });
+                if (queued != pending_bracket_legs_.end() && snapshot.chain_origin_sequence == 0
+                    && !snapshot.void_issue && std::isfinite(snapshot.requested_qty)
+                    && !queued->snapshot.void_issue
+                    && std::isfinite(queued->snapshot.requested_qty)
+                    && queued->snapshot.source_sequence == 0
+                    && queued->snapshot.projection_predecessor == 0
+                    && queued->snapshot.placement_cycle == snapshot.placement_cycle) {
+                    snapshot.chain_origin_sequence = queued->snapshot.chain_origin_sequence;
+                }
                 PendingBracketLeg staged{std::move(request), std::move(snapshot), replacement_key, family_key};
                 if (queued == pending_bracket_legs_.end()) pending_write(pending_bracket_legs_).push_back(std::move(staged));
                 else pending_write(*queued) = std::move(staged);
                 return;
             }
+            // This leg is placed at once: where it is a full exit's and opens
+            // a new place in the exit queue, the queued legs created before
+            // it take theirs first.
+            rank_queued_explicit_legs();
             // ab9714be src/source/pine_strategy_commands.cpp:2627-2648 keys a
             // source bracket by (exit id, from_entry) and a reissue replaces
             // the stored leg rather than adding a second one.  A leg that was

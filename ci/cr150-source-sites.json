@@ -36776,6 +36776,32 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "unranked",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
+    "const auto rank_queued_explicit_legs = [ & ] #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < std :: size_t >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "unranked",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: exit_with_reservation_sequence ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks , std :: uint64_t reservation_sequence ) #1",
+    "const auto rank_queued_explicit_legs = [ & ] #1",
+    "+ + index ) #1",
+    "if ( exit_leg ( row ) && row . from_entry = = from_entry && ! row . void_issue && std :: isfinite ( row . requested_qty ) && row . source_sequence = = 0 && row . projection_predecessor = = 0 && row . chain_origin_sequence = = 0 && row . placement_cycle = = current_position_cycle_ && std :: find ( opened . begin ( ) , opened . end ( ) , row . bracket_origin ) ! = opened . end ( ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "unranked . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "marketable",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
