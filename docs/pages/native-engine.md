@@ -125,7 +125,7 @@ Begin (`run` / `stream_begin`) is allowed only from `Ready`. Success consumes
 the run number, projects the spec onto execution storage, **resets once**
 (book, live requests, native events, decision floor), enters `Running`, then
 calls `on_native_run_begin()` and bar callbacks. Reset does not clear the
-host high-water.
+host high-water. Each begin needs its own successful `configure_native`: one configure stages exactly one run. A completed run leaves the host `Completed`, not `Ready`, so a further `run` without a new configure is refused with `native run requires configure_native before each run` and leaves the lifecycle, the run identity and the retained rows as they were. To run again, configure the same session key with a `run_number` above the high-water, or configure a fresh host.
 
 `stream_begin` is one logical begin plus internal warmup, then `Realtime`,
 **without** a second public `run` and without resetting lots, requests,
@@ -468,9 +468,9 @@ byte-identical** to the spec. Conflicting values are a preflight refusal:
 spec fields.
 
 The rich `run(bars, n, input_tf, script_tf, inputs, syminfo, overrides, …)`
-overload (`engine.hpp:2190`) is **not** refused as a source mutation: it
+overload (`engine.hpp:2199`) is **not** refused as a source mutation: it
 reaches `NativeExecutionConsumer::run_rich`
-(`src/native_execution_consumer.hpp:188`), which admits the begin, checks the
+(`src/native_execution_consumer.hpp:208`), which admits the begin, checks the
 timeframe arguments against the spec, preflights and pumps the batch exactly
 like the plain overload. `inputs` / `syminfo` / `overrides` are carried only as
 `NativeBeginArgs` fields to `prepare_native_begin` — the overrides as the
@@ -626,7 +626,7 @@ pump's operation (`Input` or `Stream`) and ordinal 0; until then the run goes on
 with the configuration it wrote, fills and notifications included.
 
 Generated Pine code runs on this same consumer: `source::PineStrategyHost`
-derives from `NativeStrategyHost` (`pine_strategy_host.hpp:415`) and lowers
+derives from `NativeStrategyHost` (`pine_strategy_host.hpp:418`) and lowers
 every `strategy.*` command into the native requests above. What the source
 layer keeps on top of them is TradingView's *policy* — the command batching,
 the priority and activation quirks, the money rounding — never a second
@@ -638,13 +638,13 @@ a host reacts to its own execution and may submit again. A request born there,
 mid-bar on a continuous segment, is eligible on the **remaining path suffix** of
 that segment — the birth is admitted at the current cursor and the geometric
 search then sees only the unconsumed suffix (`born_on_remaining_path`,
-`native_execution_consumer.cpp:7072-7076`). Requests accepted before the
+`native_execution_consumer.cpp:7078-7082`). Requests accepted before the
 segment, and discrete points, keep the ordinary birth gate above.
 
 `on_native_bar_open` fires at the modeled opening, before that point's matching
-pass (`native_execution_consumer.cpp:8782`). **Lookahead warning:** the
+pass (`native_execution_consumer.cpp:8788`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
-`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:8774`), the
+`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:8780`), the
 complete bar unless the spec asks for `NativeOpenBarView::OpenOnly` — so its
 high, low and close are the finished bar's, not what is known at the open. A
 host that must decide on open-only information reads
@@ -2092,10 +2092,10 @@ host that marks its own equity keeps this default and owns the whole series.
 
 **The scalar extremes are not part of that bargain.** `max_drawdown_`,
 `max_runup_` and `max_contracts_held_all_` / `_long_` / `_short_` — read back
-through `max_drawdown_percent()` (`engine.hpp:1862`), `max_runup_percent()`
+through `max_drawdown_percent()` (`engine.hpp:1871`), `max_runup_percent()`
 (`engine.hpp:1278`) and `max_contracts_held_all/long/short()`
-(`max_contracts_held_all` `engine.hpp:2261-2263`) — are a property of the RUN: what it drew down, what
-it ran up, the most it ever held. The kernel folds them (`update_equity_extremes`, `engine.hpp:1672`) at every script
+(`max_contracts_held_all` `engine.hpp:2270-2272`) — are a property of the RUN: what it drew down, what
+it ran up, the most it ever held. The kernel folds them (`update_equity_extremes`, `engine.hpp:1681`) at every script
 calculation under `HostRecorded` and `KernelRecorded`. Under
 `KernelRecordedAtHostMarks`, it folds them at the host-mark callbacks instead, so
 the host controls the cadence. A `HostRecorded` host reads them truthfully without
@@ -2117,13 +2117,13 @@ drawdown/run-up walk, and metrics computed over a real series.
 The per-bar **broker-state hash** is a row of that same report, so
 `KernelRecorded` records it too. It stays behind the recording switch it
 always had — `set_broker_state_hash_recording(true)`
-(`engine.hpp:2602`; C: `strategy_set_broker_state_hash_recording`), off by
+(`engine.hpp:2611`; C: `strategy_set_broker_state_hash_recording`), off by
 default, set while no run is active — because each row is a full
 `broker_state_hash()` over the lots and the closed rows (since v19 a row costs
 the live state, not the run's length: the closed rows enter through a running
 digest). With the switch on,
 one row follows each point, after the extremes that point just folded
-(`record_script_report_point`, `native_execution_consumer.cpp:9703`), so
+(`record_script_report_point`, `native_execution_consumer.cpp:9709`), so
 
 ```text
 broker_state_hash_len == equity_curve_len == script_bars_processed
@@ -2249,7 +2249,7 @@ bare host's own rows get theirs: the margin model's liquidation books
 under the ticket the model or the run named. A host running its own forced
 close states the cause on the row it produced.
 
-`closed_trade_close_cause(i)` (`engine.hpp:2260`) is the C++ read and
+`closed_trade_close_cause(i)` (`engine.hpp:2269`) is the C++ read and
 `strategy_closed_trade_close_cause` (`pineforge.h:1583`) the C one, with the
 same numbering: `-1` for a bad index or a NULL handle, `0` UNKNOWN, `1`
 SCRIPT, `2` BRACKET, `3` MARGIN_CALL, `4` INTRADAY_LOSS_CAP, `5`
@@ -3068,7 +3068,7 @@ each feed's key, sha256 and bar count in the run provenance.
 
 A host that wants only the running aggregate — no series instance, no
 `gaps`/`lookahead` rule, nothing folded into the continuation identity —
-aggregates the input itself. `TimeframeAggregator` (`timeframe.hpp:349`) is
+aggregates the input itself. `TimeframeAggregator` (`timeframe.hpp:358`) is
 public and engine-free; feed it from `on_native_input`, which runs once per
 accepted confirmed input bar before that bar is aggregated or matched
 (`on_native_input` `native_host.hpp:895`). Include
@@ -3097,14 +3097,14 @@ Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator
 aggregates with, and the one the kernel's `script_bucket_completions` query
 feeds when the Pine scheduler asks how its input span buckets
-(`ScriptBucketCursor` `native_execution_consumer.cpp:14772`). What it does
+(`ScriptBucketCursor` `native_execution_consumer.cpp:14917`). What it does
 **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the
 series' place in the run's continuous identity. Prefer `subscriptions` unless
 you want none of those.
 
-`set_native_security_feed` (`engine.hpp:2105`) is the host ingress for
+`set_native_security_feed` (`engine.hpp:2114`) is the host ingress for
 `authoritative_bars` installed before a run — see *Authoritative bars* above —
 and not a way to register a series: registration is
 `NativeRunSpec::subscriptions` or `declare_timeframe_subscriptions`. In-run the
@@ -4046,7 +4046,7 @@ following an otherwise successful run. The run-failure latch retains status, cod
 (the consumed run-number high-water moved) and `PF_NATIVE_E_RUN_FAILED` otherwise; the reason stays in
 `strategy_get_last_error`, `strategy_get_last_error_code`, `strategy_get_last_error_args` and
 `strategy_last_run_status` (1). A `Completed` handle runs again after a successful
-`strategy_configure_native_v1`. `strategy_stream_fill_report` is the explicit snapshot: the same
+`strategy_configure_native_v1`. Each run needs its own configure, with the handle's session key and a higher run number; a run call without it is refused with `native run requires configure_native before each run`. `strategy_stream_fill_report` is the explicit snapshot: the same
 function asked for the rows' own owner, subject to the same sink-failure gate. A live stream's rows
 survive a batch call refused over it, which reads empty, and the batch reader stays empty after
 the snapshot until the next run call. A run call made from inside a running run's callback reads
@@ -4558,7 +4558,7 @@ The standalone native host has no Pine decision path at runtime, and the
 constructor/member cut has since landed: `engine.hpp` has **zero** references to
 `CapAttachment`, `OrderPriority` or `IntradayCap`. `NativeStrategyHost` is
 zero-argument (`native_host.hpp:865`); the `CapAttachment` constructor belongs
-to `source::PineStrategyHost` (`pine_strategy_host.hpp:415-418`), and the cap
+to `source::PineStrategyHost` (`pine_strategy_host.hpp:418-421`), and the cap
 type itself lives in the adapter (`IntradayCap` `intraday_cap.hpp:84`).
 
 Nor is there a build-level one. The two source sets are disjoint:

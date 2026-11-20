@@ -2591,6 +2591,13 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
             f.i(risk_.day_block_day);
         }
     }
+    if (downcast_host_) {
+        BrokerStateHashSink clocks;
+        if (downcast_host_->hash_fixed_security_clocks(clocks)) {
+            f.s("native-fixed-security-clocks/v1");
+            f.u(clocks.h);
+        }
+    }
     return f.h;
 }
 
@@ -2654,8 +2661,7 @@ void NativeExecutionConsumer::cache_running_policy() noexcept {
 
 std::optional<native_calendar::NativeInterval>
 NativeExecutionConsumer::script_calendar_interval(std::int64_t stamp) const {
-    if (!spec_ptr() || has_undetected_timeframe() || !script_tf_.valid()
-        || !script_tf_.is_calendar())
+    if (!spec_ptr() || has_undetected_timeframe() || !script_tf_.valid())
         return std::nullopt;
     if (uses_raw_label_partition() && !script_period_.source)
         return native_calendar::interval_containing(
@@ -10098,7 +10104,7 @@ void NativeExecutionConsumer::clear_timeframe_subscriptions(BacktestEngine& engi
         for (auto it = engine.native_security_feeds_.begin();
              it != engine.native_security_feeds_.end(); ++it) {
             if (it->tf != tf) continue;
-            engine.native_security_feeds_.erase(it);
+            engine.native_security_feeds_.erase(it); engine.native_security_feeds_changed_ = true;
             break;
         }
     }
@@ -10500,17 +10506,90 @@ const Bar& NativeExecutionConsumer::auxiliary_bar(std::size_t at) const noexcept
 // the timestamp of its first contributing feed bar; the bucket bookkeeping is
 // the input pump's.
 template <typename Completed>
+bool NativeExecutionConsumer::feed_fixed_subscription(
+        BacktestEngine& engine, TimeframeSubscription& subscription, int index,
+        const Bar* feed_bar, std::int64_t horizon_ms, std::int64_t next_feed_ms,
+        Completed&& completed) {
+    auto& state = engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
+    auto& clock = state.fixed_clock;
+    if (!clock.cursor_ms) {
+        if (!feed_bar || horizon_ms <= feed_bar->timestamp) return true;
+        clock.cursor_ms = feed_bar->timestamp;
+    }
+    const auto drain = [&](std::int64_t horizon, std::int64_t observed_ms = 0,
+                           std::int64_t next_ms = 0) {
+        while (auto bucket = engine.next_native_fixed_security_bar(
+                   state, horizon, observed_ms, next_ms)) {
+            const int first_index = subscription.bucket_first_index;
+            const auto first_ms = first_index >= 0
+                ? subscription.bucket_first_ms : bucket->bar.timestamp;
+            subscription.bucket_first_index = -1;
+            subscription.bucket_first_ms = 0;
+            state.current_bar = bucket->bar;
+            state.current_sub_bar_count = 1;
+            ++state.eval_complete_count;
+            engine.dispatch_security_eval(state, bucket->bar, true, state.eval_complete_count - 1);
+            if (!completed(bucket->bar, first_index, first_ms,
+                           NativeCompletionKind::Confirmed)) return false;
+        }
+        return true;
+    };
+    if (feed_bar) {
+        if (!drain(std::min(feed_bar->timestamp, horizon_ms))) return false;
+        if (feed_bar->timestamp < horizon_ms) {
+            const int before = clock.observed_count;
+            state.aggregator.observe_fixed(clock, *feed_bar);
+            ++state.feed_count;
+            if (before == 0 && clock.observed_count > 0) {
+                // FIRST CONTRIBUTING FEED bar: a primary slice can start
+                // before this requested period and still contain that bar.
+                subscription.bucket_first_index = index;
+                subscription.bucket_first_ms = feed_bar->timestamp;
+            }
+            // Only a feed bar just observed carries the early-close context:
+            // with its accepted successor (0: not known) it says whether it
+            // was its session-day's last, as the aggregating step is told
+            // through security_next_input_ms_.
+            return drain(horizon_ms, feed_bar->timestamp, next_feed_ms) && !failed();
+        }
+    }
+    return drain(horizon_ms) && !failed();
+}
+
+template <typename Completed>
 bool NativeExecutionConsumer::feed_auxiliary_slice(
         BacktestEngine& engine, TimeframeSubscription& subscription, int index,
-        std::int64_t input_period_end_ms, Completed&& completed) {
+        const native_calendar::NativeInterval& input_interval, Completed&& completed) {
     auto& state =
         engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
     const std::string& feed_tf = spec_ptr()->auxiliary_feed->tf;
+    const auto input_period_end_ms = input_interval.next_period_open_ms;
+    const bool fixed = engine.native_fixed_security_clock(state);
+    const auto accepted = fixed ? completion_input_interval(input_interval) : std::nullopt;
+    const auto horizon = accepted
+        ? std::min(accepted->last_traded_close_ms, accepted->next_period_open_ms) : 0;
     const std::size_t total = auxiliary_bar_count();
     while (subscription.auxiliary_cursor < total) {
         const Bar feed_bar = auxiliary_bar(subscription.auxiliary_cursor);
         if (feed_bar.timestamp >= input_period_end_ms) break;
         const std::size_t at = subscription.auxiliary_cursor++;
+        if (fixed) {
+            if (!accepted) continue;
+            const auto feed_interval = native_calendar::interval_containing(
+                calendar_, *auxiliary_tf_, feed_bar.timestamp, calendar_memo_);
+            if (!feed_interval) continue;
+            auto close = std::min(horizon, std::min(feed_interval->last_traded_close_ms,
+                                                  feed_interval->next_period_open_ms));
+            if (at + 1 < total && auxiliary_bar(at + 1).timestamp > feed_bar.timestamp)
+                close = std::min(close, auxiliary_bar(at + 1).timestamp);
+            // The feed bar's own successor, the one the aggregating step
+            // below is told: 0 when the feed does not hold it yet.
+            if (!feed_fixed_subscription(
+                    engine, subscription, index, &feed_bar, close,
+                    at + 1 < total ? auxiliary_bar(at + 1).timestamp : 0, completed))
+                return false;
+            continue;
+        }
         if (subscription.bucket_first_index < 0) {
             subscription.bucket_first_index = index;
             subscription.bucket_first_ms = feed_bar.timestamp;
@@ -10539,6 +10618,8 @@ bool NativeExecutionConsumer::feed_auxiliary_slice(
             return false;
         }
     }
+    if (fixed && accepted)
+        return feed_fixed_subscription(engine, subscription, index, nullptr, horizon, 0, completed);
     return !failed();
 }
 
@@ -10567,6 +10648,9 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
             const auto record = [&subscription](const Bar& bucket, int first_index,
                                                 std::int64_t first_ms,
                                                 NativeCompletionKind completion) {
+                // Native-only empty buckets have no first contributor to
+                // project onto. Do not assign them to the preceding input.
+                if (first_index < 0) return true;
                 subscription.projected_bars.push_back(bucket);
                 subscription.projected_first_index.push_back(first_index);
                 subscription.projected_first_ms.push_back(first_ms);
@@ -10574,13 +10658,36 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
                 return true;
             };
             if (!feed_auxiliary_slice(engine, subscription, i,
-                                      interval->next_period_open_ms, record)) {
+                                      *interval, record)) {
                 return false;
             }
         }
         return !failed();
     }
     auto& state = engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
+    if (engine.native_fixed_security_clock(state)) {
+        const auto record = [&subscription](const Bar& bucket, int first_index,
+                                           std::int64_t first_ms, NativeCompletionKind kind) {
+            if (first_index < 0) return true;
+            subscription.projected_bars.push_back(bucket);
+            subscription.projected_first_index.push_back(first_index);
+            subscription.projected_first_ms.push_back(first_ms);
+            subscription.projected_completion.push_back(kind);
+            return true;
+        };
+        for (int i = 0; i < n_input; ++i) {
+            const auto partition = input_interval_at(input_bars[i].timestamp);
+            const auto interval = partition ? completion_input_interval(*partition) : std::nullopt;
+            if (!interval) continue;
+            auto horizon = std::min(interval->last_traded_close_ms, interval->next_period_open_ms);
+            const auto next = subscription_next_input_ms(i);
+            if (next > input_bars[i].timestamp) horizon = std::min(horizon, next);
+            if (!feed_fixed_subscription(engine, subscription, i, &input_bars[i], horizon, next,
+                                         record))
+                return false;
+        }
+        return !failed();
+    }
     int first_index = -1;
     std::int64_t first_ms = 0;
     for (int i = 0; i < n_input; ++i) {
@@ -10626,7 +10733,6 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
 bool NativeExecutionConsumer::pump_timeframe_subscriptions(
         BacktestEngine& engine, const Bar& bar, int index,
         const native_calendar::NativeInterval& input_interval) {
-    const std::int64_t input_period_end_ms = input_interval.next_period_open_ms;
     // barmerge.gaps_on for one series: the input delivered nothing of its
     // own, so the series has no value on it -- on the pull side
     // (native_series_bar answers nullopt) and on the push side
@@ -10679,7 +10785,7 @@ bool NativeExecutionConsumer::pump_timeframe_subscriptions(
                 return deliver_timeframe_bar(engine, subscription, bucket, first_ms,
                                              bar.timestamp, completion);
             };
-            if (!feed_auxiliary_slice(engine, subscription, index, input_period_end_ms,
+            if (!feed_auxiliary_slice(engine, subscription, index, input_interval,
                                       deliver)) {
                 return false;
             }
@@ -10688,6 +10794,25 @@ bool NativeExecutionConsumer::pump_timeframe_subscriptions(
         }
         auto& state =
             engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
+        if (engine.native_fixed_security_clock(state)) {
+            const auto interval = completion_input_interval(input_interval);
+            if (interval) {
+                auto horizon = std::min(interval->last_traded_close_ms, interval->next_period_open_ms);
+                const auto next = subscription_next_input_ms(index);
+                if (next > bar.timestamp) horizon = std::min(horizon, next);
+                const auto deliver = [&](const Bar& bucket, int, std::int64_t first_ms,
+                                         NativeCompletionKind completion) {
+                    delivered = true;
+                    return deliver_timeframe_bar(engine, subscription, bucket, first_ms,
+                                                 bar.timestamp, completion);
+                };
+                if (!feed_fixed_subscription(engine, subscription, index, &bar, horizon, next,
+                                             deliver))
+                    return false;
+            }
+            if (!delivered) clear_if_gapped(subscription);
+            continue;
+        }
         if (subscription.bucket_first_index < 0) {
             subscription.bucket_first_index = index;
             subscription.bucket_first_ms = bar.timestamp;
@@ -11056,6 +11181,15 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
     input_context.input_index = index;
     input_context.completes_script_interval =
         interval->next_period_open_ms >= script_interval->next_period_open_ms;
+    struct AcceptedInputScope {
+        NativeExecutionConsumer& consumer;
+        const NativeInputContext* previous;
+        AcceptedInputScope(NativeExecutionConsumer& value, const NativeInputContext& context)
+            : consumer(value), previous(value.accepted_input_context_) {
+            consumer.accepted_input_context_ = &context;
+        }
+        ~AcceptedInputScope() { consumer.accepted_input_context_ = previous; }
+    } accepted_scope(*this, input_context);
     // The accepted pre-roll horizon of a selected batch: the first input at or
     // after T finds the last pre-T bucket still pending when its own inputs
     // stopped short of the script interval's end. It is completed here, ahead
@@ -11075,6 +11209,17 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
             engine.runtime_contexts().append_live(bar);
         else
             engine.runtime_contexts().accept_batch(static_cast<std::uint64_t>(index) + 1);
+    }
+    const bool native_fixed = std::any_of(
+        engine.security_eval_states_.begin(), engine.security_eval_states_.end(),
+        [&engine](const auto& state) { return engine.native_fixed_security_clock(state); });
+    // A source callback can itself publish requested bars. A lazy chart seal
+    // must therefore precede that callback, as well as the subscription pump,
+    // when authoritative completion is active. The incoming close otherwise
+    // leaks into the old chart (including when it falls inside this input).
+    if (native_fixed && !seal_stale_script(engine, script_interval->open_ms)) {
+        processing_input_ = false;
+        return false;
     }
     if (!invoke_input_callback(engine, bar, input_context)) {
         processing_input_ = false;
@@ -11307,7 +11452,7 @@ void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars
         MagnifierDistribution::ENDPOINTS, engine.magnifier_volume_weighted_, 2};
     args.simple_run = true;
     if (!prepare_public_begin(engine, args)) return;
-    if (!admit_public_begin(engine, "native run requires configure_native")) return;
+    if (!admit_public_begin(engine, "native run requires configure_native before each run")) return;
     clear_rendered(engine);
     engine.last_run_status_ = 0;
     engine.abort_requested_.store(false, std::memory_order_relaxed);
@@ -11353,7 +11498,7 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
     const NativeBeginArgs args{input_bars, n_input, input_tf, script_tf, bar_magnifier,
         magnifier_samples, magnifier_dist, engine.magnifier_volume_weighted_, 2};
     if (!prepare_public_begin(engine, args)) return;
-    if (!admit_public_begin(engine, "native run requires configure_native")) return;
+    if (!admit_public_begin(engine, "native run requires configure_native before each run")) return;
     clear_rendered(engine);
     engine.last_run_status_ = 0;
     engine.abort_requested_.store(false, std::memory_order_relaxed);
@@ -11418,7 +11563,7 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
     args.syminfo = &syminfo;
     args.overrides_opaque = overrides;
     if (!prepare_public_begin(engine, args)) return;
-    if (!admit_public_begin(engine, "native run requires configure_native")) return;
+    if (!admit_public_begin(engine, "native run requires configure_native before each run")) return;
     clear_rendered(engine);
     engine.last_run_status_ = 0;
     engine.abort_requested_.store(false, std::memory_order_relaxed);

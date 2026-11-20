@@ -319,6 +319,7 @@
     "native run number does not exceed high-water",
     "native run number must exceed consumed high-water",
     "native run requires configure_native",
+    "native run requires configure_native before each run",
     "native run spec rejected",
     "native script interval lookup failed",
     "native selected scope identity mismatch",

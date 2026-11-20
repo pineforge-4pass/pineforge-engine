@@ -1279,7 +1279,13 @@ class RealTree(unittest.TestCase):
         # writer's allocation and its append. All remain OPEN.
         # KC and KCW constructor refusals add one OPEN group (U1930).
         # The checked adapters use the existing OPEN group U0439.
-        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3 + 1
+        # expectation corrected: 1636 -> 1637, because U1910 adds one unreviewed
+        # group (#718): the input timeframe text each request.security evaluator
+        # keeps for the fixed-period request clock. Five site identities also
+        # enter existing OPEN groups without adding a group: the four insertions
+        # of that clock's projection (U0652-U0655) and one parsed timeframe that
+        # a call holds in a local named tf (U1048). All remain OPEN.
+        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3 + 1 + 1
         self.assertEqual(c['OPEN'], expected_open)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])

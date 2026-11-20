@@ -1241,6 +1241,11 @@ void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const
             f.i(sec_id);
             f.b(pine.lookahead_on);
             f.b(pine.gaps_on);
+            if (pine.native_gap_chart_open) {
+                f.s("native-gap-chart/v1");
+                f.b(pine.native_gap_chart_open.has_value());
+                f.i(*pine.native_gap_chart_open);
+            }
             f.i(pine.publish_gate_tf_seconds);
             f.b(pine.calling_close_completes_partial);
             // Folded only when set: every site that loads bars keeps the

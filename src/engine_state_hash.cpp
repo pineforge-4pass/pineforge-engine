@@ -21,6 +21,25 @@ void BacktestEngine::hash_source_extension(BrokerStateHashSink& sink) const {
     sink.s("source:none");
 }
 
+bool BacktestEngine::hash_fixed_security_clocks(BrokerStateHashSink& f) const noexcept {
+    // No bytes for an evaluator that never entered the opt-in clock.
+    bool present = false;
+    for (const auto& state : security_eval_states_) {
+        const auto& clock = state.fixed_clock;
+        if (!clock.cursor_ms) continue;
+        present = true;
+        static constexpr char domain[] = "native-fixed-security-clock/v1";
+        f.u(sizeof(domain) - 1); f.bytes(domain, sizeof(domain) - 1);
+        f.i(state.sec_id); f.s(state.tf); f.s(state.evaluator_input_tf);
+        f.b(clock.cursor_ms.has_value()); f.i(*clock.cursor_ms);
+        f.i(clock.observed_count);
+        f.d(clock.observed.open); f.d(clock.observed.high);
+        f.d(clock.observed.low); f.d(clock.observed.close);
+        f.d(clock.observed.volume); f.i(clock.observed.timestamp);
+    }
+    return present;
+}
+
 uint64_t BacktestEngine::broker_state_hash() const {
     // The selected-window fence comes first, ahead of the projection (a
     // virtual, so a host override) and of any fold: a read the window no longer
@@ -132,6 +151,7 @@ uint64_t BacktestEngine::broker_state_hash_from_execution_hash(
     f.u(trades_.size());
     f.u(as_native_consumer(execution_consumer()).closed_rows_digest(trades_));
 
+    hash_fixed_security_clocks(f);
     hash_host_extension(f);
     return f.h;
 }

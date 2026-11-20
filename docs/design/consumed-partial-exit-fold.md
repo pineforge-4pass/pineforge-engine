@@ -56,8 +56,8 @@ The slab uses design (b), maintained transforms. Deferring the sort until a
 hash request would put the work on the per-bar path. The scheduler calls
 `scheduler_record_broker_hash` once per terminal script dispatch, including
 its quiet carried-callback branch
-(`src/source/pine_scheduler_native.cpp:743`,
-`src/source/pine_scheduler_native.cpp:772`). With recording enabled this
+(`src/source/pine_scheduler_native.cpp:758`,
+`src/source/pine_scheduler_native.cpp:805`). With recording enabled this
 calls `broker_state_hash` (`src/source/pine_strategy_host.cpp:3981`).
 `on_native_bar` then refreshes the recorded row after the adapter's close
 (`src/source/pine_strategy_host.cpp:953`); its `recording` guard
@@ -69,7 +69,7 @@ Terminal input updates also call `capture_script_continuation_hash`
 (`src/source/pine_strategy_host.cpp:905`). Without recording, that refresh
 does not call the broker hash; explicit broker/stream hash queries still do.
 Each broker hash reaches `hash_host_extension`
-(`src/engine_state_hash.cpp:135`); the adapter's `hash_state`
+(`src/engine_state_hash.cpp:155`); the adapter's `hash_state`
 (`src/source/pine_state_hash.cpp:358`) calls exactly one `fold_sorted`
 (`src/source/pine_state_hash.cpp:619`). A full-table lazy rebuild per dirty
 bar is therefore unsuitable.
