@@ -1726,6 +1726,66 @@ void test_fixed_period_late_completion_case(bool late) {
     }
 }
 
+// A sparse auxiliary feed leaves the 75-minute bucket open after the last
+// feed bar. The next primary input has no feed bar in its slice, so the
+// auxiliary tail drain is the only route that can deliver the bucket.
+void test_fixed_period_auxiliary_no_feed_bar_tail() {
+    scenario = "fixed-period auxiliary no-feed-bar tail";
+    namespace fact = native_fixed_period_fixture;
+    const auto primary = fact::input(60, 180);
+    NativeRunSpec spec = base_spec("60", "60", "native-fixed-aux-no-feed-bar");
+    NativeTimeframeSubscription series;
+    series.tf = "75";
+    series.authoritative_bars = fact::native();
+    NativeAuxiliaryFeed feed;
+    feed.tf = "10";
+    feed.bars = fact::input(10, 60);
+    spec.auxiliary_feed = feed;
+    series.source = NativeSeriesSource::AuxiliaryFeed;
+    spec.subscriptions.push_back(series);
+
+    CHECK(primary.size() >= 3);
+    CHECK(!feed.bars.empty());
+    if (primary.size() < 3 || feed.bars.empty()) return;
+    CHECK(feed.bars.back().timestamp < primary[1].timestamp);
+    CHECK(std::none_of(
+        feed.bars.begin(), feed.bars.end(),
+        [from = primary[1].timestamp, to = primary[2].timestamp](const Bar& bar) {
+            return bar.timestamp >= from && bar.timestamp < to;
+        }));
+
+    SeriesHost host;
+    const auto setup = host.configure_native(spec);
+    CHECK(setup.status == NativeSetupStatus::Applied);
+    if (setup.status != NativeSetupStatus::Applied) return;
+    host.run(primary.data(), static_cast<int>(primary.size()), "60", "60",
+             false, 4, MagnifierDistribution::ENDPOINTS);
+    CHECK(host.last_error().empty());
+    if (!host.last_error().empty()) return;
+    CHECK(host.bars_seen == static_cast<int>(primary.size()));
+
+    const Bar& target_row = series.authoritative_bars.front();
+    std::size_t target_delivery = 0;
+    int target_delivery_count = 0;
+    for (std::size_t i = 0; i < host.deliveries.size(); ++i) {
+        if (host.deliveries[i].bar.timestamp != target_row.timestamp) continue;
+        target_delivery = i;
+        ++target_delivery_count;
+    }
+    CHECK(target_delivery_count == 1);
+    if (target_delivery_count != 1) return;
+    const Delivery& delivery = host.deliveries[target_delivery];
+    check_bucket(delivery.bar, target_row, "auxiliary no-feed-bar payload");
+    CHECK(delivery.accessor_matches);
+    CHECK(delivery.context.completion == NativeCompletionKind::LazyComplete);
+    CHECK(delivery.context.delivered_at_ms == primary[1].timestamp);
+    CHECK(delivery.bars_before == 1);
+
+    const std::string htf_event =
+        "htf:0@" + std::to_string(target_row.timestamp);
+    CHECK(std::count(host.log.begin(), host.log.end(), htf_event) == 1);
+}
+
 // ---- a supplied fixed-period bar off its requested grid -------------------
 
 // The refusal of a supplied bar that does not open on its requested grid, as
@@ -1840,11 +1900,13 @@ int main(int argc, char** argv) {
             test_fixed_period_late_completion_case(true);
         } else if (std::string(argv[2]) == "late-fixed-subscription-control") {
             test_fixed_period_late_completion_case(false);
+        } else if (std::string(argv[2]) == "auxiliary-no-feed-bar-tail") {
+            test_fixed_period_auxiliary_no_feed_bar_tail();
         } else {
             std::printf(
                 "usage: test_native_htf_subscriptions "
                 "[--only off-grid-classification|late-fixed-subscription-completion|"
-                "late-fixed-subscription-control]\n");
+                "late-fixed-subscription-control|auxiliary-no-feed-bar-tail]\n");
             return 2;
         }
         std::printf("native HTF subscriptions: %d checks, %d failures\n", checks, failures);
@@ -1854,7 +1916,7 @@ int main(int argc, char** argv) {
         std::printf(
             "usage: test_native_htf_subscriptions "
             "[--only off-grid-classification|late-fixed-subscription-completion|"
-            "late-fixed-subscription-control]\n");
+            "late-fixed-subscription-control|auxiliary-no-feed-bar-tail]\n");
         return 2;
     }
     test_hourly_over_quarter_hour();
