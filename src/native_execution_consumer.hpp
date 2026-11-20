@@ -184,9 +184,9 @@ public:
             ? &accepted_input_context_->input_interval
             : input_callback_context_ ? &input_callback_context_->input_interval
             : last_accepted_input_ ? &*last_accepted_input_ : nullptr;
-        if (!latest || stamp > latest->open_ms) return std::nullopt;
-        if (stamp == latest->open_ms || stamp == latest->eligible_open_ms)
+        if (latest && native_confirmed_bar_label_admitted(*latest, stamp))
             return completion_input_interval(*latest);
+        if (!latest || stamp > latest->open_ms) return std::nullopt;
         const auto interval = input_interval_at(stamp);
         return interval ? completion_input_interval(*interval) : std::nullopt;
     }
