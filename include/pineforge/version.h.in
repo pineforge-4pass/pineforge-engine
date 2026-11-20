@@ -19,7 +19,7 @@
  * PINEFORGE_VERSION_SOURCE=FILE. */
 #define PINEFORGE_VERSION_FULL    "@PINEFORGE_VERSION_FULL@"
 
-/* Build Git SHA (usually abbreviated), or "unknown" if unavailable. */
+/* Build Git SHA (abbreviation length varies), or "unknown" if unavailable, even in a checkout. */
 #define PINEFORGE_GIT_SHA         "@PINEFORGE_VERSION_GIT_SHA@"
 
 #endif /* PINEFORGE_VERSION_H */

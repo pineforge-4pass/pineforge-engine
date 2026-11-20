@@ -1937,10 +1937,10 @@ typedef struct pf_version_s {
     int         major;       /**< Major version. */
     int         minor;       /**< Minor version. */
     int         patch;       /**< Patch version. */
-    const char* commit_sha;  /**< Short git commit SHA, or `""` if unknown. */
+    const char* commit_sha;  /**< Build Git commit SHA (abbreviation length varies), or `""` if unavailable. */
 } pf_version_t;
 
-/** @return Linked runtime version. */
+/** @return Linked runtime version. The build SHA can be unavailable even in a Git checkout. */
 PF_API pf_version_t pf_version_get(void);
 
 /** @return Monotonic ABI version (see #PF_ABI_VERSION). */
@@ -1953,8 +1953,8 @@ PF_API int pf_abi_version(void);
  *  checkout, or exactly the `VERSION` file (`"MAJOR.MINOR.PATCH"`, or
  *  `"MAJOR.MINOR.PATCH-rc.N"` for a release candidate) for a tarball build
  *  or one configured with `PINEFORGE_VERSION_SOURCE=FILE`. #pf_version_get
- *  carries only the numeric MAJOR.MINOR.PATCH. The pointer is to a static
- *  string with program lifetime; do not free. */
+ *  exposes MAJOR.MINOR.PATCH in its numeric fields. The returned string has
+ *  program lifetime; do not free it. */
 PF_API const char* pf_version_string(void);
 
 /** @} */ /* end of pf_version */
