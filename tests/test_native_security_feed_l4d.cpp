@@ -1605,6 +1605,115 @@ void test_native_fixed_period_feed_shifted_during_run() {
         FEED_SHIFT_CHECK(error.find("native security feeds changed during the run") != std::string::npos);
     }
 }
+
+void test_native_fixed_lookahead_missing_row() {
+    using tv_fixed_period_75_fact::kOriginMs;
+    constexpr int chart_minutes = 60;
+    constexpr int fine_minutes = 5;
+    constexpr int requested_minutes = 75;
+    const auto missing_open = kOriginMs + requested_minutes * kMinute;
+    const auto next_open = missing_open + requested_minutes * kMinute;
+    const auto chart = native_fixed_period_fixture::input(chart_minutes, 4 * chart_minutes);
+    const auto dense = native_fixed_period_fixture::input(fine_minutes, 4 * chart_minutes);
+    const std::vector<Bar> native{
+        {800, 820, 790, 810, 42, kOriginMs},
+        {900, 920, 890, 910, 84, next_open},
+    };
+    const auto in_missing_period = [=](const Bar& bar) {
+        return missing_open <= bar.timestamp && bar.timestamp < next_open;
+    };
+    auto sparse = dense;
+    sparse.erase(std::remove_if(sparse.begin(), sparse.end(), in_missing_period),
+                 sparse.end());
+
+    // Independently roll up the real inputs of the missing period. Its first
+    // children belong to the preceding chart bar and the chart selecting it
+    // also contains children from the next requested period.
+    Bar aggregate{};
+    int contributors = 0;
+    for (const Bar& child : dense) {
+        if (!in_missing_period(child)) continue;
+        if (contributors++ == 0) aggregate = child;
+        else {
+            aggregate.high = std::max(aggregate.high, child.high);
+            aggregate.low = std::min(aggregate.low, child.low);
+            aggregate.close = child.close;
+            aggregate.volume += child.volume;
+        }
+    }
+    FIXED_CHECK(contributors == requested_minutes / fine_minutes);
+    const auto matches = [](const Bar& actual, const Bar& expected) {
+        return actual.timestamp == expected.timestamp && actual.open == expected.open
+            && actual.high == expected.high && actual.low == expected.low
+            && actual.close == expected.close && actual.volume == expected.volume;
+    };
+    const auto run = [&](FixedPeriodProbe& host, const std::vector<Bar>& aux, bool gaps) {
+        host.requested = std::to_string(requested_minutes);
+        host.ahead = true;
+        host.gaps = gaps;
+        install_fixed_native(host, native);
+        FIXED_CHECK(strategy_set_aux_security_feed(
+            static_cast<pf_strategy_t>(&host),
+            reinterpret_cast<const pf_bar_t*>(aux.data()), static_cast<int>(aux.size()),
+            std::to_string(fine_minutes).c_str()) == 0);
+        const auto chart_tf = std::to_string(chart_minutes);
+        host.run(chart.data(), static_cast<int>(chart.size()), chart_tf, chart_tf);
+        FIXED_CHECK(host.last_error().empty());
+        FIXED_CHECK(host.native_security_substitutions()
+                    == static_cast<std::int64_t>(native.size()));
+        FIXED_CHECK(host.reads.size() == chart.size());
+    };
+
+    for (const bool gaps : {false, true}) {
+        for (const bool observed : {false, true}) {
+            FixedPeriodProbe host;
+            run(host, observed ? dense : sparse, gaps);
+            FIXED_CHECK(host.native_security_misses() == (observed ? 1 : 0));
+            if (host.reads.size() != chart.size()) continue;
+
+            const auto& selected = host.reads[2];
+            FIXED_CHECK(selected.present == (observed || !gaps));
+            if (selected.present)
+                FIXED_CHECK(matches(selected.bar, observed ? aggregate : native.front()));
+            FIXED_CHECK(host.reads.front().present
+                        && matches(host.reads.front().bar, native.front()));
+            FIXED_CHECK(host.reads[1].present == !gaps);
+            if (host.reads[1].present)
+                FIXED_CHECK(matches(host.reads[1].bar, native.front()));
+            FIXED_CHECK(host.reads.back().present
+                        && matches(host.reads.back().bar, native.back()));
+
+            // Missing periods never allocate a history slot without inputs,
+            // and the next native row cannot be evaluated one chart early.
+            std::vector<Bar> completed;
+            for (std::size_t i = 0; i < host.evaluated_bars.size(); ++i) {
+                FIXED_CHECK(host.deliveries[i].requested_slot
+                            == static_cast<std::int64_t>(completed.size()));
+                if (host.deliveries[i].actual_complete)
+                    completed.push_back(host.evaluated_bars[i]);
+                FIXED_CHECK(observed || !in_missing_period(host.evaluated_bars[i]));
+            }
+            FIXED_CHECK(completed.size() == native.size() + (observed ? 1 : 0));
+            if (completed.size() == native.size() + (observed ? 1 : 0)) {
+                FIXED_CHECK(matches(completed.front(), native.front()));
+                if (observed) FIXED_CHECK(matches(completed[1], aggregate));
+                FIXED_CHECK(matches(completed.back(), native.back()));
+            }
+        }
+    }
+
+    // In projection mode the chart itself is the source of the fallback.
+    // There is one chart child in this period, and no finer input opens there.
+    FixedPeriodProbe projected;
+    projected.set_syminfo_metadata("historical_security_lookahead_projection", 1.0);
+    run(projected, sparse, false);
+    if (projected.reads.size() == chart.size()) {
+        FIXED_CHECK(projected.reads[2].present
+                    && matches(projected.reads[2].bar, chart[2]));
+        FIXED_CHECK(projected.reads.back().present
+                    && matches(projected.reads.back().bar, native.back()));
+    }
+}
 #undef FEED_SHIFT_CHECK
 #undef REPORTED_QUANTITY_CHECK
 #undef FIXED_CHECK
@@ -1632,6 +1741,7 @@ int main() {
     test_native_fixed_period_reported_entry_quantities();
     test_native_fixed_period_feed_removed_during_run();
     test_native_fixed_period_feed_shifted_during_run();
+    test_native_fixed_lookahead_missing_row();
     return fixed_failures == 0 ? 0 : 1;
 }
 
