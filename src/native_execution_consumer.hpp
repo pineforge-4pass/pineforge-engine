@@ -2488,6 +2488,10 @@ private:
     // selected engine reads closed from then on.
     void selected_query_begin_admitted(BacktestEngine& engine, bool selected) noexcept;
     void selected_query_seal() noexcept;
+    // Whether the point of an applied (fill) callback is current for a request
+    // made in it; defined at the end of native_execution_consumer.cpp. A member
+    // function, so no data member moves.
+    bool applied_open_is_current(const NativeCoordinate& coordinate) const noexcept;
     // Positive evidence that this consumer's selected run is open. Never
     // hashed, never a broker or trading-state input. Declared last so no member
     // the consumer reads at every point changes offset.

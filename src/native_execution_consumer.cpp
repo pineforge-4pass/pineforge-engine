@@ -3972,7 +3972,7 @@ native_order::CommandContext NativeExecutionConsumer::make_command_context(
     // authorization is carried separately and consumed by match_discrete.
     const bool applied_point_is_current = callback_phase_ == CallbackPhase::Applied
         && current_frame_
-        && (current_frame_->point.decision.coordinate.effective_time_ms >= decision_floor()
+        && (applied_open_is_current(current_frame_->point.decision.coordinate)
             || (remaining_path_coordinate(current_frame_->point.decision.coordinate)
                 && !std::holds_alternative<native_order::Market>(request.trigger)));
     ctx.decision_time_ms = (callback_phase_ == CallbackPhase::PreOpen || applied_point_is_current)
@@ -15308,6 +15308,36 @@ void NativeExecutionConsumer::record_live_run_warning(
         throw;
     }
     rendered.swap(run_warnings_json_);
+}
+
+namespace {
+
+// A confirmed script bucket aggregated from finer inputs has its decision
+// floor raised to the inputs' completion before the seal walks its modeled
+// path, whose open point is dated at the bucket's first input. On the chart
+// timeframe that open point sits at the floor. The open point of the bucket
+// being walked is therefore current there, as on the chart.
+bool modeled_open_of_floored_bucket(const NativeCoordinate& coordinate,
+                                    int64_t floor) noexcept {
+    return coordinate.provenance == NativePriceProvenance::ModeledOHLCOpen
+        && coordinate.path_phase == NativePathPhase::Open
+        && coordinate.completion == NativeCompletionKind::Confirmed
+        && coordinate.effective_time_ms < floor
+        && floor <= coordinate.next_period_open_ms;
+}
+
+} // namespace
+
+// The applied point's own time reaches the decision floor, or it is the open of
+// a bucket whose floor was raised past it (modeled_open_of_floored_bucket) on an
+// aggregated chart: one whose script bars are buckets gathered from finer inputs
+// (aggregates_input(), false for Passthrough, the byte-identical timeframes of a
+// plain chart). A plain chart keeps the floor. Both definitions sit at the end
+// of the file so that no line cited by the documentation moves.
+bool NativeExecutionConsumer::applied_open_is_current(const NativeCoordinate& coordinate) const noexcept {
+    return coordinate.effective_time_ms >= decision_floor()
+        || (aggregates_input()
+            && modeled_open_of_floored_bucket(coordinate, decision_floor()));
 }
 
 }  // namespace pineforge::engine_script_run_v20
