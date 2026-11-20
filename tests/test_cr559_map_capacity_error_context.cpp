@@ -40,19 +40,22 @@ NativeRunSpec spec_for(const char* session) {
     return spec;
 }
 
-void require_failure(BacktestEngine& host, cr559::Scalar expected_bar) {
-    auto* handle = &host;
-    cr559::require(strategy_last_run_status(handle) == 1, "map refusal did not fail the run");
-    const char* code = strategy_get_last_error_code(handle);
-    const char* args = strategy_get_last_error_args(handle);
-    const char* text = strategy_get_last_error(handle);
+void require_failure_record(BacktestEngine& host, cr559::Scalar expected_bar,
+                            const std::string& expected_text) {
+    const char* code = strategy_get_last_error_code(&host);
+    const char* args = strategy_get_last_error_args(&host);
+    const char* text = strategy_get_last_error(&host);
     cr559::require(code && std::string(code) == "pine_map_capacity_exceeded",
                    "map context row lost its typed failure");
     if (!args || std::string(args) != cr559::capacity_args(3, 4, expected_bar))
         throw std::runtime_error("wrong map refusal bar context: " +
                                  std::string(args ? args : "<null>"));
-    cr559::require(text && std::string(text) == cr559::capacity_message(3, 4, expected_bar),
-                   "map context row changed exact TV English");
+    cr559::require(text && text == expected_text, "map context row changed exact English");
+}
+
+void require_failure(BacktestEngine& host, cr559::Scalar expected_bar) {
+    cr559::require(strategy_last_run_status(&host) == 1, "map refusal did not fail the run");
+    require_failure_record(host, expected_bar, cr559::capacity_message(3, 4, expected_bar));
 }
 
 class LateNativeHost final : public NativeStrategyHost {
@@ -98,6 +101,44 @@ template <class Host, class... Args>
 std::unique_ptr<Host> make_limited_host(Args&&... args) {
     detail::MapPairLimitScope creation_policy(3);
     return std::make_unique<Host>(std::forward<Args>(args)...);
+}
+
+enum class StartupHook { Prepare, RunBegin };
+
+class StartupCapacityHost final : public NativeStrategyHost {
+public:
+    explicit StartupCapacityHost(StartupHook hook) : hook_(hook) {}
+
+    void prepare_native_begin(const NativeBeginArgs&) override {
+        if (hook_ == StartupHook::Prepare) exceed_limit();
+    }
+    void on_native_run_begin() override {
+        if (hook_ == StartupHook::RunBegin) exceed_limit();
+    }
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override { ++bar_calls; }
+
+    int bar_calls = 0;
+
+private:
+    static void exceed_limit() {
+        auto map = cr559::Map::new_();
+        for (cr559::Scalar index = 0; index < 4; ++index)
+            (void)map.put(cr559::key_for(index), cr559::value_for(index));
+    }
+
+    StartupHook hook_;
+};
+
+void run_startup_refusal(StartupHook hook) {
+    auto host = make_limited_host<StartupCapacityHost>(hook);
+    cr559::require(host->configure_native(spec_for("startup-map")).status ==
+                       NativeSetupStatus::Applied,
+                   "startup map fixture setup was refused");
+    host->run(bars.data(), static_cast<int>(bars.size()));
+    cr559::require(host->bar_calls == 0, "a bar ran after the startup map refusal");
+    require_failure_record(*host, -1,
+        "Error before the first bar: A map cannot have more than 3 key-value pairs. "
+        "The current size is 4.");
 }
 
 void run_late_native() {
@@ -166,6 +207,8 @@ int main() {
         run_late_native();
         {
             ta::BarContextScope unrelated(91, 0);
+            run_startup_refusal(StartupHook::Prepare);
+            run_startup_refusal(StartupHook::RunBegin);
             run_late_native();
             cr559::require(ta::bar_context().bar_index == 91,
                            "native callback changed the unrelated TA context");
@@ -182,7 +225,7 @@ int main() {
             require_failure(*parent, 37);
             standalone_context_is_restored();
         }
-        std::puts("CR559 context: late native, unrelated TA, nested Pine and both ambient paths checked");
+        std::puts("CR559 context: startup, late native, unrelated TA and nested Pine checked");
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "CR559 context FAIL: %s\n", error.what());

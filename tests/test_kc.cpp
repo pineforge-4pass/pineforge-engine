@@ -71,12 +71,16 @@ static void expect_constructor_refusal(int length, double mult, const char* func
 template <class Channel>
 static void test_constructor_validation(const char* function) {
     const std::string stop = std::string(") in the '") + function + "' function. It must be > 0.";
+    constexpr char before_first_bar[] = "Error before the first bar: ";
     expect_constructor_refusal<Channel>(0, 0.75, function, "length", "must_be_positive",
-                                        (" (0" + stop).c_str(), "");
+                                        (" (0" + stop).c_str(), before_first_bar);
     expect_constructor_refusal<Channel>(-2, 1.5, function, "length", "must_be_positive",
-                                        (" (-2" + stop).c_str(), "");
+                                        (" (-2" + stop).c_str(), before_first_bar);
     expect_constructor_refusal<Channel>(na<int>(), 2.5, function, "length", "must_not_be_na",
-        (std::string(" in the '") + function + "' function. It must not be na").c_str(), "");
+        (std::string(" in the '") + function + "' function. It must not be na").c_str(),
+        before_first_bar);
+    expect_constructor_refusal<Channel>(3, -0.25, function, "mult", "must_be_positive",
+                                        (" (-0.25" + stop).c_str(), before_first_bar);
     ta::BarContextScope context(7, 9000);
     expect_constructor_refusal<Channel>(3, -0.0, function, "mult", "must_be_positive",
                                         (" (-0" + stop).c_str(), "Error on bar 7: ");
