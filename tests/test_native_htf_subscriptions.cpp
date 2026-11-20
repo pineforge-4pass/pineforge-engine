@@ -1939,6 +1939,7 @@ int main(int argc, char** argv) {
     test_fixed_period_early_close_gate();
     test_fixed_period_session_hole_is_not_a_close();
     test_fixed_period_late_completion_case(true);
+    test_fixed_period_auxiliary_no_feed_bar_tail();
     test_fixed_period_off_grid_classification();
     std::printf("native HTF subscriptions: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
