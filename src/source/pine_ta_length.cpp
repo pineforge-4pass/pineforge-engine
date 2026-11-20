@@ -489,10 +489,7 @@ void SeriesSma::ensure_capacity() {
 double SeriesSma::mean(std::size_t length) const {
     if (length > count_) return na<double>();
 
-    // Nonoverlapping partials have distinct highest set bits. Allow one
-    // slot per binary64 bit position, a zero, and room for the next insert.
-    using Limits = std::numeric_limits<double>;
-    double partials[Limits::max_exponent - Limits::min_exponent + Limits::digits + 2];
+    double partials[::pineforge::detail::kWindowSumPartialCapacity];
     std::size_t parts = 0;
     const auto partial = [&partials](std::size_t i) -> double& { return partials[i]; };
     const auto first = (head_ + kCapacity - length) % kCapacity;
