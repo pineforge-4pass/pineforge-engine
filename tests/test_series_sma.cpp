@@ -278,7 +278,6 @@ void tv_clock_na_prefix() {
 void precision_and_order() {
     // Exact integer sums: [2^53, 1, -2^53] sums to 1, and adding 5,-3
     // sums to 3. Independent rational means distinguish lost low addends.
-    // They specify the chosen compensated path, not measured TV bit order.
     const Row rows[] = {
         {0x1p53, 1, 0x1p53},
         {1, 2, 0x1p52},
@@ -296,6 +295,21 @@ void precision_and_order() {
     expect(actual.recompute(3, 5), 1.8); // exact sum 9
     expect(actual.recompute(-5, 2), 0);
     expect(actual.compute(9, 6), 1.6666666666666667); // exact sum 10
+
+    // The two large values cancel, as do 1 and -1. A single compensation
+    // term loses the third addend when it is rounded into 1.
+    constexpr double tiny = 1e-16;
+    constexpr double window[] = {1e16, 1.0, tiny, -1e16, -1.0};
+    SeriesSma variable;
+    pineforge::ta::SMA fixed(5);
+    double series_mean = na<double>();
+    double fixed_mean = na<double>();
+    for (double value : window) {
+        series_mean = variable.compute(value, 5);
+        fixed_mean = fixed.compute(value);
+    }
+    assert(fixed_mean == tiny / 5.0);
+    assert(series_mean == fixed_mean);
 }
 
 void retained_history_and_storage() {
@@ -367,9 +381,8 @@ void constant_length_corpus_comparison() {
     // tests/fixtures/qty_step_mincontract/btc60/feed/bars.csv (header + 1441).
     // This fixed-N=20 exercise of the VARIABLE adapter is not coverage of a
     // generated constant-length script or proof of its codegen routing.
-    // The 1.13.0 variable-length path temporarily uses Neumaier arithmetic;
-    // measure its difference from real fixed SMA across every numeric row.
-    // No alignment/parity verdict or expected difference count/max is pinned.
+    // Report the numeric difference from fixed SMA across every numeric row.
+    // This feed does not provide independent TradingView expectations.
     const std::string file = __FILE__;
     const auto slash = file.find_last_of("/\\");
     assert(slash != std::string::npos);
