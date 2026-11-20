@@ -92,6 +92,20 @@ int timeframe_count(const std::string& text) {
     }
 }
 
+// `count` units of `unit_seconds` each, multiplied in 64 bits. Seconds that
+// do not fit this legacy int API get the refusal of a count that does not.
+int timeframe_seconds(int count, int unit_seconds, const std::string& tf) {
+    const int64_t seconds = static_cast<int64_t>(count) * unit_seconds;
+    if (seconds < std::numeric_limits<int>::min()
+        || seconds > std::numeric_limits<int>::max()) {
+        throw coded<std::out_of_range>(
+            RunFailureCode::pine_invalid_argument,
+            {{"argument", "timeframe"}, {"rule", "unparseable"}},
+            "timeframe '" + tf + "': seconds out of int range");
+    }
+    return static_cast<int>(seconds);
+}
+
 }  // namespace
 
 int tf_to_seconds(const std::string& tf) {
@@ -112,14 +126,16 @@ int tf_to_seconds(const std::string& tf) {
         // like M. Its parsed day count still drives the generated partition;
         // this is not a limit on the number of dates a bucket can hold.
         if (n > std::numeric_limits<int>::max() / 86400) return -1;
-        return n * 86400;
+        return timeframe_seconds(n, 86400, tf);
     }
 
     if (last == 'W') {
         // "W" or "1W" etc.
         if (tf.size() == 1) return 604800;
         int n = timeframe_count(tf.substr(0, tf.size() - 1));
-        return n * 604800;
+        // Calendar-only past the int too, as a day count is above.
+        if (n > std::numeric_limits<int>::max() / 604800) return -1;
+        return timeframe_seconds(n, 604800, tf);
     }
 
     if (last == 'S') {
@@ -131,20 +147,22 @@ int tf_to_seconds(const std::string& tf) {
         return n;
     }
 
-    // All-numeric: minutes
+    // All-numeric: minutes. They have no calendar meaning to fall back on.
     int minutes = timeframe_count(tf);
-    return minutes * 60;
+    return timeframe_seconds(minutes, 60, tf);
 }
 
 int tf_ratio(const std::string& input_tf, const std::string& target_tf) {
     int input_s = tf_to_seconds(input_tf);
     int target_s = tf_to_seconds(target_tf);
 
-    // Calendar-only durations include a day count too large for the legacy
-    // seconds API. Equal day literals still pass their input bars through.
+    // Calendar-only durations include a day or week count too large for the
+    // legacy seconds API (-1). Equal day literals, and equal calendar-only
+    // week literals, still pass their input bars through.
     if (target_s < 0) {
-        if (input_tf == target_tf
-            && calendar_period_for(target_tf) == CalendarPeriod::DAY) return 1;
+        const CalendarPeriod period = calendar_period_for(target_tf);
+        if (input_tf == target_tf && (period == CalendarPeriod::DAY
+                || (period == CalendarPeriod::WEEK && target_s == -1))) return 1;
         return -1;
     }
 
