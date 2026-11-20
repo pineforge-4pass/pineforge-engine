@@ -166,19 +166,22 @@ public:
 #if defined(__linux__)
     // Open files of this live runner that sit in `directory` and have no name
     // (O_TMPFILE, or mkstemp then unlink): /proc shows "<path> (deleted)".
-    std::size_t unnamed_files_in(const fs::path& directory) const {
+    std::vector<std::string> unnamed_file_names_in(const fs::path& directory) const {
         const std::string prefix = directory.string() + "/";
         const std::string suffix = " (deleted)";
-        std::size_t count = 0;
+        std::vector<std::string> names;
         for (const auto& entry : fs::directory_iterator("/proc/" + std::to_string(pid_) + "/fd")) {
             std::error_code error;
             const auto target = fs::read_symlink(entry.path(), error).string();
             if (error || target.size() < prefix.size() + suffix.size()) continue;
             if (target.compare(0, prefix.size(), prefix) == 0 &&
                 target.compare(target.size() - suffix.size(), suffix.size(), suffix) == 0)
-                ++count;
+                names.push_back(target.substr(prefix.size(), target.size() - prefix.size() - suffix.size()));
         }
-        return count;
+        return names;
+    }
+    std::size_t unnamed_files_in(const fs::path& directory) const {
+        return unnamed_file_names_in(directory).size();
     }
 #endif
     bool exited() const {
@@ -1510,6 +1513,67 @@ void spool_write_failure_finishes(Fixture& fixture) {
 }
 
 #if defined(__linux__)
+void spool_probe_failure_keeps_curve_resident(Fixture& fixture) {
+    const auto directory = fs::canonical(fixture.temporary.path) / "ledger";
+    const auto temporary = directory.parent_path() / "fallback";
+    fs::create_directory(directory);
+    fs::create_directory(temporary);
+    struct statfs backing{};
+    require(::statfs(temporary.c_str(), &backing) == 0 &&
+                static_cast<std::uint32_t>(backing.f_type) != UINT32_C(0x01021994) &&
+                static_cast<std::uint32_t>(backing.f_type) != UINT32_C(0x858458f6),
+            "the fallback directory must be disk-backed");
+    const auto ledger = directory / "run.sqlite";
+    const auto status = directory.parent_path() / "run.status";
+    auto command = fixture.command(ledger, status, "--report-jsonl=delta", 0);
+    Database keeper(nullptr, sqlite3_close);
+    {
+        Runner seed(command, directory.parent_path() / "seed.stderr");
+        wait_ready(status, 0, seed);
+        // Keep the pre-existing SQLite sidecars open across the restart.
+        keeper = open_database(ledger, SQLITE_OPEN_READONLY);
+        execute(keeper.get(), "BEGIN; SELECT COUNT(*) FROM inputs;");
+        check_summary(seed.finish(), 0, 0);
+    }
+    fs::remove(status);
+    command.insert(command.end(), {"--native-event-retention", "window"});
+    const struct RestoreWrite {
+        const fs::path& path;
+        ~RestoreWrite() {
+            std::error_code ignored;
+            fs::permissions(path, fs::perms::owner_write, fs::perm_options::add, ignored);
+        }
+    } writable{directory};
+    fs::permissions(directory, fs::perms::owner_write, fs::perm_options::remove);
+    require(::access(directory.c_str(), W_OK) == -1 && errno == EACCES,
+            "the test process must not be able to write in the ledger directory");
+    require(::setenv("TMPDIR", temporary.c_str(), 1) == 0, "cannot set the fallback directory");
+    Runner child(std::move(command), directory.parent_path() / "probe.stderr");
+    wait_ready(status, 0, child);
+    // The engine keeps its command journal in an unnamed file in TMPDIR in every run. Only
+    // the report scratch (file names starting "pineforge-scratch") must stay out of it.
+    auto held = child.unnamed_file_names_in(temporary);
+    child.send(fixture.inputs.front() + "\n");
+    child.line();
+    const auto held_after_input = child.unnamed_file_names_in(temporary);
+    held.insert(held.end(), held_after_input.begin(), held_after_input.end());
+    check_summary(child.finish(), 1, 1);
+    const auto errors = child.errors();
+    require(occurrences(errors, "cumulative report spool cannot be created") == 1,
+            "startup spool probe did not fail exactly once: " + errors);
+    std::size_t report_scratch_files = 0;
+    std::string held_names;
+    for (const auto& name : held) {
+        held_names += "[" + name + "]";
+        if (name.rfind("pineforge-scratch", 0) == 0) ++report_scratch_files;
+    }
+    require(fs::is_empty(temporary) && report_scratch_files == 0 &&
+                occurrences(errors, "the live report's equity curve stays in memory: ") == 1 &&
+                errors.find("the ledger's directory cannot hold scratch files") != std::string::npos,
+            "expected a resident curve and one warning; unnamed files held in the fallback directory: " +
+                held_names + ": " + errors);
+}
+
 // A ledger on tmpfs: the spool probe admits the directory (O_TMPFILE works
 // there), so the runner must warn that the settled rows stay in memory
 // (runner/main.cpp, the statfs check after the ReportSpool probe). Returns
@@ -1681,6 +1745,10 @@ int main(int argc, char** argv) {
 #endif
         } else if (test_case == "spool-write-failure") {
             spool_write_failure_finishes(fixture);
+#if defined(__linux__)
+        } else if (test_case == "spool-probe-failure") {
+            spool_probe_failure_keeps_curve_resident(fixture);
+#endif
         } else if (test_case == "tmpfs-spool-warning") {
 #if defined(__linux__)
             if (!tmpfs_spool_warns(fixture)) {

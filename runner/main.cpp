@@ -1280,14 +1280,19 @@ int run(Config c) {
     std::unique_ptr<pineforge::LiveReportAccumulator> accumulator;
     if (strategy.has_current_engine_layout &&
         c.native_event_retention == pineforge::NativeEventRetention::Window) {
-        try {
-            accumulator = std::make_unique<pineforge::LiveReportAccumulator>(c.ratio_interval,
-                report_scratch, static_cast<pineforge::BacktestEngine*>(strategy.state));
-        } catch (const std::exception& error) {
-            // The engine's scratch needs a disk-backed directory. A ledger on a
-            // memory filesystem keeps the curve where it always was.
+        if (report_scratch.empty()) {
             std::cerr << "pineforge-live: warning: the live report's equity curve stays in memory: "
-                      << error.what() << '\n';
+                      << "the ledger's directory cannot hold scratch files\n";
+        } else {
+            try {
+                accumulator = std::make_unique<pineforge::LiveReportAccumulator>(c.ratio_interval,
+                    report_scratch, static_cast<pineforge::BacktestEngine*>(strategy.state));
+            } catch (const std::exception& error) {
+                // The engine's scratch needs a disk-backed directory. A ledger on a
+                // memory filesystem keeps the curve where it always was.
+                std::cerr << "pineforge-live: warning: the live report's equity curve stays in memory: "
+                          << error.what() << '\n';
+            }
         }
     }
     if (!accumulator) accumulator = std::make_unique<pineforge::LiveReportAccumulator>(c.ratio_interval);

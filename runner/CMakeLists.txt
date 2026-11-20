@@ -674,6 +674,11 @@ if(PINEFORGE_BUILD_TESTS)
     add_test(NAME test_native_live_report_spool_write_failure COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> spool-write-failure)
     set_tests_properties(test_native_live_report_spool_write_failure PROPERTIES TIMEOUT 0)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME test_native_live_report_spool_probe_failure COMMAND test_native_live_report_cli
+            $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> spool-probe-failure)
+        set_tests_properties(test_native_live_report_spool_probe_failure PROPERTIES TIMEOUT 0)
+    endif()
     add_executable(test_native_live_report_curve_staging_work
         ${PROJECT_SOURCE_DIR}/tests/test_native_live_report_curve_staging_work.cpp)
     target_include_directories(test_native_live_report_curve_staging_work PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
