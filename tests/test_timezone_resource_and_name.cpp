@@ -63,10 +63,30 @@ void setenv_failure_rows() {
     const auto real = libc_setenv();
     CHECK(real != nullptr);
     if (real == nullptr) return;
+    const char* const found = std::getenv("TZ");
+    const bool had_zone = found != nullptr;
+    const std::string original = had_zone ? found : "";
+    ::tzset();
+    const std::time_t zero = 0;
+    std::tm before{};
+    CHECK(::localtime_r(&zero, &before) != nullptr);
+    {
+        pineforge::tz_util::ScopedTimezone guard("UTC+9");
+        std::tm inside{};
+        CHECK(::localtime_r(&zero, &inside) != nullptr);
+        CHECK(inside.tm_hour == 9);
+    }
+    // The guard has ended: the zone it found is back in force, both as TZ and as the local time of the epoch.
+    const char* const restored = std::getenv("TZ");
+    CHECK((restored != nullptr) == had_zone);
+    CHECK(restored == nullptr || original == restored);
+    std::tm after{};
+    CHECK(::localtime_r(&zero, &after) != nullptr);
+    CHECK(after.tm_hour == before.tm_hour);
     for (const int error : {ENOMEM, EINVAL}) {
-        {
-            pineforge::tz_util::ScopedTimezone previous("UTC+9");
-        }
+        // Put the previous zone in force by hand: the guard above is the one asserted to put its zone back.
+        CHECK(real("TZ", "UTC-9", 1) == 0);
+        ::tzset();
         setenv_failed = false;
         setenv_failure = error;
         bool threw = false;
@@ -93,6 +113,9 @@ void setenv_failure_rows() {
         CHECK(::localtime_r(&epoch, &local) != nullptr);
         CHECK(local.tm_hour == 9);
     }
+    // Hand back the zone this process had, so that the guard below restores it and nothing outlives this function.
+    CHECK((had_zone ? real("TZ", original.c_str(), 1) : ::unsetenv("TZ")) == 0);
+    ::tzset();
     pineforge::tz_util::ScopedTimezone target("UTC+3");
     const std::time_t epoch = 0;
     std::tm local{};
