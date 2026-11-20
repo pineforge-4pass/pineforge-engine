@@ -135,7 +135,11 @@ public:
             descriptor_ = ::mkstemp(name.data());
             if (descriptor_ < 0)
                 throw std::runtime_error("cumulative report spool cannot be created");
-            ::unlink(name.c_str());
+            if (::unlink(name.c_str()) != 0) {
+                ::close(descriptor_);
+                (void)::unlink(name.c_str()); // Best effort; no report bytes have been written.
+                throw std::runtime_error("cumulative report spool cannot be created");
+            }
             const int flags = ::fcntl(descriptor_, F_GETFD);
             if (flags >= 0) ::fcntl(descriptor_, F_SETFD, flags | FD_CLOEXEC);
         }
