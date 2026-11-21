@@ -526,9 +526,40 @@ std::string time_format_tokens(std::string fmt) {
     return fmt;
 }
 
-std::string time_format_chunk(const std::string& fmt, const std::tm& fields) {
+size_t time_format_directive_end(const std::string& fmt, size_t first) {
+    size_t pos = first + 1;
+    while (pos < fmt.size() && std::strchr("_-0^#", fmt[pos])) ++pos;
+    while (pos < fmt.size() && fmt[pos] >= '0' && fmt[pos] <= '9') ++pos;
+    if (pos < fmt.size() && (fmt[pos] == 'E' || fmt[pos] == 'O')) ++pos;
+    if (pos < fmt.size()) ++pos;
+    return pos;
+}
+
+std::string time_format_unix_seconds(const std::string& fmt, time_t unix_seconds) {
+    // `%s` is the Unix timestamp, so do not let strftime reinterpret the
+    // civil fields through the process timezone.
+    const std::string seconds = std::to_string(static_cast<long long>(unix_seconds));
+    std::string expanded;
+    for (size_t pos = 0; pos < fmt.size();) {
+        if (fmt[pos] != '%') {
+            expanded += fmt[pos++];
+            continue;
+        }
+        const size_t first = pos;
+        pos = time_format_directive_end(fmt, first);
+        if (pos == first + 2 && fmt[first + 1] == 's') {
+            expanded += seconds;
+        } else {
+            expanded.append(fmt, first, pos - first);
+        }
+    }
+    return expanded;
+}
+
+std::string time_format_chunk(const std::string& fmt, const std::tm& fields,
+                              time_t unix_seconds) {
     // A marker distinguishes an empty expansion from insufficient storage.
-    const std::string marked = " " + fmt;
+    const std::string marked = " " + time_format_unix_seconds(fmt, unix_seconds);
     const size_t maximum = marked.max_size();
     size_t directives = 0;
     size_t largest_width = 0;
@@ -575,16 +606,8 @@ std::string time_format_chunk(const std::string& fmt, const std::tm& fields) {
     }
 }
 
-size_t time_format_directive_end(const std::string& fmt, size_t first) {
-    size_t pos = first + 1;
-    while (pos < fmt.size() && std::strchr("_-0^#", fmt[pos])) ++pos;
-    while (pos < fmt.size() && fmt[pos] >= '0' && fmt[pos] <= '9') ++pos;
-    if (pos < fmt.size() && (fmt[pos] == 'E' || fmt[pos] == 'O')) ++pos;
-    if (pos < fmt.size()) ++pos;
-    return pos;
-}
-
-std::string time_format_unquoted(const std::string& pattern, const std::tm& fields) {
+std::string time_format_unquoted(const std::string& pattern, const std::tm& fields,
+                                 time_t unix_seconds) {
     const std::string fmt = time_format_tokens(pattern);
     std::string expanded;
     for (size_t pos = 0; pos < fmt.size();) {
@@ -607,7 +630,7 @@ std::string time_format_unquoted(const std::string& pattern, const std::tm& fiel
             expanded += fmt[pos++];
         }
     }
-    return time_format_chunk(expanded, fields);
+    return time_format_chunk(expanded, fields, unix_seconds);
 }
 
 bool time_format_has_unmatched_quote(const std::string& pattern) {
@@ -628,10 +651,11 @@ bool time_format_has_unmatched_quote(const std::string& pattern) {
     return quoted;
 }
 
-std::string time_format_pattern(const std::string& format, const std::tm& fields) try {
+std::string time_format_pattern(const std::string& format, const std::tm& fields,
+                                time_t unix_seconds) try {
     const std::string pattern = format.substr(0, format.find('\0'));
     if (time_format_has_unmatched_quote(pattern)) {
-        return time_format_chunk(time_format_tokens(pattern), fields);
+        return time_format_chunk(time_format_tokens(pattern), fields, unix_seconds);
     }
 
     std::string result;
@@ -646,10 +670,11 @@ std::string time_format_pattern(const std::string& format, const std::tm& fields
             }
         }
         if (first_quote == pattern.size()) {
-            result += time_format_unquoted(pattern.substr(pos), fields);
+            result += time_format_unquoted(pattern.substr(pos), fields, unix_seconds);
             break;
         }
-        result += time_format_unquoted(pattern.substr(pos, first_quote - pos), fields);
+        result += time_format_unquoted(pattern.substr(pos, first_quote - pos), fields,
+                                       unix_seconds);
         pos = first_quote + 1;
         // Append quoted bytes directly so even a percent stays literal.
         while (pos < pattern.size()) {
@@ -679,16 +704,15 @@ std::string str_format_time(long long timestamp_ms,
     if (!timezone.empty() && timezone != "UTC" && timezone != "Etc/UTC") {
         tz_util::ScopedTimezone guard(timezone);
         localtime_r(&secs, &tm_buf);
-        return time_format_pattern(format, tm_buf);
+        return time_format_pattern(format, tm_buf, secs);
     }
     gmtime_r(&secs, &tm_buf);
     tm_buf.tm_gmtoff = 0;
-    // strftime may read TZ (libc is allowed to call tzset for it, and "%s"
-    // goes through mktime), so the UTC fields are formatted under the
-    // environment lock too: no TZ switch, and no read while another thread
-    // switches or restores.
+    // strftime may read TZ (libc is allowed to call tzset), so the UTC fields
+    // are formatted under the environment lock too: no TZ switch, and no read
+    // while another thread switches or restores.
     const tz_util::EnvironmentLock environment;
-    return time_format_pattern(format, tm_buf);
+    return time_format_pattern(format, tm_buf, secs);
 }
 
 // ---------- str.match ----------
