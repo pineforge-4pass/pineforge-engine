@@ -635,7 +635,7 @@ if(PINEFORGE_BUILD_TESTS)
     endif()
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        add_executable(test_service_unlink_failure ../tests/test_service_unlink_failure.cpp)
+        add_executable(test_service_unlink_failure ${PROJECT_SOURCE_DIR}/tests/test_service_unlink_failure.cpp)
         target_link_libraries(test_service_unlink_failure PRIVATE pineforge_live_support)
         target_link_options(test_service_unlink_failure PRIVATE "LINKER:--wrap=unlink")
         add_test(NAME test_service_unlink_failure COMMAND test_service_unlink_failure)
