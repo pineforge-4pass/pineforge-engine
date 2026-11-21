@@ -510,8 +510,9 @@ private:
 // recompute replaces the most recent logical update: restore its pre-update
 // head/count and any evicted oldest value, then record only a non-na source.
 // Repeated recompute uses that same checkpoint; unused instances start there.
-// Cache capacity controls residency only. Sum oldest first, with Neumaier
-// double compensation. Finite TV clock/source-na evidence supports sample
+// Cache capacity controls residency only. For finite inputs without overflow,
+// divide the exact window sum, rounded once as in fixed SMA, by the length.
+// Finite TV clock/source-na evidence supports sample
 // membership only; numerical order/domains, runtime overrides, whole-history
 // TV parity and repeated/requested-context Pine clocks/rollback are unqualified.
 // Copy/assignment preserve the ring and complete pre-update checkpoint;
