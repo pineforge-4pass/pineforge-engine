@@ -1786,6 +1786,104 @@ void test_fixed_period_auxiliary_no_feed_bar_tail() {
     CHECK(std::count(host.log.begin(), host.log.end(), htf_event) == 1);
 }
 
+NativeRunSpec clipped_session_subscription_spec() {
+    NativeRunSpec spec = base_spec("60", "60", "native-fixed-clipped-input");
+    spec.type = "stock";
+    spec.session = "0930-1600,1700-2000";
+    NativeTimeframeSubscription series;
+    series.tf = "75";
+    series.authoritative_bars = {
+        {200.0, 204.0, 198.0, 203.0, 90.0, utc_ms(2024, 1, 2, 14, 30)},
+    };
+    spec.subscriptions.push_back(series);
+    return spec;
+}
+
+void test_fixed_period_clipped_input_label() {
+    scenario = "fixed-period clipped-session input label";
+    const Bar bars[] = {
+        {100.0, 105.0, 99.0, 102.0, 10.0, utc_ms(2024, 1, 2, 14, 30)},
+        {110.0, 115.0, 109.0, 112.0, 20.0, utc_ms(2024, 1, 2, 17, 0)},
+    };
+    const auto spec = clipped_session_subscription_spec();
+    SeriesHost host;
+    const auto setup = host.configure_native(spec);
+    CHECK(setup.status == NativeSetupStatus::Applied);
+    if (setup.status != NativeSetupStatus::Applied) return;
+    host.run(bars, 2, "60", "60", false, 4, MagnifierDistribution::ENDPOINTS);
+    CHECK(host.last_error().empty());
+    if (!host.last_error().empty()) return;
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(host.deliveries.size() == 1);
+    if (host.deliveries.size() != 1) return;
+
+    // From the 09:30 grid, the 75-minute bucket is 14:30 to 15:45.
+    // The 14:30 input ends at 15:30. With the 15:30 input absent, the
+    // 17:00 eligible label of the 16:30 slot carries the late delivery.
+    const auto& delivery = host.deliveries.front();
+    CHECK(delivery.context.completion == NativeCompletionKind::LazyComplete);
+    CHECK(delivery.bar.timestamp == 1704205800000LL);  // 14:30 UTC
+    CHECK(delivery.context.interval.open_ms == 1704205800000LL);
+    CHECK(delivery.context.interval.last_traded_close_ms == 1704210300000LL);  // 15:45 UTC
+    CHECK(delivery.context.interval.next_period_open_ms == 1704210300000LL);
+    CHECK(delivery.context.delivered_at_ms == 1704214800000LL);  // 17:00 UTC
+}
+
+enum class SubscriptionInputMismatch { Timestamp, Index };
+
+class SubscriptionInputMismatchHost final : public NativeStrategyHost {
+public:
+    SubscriptionInputMismatchHost(SubscriptionInputMismatch mismatch, Bar& indexed_bar)
+        : mismatch_(mismatch), indexed_bar_(indexed_bar) {}
+
+    int inputs_seen = 0;
+
+    void on_native_input(const Bar&, const NativeInputContext& context) override {
+        if (++inputs_seen != 2) return;
+        // Change one identity field after chart admission. The tape is owned
+        // by this test, and the context is the consumer's mutable stack local.
+        if (mismatch_ == SubscriptionInputMismatch::Timestamp) {
+            indexed_bar_.timestamp = utc_ms(2024, 1, 2, 17, 1);
+        } else {
+            const_cast<NativeInputContext&>(context).input_index = 0;
+        }
+    }
+
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {}
+
+private:
+    SubscriptionInputMismatch mismatch_;
+    Bar& indexed_bar_;
+};
+
+void test_fixed_period_foreign_input_identity(SubscriptionInputMismatch mismatch) {
+    scenario = mismatch == SubscriptionInputMismatch::Timestamp
+        ? "fixed-period subscription foreign input timestamp"
+        : "fixed-period subscription foreign input index";
+    Bar bars[] = {
+        {100.0, 105.0, 99.0, 102.0, 10.0, utc_ms(2024, 1, 2, 14, 30)},
+        {110.0, 115.0, 109.0, 112.0, 20.0, utc_ms(2024, 1, 2, 16, 30)},
+    };
+    const auto spec = clipped_session_subscription_spec();
+    SubscriptionInputMismatchHost host(mismatch, bars[1]);
+    const auto setup = host.configure_native(spec);
+    CHECK(setup.status == NativeSetupStatus::Applied);
+    if (setup.status != NativeSetupStatus::Applied) return;
+    host.run(bars, 2, "60", "60", false, 4, MagnifierDistribution::ENDPOINTS);
+    CHECK(host.inputs_seen == 2);
+    const auto state = host.native_state();
+    CHECK(state.kind == NativeLifecycleKind::Failed);
+    CHECK(state.failure.code == NativeFailureCode::Contract);
+    CHECK(state.failure.operation == NativeFailureOperation::Input);
+    CHECK(host.last_error() == "native timeframe subscription input identity mismatch");
+}
+
+void test_fixed_period_subscription_input_identity() {
+    test_fixed_period_clipped_input_label();
+    test_fixed_period_foreign_input_identity(SubscriptionInputMismatch::Timestamp);
+    test_fixed_period_foreign_input_identity(SubscriptionInputMismatch::Index);
+}
+
 // ---- a supplied fixed-period bar off its requested grid -------------------
 
 // The refusal of a supplied bar that does not open on its requested grid, as
@@ -1902,11 +2000,14 @@ int main(int argc, char** argv) {
             test_fixed_period_late_completion_case(false);
         } else if (std::string(argv[2]) == "auxiliary-no-feed-bar-tail") {
             test_fixed_period_auxiliary_no_feed_bar_tail();
+        } else if (std::string(argv[2]) == "clipped-session-subscription-identity") {
+            test_fixed_period_subscription_input_identity();
         } else {
             std::printf(
                 "usage: test_native_htf_subscriptions "
                 "[--only off-grid-classification|late-fixed-subscription-completion|"
-                "late-fixed-subscription-control|auxiliary-no-feed-bar-tail]\n");
+                "late-fixed-subscription-control|auxiliary-no-feed-bar-tail|"
+                "clipped-session-subscription-identity]\n");
             return 2;
         }
         std::printf("native HTF subscriptions: %d checks, %d failures\n", checks, failures);
@@ -1916,7 +2017,8 @@ int main(int argc, char** argv) {
         std::printf(
             "usage: test_native_htf_subscriptions "
             "[--only off-grid-classification|late-fixed-subscription-completion|"
-            "late-fixed-subscription-control|auxiliary-no-feed-bar-tail]\n");
+            "late-fixed-subscription-control|auxiliary-no-feed-bar-tail|"
+            "clipped-session-subscription-identity]\n");
         return 2;
     }
     test_hourly_over_quarter_hour();
@@ -1940,6 +2042,7 @@ int main(int argc, char** argv) {
     test_fixed_period_session_hole_is_not_a_close();
     test_fixed_period_late_completion_case(true);
     test_fixed_period_auxiliary_no_feed_bar_tail();
+    test_fixed_period_subscription_input_identity();
     test_fixed_period_off_grid_classification();
     std::printf("native HTF subscriptions: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

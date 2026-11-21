@@ -10510,20 +10510,18 @@ bool NativeExecutionConsumer::feed_fixed_subscription(
         BacktestEngine& engine, TimeframeSubscription& subscription, int index,
         const Bar* feed_bar, std::int64_t horizon_ms, std::int64_t next_feed_ms,
         Completed&& completed) {
+    // A historical projection can have an indexed bar before there is an
+    // accepted context; live input can have a context without the array.
     const bool has_indexed_input =
         subscription_input_bars_ != nullptr
         && index >= 0 && index < subscription_input_n_;
-    const auto member_input_ms = accepted_input_context_
-        ? std::optional<std::int64_t>(
-            accepted_input_context_->input_interval.open_ms)
-        : std::nullopt;
-    const auto indexed_input_ms = has_indexed_input
-        ? std::optional<std::int64_t>(
-            subscription_input_bars_[index].timestamp)
-        : std::nullopt;
-    if (member_input_ms && indexed_input_ms
+    // When both are present, match the index and allow a session break to
+    // clip the label to the interval's first eligible instant.
+    if (accepted_input_context_ && has_indexed_input
         && (accepted_input_context_->input_index != index
-            || *member_input_ms != *indexed_input_ms)) {
+            || !native_confirmed_bar_label_admitted(
+                accepted_input_context_->input_interval,
+                subscription_input_bars_[index].timestamp))) {
         fail(engine, NativeFailure{NativeFailureCode::Contract,
                                    NativeFailureOperation::Input});
         render(engine, "native timeframe subscription input identity mismatch");
@@ -10535,9 +10533,11 @@ bool NativeExecutionConsumer::feed_fixed_subscription(
         if (!feed_bar || horizon_ms <= feed_bar->timestamp) return true;
         clock.cursor_ms = feed_bar->timestamp;
     }
-    const auto completion_input_ms = feed_bar
-        ? std::optional<std::int64_t>(feed_bar->timestamp)
-        : member_input_ms ? member_input_ms : indexed_input_ms;
+    // Completion only needs to know whether an input is present.
+    // The delivery callback supplies the actual primary bar's timestamp.
+    const bool has_completion_input =
+        feed_bar || accepted_input_context_ || has_indexed_input;
+
     const auto drain = [&](std::int64_t horizon, std::int64_t observed_ms = 0,
                            std::int64_t next_ms = 0) {
         while (auto bucket = engine.next_native_fixed_security_bar(
@@ -10561,7 +10561,7 @@ bool NativeExecutionConsumer::feed_fixed_subscription(
             ++state.eval_complete_count;
             engine.dispatch_security_eval(state, bucket->bar, true, state.eval_complete_count - 1);
             if (!completed(bucket->bar, first_index, first_ms,
-                           (!completion_input_ms || same_feed_bucket)
+                           (!has_completion_input || same_feed_bucket)
                                ? NativeCompletionKind::Confirmed
                                : NativeCompletionKind::LazyComplete)) {
                 return false;
