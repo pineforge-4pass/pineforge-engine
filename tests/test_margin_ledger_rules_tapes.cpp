@@ -83,20 +83,7 @@ constexpr std::size_t kTvRows = 43088;
 // Tapes the engine does not reproduce yet: fixture tape directory and its
 // reason. A listed tape that starts matching fails the test until its entry
 // is removed.
-const char kHistoryResidual[] = "G+L residual call: history regime unpinned";
-const std::vector<std::pair<std::string, std::string>> kKnownDivergences = {
-    // The residual call on a history: these history-residual probe ledgers need the 1x long
-    // residual call on the G + L cash after their trade history, which the
-    // tree keeps in its earlier scope (net profit with no tracked roundoff).
-    {"proozac-history-k0-after-v2/r1", kHistoryResidual},
-    {"proozac-history-k0-after/r1", kHistoryResidual},
-    {"proozac-history-k0-only-v2-ledger-witness/r1", kHistoryResidual},
-    {"proozac-history-k0-only-v2-ledger-witness/r2", kHistoryResidual},
-    {"proozac-history-k0-only-v2-ledger-witness/r3", kHistoryResidual},
-    {"proozac-history-k0-only-v2-ledger-witness/r4", kHistoryResidual},
-    {"proozac-history-k0-only-v2/r1", kHistoryResidual},
-    {"proozac-history-k0-only/r1", kHistoryResidual},
-};
+const std::vector<std::pair<std::string, std::string>> kKnownDivergences = {};
 
 std::string fixture(const std::string& relative) {
     return std::string(PINEFORGE_MARGIN_LEDGER_RULES_FIXTURE_DIR) + "/" + relative;
