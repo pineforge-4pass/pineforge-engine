@@ -6,12 +6,14 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <ctime>
 #include <string>
+#include <system_error>
 #include <unordered_set>
 #include <vector>
 
@@ -365,6 +367,25 @@ int local_weekofyear(int64_t bar_ms, const std::string& tz) {
     return (t.tm_yday + 7 - ((t.tm_wday + 6) % 7)) / 7;
 }
 
+// Under the caller's ScopedTimezone. Preserve libc's normalization and the
+// input DST hint. Only a conversion error calls for a later hour.
+static int64_t zoned_calendar_boundary_ms(const std::tm& date, int retry_hours = 0) {
+    for (int hour = 0; ; ++hour) {
+        std::tm fields = date;
+        fields.tm_hour = hour;
+        fields.tm_min = 0;
+        fields.tm_sec = 0;
+        // A successful conversion can return Unix second -1.
+        errno = 0;
+        const time_t seconds = std::mktime(&fields);
+        const int error = errno;
+        if (seconds != static_cast<time_t>(-1) || error == 0)
+            return static_cast<int64_t>(seconds) * 1000;
+        if (hour == retry_hours)
+            throw std::system_error(error, std::generic_category(), "mktime");
+    }
+}
+
 static int64_t calendar_day_open_local_ms_tz(int64_t bar_ms, const std::string& tz);
 
 int64_t calendar_day_open_local_ms(int64_t bar_ms, const std::string& tz) {
@@ -383,30 +404,7 @@ static int64_t calendar_day_open_local_ms_tz(int64_t bar_ms, const std::string& 
     time_t secs = static_cast<time_t>(bar_ms / 1000);
     struct tm local_tm {};
     localtime_r(&secs, &local_tm);
-    local_tm.tm_hour = 0;
-    local_tm.tm_min  = 0;
-    local_tm.tm_sec  = 0;
-    // DST edge-case: on spring-forward days in certain timezones (e.g.,
-    // America/Havana, Pacific/Lord_Howe), midnight is non-existent and
-    // mktime() returns -1. Retry with +1 h and +2 h until we obtain a
-    // valid epoch. This gives the first representable second of the day.
-    time_t day0 = mktime(&local_tm);
-    if (day0 == static_cast<time_t>(-1)) {
-        std::fprintf(stderr,
-            "[pineforge] WARNING: mktime() returned -1 for midnight in tz='%s' "
-            "(DST gap?). Falling back to midnight+1h.\n",
-            tz.c_str());
-        local_tm.tm_hour = 1;
-        day0 = mktime(&local_tm);
-        if (day0 == static_cast<time_t>(-1)) {
-            local_tm.tm_hour = 2;
-            day0 = mktime(&local_tm);
-        }
-        if (day0 != static_cast<time_t>(-1)) {
-            // Snap back to the hour boundary we actually used (already set above).
-        }
-    }
-    return static_cast<int64_t>(day0) * 1000;
+    return zoned_calendar_boundary_ms(local_tm, /*retry_hours=*/2);
 }
 
 // =========================================================================
@@ -484,12 +482,8 @@ static int64_t calendar_week_open_local_ms_tz(int64_t bar_ms, const std::string&
     localtime_r(&secs, &local_tm);
     int wday = local_tm.tm_wday;  // 0=Sun
     int days_from_mon = (wday + 6) % 7;
-    local_tm.tm_hour = 0;
-    local_tm.tm_min = 0;
-    local_tm.tm_sec = 0;
     local_tm.tm_mday -= days_from_mon;
-    time_t wk0 = mktime(&local_tm);
-    return static_cast<int64_t>(wk0) * 1000;
+    return zoned_calendar_boundary_ms(local_tm);
 }
 
 static int64_t calendar_month_open_local_ms_tz(int64_t bar_ms, const std::string& tz);
@@ -518,11 +512,7 @@ static int64_t calendar_month_open_local_ms_tz(int64_t bar_ms, const std::string
     struct tm local_tm {};
     localtime_r(&secs, &local_tm);
     local_tm.tm_mday = 1;
-    local_tm.tm_hour = 0;
-    local_tm.tm_min = 0;
-    local_tm.tm_sec = 0;
-    time_t m0 = mktime(&local_tm);
-    return static_cast<int64_t>(m0) * 1000;
+    return zoned_calendar_boundary_ms(local_tm);
 }
 
 // D/W/M open on the `tz` calendar; an intraday tf on the SYMBOL's
@@ -601,28 +591,16 @@ static int64_t compute_tf_close_ms(int64_t bar_ms,
 
     if (cp == CalendarPeriod::DAY) {
         local_tm.tm_mday += 1;
-        local_tm.tm_hour = 0;
-        local_tm.tm_min = 0;
-        local_tm.tm_sec = 0;
-        time_t nx = mktime(&local_tm);
-        return static_cast<int64_t>(nx) * 1000;
+        return zoned_calendar_boundary_ms(local_tm);
     }
     if (cp == CalendarPeriod::WEEK) {
         local_tm.tm_mday += 7;
-        local_tm.tm_hour = 0;
-        local_tm.tm_min = 0;
-        local_tm.tm_sec = 0;
-        time_t nx = mktime(&local_tm);
-        return static_cast<int64_t>(nx) * 1000;
+        return zoned_calendar_boundary_ms(local_tm);
     }
     if (cp == CalendarPeriod::MONTH) {
         local_tm.tm_mon += 1;
         local_tm.tm_mday = 1;
-        local_tm.tm_hour = 0;
-        local_tm.tm_min = 0;
-        local_tm.tm_sec = 0;
-        time_t nx = mktime(&local_tm);
-        return static_cast<int64_t>(nx) * 1000;
+        return zoned_calendar_boundary_ms(local_tm);
     }
     return open_ms;
 }
