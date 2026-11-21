@@ -5,9 +5,11 @@
 
 #include <pineforge/math.hpp>
 #include <pineforge/na.hpp>
+#include <pineforge/ta.hpp>
 
 #include <cmath>
 #include <cstdio>
+#include <limits>
 
 using namespace pineforge;
 
@@ -60,6 +62,36 @@ int main() {
         tie.compute(1.0);
         tie.compute(half_step);
         check(tie.compute(0.0), 1.0, "1 + 2^-53 + 0 is a tie and rounds to even");
+    }
+
+    // 3. A finite window sum survives overflow of a same-sign prefix.
+    {
+        const double m = std::numeric_limits<double>::max();
+        const double prefix[] = {m, m, m, -m};
+        ta::SMA sma(4);
+        math::Sum sum(4);
+        ta::RMA rma(5);
+        for (double x : prefix) {
+            sma.compute(x);
+            sum.compute(x);
+            rma.compute(x);
+        }
+        // The length-four window contains two opposite pairs. The RMA seed
+        // also contains the first +m, so its sum is m.
+        check(sma.compute(-m), 0.0, "SMA cancels two pairs after overflow");
+        check(sum.compute(-m), 0.0, "sum cancels two pairs after overflow");
+        check(rma.compute(-m), m / 5.0, "RMA seed retains the uncanceled maximum");
+        // The next eviction leaves one opposite pair and one uncanceled -m.
+        check(sum.compute(0.0), -m, "sum retains the uncanceled negative maximum");
+
+        // The four maxima cancel, leaving a midpoint plus the smallest
+        // subnormal, so the exact sum rounds to the next double above one.
+        const double half_step = std::ldexp(1.0, -53);
+        math::Sum rounded(7);
+        const double inputs[] = {m, m, 1.0, half_step, std::numeric_limits<double>::denorm_min(), -m};
+        for (double x : inputs) rounded.compute(x);
+        check(rounded.compute(-m), 1.0 + std::ldexp(1.0, -52),
+              "subnormal breaks a rounding tie after overflow");
     }
 
     std::printf("test_ta_window_sum_exact: passed=%d failed=%d\n", tests_passed, tests_failed);
