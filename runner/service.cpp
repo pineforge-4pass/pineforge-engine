@@ -1,4 +1,8 @@
 #include "service.hpp"
+
+#include <cerrno>
+#include <cstring>
+#include <iostream>
 #include <algorithm>
 #include <chrono>
 #include <climits>
@@ -65,6 +69,21 @@ void atomic_json_file(const std::string& path, const Json& document, bool create
     const int descriptor = mkstemp(name.data());
     if (descriptor < 0) throw std::runtime_error("cannot create atomic service file");
     bool open = true;
+    bool needs_cleanup = true;
+    const auto remove_temporary = [&]() noexcept {
+        if (!needs_cleanup) return;
+        needs_cleanup = false;
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            if (unlink(name.data()) == 0 || errno == ENOENT) return;
+        }
+        const int error = errno;
+        try {
+            std::cerr << (std::string("pineforge-live: warning: cannot remove temporary service file ") +
+                          name.data() + ": " + std::strerror(error) + '\n');
+        } catch (...) {
+            // A diagnostic failure must not replace the result of the operation.
+        }
+    };
     try {
         const auto bytes = document.dump() + "\n";
         std::size_t offset = 0;
@@ -80,7 +99,8 @@ void atomic_json_file(const std::string& path, const Json& document, bool create
         if (closed != 0) throw std::runtime_error("cannot close atomic service file");
         const int installed = create_only ? link(name.data(), path.c_str()) : rename(name.data(), path.c_str());
         if (installed != 0) throw std::runtime_error("cannot install atomic service file");
-        unlink(name.data());
+        if (create_only) remove_temporary();
+        else needs_cleanup = false;
         if (durable) {
             auto parent = fs::path(path).parent_path();
             if (parent.empty()) parent = ".";
@@ -92,7 +112,7 @@ void atomic_json_file(const std::string& path, const Json& document, bool create
         }
     } catch (...) {
         if (open) close(descriptor);
-        unlink(name.data());
+        remove_temporary();
         throw;
     }
 }

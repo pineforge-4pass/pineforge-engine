@@ -1133,13 +1133,13 @@ PF_API int strategy_set_native_security_feed(pf_strategy_t s,
 /* See PF_ABI_VERSION doc in pineforge.h. */
 PF_API int pf_abi_version(void) { return PF_ABI_VERSION; }
 
-/* Return the runtime library version. */
+/* Use the C ABI's empty string for an unavailable build SHA. */
 PF_API pf_version_t pf_version_get(void) {
     pf_version_t v;
     v.major      = PINEFORGE_VERSION_MAJOR;
     v.minor      = PINEFORGE_VERSION_MINOR;
     v.patch      = PINEFORGE_VERSION_PATCH;
-    v.commit_sha = PINEFORGE_GIT_SHA;
+    v.commit_sha = std::strcmp(PINEFORGE_GIT_SHA, "unknown") == 0 ? "" : PINEFORGE_GIT_SHA;
     return v;
 }
 

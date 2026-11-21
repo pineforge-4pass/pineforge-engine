@@ -2,11 +2,13 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
 #include <pineforge/timeframe.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/run_failure.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
@@ -70,6 +72,78 @@ static void test_tf_ratio() {
     // monthly is calendar-based
     CHECK(tf_ratio("1", "M") == -1);
     CHECK(tf_ratio("D", "M") == -1);
+}
+
+static void test_detect_timeframe_extreme_timestamp_gaps() {
+    const auto earliest = std::numeric_limits<int64_t>::min();
+    const auto latest = std::numeric_limits<int64_t>::max();
+    const Bar bars[] = {
+        make_bar(1, 1, 1, 1, 1, earliest),
+        make_bar(1, 1, 1, 1, 1, latest),
+        make_bar(1, 1, 1, 1, 1, earliest + 300000),
+        make_bar(1, 1, 1, 1, 1, earliest + 600000),
+    };
+
+    CHECK(detect_timeframe(bars, 2) == "W");
+    CHECK(detect_timeframe(bars + 1, 2) == "1");
+    // The upper median of the two increasing gaps is the wider gap.
+    CHECK(detect_timeframe(bars, 4) == "W");
+}
+
+// True when `call` throws the refusal a timeframe count past int already
+// gets: std::out_of_range coded pine_invalid_argument (timeframe, unparseable).
+template <class Call>
+static bool refused_like_count_past_int(Call call) {
+    try {
+        (void)call();
+    } catch (const std::out_of_range& error) {
+        const RunFailureValue failure = classify_run_failure(error);
+        return failure.code == RunFailureCode::pine_invalid_argument && failure.args
+            && *failure.args == "{\"argument\":\"timeframe\",\"rule\":\"unparseable\"}";
+    } catch (...) {
+    }
+    return false;
+}
+
+static bool seconds_refused(const char* tf) {
+    return refused_like_count_past_int([tf] { return tf_to_seconds(tf); });
+}
+
+// A count the parser admits whose seconds do not fit the int this API
+// returns. Minutes take the refusal of a count past int; a day or week count
+// is calendar-only (-1), like M; a negative count past the int is refused.
+// The last count that fits keeps its exact seconds.
+static void test_tf_to_seconds_int_overflow() {
+    std::printf("test_tf_to_seconds_int_overflow\n");
+    static_assert(std::numeric_limits<int>::max() / 60 == 35791394, "int is 32-bit");
+    static_assert(std::numeric_limits<int>::max() / 604800 == 3550, "int is 32-bit");
+    static_assert(std::numeric_limits<int>::max() / 86400 == 24855, "int is 32-bit");
+    // The refusal itself: a count past int, refused before any multiply.
+    CHECK(seconds_refused("2147483648"));
+    // Minutes.
+    CHECK(tf_to_seconds("35791394") == 2147483640);
+    CHECK(seconds_refused("35791395"));
+    CHECK(seconds_refused("71582789"));  // its product wraps to 44
+    CHECK(seconds_refused("2147483647"));
+    CHECK(tf_to_seconds("-35791394") == -2147483640);
+    CHECK(seconds_refused("-35791395"));
+    // Weeks.
+    CHECK(tf_to_seconds("3550W") == 2147040000);
+    CHECK(tf_to_seconds("3551W") == -1);
+    CHECK(tf_to_seconds("-3550W") == -2147040000);
+    CHECK(seconds_refused("-3551W"));
+    // Days: the existing guard; a negative count past the int.
+    CHECK(tf_to_seconds("24855D") == 2147472000);
+    CHECK(tf_to_seconds("24856D") == -1);
+    CHECK(tf_to_seconds("-24855D") == -2147472000);
+    CHECK(seconds_refused("-24856D"));
+    // tf_ratio: a minute target past the int is refused, never read as a
+    // calendar period; equal calendar-only literals pass their bars through.
+    CHECK(tf_ratio("1", "35791394") == 35791394);
+    CHECK(refused_like_count_past_int([] { return tf_ratio("1", "35791395"); }));
+    CHECK(tf_ratio("24856D", "24856D") == 1);
+    CHECK(tf_ratio("3551W", "3551W") == 1);
+    CHECK(tf_ratio("W", "3551W") == -1);
 }
 
 // ─── Ratio-based aggregation ──────────────────────────────────────────────────
@@ -268,6 +342,8 @@ int main() {
 
     test_tf_to_seconds();
     test_tf_ratio();
+    test_detect_timeframe_extreme_timestamp_gaps();
+    test_tf_to_seconds_int_overflow();
     test_ratio_aggregation();
     test_passthrough();
     test_calendar_daily_aggregation();

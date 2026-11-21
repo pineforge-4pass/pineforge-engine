@@ -258,4 +258,6 @@ def test_cr559_map_capacity_catalog_contract():
         "maxSize": {"kind": "integer"}, "currSize": {"kind": "integer"}}
     assert entry["english"] == [
         "Error on bar {bar_index}: A map cannot have more than {maxSize} "
+        "key-value pairs. The current size is {currSize}.",
+        "Error before the first bar: A map cannot have more than {maxSize} "
         "key-value pairs. The current size is {currSize}."]

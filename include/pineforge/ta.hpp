@@ -20,8 +20,8 @@ enum class EmaSeeding : unsigned char {
     // The default, and byte-identical to every EMA before the option existed.
     FirstValue = 0,
     // na until ``length`` finite inputs have accumulated, then their simple
-    // average, then the ordinary recursion: an SMA-seeded EMA, warming up the
-    // way ``RMA`` and ``SMA`` already do (na for the whole warm-up window).
+    // average (the exact sum rounded once, then divided by length), then the
+    // ordinary recursion.
     SimpleAverage = 1,
 };
 
@@ -302,6 +302,10 @@ class EMA {
     bool na_warmup_ = false;
     bool warmup_latched_ = false;
 
+    // Only SimpleAverage retains sources, through the last replayable seed
+    // bar. Each warm-up observation adds one source after save().
+    std::vector<double> seed_sources_;
+
 public:
     explicit EMA(int length);
     // Names the seeding at construction; the ambient default is never read.
@@ -316,8 +320,10 @@ public:
     double recompute(double src);
     double recompute(double src, bool input_ready);
 public:
-    // All retained fields are inline scalars (or scalar-only aggregates).
-    void observe_owned_storage(OwnedStorage&) const noexcept {}
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        if (seed_sources_.capacity() != 0)
+            observe_owned_members(out, seed_sources_);
+    }
 };
 
 // --- MACD ---

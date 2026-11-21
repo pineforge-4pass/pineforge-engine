@@ -1352,10 +1352,13 @@ SESSION_CALENDAR_SCHEMA = "pineforge-symbol-calendar/v1"
 
 def load_session_calendar(path: Path) -> tuple[str, list[tuple[int, int]]]:
     """A ``pineforge-symbol-calendar/v1`` document's symbol and session days
-    (scripts/symbol_calendar.py writes them), checked: the schema, and
-    ascending days, each opening before it closes and no later than the next
-    one opens."""
-    doc = json.loads(Path(path).read_text(encoding="utf-8"))
+    (scripts/symbol_calendar.py writes them), checked: the schema and a
+    nonempty list of ascending days, each opening before it closes and
+    closing no later than the next one opens."""
+    return _validate_session_calendar(json.loads(Path(path).read_text(encoding="utf-8")), path)
+
+
+def _validate_session_calendar(doc, path: Path) -> tuple[str, list[tuple[int, int]]]:
     if not isinstance(doc, dict) or doc.get("schema") != SESSION_CALENDAR_SCHEMA:
         raise ValueError(f"{path}: not a {SESSION_CALENDAR_SCHEMA} document")
     sessions = [(int(o), int(c)) for o, c in doc.get("sessions") or []]

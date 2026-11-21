@@ -163,7 +163,7 @@ stamp, every mode (the default stream included, and a run without JSONL
 output) holds the scalar members of the cumulative JSON document and the rows
 of the newest input. Rows that a later input can no longer change are
 serialized once and appended to anonymous files beside the ledger
-(`SpooledReportArray` runner/report_spool.hpp:286), and a `--report-jsonl` line
+(`SpooledReportArray` runner/report_spool.hpp:290), and a `--report-jsonl` line
 is written to stdout from those files (`write_cumulative_line`
 runner/main.cpp:955) instead of being rebuilt from a retained document. With
 `--native-event-retention window` only, the
@@ -181,14 +181,16 @@ keeps every event, both growing with the inputs processed. Under the window a
 polling host loses no command it acknowledges, and keeps no driver point or
 account row; every event let go unread is counted per kind by
 `native_events_dropped` (C: `strategy_native_events_dropped_v1`).
-A report checkpoint above 512 inputs is folded through the same spooled arrays
-(`fold_full_report` runner/store.cpp:363), reading every report row from
+A report checkpoint above 512 inputs, and every checkpoint of a run with
+`--native-event-retention window`, is folded through the same spooled arrays
+(`fold_full_report` runner/store.cpp:364), reading every report row from
 cursor 0 where 1.13.0 started from the nearest earlier checkpoint; at the
 boundaries K, 2K, 4K, ... the checkpoints up to 2^m·K read (2^(m+1) − 1)·K
 rows in all, less than twice the last boundary's cursor. With `--native-event-retention
 window` (`LedgerOptions::stream_large_checkpoints`), a payload above the 1 MiB
-JSON frame is written into its row in pieces (`write_report_checkpoint`
-runner/store.cpp:476) and stored as a BLOB with the same bytes; under a ledger
+JSON frame is written into its row in pieces, at any cursor
+(`write_report_checkpoint` runner/store.cpp:480) and stored as a BLOB with the
+same bytes; under a ledger
 byte budget that write is admitted whole first and then lets SQLite spill its
 pages, so it does not wait in memory for its commit. Without the option the
 payload is built as one string and stored as TEXT, as in 1.13.0. The ledger's
@@ -201,7 +203,12 @@ in a realtime stream) and the curve's memory-filesystem warning apply only
 with `--native-event-retention window`. What grows with the run is on disk:
 the ledger, the serialized settled rows (about the size of one cumulative
 report) and, with `window`, **24 B per report point** of curve scratch.
-`--max-ledger-bytes` does not count the spool files or the curve scratch.
+`--max-ledger-bytes` does not count the spool files or the curve scratch. The
+engine's own scratch files (the spilled part of its trade ledger and its
+command journals, among others) are not beside the ledger: they are unlinked
+files in `TMPDIR`, or in `/tmp` when it is unset, so `TMPDIR` needs a
+disk-backed directory with room for them (see [What you can
+set](@ref memory_controls)).
 
 A spool write that returns an error (a full disk, an exceeded quota, an I/O error), or that would take the file past the process's per-file size limit (`ulimit -f`, RLIMIT_FSIZE; read before the write, so a spool never raises SIGXFSZ), does
 not stop the run: `ReportSpool` (runner/report_spool.hpp) keeps the bytes it could
@@ -230,7 +237,7 @@ export command, which folds the report as a tree; and the strategy's own
 stores that the rest of this page lists.
 
 `test_native_live_report_memory` checks it (`report_memory`
-tests/test_native_live_report_cli.cpp:1249). The row drives the real runner's
+tests/test_native_live_report_cli.cpp:1252). The row drives the real runner's
 default cumulative stream and default ratio interval, with
 `--native-event-retention window`, on seeded inputs, on a
 native test host that records one equity point per bar, at the sizes of
@@ -382,8 +389,8 @@ trailer, 7 internal error, 8 `sink_exhausted` (the stream exceeds `--max-bytes`;
 `sink_exhausted` at `docker/pineforge_sink_finalize.py:115-123`). Its output is provisional until
 exit 0, and a consumer must discard everything it received on exit 3 to 8 (`PROVISIONAL` at
 `docker/pineforge_sink_finalize.py:24-26`). The failure catalog maps exit 8 to `report_sink_failed`
-with `reason` `sink_exhausted` (`sink_exhausted` at `docker/run_failure_codes.json:1192`). A sink failure carries code `report_sink_failed` and a `reason`
-from the closed list of the catalog (`report_sink_failed` at `docker/run_failure_codes.json:1160`):
+with `reason` `sink_exhausted` (`sink_exhausted` at `docker/run_failure_codes.json:1193`). A sink failure carries code `report_sink_failed` and a `reason`
+from the closed list of the catalog (`report_sink_failed` at `docker/run_failure_codes.json:1161`):
 `arena_exhausted`, `arena_io`, `arena_backing`, `scratch_io`, `sink_io`, `sink_peer_closed` and
 `sink_exhausted`. Only some reasons carry sizes: `arena_exhausted` carries `high_water_bytes`,
 `arena_bytes`, `claimed_bytes`, `store` and `needed_bytes_lower_bound`, `sink_exhausted` carries

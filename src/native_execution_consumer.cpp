@@ -1978,8 +1978,8 @@ bool NativeExecutionConsumer::prepare_public_begin(
     preparing_begin_ = true;
     try {
         detail::MapPairLimitScope map_policy(map_pair_limit_);
-        const int preparation_bar = 0;
-        detail::MapBarContextScope map_bar(&preparation_bar);
+        const int before_first_bar = -1;
+        detail::MapBarContextScope map_bar(&before_first_bar);
         host->prepare_native_begin(args);
     } catch (const std::exception& e) {
         pending_bar_views_ = {};
@@ -3409,14 +3409,14 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     // host's and are never mistaken for the kernel's tail. This run's
     // declaration is registered after the callback (below).
     clear_timeframe_subscriptions(engine);
-    provision_run_command_scratch_for_run();
-    // Both command stores are run-owned before the first host callback.
+    provision_run_command_scratch_for_run(); // Both command stores are run-owned before the callback.
     if (auto* host = native_host(engine)) {
         in_callback_ = true;
         in_run_begin_ = true;
         try {
             detail::MapPairLimitScope map_policy(map_pair_limit_);
-            detail::MapBarContextScope map_bar(&engine.bar_index_);
+            const int before_first_bar = -1;
+            detail::MapBarContextScope map_bar(&before_first_bar);
             host->on_native_run_begin();
         } catch (const std::exception& e) {
             in_callback_ = false;

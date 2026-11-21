@@ -454,7 +454,7 @@ preserved; extra element keys are ignored and malformed elements are dropped.
 Metrics-only or sink-only shapes that bypass these two report assembly sites
 do not carry the key. Warnings are outside provenance, fingerprints, trade CSVs
 and sink records. This optional field is a minor report-schema addition;
-ABI 5, stream layout 4, sink wire and fingerprint versions are unchanged.
+ABI 5, stream layout 5, sink wire and fingerprint versions are unchanged.
 
 All three cache fields are absent at zero; a cache disabled by policy adds no event.
 Older modules without the getter omit all three fields. Admission starts a new

@@ -625,6 +625,21 @@ if(PINEFORGE_BUILD_TESTS)
     target_link_libraries(test_live_report PRIVATE PineForge::pineforge)
     target_compile_options(test_live_report PRIVATE -UNDEBUG)
     add_test(NAME test_live_report COMMAND test_live_report)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(test_report_spool_unlink_failure
+            ${PROJECT_SOURCE_DIR}/tests/test_report_spool_unlink_failure.cpp)
+        target_link_libraries(test_report_spool_unlink_failure PRIVATE PineForge::pineforge)
+        target_compile_options(test_report_spool_unlink_failure PRIVATE -UNDEBUG)
+        target_link_options(test_report_spool_unlink_failure PRIVATE "LINKER:--wrap=open" "LINKER:--wrap=unlink")
+        add_test(NAME test_report_spool_unlink_failure COMMAND test_report_spool_unlink_failure)
+    endif()
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(test_service_unlink_failure ${PROJECT_SOURCE_DIR}/tests/test_service_unlink_failure.cpp)
+        target_link_libraries(test_service_unlink_failure PRIVATE pineforge_live_support)
+        target_link_options(test_service_unlink_failure PRIVATE "LINKER:--wrap=unlink")
+        add_test(NAME test_service_unlink_failure COMMAND test_service_unlink_failure)
+    endif()
     add_executable(test_live_report_accumulator
         ${PROJECT_SOURCE_DIR}/tests/test_live_report_accumulator.cpp)
     target_include_directories(test_live_report_accumulator PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -658,6 +673,15 @@ if(PINEFORGE_BUILD_TESTS)
     add_test(NAME test_native_live_report_event_retention COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> event-retention)
     set_tests_properties(test_native_live_report_event_retention PROPERTIES TIMEOUT 0)
+    add_test(NAME test_native_live_report_window_checkpoint_storage COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> window-checkpoint-storage
+        $<TARGET_FILE:live_contract_native_stub>)
+    set_tests_properties(test_native_live_report_window_checkpoint_storage PROPERTIES TIMEOUT 0)
+    add_test(NAME test_native_live_report_window_checkpoint_streaming COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> window-checkpoint-streaming)
+    set_tests_properties(test_native_live_report_window_checkpoint_streaming PROPERTIES
+        TIMEOUT 0 SKIP_RETURN_CODE 77)
+    add_dependencies(test_native_live_report_cli live_contract_native_stub)
     # A default run's equity export, pinned to the 1.13.0 build's SHA-256; 77 = not x86-64 Linux.
     add_test(NAME test_native_live_report_default_equity_export COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> default-equity-export)
@@ -674,6 +698,19 @@ if(PINEFORGE_BUILD_TESTS)
     add_test(NAME test_native_live_report_spool_write_failure COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> spool-write-failure)
     set_tests_properties(test_native_live_report_spool_write_failure PROPERTIES TIMEOUT 0)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME test_native_live_report_spool_probe_failure COMMAND test_native_live_report_cli
+            $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> spool-probe-failure)
+        set_tests_properties(test_native_live_report_spool_probe_failure PROPERTIES TIMEOUT 0)
+    endif()
+    add_executable(test_native_live_recovery_spool_warning
+        ${PROJECT_SOURCE_DIR}/tests/test_native_live_recovery_spool_warning.cpp)
+    target_link_libraries(test_native_live_recovery_spool_warning PRIVATE ${_pf_sqlite_target} Threads::Threads)
+    target_compile_options(test_native_live_recovery_spool_warning PRIVATE -UNDEBUG)
+    add_test(NAME test_native_live_recovery_spool_warning COMMAND test_native_live_recovery_spool_warning
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example>)
+    set_tests_properties(test_native_live_recovery_spool_warning PROPERTIES TIMEOUT 0)
+    add_dependencies(test_native_live_recovery_spool_warning pineforge-live native_live_report_example)
     add_executable(test_native_live_report_curve_staging_work
         ${PROJECT_SOURCE_DIR}/tests/test_native_live_report_curve_staging_work.cpp)
     target_include_directories(test_native_live_report_curve_staging_work PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -729,7 +766,6 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
         COMMAND ${_pf_layout_proof_command} opaque-report)
     set_tests_properties(native_live_engine_layout_e2e native_live_opaque_report_e2e
         PROPERTIES TIMEOUT 0)
-    add_dependencies(test_native_live_report_cli live_contract_native_stub)
     add_test(NAME native_live_old_layout_report_e2e COMMAND ${Python3_EXECUTABLE}
         ${PROJECT_SOURCE_DIR}/tests/native_live_startup_e2e.py $<TARGET_FILE:pineforge-live>
         $<TARGET_FILE:native_live_example> $<TARGET_FILE:native_market_example>

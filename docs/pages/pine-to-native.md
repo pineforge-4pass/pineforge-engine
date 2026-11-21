@@ -707,7 +707,7 @@ it, so a valid length gives that class's values. The adapters do not touch
 
 ### Series-length SMA source adapter {#pine_to_native_series_sma}
 
-`pineforge::source::SeriesSma` (include/pineforge/source/pine_ta_length.hpp:519)
+`pineforge::source::SeriesSma` (include/pineforge/source/pine_ta_length.hpp:520)
 provides an SMA with a length supplied on every evaluation in the Pine source
 adapter. Keep one instance per written call site and evaluation context. Its
 public signatures are below. This is an unwired library primitive: codegen
@@ -728,7 +728,7 @@ existing `ta_number` overloads (include/pineforge/source/pine_ta_length.hpp:68)
 for `double`, `int` and `std::int64_t`, so integer `na` sentinels reach the
 adapter as a double NaN.
 
-`compute` (src/source/pine_ta_length.cpp:506) makes one logical update per call,
+`compute` (src/source/pine_ta_length.cpp:528) makes one logical update per call,
 starting at the site's first execution. A non-`na` source appends one retained
 observation; an `na` source contributes no sample. Each call uses its current
 length to select the last N non-`na` observations and returns `na` while fewer
@@ -739,7 +739,7 @@ access to the retained observations, capped at the last
 keep the same instance and ring; equal source values on successive calls remain
 distinct observations.
 
-`checked_length` (src/source/pine_ta_length.cpp:469) validates before either
+`checked_length` (src/source/pine_ta_length.cpp:471) validates before either
 entry point records or replaces an update. Finite fractional lengths truncate
 toward zero. A nonpositive truncated length throws the family's
 `length_not_positive` error for `sma`; `na` and other nonfinite lengths throw
@@ -748,7 +748,7 @@ above 15001 throws the family's `max_bars_back_exceeded` error with
 `pine_runtime_limit`. Invalid calls leave the logical checkpoint unchanged.
 For a valid length, warm-up returns `na` until N non-`na` samples are retained.
 
-`recompute` (src/source/pine_ta_length.cpp:527) replaces the most recent logical
+`recompute` (src/source/pine_ta_length.cpp:549) replaces the most recent logical
 update from its pre-update ring head/count, including the oldest value evicted
 by a full-ring push. Replacing a value with `na` restores that evicted value;
 replacing `na` with a value inserts one observation, evicting the oldest if
@@ -757,9 +757,9 @@ On an unused instance it creates the first logical update. Copy construction
 and assignment preserve the ring, head/count, saved eviction and replacement
 state, with storage detached before mutation.
 
-`mean` (src/source/pine_ta_length.cpp:487) sums the selected window afresh from
-oldest to newest with Neumaier compensated double arithmetic, then divides
-by N. The finite TradingView clock/source-`na`
+`mean` (src/source/pine_ta_length.cpp:489) sums the selected window afresh.
+For finite sources without intermediate overflow, it rounds the exact sum
+once, as fixed SMA does, then divides by N. The finite TradingView clock/source-`na`
 packet supports the non-`na` sample membership correction; its complete prefix
 through bar 16 is embedded in `tv_clock_na_prefix`
 (tests/test_series_sma.cpp:241). This evidence does not qualify runtime
@@ -769,25 +769,17 @@ transport, infinity, overflow and signed zero remain unqualified. Sparse-call
 routing, repeated calls of the same site within a bar, same-bar re-execution
 after multiple calls and requested-context clocks require separate
 qualification. These ordinary C++ API rules do not establish Pine overload
-admission or TradingView parity for those contexts. The 1.13.0 variable-length
-path temporarily uses Neumaier arithmetic.
-Constant-length calls must retain existing `ta::SMA` and its window arithmetic
-(the exact sum of the window, rounded once; until November 2026 a sliding
-Kahan sum with compensated addends); this unwired primitive does not establish
-that future codegen route. Alignment of the variable-length arithmetic with
-fixed SMA remains planned after 1.13.0. The ordinary unit target's full
-1441-row feed comparison at N=20 exercises the variable adapter, measures
-numeric differences and maximum ULP distance against real fixed `ta::SMA`,
-and reports the first and maximum rows with times and hex values. That
-measurement is neither exact-alignment nor generated constant-script coverage;
-its metrics require actual execution.
+admission or TradingView parity for those contexts. Constant-length calls
+continue to use `ta::SMA`. The unit test covers a cancellation where the two
+paths used to disagree. Its separate 1441-row feed comparison at N=20 reports
+difference counts and maximum ULP distance against fixed `ta::SMA`.
 
 Storage is one ring of at most 15001 non-`na` observations plus a scalar
 rollback checkpoint; it does not grow with bars or requested N.
-`ensure_capacity` (src/source/pine_ta_length.cpp:479) lazily creates that fixed
-ring. The cache policy controls residency, and selecting a window takes O(N)
-work. `observe_owned_storage`
-(include/pineforge/source/pine_ta_length.hpp:525) reports owned history through
+`ensure_capacity` (src/source/pine_ta_length.cpp:481) lazily creates that fixed
+ring. The cache policy controls residency, and summation uses bounded local
+scratch and takes O(N) work. `observe_owned_storage`
+(include/pineforge/source/pine_ta_length.hpp:526) reports owned history through
 the existing storage accounting. Allocation, capacity and scratch I/O failures
 propagate. Ring/checkpoint fields are published after required writes
 succeed, including restoration of an evicted oldest value.

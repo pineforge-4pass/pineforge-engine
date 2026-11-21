@@ -305,6 +305,76 @@ std::vector<Bar> session_bars(const Zone& zone, const Shape& shape, int n) {
     return bars;
 }
 
+// Ask during the confirmed-input callback, before the second row is accepted.
+// Both rows are in the batch, but its second row cannot supply a horizon yet.
+struct AcceptedIntervalHost final : NativeStrategyHost {
+    struct Lookup {
+        std::int64_t stamp;
+        Probe::Interval interval;
+    };
+
+    explicit AcceptedIntervalHost(std::int64_t next_stamp) : next_stamp_(next_stamp) {}
+
+    std::vector<Lookup> observed;
+
+    void on_native_input(const Bar& bar, const NativeInputContext&) override {
+        const auto& consumer = NativeExecutionConsumer::bound(*this);
+        if (observed.empty())
+            CHECK(!consumer.accepted_input_interval(next_stamp_));
+        observed.push_back({bar.timestamp, consumer.accepted_input_interval(bar.timestamp)});
+    }
+
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {}
+
+private:
+    const std::int64_t next_stamp_;
+};
+
+void accepted_input_interval_respects_frontier() {
+    namespace nc = native_calendar;
+    constexpr Shape hourly{"60", "60", 60 * kMinute};
+    constexpr auto midnight = kZones[0].t0;
+    const Zone sessions[] = {
+        {"UTC", "0930-1130,1300-1600", midnight + (9 * 60 + 30) * kMinute},
+        {"UTC", "0900-1130,1220-1530", midnight + 9 * 60 * kMinute},
+    };
+    const auto tf = nc::parse_timeframe(hourly.input_tf);
+    CHECK(tf.has_value());
+    if (!tf) return;
+    for (const auto& zone : sessions) {
+        const auto calendar = nc::parse_session(zone.session, zone.timezone);
+        CHECK(calendar.has_value());
+        if (!calendar) continue;
+        const auto day = nc::session_day_at(*calendar, zone.t0);
+        CHECK(day && day->spans.size() == 2);
+        if (!day || day->spans.size() != 2) continue;
+        const auto reopen = day->spans[1].first;
+        const auto next = day->origin_ms
+            + ((reopen - day->origin_ms) / hourly.step + 1) * hourly.step;
+        const auto clipped = nc::interval_containing(*calendar, *tf, reopen);
+        const auto successor = nc::interval_containing(*calendar, *tf, next);
+        CHECK(clipped && clipped->open_ms < reopen && clipped->eligible_open_ms == reopen
+              && reopen < clipped->last_traded_close_ms && clipped->next_period_open_ms == next);
+        CHECK(successor && successor->open_ms == next && successor->last_traded_close_ms > next);
+        if (!clipped || !successor) continue;
+
+        const Bar rows[] = {{100, 101, 99, 100.5, 1, reopen},
+                            {102, 103, 101, 102.5, 2, next}};
+        AcceptedIntervalHost host(next);
+        const auto setup = host.configure_native(spec_for(zone, hourly, false, 1));
+        CHECK(setup.status == NativeSetupStatus::Applied);
+        if (setup.status != NativeSetupStatus::Applied) continue;
+        host.run(rows, 2);
+        CHECK(host.last_error().empty());
+        CHECK(host.observed.size() == 2);
+        if (host.observed.size() != 2) continue;
+        CHECK(host.observed[0].stamp == reopen);
+        CHECK(same_interval(host.observed[0].interval, clipped));
+        CHECK(host.observed[1].stamp == next);
+        CHECK(same_interval(host.observed[1].interval, successor));
+    }
+}
+
 void memos_answer_as_fresh_resolutions() {
     std::mt19937_64 rng(0xA5A5DEADBEEF1234ULL);
     int runs = 0;
@@ -361,6 +431,7 @@ void memos_answer_as_fresh_resolutions() {
 }  // namespace
 
 int main() {
+    accepted_input_interval_respects_frontier();
     memos_answer_as_fresh_resolutions();
     std::printf("test_native_lookup_memos: %d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;

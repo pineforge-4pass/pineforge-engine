@@ -36,7 +36,7 @@ struct FixedPeriodClock {
 /// Day-based:    "D","1D" => 86400
 /// Week-based:   "W","1W" => 604800
 /// Month-based:  "M","1M" => -1 (calendar-based, not fixed seconds)
-/// Day counts whose seconds do not fit int also return -1 (calendar-only).
+/// Seconds past int: -1 (calendar-only) for a positive D/W count, else out_of_range.
 int tf_to_seconds(const std::string& tf);
 
 /// Extract the numeric multiplier from a TF string (e.g. "15" -> 15, "D" -> 1).

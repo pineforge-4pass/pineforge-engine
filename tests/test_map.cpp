@@ -264,9 +264,24 @@ static void test_put_all_overwrites_in_source_order() {
 
 static void test_50000_pair_capacity_and_put_all_preflight() {
     using Map = PineMap<int, int>;
-    constexpr const char* capacity_error =
-        "Error on bar 0: A map cannot have more than 50000 key-value pairs. "
-        "The current size is 50001.";
+    // expectation corrected: bar 0 -> bar -1, because no bar is executing.
+    const auto expect_capacity_error = [](auto operation) {
+        bool threw = false;
+        try {
+            operation();
+        } catch (const pineforge::MapCapacityError& error) {
+            threw = true;
+            assert(std::string(error.what()) ==
+                   "Error before the first bar: A map cannot have more than 50000 key-value "
+                   "pairs. The current size is 50001.");
+            assert(error.bar_index == -1);
+            const auto failure = error.run_failure();
+            assert(failure.code == pineforge::RunFailureCode::pine_map_capacity_exceeded);
+            assert(failure.args && *failure.args ==
+                   R"({"bar_index":-1,"code":"RE10070","currSize":50001,"maxSize":50000})");
+        }
+        assert(threw);
+    };
 
     auto map = Map::new_(Map::max_pairs);
     for (int key = 0; key < Map::max_pairs; ++key) {
@@ -279,8 +294,7 @@ static void test_50000_pair_capacity_and_put_all_preflight() {
     const auto limit_overwrite_previous = map.put(0, -1);
     assert(limit_overwrite_previous == 0);
     assert(map.size() == Map::max_pairs);
-    expect_runtime_error(
-        [&] { (void)map.put(Map::max_pairs, 1); }, capacity_error);
+    expect_capacity_error([&] { (void)map.put(Map::max_pairs, 1); });
     assert(map.size() == Map::max_pairs);
 
     const auto removed_for_capacity = map.remove(2);
@@ -299,7 +313,7 @@ static void test_50000_pair_capacity_and_put_all_preflight() {
     auto mixed = Map::new_();
     mixed.put(0, 200);
     mixed.put(Map::max_pairs + 1, 50001);
-    expect_runtime_error([&] { map.put_all(mixed); }, capacity_error);
+    expect_capacity_error([&] { map.put_all(mixed); });
 
     // Capacity is preflighted: the overwrite before the new source key was
     // not partially applied.
