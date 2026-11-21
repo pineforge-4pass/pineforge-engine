@@ -1427,7 +1427,10 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
     ``scripts/crossvalidate_metrics.py`` both consume it, so a probe that
     runs under one harness runs identically under the other. ``params``
     itself must still be passed to ``Strategy.run(params=...)`` so Pine
-    ``input()`` values reach ``strategy_set_input``. ``env`` (default
+    ``input()`` values reach ``strategy_set_input``. ``runtime_overrides``
+    accepts ``qty_step`` and ``mincontract`` flat or under ``syminfo_metadata``.
+    A flat ``mincontract`` must be a positive finite JSON number or null;
+    a minimum already declared in ``syminfo_metadata`` takes precedence. ``env`` (default
     ``os.environ``) supplies the one lane fact the case runner hands every
     run, the lane template's quantity step (``LANE_QTY_STEP_ENV``), which
     becomes ``syminfo.mincontract``.
@@ -1537,10 +1540,7 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
         except (TypeError, ValueError):
             return None
 
-    # Per-instrument forced-liquidation lot step. Accept it either as a
-    # top-level runtime_overrides.qty_step or inside syminfo_metadata, and
-    # route it through the existing syminfo_metadata channel (key "qty_step")
-    # so the engine quantizes margin-call lots without a new C-ABI export.
+    # An explicit quantity increment can be supplied flat or as numeric metadata.
     qty_step = _num(runtime_overrides.get("qty_step"))
     if qty_step is None and isinstance(syminfo_metadata, dict):
         qty_step = _num(syminfo_metadata.get("qty_step"))
@@ -1565,9 +1565,19 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
     # F06, cg/w2-trio 90ab04d; codegen d7e095f still lowers na); a probe that
     # declares its own keeps it.
     lane_step = _num((os.environ if env is None else env).get(LANE_QTY_STEP_ENV))
-    if lane_step is not None and math.isfinite(lane_step) and lane_step > 0.0:
+    minimum = runtime_overrides.get("mincontract")
+    if minimum is not None:
+        try:
+            valid = type(minimum) in (int, float) and minimum > 0 and math.isfinite(minimum)
+        except OverflowError:  # A JSON integer outside the engine's double range.
+            valid = False
+        if not valid:
+            raise ValueError("runtime_overrides.mincontract must be a positive finite number")
+    elif lane_step is not None and math.isfinite(lane_step) and lane_step > 0.0:
+        minimum = lane_step
+    if minimum is not None and (syminfo_metadata or {}).get("mincontract") is None:
         syminfo_metadata = dict(syminfo_metadata or {})
-        syminfo_metadata.setdefault("mincontract", lane_step)
+        syminfo_metadata["mincontract"] = minimum
     calendar = _session_calendar_metadata(os.environ if env is None else env,
                                           runtime_overrides.get("tickerid"))
     if calendar:
@@ -4721,12 +4731,14 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
     if dist.upper() == "VOLUME_WEIGHTED":
         dist = "ENDPOINTS"
 
-    # syminfo from runtime_overrides. apply_syminfo covers mintick/pointvalue/
-    # timezone/session; syminfo_metadata (fundamentals, and the lane's
-    # syminfo.mincontract) is NOT covered, nor is a declared bar magnifier (the
-    # image runs generated.cpp, so the library's export is never read) --
-    # documented gaps, which main() prints when the environment names either.
+    # Keep the execution step and the script-visible minimum distinct. The
+    # image's symbol parser validates both and uses the minimum only in the
+    # absence of an explicit step.
     syminfo: dict = {}
+    metadata = run_kwargs.get("syminfo_metadata") or {}
+    for key in ("qty_step", "mincontract"):
+        if metadata.get(key) is not None:
+            syminfo[key] = metadata[key]
     if run_kwargs.get("syminfo_timezone"):
         syminfo["timezone"] = run_kwargs["syminfo_timezone"]
     if run_kwargs.get("syminfo_session"):
@@ -5080,10 +5092,8 @@ def _main_run(args, resources) -> int:
                 "error: --runner docker does not support --dump-book; "
                 "use --runner ctypes with a freshly built strategy library.")
         strat = None
-        if (os.environ.get(MAGNIFIER_FEED_ENV) or os.environ.get(LANE_QTY_STEP_ENV)
-                or os.environ.get(SESSION_CALENDAR_ENV)):
-            print("note: --runner docker honours neither a declared bar magnifier nor "
-                  "syminfo_metadata (syminfo.mincontract, the session calendar); "
+        if os.environ.get(MAGNIFIER_FEED_ENV) or os.environ.get(SESSION_CALENDAR_ENV):
+            print("note: --runner docker does not apply a declared bar magnifier or session calendar; "
                   "use --runner ctypes", file=sys.stderr)
 
         def run_engine(start_ms):

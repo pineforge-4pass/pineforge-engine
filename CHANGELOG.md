@@ -232,6 +232,12 @@ version number follows semantic versioning over the surfaces the
 ### Changed
 
 - When a partial `strategy.exit(qty = ...)` is reissued before a full exit for the same entry, it can now fill for its specified quantity at its own price, leaving only the remainder for the full exit; previously, the full exit could close the entire entry in one trade. Exits sized with a `qty_percent` below 100, and partial exits that are not followed by a full exit, are unchanged (#810).
+- `scripts/run_strategy.py --runner docker` now passes the symbol’s declared
+  quantity step or minimum contract size to the strategy. Explicit entries
+  are truncated to the lot size, and a 100%-of-equity entry can fill when that
+  truncated quantity is affordable. Both runners also accept `mincontract`
+  directly in `runtime_overrides`. With neither value supplied, quantities
+  still have no lot grid (#716).
 - The engine layout stamp that `pineforge-live` checks, `PF_STREAM_ENGINE_LAYOUT_VERSION`, is now 5. A strategy module built against 1.13.x headers declares stamp 4 and is refused by a 1.14.0 `pineforge-live` before it is created (`strategy engine layout mismatch: module=4 runtime=5`): rebuild such modules against the matching 1.14.0 headers. The earlier miss, disclosed: 1.13.0 changed the same internal layout without raising the stamp, so a module built against 1.12.x headers and loaded into a 1.13.x `pineforge-live` was not refused; rebuild such modules against matching headers too. `PF_ABI_VERSION` stays 5, and the C API and its caller-allocated structures are unchanged.
 - A new host helper, `strategy_convert_identity_or_warn`, lets generated code report `strategy.convert_to_account` and `strategy.convert_to_symbol` calls that had no account-currency rate: the value still comes back unchanged, and the run's warnings now list `currency_conversion_rate_unavailable` once for each such call site (#376).
 
