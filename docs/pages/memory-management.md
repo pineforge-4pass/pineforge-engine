@@ -163,7 +163,7 @@ stamp, every mode (the default stream included, and a run without JSONL
 output) holds the scalar members of the cumulative JSON document and the rows
 of the newest input. Rows that a later input can no longer change are
 serialized once and appended to anonymous files beside the ledger
-(`SpooledReportArray` runner/report_spool.hpp:286), and a `--report-jsonl` line
+(`SpooledReportArray` runner/report_spool.hpp:290), and a `--report-jsonl` line
 is written to stdout from those files (`write_cumulative_line`
 runner/main.cpp:955) instead of being rebuilt from a retained document. With
 `--native-event-retention window` only, the
@@ -389,8 +389,8 @@ trailer, 7 internal error, 8 `sink_exhausted` (the stream exceeds `--max-bytes`;
 `sink_exhausted` at `docker/pineforge_sink_finalize.py:115-123`). Its output is provisional until
 exit 0, and a consumer must discard everything it received on exit 3 to 8 (`PROVISIONAL` at
 `docker/pineforge_sink_finalize.py:24-26`). The failure catalog maps exit 8 to `report_sink_failed`
-with `reason` `sink_exhausted` (`sink_exhausted` at `docker/run_failure_codes.json:1192`). A sink failure carries code `report_sink_failed` and a `reason`
-from the closed list of the catalog (`report_sink_failed` at `docker/run_failure_codes.json:1160`):
+with `reason` `sink_exhausted` (`sink_exhausted` at `docker/run_failure_codes.json:1193`). A sink failure carries code `report_sink_failed` and a `reason`
+from the closed list of the catalog (`report_sink_failed` at `docker/run_failure_codes.json:1161`):
 `arena_exhausted`, `arena_io`, `arena_backing`, `scratch_io`, `sink_io`, `sink_peer_closed` and
 `sink_exhausted`. Only some reasons carry sizes: `arena_exhausted` carries `high_water_bytes`,
 `arena_bytes`, `claimed_bytes`, `store` and `needed_bytes_lower_bound`, `sink_exhausted` carries
