@@ -662,6 +662,10 @@ if(PINEFORGE_BUILD_TESTS)
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> window-checkpoint-storage
         $<TARGET_FILE:live_contract_native_stub>)
     set_tests_properties(test_native_live_report_window_checkpoint_storage PROPERTIES TIMEOUT 0)
+    add_test(NAME test_native_live_report_window_checkpoint_streaming COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> window-checkpoint-streaming)
+    set_tests_properties(test_native_live_report_window_checkpoint_streaming PROPERTIES
+        TIMEOUT 0 SKIP_RETURN_CODE 77)
     add_dependencies(test_native_live_report_cli live_contract_native_stub)
     # A default run's equity export, pinned to the 1.13.0 build's SHA-256; 77 = not x86-64 Linux.
     add_test(NAME test_native_live_report_default_equity_export COMMAND test_native_live_report_cli

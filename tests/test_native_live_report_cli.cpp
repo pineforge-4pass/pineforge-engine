@@ -1534,6 +1534,73 @@ void window_checkpoint_storage(Fixture& fixture, const char* unstamped_module) {
     check(false);
 }
 
+// With --native-event-retention window a report checkpoint above 1 MiB is written into its row
+// in pieces at every cursor. A checkpoint at cursor 512, the last one the tree fold used to
+// build, must not be held in memory whole, and its bytes must be the bytes of a run without the
+// option (which still builds that checkpoint from the tree and stores it as TEXT).
+void window_checkpoint_streams_at_the_tree_cursor(Fixture& fixture) {
+    constexpr std::uint64_t inputs = 512, bars_per_input = 1000;
+    struct Outcome {
+        std::string storage, hash;
+        std::int64_t bytes = 0;
+        std::uint64_t peak_kib = 0;
+    };
+    // `interval` above the number of inputs writes no checkpoint: the memory baseline.
+    const auto run = [&](const std::string& name, bool window, std::uint64_t interval) {
+        const auto ledger = fixture.temporary.path / (name + ".sqlite");
+        const auto status = fixture.temporary.path / (name + ".status");
+        auto command = fixture.command(ledger, status, "", 0);
+        if (window) command.insert(command.end(), {"--native-event-retention", "window"});
+        command.insert(command.end(), {"--checkpoint-interval", std::to_string(interval), "--ratio-interval",
+                                       std::to_string(interval)});
+        Runner child(std::move(command), fixture.temporary.path / (name + ".stderr"), /*measure_rss=*/true);
+        wait_ready(status, 0, child);
+        std::uint32_t seed = 12345;
+        for (std::uint64_t input = 0; input < inputs; ++input) {
+            std::string batch = "{\"type\":\"batch\",\"events\":[";
+            for (std::uint64_t bar = 1; bar <= bars_per_input; ++bar) {
+                if (bar != 1) batch += ',';
+                batch += seeded_input(input * bars_per_input + bar, seed);
+            }
+            child.send(batch + "]}\n");
+        }
+        // A checkpoint is written inside its boundary input's own transaction.
+        wait_ready(status, inputs, child);
+        Outcome outcome;
+        const auto held = child.resident_high_water_kib();
+        std::uint64_t exit_peak = 0;
+        check_summary(child.finish(0, &exit_peak), inputs, inputs);
+        outcome.peak_kib = std::max(held, exit_peak);
+        if (interval > inputs) return outcome;
+        auto database = open_database(ledger, SQLITE_OPEN_READONLY);
+        sqlite3_stmt* raw = nullptr;
+        require(sqlite3_prepare_v2(database.get(),
+                    "SELECT typeof(payload), length(CAST(payload AS BLOB)), payload_hash "
+                    "FROM report_checkpoints WHERE input_cursor=?", -1, &raw, nullptr) == SQLITE_OK,
+                "cannot inspect the stored checkpoint");
+        std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)> query(raw, sqlite3_finalize);
+        require(sqlite3_bind_int64(raw, 1, static_cast<sqlite3_int64>(inputs)) == SQLITE_OK &&
+                    sqlite3_step(raw) == SQLITE_ROW,
+                name + ": the checkpoint at cursor 512 is missing: " + child.errors());
+        outcome.storage = reinterpret_cast<const char*>(sqlite3_column_text(raw, 0));
+        outcome.bytes = sqlite3_column_int64(raw, 1);
+        outcome.hash = reinterpret_cast<const char*>(sqlite3_column_text(raw, 2));
+        return outcome;
+    };
+    const auto baseline = run("window-no-checkpoint", true, inputs + 1);
+    const auto streamed = run("window-checkpoint", true, inputs);
+    const auto plain = run("plain-checkpoint", false, inputs);
+    require(streamed.bytes > 1024 * 1024 && streamed.bytes == plain.bytes && streamed.hash == plain.hash,
+            "the checkpoint at cursor 512 changed its bytes: " + std::to_string(streamed.bytes) + " bytes with the option, " +
+                std::to_string(plain.bytes) + " without");
+    require(plain.storage == "text" && streamed.storage == "blob",
+            "stored as " + streamed.storage + " with the option and " + plain.storage + " without it");
+    const auto growth_kib = streamed.peak_kib > baseline.peak_kib ? streamed.peak_kib - baseline.peak_kib : 0;
+    require(growth_kib < static_cast<std::uint64_t>(streamed.bytes) / 1024,
+            "the checkpoint raised the peak resident memory by " + std::to_string(growth_kib) +
+                " KiB, as much as its " + std::to_string(streamed.bytes / 1024) + " KiB payload");
+}
+
 void spool_write_failure_finishes(Fixture& fixture) {
     constexpr std::uint64_t count = 1100;
     const auto base = spool_run(fixture, "spool-unconstrained", count, nullptr);
@@ -1740,6 +1807,12 @@ int main(int argc, char** argv) {
             return 0;
         }
         require(argc == 4, "unexpected extra module");
+#if !defined(__linux__)
+        if (test_case == "window-checkpoint-streaming") {
+            std::cout << "SKIP window checkpoint streaming: runner VmHWM requires Linux /proc/<pid>/status\n";
+            return 77;
+        }
+#endif
         if (test_case == "module-layout") {
             // Probe in a C++ process so instrumented modules use its runtime.
             std::unique_ptr<void, decltype(&dlclose)> library(
@@ -1793,6 +1866,8 @@ int main(int argc, char** argv) {
             report_memory(fixture, true);
         } else if (test_case == "event-retention") {
             event_retention_option(fixture);
+        } else if (test_case == "window-checkpoint-streaming") {
+            window_checkpoint_streams_at_the_tree_cursor(fixture);
         } else if (test_case == "default-equity-export") {
 #if defined(__linux__) && defined(__x86_64__)
             default_equity_export(fixture);
