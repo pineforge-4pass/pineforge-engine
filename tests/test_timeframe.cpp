@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -70,6 +71,22 @@ static void test_tf_ratio() {
     // monthly is calendar-based
     CHECK(tf_ratio("1", "M") == -1);
     CHECK(tf_ratio("D", "M") == -1);
+}
+
+static void test_detect_timeframe_extreme_timestamp_gaps() {
+    const auto earliest = std::numeric_limits<int64_t>::min();
+    const auto latest = std::numeric_limits<int64_t>::max();
+    const Bar bars[] = {
+        make_bar(1, 1, 1, 1, 1, earliest),
+        make_bar(1, 1, 1, 1, 1, latest),
+        make_bar(1, 1, 1, 1, 1, earliest + 300000),
+        make_bar(1, 1, 1, 1, 1, earliest + 600000),
+    };
+
+    CHECK(detect_timeframe(bars, 2) == "W");
+    CHECK(detect_timeframe(bars + 1, 2) == "1");
+    // The upper median of the two increasing gaps is the wider gap.
+    CHECK(detect_timeframe(bars, 4) == "W");
 }
 
 // ─── Ratio-based aggregation ──────────────────────────────────────────────────
@@ -268,6 +285,7 @@ int main() {
 
     test_tf_to_seconds();
     test_tf_ratio();
+    test_detect_timeframe_extreme_timestamp_gaps();
     test_ratio_aggregation();
     test_passthrough();
     test_calendar_daily_aggregation();
