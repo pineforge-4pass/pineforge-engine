@@ -2,6 +2,7 @@
 #include <string>
 
 #include <pineforge/na.hpp>
+#include <pineforge/native_calendar.hpp>
 #include <pineforge/session_time.hpp>
 
 using namespace pineforge;
@@ -187,6 +188,22 @@ static void test_time_syminfo_tz_does_not_move_calendar_open() {
     CHECK(pine_time(bar, "D", "America/New_York", "", "15", "America/New_York") == plain);
 }
 
+static void test_calendar_preserves_minus_one_second() {
+    std::printf("test_calendar_preserves_minus_one_second\n");
+    // UTC+1 second: at Unix 0 the local clock is 00:00:01 on Jan 1, 1970.
+    // The local day's midnight was one second before the Unix epoch.
+    const int64_t open = timeframe_time(0, "D", "", "TST-00:00:01", "15");
+    CHECK(open == -1000);
+
+    // DST is UTC+1h and ends at Jan 1 01:00 DST, i.e. Unix 0.
+    // The repeated Jan 1 00:59:59 is Unix -1 under DST and +3599 under standard
+    // time. Civil resolution must report the fold and pick its earlier instant.
+    const auto fold = native_calendar::resolve_civil(
+        "STD0DST-1,M7.1.0/2,J1/1", 1970, 1, 1, 0, 59, 59);
+    CHECK(fold && fold->kind == native_calendar::CivilKind::Fold);
+    CHECK(fold && fold->epoch_ms == -1000);
+}
+
 int main() {
     test_time_hourly_bucket_utc();
     test_time_session_ny_inside();
@@ -201,6 +218,7 @@ int main() {
     test_time_session_explicit_tz_beats_syminfo();
     test_time_session_syminfo_tz_dst_aware();
     test_time_syminfo_tz_does_not_move_calendar_open();
+    test_calendar_preserves_minus_one_second();
 
     std::printf("session_time: %d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;
