@@ -13,9 +13,9 @@
 
 namespace entry_fill_tape {
 
-// The ordinary pre-run C API, on a fresh strategy. Neither quantity metadata
-// key is supplied; the price tick is a separate symbol fact.
-inline void set_eth_symbol(pineforge::BacktestEngine& host, double mintick) {
+// Apply the recorded chart facts and exactly the lot setters the caller sent.
+inline void set_eth_symbol(pineforge::BacktestEngine& host, double mintick,
+                           int count, char** metadata) {
     strategy_set_syminfo_type(&host, "crypto");
     strategy_set_syminfo_timezone(&host, "UTC");
     strategy_set_syminfo_session(&host, "24x7");
@@ -26,6 +26,13 @@ inline void set_eth_symbol(pineforge::BacktestEngine& host, double mintick) {
         strategy_set_syminfo_string(&host, "currency", "USDT") != 0 ||
         strategy_set_syminfo_string(&host, "basecurrency", "ETH") != 0)
         throw std::runtime_error("could not set the chart symbol");
+    if (count % 2 != 0) throw std::runtime_error("incomplete metadata setter");
+    for (int i = 0; i < count; i += 2) {
+        const std::string key = metadata[i];
+        if (key != "qty_step" && key != "mincontract")
+            throw std::runtime_error("unexpected lot metadata: " + key);
+        strategy_set_syminfo_metadata(&host, key.c_str(), std::stod(metadata[i + 1]));
+    }
 }
 
 struct Fill {

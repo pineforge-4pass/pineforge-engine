@@ -8822,18 +8822,23 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
 endif()
 
 if(PINEFORGE_BUILD_SOURCE_LAYER)
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/grid_close/w3bf02-e2-offgrid-qty/tv_trades.csv")
-        add_test(NAME test_entry_without_grid_explicit
-            COMMAND test_grid_close_tapes --explicit-entry-without-grid w3bf02-e2-offgrid-qty)
+    if(TARGET test_grid_close_tapes
+       AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/grid_close/w3bf02-e2-offgrid-qty/tv_trades.csv"
+       AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/syminfo_mincontract/eth-15/tv_trades.csv")
+        add_test(NAME test_entry_runner_explicit
+            COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/test_entry_quantity_runner.py
+                    $<TARGET_FILE:test_grid_close_tapes> --explicit-entry w3bf02-e2-offgrid-qty)
     else()
-        add_test(NAME test_entry_without_grid_explicit COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/grid_close/w3bf02-e2-offgrid-qty/tv_trades.csv")
-        set_tests_properties(test_entry_without_grid_explicit PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+        add_test(NAME test_entry_runner_explicit COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/grid_close/w3bf02-e2-offgrid-qty/tv_trades.csv or its chart/symbol fixtures")
+        set_tests_properties(test_entry_runner_explicit PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
     endif()
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_ledger_rules/flat-eth-fillexact-under/r1/tv_trades.csv")
-        add_test(NAME test_entry_without_grid_all_equity
-            COMMAND test_margin_ledger_rules_tapes --equity-entry-without-grid flat-eth-fillexact-under/r1/tv_trades.csv)
+    if(TARGET test_margin_ledger_rules_tapes
+       AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_ledger_rules/flat-eth-fillexact-under/r1/tv_trades.csv")
+        add_test(NAME test_entry_runner_all_equity
+            COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/test_entry_quantity_runner.py
+                    $<TARGET_FILE:test_margin_ledger_rules_tapes> --equity-entry flat-eth-fillexact-under/r1/tv_trades.csv)
     else()
-        add_test(NAME test_entry_without_grid_all_equity COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/margin_ledger_rules/flat-eth-fillexact-under/r1/tv_trades.csv")
-        set_tests_properties(test_entry_without_grid_all_equity PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+        add_test(NAME test_entry_runner_all_equity COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/margin_ledger_rules/flat-eth-fillexact-under/r1/tv_trades.csv")
+        set_tests_properties(test_entry_runner_all_equity PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
     endif()
 endif()

@@ -4,7 +4,8 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND
             "PINEFORGE_ENTRY_PERCENT_LIBRARY=$<TARGET_FILE:entry_quantity_percent>"
             "PINEFORGE_ENTRY_EXPLICIT_LIBRARY=$<TARGET_FILE:entry_quantity_explicit>"
             ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
-            ${PROJECT_SOURCE_DIR}/tests/test_entry_quantity_callers.py::test_json_entry_quantity)
+            ${PROJECT_SOURCE_DIR}/tests/test_entry_quantity_callers.py::test_json_entry_quantity
+            ${PROJECT_SOURCE_DIR}/tests/test_entry_quantity_runner.py)
     if(PINEFORGE_BUILD_LIVE_RUNNER)
         add_test(NAME test_entry_quantity_live
             COMMAND ${CMAKE_COMMAND} -E env

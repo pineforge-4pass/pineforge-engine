@@ -417,7 +417,7 @@ pineforge::source::detail::MarginRuleSwitches all_rules_on() {
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc == 3 && std::string(argv[1]) == "--equity-entry-without-grid") {
+    if (argc >= 3 && std::string(argv[1]) == "--equity-entry") {
         const auto cases = load_cases(argv[2]);
         if (cases.size() != 1 || tests_failed) throw std::runtime_error("invalid equity-entry case");
         const auto& c = cases.front();
@@ -429,7 +429,7 @@ int main(int argc, char** argv) {
         const auto bars = load_bars(c.bars);
         if (bars.empty() || tests_failed) throw std::runtime_error("invalid equity-entry feed");
         LedgerHost host(c);
-        entry_fill_tape::set_eth_symbol(host, c.tick);
+        entry_fill_tape::set_eth_symbol(host, c.tick, argc - 3, argv + 3);
         host.run(bars.data(), static_cast<int>(bars.size()), c.timeframe, c.timeframe);
         return entry_fill_tape::matches(host, c.events[0].id, tv) ? 0 : 1;
     }
