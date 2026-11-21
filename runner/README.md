@@ -265,7 +265,7 @@ the input durable. If the separate transaction's actual page admission needs
 more room than reserved, only the checkpoint rolls back; the diagnostic count
 increases without latching a storage stop. Without `--native-event-retention
 window`, up to cursor 512 preparation builds the cumulative document as a
-tree, as before. Above it, and at every cursor with that option, preparation
+tree, as before. Above it, and at every cursor with that option on a module that has the engine layout stamp, preparation
 folds every report row from cursor 0 through spooled arrays in the ledger's
 directory, where 1.13.0 started from the nearest earlier checkpoint. At the
 geometric boundaries K, 2K, 4K, ... the checkpoints up to 2^m·K therefore read
@@ -276,14 +276,14 @@ no longer repeated by it; the bytes written are the same. The read runs inside
 the boundary input's own transaction, so that input's commit takes as long as
 the read. Where no spool file can be created or written in that directory, the
 fold keeps those rows in memory (the one warning above) and the checkpoint is
-still written. With `--native-event-retention window`, a payload above 1 MiB is
+still written. With `--native-event-retention window` on a module that has the engine layout stamp, a payload above 1 MiB is
 hashed and written into its row in pieces, at any cursor (stored as a BLOB with
 the same bytes; the column is declared `TEXT`, but SQLite keeps each value's
 own type, so `SELECT payload` returns a blob for such a row and text for the
 others, and `CAST(payload AS TEXT)` reads both; a payload of 2 GiB or more is beyond
 SQLite's blob I/O and fails as a checkpoint write failure, with the input
 durable), so its memory does not grow with T, the full report size. Without
-that option the payload is built as one string and stored as TEXT, as in
+that option, or for a module without the stamp, the payload is built as one string and stored as TEXT, as in
 1.13.0, and a ledger of such a run has the 1.13.0 form. It still reads O(N) report rows at a boundary,
 which can delay the input loop, and it does not provide constant export time.
 With a ledger byte budget SQLite keeps a transaction's pages in memory until
@@ -555,7 +555,7 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   defaults to 1024. Checkpoints are report recovery aids; they do not serialize
   or restore strategy state. Startup and recovery checkpoint writes use the
   same admission; opening files already over a finite budget refuses before
-  any checkpoint is attempted. With `--native-event-retention window`, a
+  any checkpoint is attempted. With `--native-event-retention window` on a module that has the engine layout stamp, a
   checkpoint above 1 MiB is admitted whole
   (its byte size, with the same margin as an input's payload) before its first
   write and is then written in pieces with SQLite's page spilling enabled for
