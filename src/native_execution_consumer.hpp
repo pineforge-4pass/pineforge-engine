@@ -180,19 +180,19 @@ public:
     // callback cannot turn its still-open slot into a completed observation.
     std::optional<native_calendar::NativeInterval> accepted_input_interval(
         std::int64_t stamp) const {
-        const auto* latest = accepted_input_context_
-            ? &accepted_input_context_->input_interval
-            : input_callback_context_ ? &input_callback_context_->input_interval
+        const auto* latest = accepted_input_
+            ? &accepted_input_->context.input_interval
             : last_accepted_input_ ? &*last_accepted_input_ : nullptr;
-        if (latest && native_confirmed_bar_label_admitted(*latest, stamp))
+        if (latest && ((accepted_input_ && stamp == accepted_input_->stamp)
+                       || native_confirmed_bar_label_admitted(*latest, stamp)))
             return completion_input_interval(*latest);
         if (!latest || stamp > latest->open_ms) return std::nullopt;
         const auto interval = input_interval_at(stamp);
         return interval ? completion_input_interval(*interval) : std::nullopt;
     }
     std::optional<native_calendar::NativeInterval> accepted_completion_interval() const {
-        const auto* latest = accepted_input_context_
-            ? &accepted_input_context_->input_interval
+        const auto* latest = accepted_input_
+            ? &accepted_input_->context.input_interval
             : last_accepted_input_ ? &*last_accepted_input_ : nullptr;
         return latest ? completion_input_interval(*latest) : std::nullopt;
     }
@@ -1357,6 +1357,7 @@ private:
                                         const Bar* input_bars, int n_input);
     bool pump_timeframe_subscriptions(BacktestEngine& engine, const Bar& bar, int index,
                                       const native_calendar::NativeInterval& input_interval);
+    bool check_fixed_subscription_input(BacktestEngine& engine, int index);
     // The declared auxiliary feed followed by a stream's appended bars, read
     // as one sequence. Zero / never called for a run that declares no feed.
     std::size_t auxiliary_bar_count() const noexcept;
@@ -1369,7 +1370,8 @@ private:
                               Completed&& completed);
     template <typename Completed>
     bool feed_fixed_subscription(BacktestEngine&, TimeframeSubscription&, int index,
-                                 const Bar* feed_bar, std::int64_t horizon_ms,
+                                 const Bar* feed_bar, std::int64_t eligible_open_ms,
+                                 std::int64_t horizon_ms,
                                  std::int64_t next_feed_ms, Completed&& completed);
     // A declared series is fed by accepted CONFIRMED input only, because that
     // is the only input a batch of the same bars also has. True (refused)
@@ -2165,9 +2167,14 @@ private:
     std::size_t driver_mark_count_ = 0;
     std::uint64_t applied_events_ = 0;
     NativeDecisionContext callback_context_{};
-    // Stack-borrowed after validation until all delayed source work for this
-    // accepted input returns. Never durable state or a borrowed input array.
-    const NativeInputContext* accepted_input_context_ = nullptr;
+    // Stack-borrowed only while the validated input is being consumed.
+    // Capture the stamp by value before any callback can observe the input.
+    struct AcceptedInput {
+        const NativeInputContext& context;
+        const Bar& bar;
+        std::int64_t stamp;
+    };
+    const AcceptedInput* accepted_input_ = nullptr;
     std::optional<NativeInputContext> input_callback_context_;
     std::optional<Bar> input_callback_bar_;
     std::optional<NativeTickContext> tick_callback_context_;

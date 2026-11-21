@@ -49,10 +49,10 @@ enum class NativePathPhase : std::uint8_t {
 
 /// How a script interval or a higher-timeframe bucket was closed. Confirmed means
 /// its own last contributing bar closed it. LazyComplete seals the available
-/// aggregate when the next interval's input arrives, or at an opted-in batch
-/// input horizon without confirming its calendar close or requiring another input.
-/// Session-clipped subscription buckets are Confirmed. PartialFinalized means a
-/// stream end finalized a forming observed slot; no path produces SessionShortened.
+/// aggregate when an input reveals a close without a closing feed bar, or at
+/// an opted-in batch horizon for a script interval. A session-clipped bucket
+/// is Confirmed when its own last feed bar reaches the close. PartialFinalized
+/// marks a forming observed slot finalized at stream end; no path produces SessionShortened.
 /// Delivered on NativeTimeframeBarContext::completion or calculation coordinates.
 enum class NativeCompletionKind : std::uint8_t {
     Confirmed = 0,

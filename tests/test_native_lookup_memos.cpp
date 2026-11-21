@@ -81,6 +81,9 @@ struct NativeExecutionConsumerProbe {
     static bool running(const NativeExecutionConsumer& c) {
         return std::holds_alternative<NativeRunning>(c.state_);
     }
+    static void truncate_subscription_view(NativeExecutionConsumer& c, int count) {
+        c.subscription_input_n_ = count;
+    }
 };
 
 }  // inline namespace engine_script_run_v20
@@ -375,6 +378,63 @@ void accepted_input_interval_respects_frontier() {
     }
 }
 
+void accepted_input_interval_recognizes_provider_label() {
+    constexpr Shape shape{"30", "60", 30 * kMinute};
+    constexpr Zone zone{"UTC", "24x7", 1704153600000LL};  // Jan 2, 00:00 UTC
+    const Bar rows[] = {{100, 101, 99, 100, 1, 1704153660000LL},
+                        {100, 101, 99, 100, 1, 1704155460000LL},
+                        {100, 101, 99, 100, 1, 1704157260000LL}};
+    AcceptedIntervalHost host(rows[1].timestamp);
+    const auto setup = host.configure_native(spec_for(zone, shape, true, 1));
+    CHECK(setup.status == NativeSetupStatus::Applied);
+    if (setup.status != NativeSetupStatus::Applied) return;
+    host.run(rows, 3);
+    CHECK(host.last_error().empty());
+    CHECK(host.observed.size() == 3);
+    if (host.observed.size() != 3) return;
+    const auto& first = host.observed.front().interval;
+    CHECK(first.has_value());
+    if (!first) return;
+    CHECK(first->open_ms == 1704153600000LL);  // 00:00 UTC
+    CHECK(first->last_traded_close_ms == 1704155400000LL);  // 00:30 UTC
+}
+
+void fixed_subscription_rejects_index_outside_installed_view() {
+    struct Host final : NativeStrategyHost {
+        int inputs = 0;
+        int deliveries = 0;
+        void on_native_input(const Bar&, const NativeInputContext& context) override {
+            ++inputs;
+            if (context.input_index == 1)
+                Probe::truncate_subscription_view(NativeExecutionConsumer::bound(*this), 1);
+        }
+        void on_native_timeframe_bar(const Bar&, const NativeTimeframeBarContext&) override {
+            ++deliveries;
+        }
+        void on_native_bar(const Bar&, const NativeDecisionContext&) override {}
+    } host;
+    constexpr Shape shape{"60", "60", 60 * kMinute};
+    constexpr Zone zone{"UTC", "24x7", 1704153600000LL};
+    auto spec = spec_for(zone, shape, false, 1);
+    NativeTimeframeSubscription series;
+    series.tf = "75";
+    series.authoritative_bars = {{200, 201, 199, 200, 2, 1704153600000LL}};
+    spec.subscriptions.push_back(series);
+    const Bar rows[] = {{100, 101, 99, 100, 1, 1704153600000LL},
+                        {110, 111, 109, 110, 1, 1704157200000LL}};
+    const auto setup = host.configure_native(spec);
+    CHECK(setup.status == NativeSetupStatus::Applied);
+    if (setup.status != NativeSetupStatus::Applied) return;
+    host.run(rows, 2);
+    const auto state = host.native_state();
+    CHECK(host.inputs == 2);
+    CHECK(state.kind == NativeLifecycleKind::Failed);
+    CHECK(state.failure.code == NativeFailureCode::Contract);
+    CHECK(state.failure.operation == NativeFailureOperation::Input);
+    CHECK(host.last_error() == "native timeframe subscription input identity mismatch");
+    CHECK(host.deliveries == 0);
+}
+
 void memos_answer_as_fresh_resolutions() {
     std::mt19937_64 rng(0xA5A5DEADBEEF1234ULL);
     int runs = 0;
@@ -432,6 +492,8 @@ void memos_answer_as_fresh_resolutions() {
 
 int main() {
     accepted_input_interval_respects_frontier();
+    accepted_input_interval_recognizes_provider_label();
+    fixed_subscription_rejects_index_outside_installed_view();
     memos_answer_as_fresh_resolutions();
     std::printf("test_native_lookup_memos: %d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;

@@ -1488,6 +1488,7 @@ void test_fixed_period_late_completion_case(bool late) {
     const auto holed_bars = day::without(
         complete_bars, 0, 13 * 60, 14 * 60 + 30);
     CHECK(!complete_bars.empty());
+    CHECK(!holed_bars.empty());
     CHECK(holed_bars.size() < complete_bars.size());
     if (complete_bars.empty() || holed_bars.empty()) return;
 
@@ -1786,6 +1787,208 @@ void test_fixed_period_auxiliary_no_feed_bar_tail() {
     CHECK(std::count(host.log.begin(), host.log.end(), htf_event) == 1);
 }
 
+void test_fixed_period_auxiliary_prefix_own_close() {
+    scenario = "fixed-period auxiliary prefix closes on its own last feed bar";
+    const Bar primary[] = {
+        {100, 101, 99, 100, 1, utc_ms(2024, 1, 2, 13, 30)},
+        {110, 111, 109, 110, 1, utc_ms(2024, 1, 2, 14, 30)},
+    };
+    const Bar daily{200, 201, 199, 200, 2, utc_ms(2024, 1, 2, 13, 0)};
+    const Bar authoritative{300, 301, 299, 300, 3, utc_ms(2024, 1, 2, 12, 50)};
+    NativeRunSpec spec = base_spec("60", "60", "native-fixed-auxiliary-prefix");
+    spec.type = "stock";
+    spec.session = "0930-1600";
+    NativeAuxiliaryFeed feed;
+    feed.tf = "10";
+    for (auto stamp = utc_ms(2024, 1, 2, 12, 50);
+         stamp <= utc_ms(2024, 1, 2, 14, 10); stamp += 10 * kMinute) {
+        feed.bars.push_back({120, 121, 119, 120, 1, stamp});
+    }
+    spec.auxiliary_feed = feed;
+    NativeTimeframeSubscription series;
+    series.tf = "75";
+    series.source = NativeSeriesSource::AuxiliaryFeed;
+    series.authoritative_bars = {authoritative};
+    spec.subscriptions.push_back(series);
+
+    SeriesHost host;
+    const auto setup = host.configure_native(spec);
+    CHECK(setup.status == NativeSetupStatus::Applied);
+    if (setup.status != NativeSetupStatus::Applied) return;
+    const bool daily_installed = host.set_native_security_feed("D", &daily, 1);
+    CHECK(daily_installed);
+    if (!daily_installed) return;
+    host.run(primary, 2, "60", "60", false, 4, MagnifierDistribution::ENDPOINTS);
+    CHECK(host.last_error().empty());
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(host.deliveries.size() == 1);
+    if (host.deliveries.size() != 1) return;
+
+    // The 13:00 late open places the first close at 14:15, but the
+    // 12:50 observation supplies its label. The 14:10 feed bar reaches
+    // 14:20 inside the primary slice labelled 13:30.
+    const auto& delivery = host.deliveries.front();
+    check_bucket(delivery.bar, authoritative, "auxiliary prefix payload");
+    CHECK(delivery.bar.timestamp == 1704199800000LL);  // 12:50 UTC
+    CHECK(delivery.context.delivered_at_ms == 1704202200000LL);  // 13:30 UTC
+    CHECK(delivery.context.completion == NativeCompletionKind::Confirmed);
+}
+
+void test_fixed_period_gap_input_does_not_confirm() {
+    scenario = "fixed-period gap input reveals a bucket it did not contribute to";
+    const Bar bars[] = {
+        {100, 101, 99, 100, 1, utc_ms(2024, 1, 2, 15, 0)},
+        {110, 111, 109, 110, 1, utc_ms(2024, 1, 2, 16, 30)},
+    };
+    const Bar authoritative{200, 201, 199, 200, 2, utc_ms(2024, 1, 2, 15, 0)};
+    NativeRunSpec spec = base_spec("30", "30", "native-fixed-gap-input");
+    spec.type = "stock";
+    spec.session = "0930-1600,1800-2000";
+    NativeTimeframeSubscription series;
+    series.tf = "110";
+    series.authoritative_bars = {authoritative};
+    spec.subscriptions.push_back(series);
+
+    SeriesHost host;
+    const auto setup = host.configure_native(spec);
+    CHECK(setup.status == NativeSetupStatus::Applied);
+    if (setup.status != NativeSetupStatus::Applied) return;
+    host.run(bars, 2, "30", "30", false, 4, MagnifierDistribution::ENDPOINTS);
+    CHECK(host.last_error().empty());
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(host.deliveries.size() == 1);
+    if (host.deliveries.size() != 1) return;
+
+    // Three 110-minute steps from 09:30 put this bucket at 15:00.
+    // Trading ends at 16:00; the 16:30 input is wholly in the gap.
+    const auto& delivery = host.deliveries.front();
+    check_bucket(delivery.bar, authoritative, "gap-input payload");
+    CHECK(delivery.context.interval.open_ms == 1704207600000LL);  // 15:00 UTC
+    CHECK(delivery.context.interval.last_traded_close_ms == 1704211200000LL);  // 16:00 UTC
+    CHECK(delivery.context.interval.next_period_open_ms == 1704214200000LL);  // 16:50 UTC
+    CHECK(delivery.context.delivered_at_ms == 1704213000000LL);  // 16:30 UTC
+    CHECK(delivery.context.completion == NativeCompletionKind::LazyComplete);
+}
+
+NativeRunSpec provider_label_subscription_spec() {
+    NativeRunSpec spec = base_spec("30", "60", "native-fixed-provider-label");
+    spec.slot_label_policy = NativeSlotLabelPolicy::FeedTolerant;
+    NativeTimeframeSubscription series;
+    series.tf = "75";
+    series.authoritative_bars = {{200, 201, 199, 200, 2, utc_ms(2024, 1, 2)}};
+    spec.subscriptions.push_back(series);
+    return spec;
+}
+
+void test_fixed_period_provider_input_label() {
+    scenario = "fixed-period provider label on a 24-hour calendar";
+    const Bar bars[] = {
+        {100, 101, 99, 100, 1, utc_ms(2024, 1, 2, 0, 1)},
+        {100, 101, 99, 100, 1, utc_ms(2024, 1, 2, 0, 31)},
+        {100, 101, 99, 100, 1, utc_ms(2024, 1, 2, 1, 1)},
+    };
+    const auto spec = provider_label_subscription_spec();
+    SeriesHost host;
+    const auto setup = host.configure_native(spec);
+    CHECK(setup.status == NativeSetupStatus::Applied);
+    if (setup.status != NativeSetupStatus::Applied) return;
+    host.run(bars, 3, "30", "60", false, 4, MagnifierDistribution::ENDPOINTS);
+    CHECK(host.last_error().empty());
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(host.deliveries.size() == 1);
+    if (host.deliveries.size() != 1) return;
+
+    // The admitted 01:01 label is in the 01:00–01:30 input interval.
+    // That interval reaches the 01:15 close of the 00:00 bucket.
+    const auto& delivery = host.deliveries.front();
+    check_bucket(delivery.bar, spec.subscriptions.front().authoritative_bars.front(),
+                 "provider label payload");
+    CHECK(delivery.context.interval.open_ms == 1704153600000LL);  // 00:00 UTC
+    CHECK(delivery.context.interval.last_traded_close_ms == 1704158100000LL);  // 01:15 UTC
+    CHECK(delivery.context.delivered_at_ms == 1704157260000LL);  // 01:01 UTC
+    CHECK(delivery.context.completion == NativeCompletionKind::Confirmed);
+}
+
+void check_fixed_period_reopen_input(NativeSlotLabelPolicy label_policy,
+                                     std::int64_t first_stamp, bool lookahead) {
+    const Bar bars[] = {
+        {100, 101, 99, 100, 1, first_stamp},
+        {110, 111, 109, 110, 1, utc_ms(2024, 1, 2, 17, 30)},
+        {120, 121, 119, 120, 1, utc_ms(2024, 1, 2, 18, 30)},
+    };
+    const Bar authoritative{200, 201, 199, 200, 2, utc_ms(2024, 1, 2, 17, 0)};
+    NativeRunSpec spec = base_spec("60", "60", "native-fixed-reopen-input");
+    spec.type = "stock";
+    spec.session = "0930-1600,1700-2000";
+    spec.slot_label_policy = label_policy;
+    NativeTimeframeSubscription series;
+    series.tf = "75";
+    series.lookahead = lookahead;
+    series.authoritative_bars = {authoritative};
+    spec.subscriptions.push_back(series);
+
+    SeriesHost host;
+    const auto setup = host.configure_native(spec);
+    CHECK(setup.status == NativeSetupStatus::Applied);
+    if (setup.status != NativeSetupStatus::Applied) return;
+    host.run(bars, 3, "60", "60", false, 4, MagnifierDistribution::ENDPOINTS);
+    CHECK(host.last_error().empty());
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(host.deliveries.size() == 2);
+    if (host.deliveries.size() != 2) return;
+
+    // The first input trades from 17:00 to 17:30. The 17:30 input
+    // contributes to that bucket and extends beyond its 18:15 close.
+    const auto& delivery = host.deliveries.front();
+    check_bucket(delivery.bar, authoritative, "reopen payload");
+    CHECK(delivery.context.interval.open_ms == 1704214800000LL);  // 17:00 UTC
+    CHECK(delivery.context.interval.last_traded_close_ms == 1704219300000LL);  // 18:15 UTC
+    CHECK(delivery.context.delivered_at_ms == (lookahead ? first_stamp : 1704216600000LL));
+    CHECK(delivery.context.completion == NativeCompletionKind::Confirmed);
+    CHECK(host.deliveries[1].bar.timestamp == 1704219300000LL);  // 18:15 UTC
+    CHECK(host.deliveries[1].context.delivered_at_ms == 1704220200000LL);  // 18:30 UTC
+}
+
+void test_fixed_period_reopen_input() {
+    scenario = "fixed-period initial nominal label before the reopen";
+    check_fixed_period_reopen_input(NativeSlotLabelPolicy::Canonical,
+                                    1704213000000LL, false);  // 16:30 UTC
+    scenario = "fixed-period initial provider label before the reopen";
+    check_fixed_period_reopen_input(NativeSlotLabelPolicy::FeedTolerant,
+                                    1704213060000LL, true);  // 16:31 UTC
+
+    scenario = "fixed-period provider label in a break inside one slot";
+    const Bar bars[] = {
+        {100, 101, 99, 100, 1, utc_ms(2024, 1, 2, 10, 5)},
+        {110, 111, 109, 110, 1, utc_ms(2024, 1, 2, 10, 30)},
+    };
+    NativeRunSpec spec = base_spec("60", "60", "native-fixed-slot-break");
+    spec.type = "stock";
+    spec.session = "0930-1000,1010-1600";
+    spec.slot_label_policy = NativeSlotLabelPolicy::FeedTolerant;
+    NativeTimeframeSubscription series;
+    // Use a coarser fixed bucket; its grid open is 09:30, but the fixed
+    // clock can first seat the input at the 10:10 reopen.
+    series.tf = "75";
+    series.lookahead = true;
+    series.authoritative_bars = {{200, 201, 199, 200, 2, utc_ms(2024, 1, 2, 9, 30)}};
+    spec.subscriptions.push_back(series);
+
+    SeriesHost host;
+    const auto setup = host.configure_native(spec);
+    CHECK(setup.status == NativeSetupStatus::Applied);
+    if (setup.status != NativeSetupStatus::Applied) return;
+    host.run(bars, 2, "60", "60", false, 4, MagnifierDistribution::ENDPOINTS);
+    CHECK(host.last_error().empty());
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(host.deliveries.size() == 1);
+    if (host.deliveries.size() != 1) return;
+    const auto& delivery = host.deliveries.front();
+    CHECK(delivery.bar.timestamp == 1704187800000LL);  // 09:30 UTC
+    CHECK(delivery.context.delivered_at_ms == 1704189900000LL);  // 10:05 UTC
+    CHECK(delivery.context.completion == NativeCompletionKind::Confirmed);
+}
+
 NativeRunSpec clipped_session_subscription_spec() {
     NativeRunSpec spec = base_spec("60", "60", "native-fixed-clipped-input");
     spec.type = "stock";
@@ -1833,20 +2036,29 @@ enum class SubscriptionInputMismatch { Timestamp, Index };
 
 class SubscriptionInputMismatchHost final : public NativeStrategyHost {
 public:
-    SubscriptionInputMismatchHost(SubscriptionInputMismatch mismatch, Bar& indexed_bar)
-        : mismatch_(mismatch), indexed_bar_(indexed_bar) {}
+    SubscriptionInputMismatchHost(SubscriptionInputMismatch mismatch, Bar& indexed_bar,
+                                  int at_input, std::int64_t foreign_timestamp)
+        : mismatch_(mismatch), indexed_bar_(indexed_bar), at_input_(at_input),
+          foreign_timestamp_(foreign_timestamp) {}
 
     int inputs_seen = 0;
+    int deliveries = 0;
+    std::int64_t delivered_at_ms = 0;
 
     void on_native_input(const Bar&, const NativeInputContext& context) override {
-        if (++inputs_seen != 2) return;
+        if (++inputs_seen != at_input_) return;
         // Change one identity field after chart admission. The tape is owned
         // by this test, and the context is the consumer's mutable stack local.
         if (mismatch_ == SubscriptionInputMismatch::Timestamp) {
-            indexed_bar_.timestamp = utc_ms(2024, 1, 2, 17, 1);
+            indexed_bar_.timestamp = foreign_timestamp_;
         } else {
-            const_cast<NativeInputContext&>(context).input_index = 0;
+            const_cast<NativeInputContext&>(context).input_index = 1 - context.input_index;
         }
+    }
+
+    void on_native_timeframe_bar(const Bar&, const NativeTimeframeBarContext& context) override {
+        delivered_at_ms = context.delivered_at_ms;
+        ++deliveries;
     }
 
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {}
@@ -1854,7 +2066,18 @@ public:
 private:
     SubscriptionInputMismatch mismatch_;
     Bar& indexed_bar_;
+    int at_input_;
+    std::int64_t foreign_timestamp_;
 };
+
+void check_subscription_input_mismatch(const SubscriptionInputMismatchHost& host) {
+    const auto state = host.native_state();
+    CHECK(state.kind == NativeLifecycleKind::Failed);
+    CHECK(state.failure.code == NativeFailureCode::Contract);
+    CHECK(state.failure.operation == NativeFailureOperation::Input);
+    CHECK(host.last_error() == "native timeframe subscription input identity mismatch");
+    CHECK(host.deliveries == 0);
+}
 
 void test_fixed_period_foreign_input_identity(SubscriptionInputMismatch mismatch) {
     scenario = mismatch == SubscriptionInputMismatch::Timestamp
@@ -1865,23 +2088,151 @@ void test_fixed_period_foreign_input_identity(SubscriptionInputMismatch mismatch
         {110.0, 115.0, 109.0, 112.0, 20.0, utc_ms(2024, 1, 2, 16, 30)},
     };
     const auto spec = clipped_session_subscription_spec();
-    SubscriptionInputMismatchHost host(mismatch, bars[1]);
+    SubscriptionInputMismatchHost host(mismatch, bars[1], 2, utc_ms(2024, 1, 2, 17, 1));
     const auto setup = host.configure_native(spec);
     CHECK(setup.status == NativeSetupStatus::Applied);
     if (setup.status != NativeSetupStatus::Applied) return;
     host.run(bars, 2, "60", "60", false, 4, MagnifierDistribution::ENDPOINTS);
     CHECK(host.inputs_seen == 2);
-    const auto state = host.native_state();
-    CHECK(state.kind == NativeLifecycleKind::Failed);
-    CHECK(state.failure.code == NativeFailureCode::Contract);
-    CHECK(state.failure.operation == NativeFailureOperation::Input);
+    check_subscription_input_mismatch(host);
+}
+
+void test_fixed_period_foreign_provider_label() {
+    scenario = "fixed-period subscription foreign provider label in the same slot";
+    Bar bars[] = {
+        {100, 101, 99, 100, 1, utc_ms(2024, 1, 2, 0, 1)},
+        {100, 101, 99, 100, 1, utc_ms(2024, 1, 2, 0, 31)},
+        {100, 101, 99, 100, 1, utc_ms(2024, 1, 2, 1, 1)},
+    };
+    const auto spec = provider_label_subscription_spec();
+    SubscriptionInputMismatchHost host(SubscriptionInputMismatch::Timestamp,
+                                       bars[2], 3, utc_ms(2024, 1, 2, 1, 2));
+    const auto setup = host.configure_native(spec);
+    CHECK(setup.status == NativeSetupStatus::Applied);
+    if (setup.status != NativeSetupStatus::Applied) return;
+    host.run(bars, 3, "30", "60", false, 4, MagnifierDistribution::ENDPOINTS);
+    CHECK(host.inputs_seen == 3);
+    check_subscription_input_mismatch(host);
+}
+
+void test_fixed_period_projected_input_identity(SubscriptionInputMismatch mismatch) {
+    scenario = mismatch == SubscriptionInputMismatch::Timestamp
+        ? "fixed-period lookahead rejects a foreign input timestamp"
+        : "fixed-period lookahead rejects a foreign input index";
+    Bar bars[] = {
+        {100, 101, 99, 100, 1, utc_ms(2024, 1, 2, 0, 0)},
+        {110, 111, 109, 110, 1, utc_ms(2024, 1, 2, 1, 0)},
+        {120, 121, 119, 120, 1, utc_ms(2024, 1, 2, 2, 0)},
+    };
+    NativeRunSpec spec = base_spec("60", "60", "native-fixed-lookahead-input");
+    NativeTimeframeSubscription series;
+    series.tf = "75";
+    series.lookahead = true;
+    series.authoritative_bars = {{200, 201, 199, 200, 2, utc_ms(2024, 1, 2)}};
+    spec.subscriptions.push_back(series);
+
+    SubscriptionInputMismatchHost host(mismatch, bars[0], 1, utc_ms(2024, 1, 2, 0, 1));
+    const auto setup = host.configure_native(spec);
+    CHECK(setup.status == NativeSetupStatus::Applied);
+    if (setup.status != NativeSetupStatus::Applied) return;
+    host.run(bars, 3, "60", "60", false, 4, MagnifierDistribution::ENDPOINTS);
+    check_subscription_input_mismatch(host);
+    CHECK(host.inputs_seen == 1);
+}
+
+void test_fixed_period_live_input_identity() {
+    scenario = "fixed-period live input rejects a foreign timestamp";
+    const Bar warmup{100, 101, 99, 100, 1, utc_ms(2024, 1, 2)};
+    Bar live{110, 111, 109, 110, 1, utc_ms(2024, 1, 2, 1, 0)};
+    NativeRunSpec spec = base_spec("60", "60", "native-fixed-live-input");
+    NativeTimeframeSubscription series;
+    series.tf = "75";
+    series.authoritative_bars = {{200, 201, 199, 200, 2, utc_ms(2024, 1, 2)}};
+    spec.subscriptions.push_back(series);
+
+    SubscriptionInputMismatchHost host(SubscriptionInputMismatch::Timestamp,
+                                       live, 2, utc_ms(2024, 1, 2, 1, 1));
+    const auto setup = host.configure_native(spec);
+    CHECK(setup.status == NativeSetupStatus::Applied);
+    if (setup.status != NativeSetupStatus::Applied) return;
+    const bool started = host.stream_begin(&warmup, 1, "", "");
+    CHECK(started);
+    if (!started) return;
+    CHECK(!host.stream_push_bar(live));
+    CHECK(host.inputs_seen == 2);
+    check_subscription_input_mismatch(host);
+}
+
+void test_fixed_period_alias_keeps_accepted_label() {
+    scenario = "fixed-period lookahead keeps the accepted spelling of a slot";
+    Bar bars[] = {
+        {100, 101, 99, 100, 1, utc_ms(2024, 1, 2, 17, 0)},
+        {110, 111, 109, 110, 1, utc_ms(2024, 1, 2, 17, 30)},
+    };
+    auto spec = clipped_session_subscription_spec();
+    auto& series = spec.subscriptions.front();
+    series.lookahead = true;
+    series.authoritative_bars.front().timestamp = 1704214800000LL;
+    SubscriptionInputMismatchHost host(SubscriptionInputMismatch::Timestamp,
+                                       bars[0], 1, utc_ms(2024, 1, 2, 16, 30));
+    const auto setup = host.configure_native(spec);
+    CHECK(setup.status == NativeSetupStatus::Applied);
+    if (setup.status != NativeSetupStatus::Applied) return;
+    host.run(bars, 2, "60", "60", false, 4, MagnifierDistribution::ENDPOINTS);
+    CHECK(host.last_error().empty());
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(host.deliveries == 1);
+    CHECK(host.delivered_at_ms == 1704214800000LL);  // 17:00 UTC
+}
+
+class ChangeInputDuringDeliveryHost final : public NativeStrategyHost {
+public:
+    explicit ChangeInputDuringDeliveryHost(Bar& input) : input_(input) {}
+
+    std::vector<std::int64_t> delivery_times;
+
+    void on_native_timeframe_bar(const Bar&, const NativeTimeframeBarContext& context) override {
+        delivery_times.push_back(context.delivered_at_ms);
+        if (delivery_times.size() == 1)
+            input_.timestamp = utc_ms(2024, 1, 2, 3, 1);
+    }
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {}
+
+private:
+    Bar& input_;
+};
+
+void test_fixed_period_identity_between_deliveries() {
+    scenario = "fixed-period input identity between deliveries on one input";
+    Bar bars[] = {
+        {100, 101, 99, 100, 1, utc_ms(2024, 1, 2)},
+        {110, 111, 109, 110, 1, utc_ms(2024, 1, 2, 3, 0)},
+    };
+    NativeRunSpec spec = base_spec("30", "30", "native-fixed-delivery-input");
+    NativeTimeframeSubscription series;
+    series.tf = "75";
+    series.authoritative_bars = {
+        {200, 201, 199, 200, 2, utc_ms(2024, 1, 2)},
+        {210, 211, 209, 210, 2, utc_ms(2024, 1, 2, 1, 15)},
+    };
+    spec.subscriptions.push_back(series);
+    ChangeInputDuringDeliveryHost host(bars[1]);
+    const auto setup = host.configure_native(spec);
+    CHECK(setup.status == NativeSetupStatus::Applied);
+    if (setup.status != NativeSetupStatus::Applied) return;
+    host.run(bars, 2, "30", "30", false, 4, MagnifierDistribution::ENDPOINTS);
+    CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
     CHECK(host.last_error() == "native timeframe subscription input identity mismatch");
+    CHECK(host.delivery_times.size() == 1);
+    if (host.delivery_times.size() == 1)
+        CHECK(host.delivery_times.front() == 1704164400000LL);  // 03:00 UTC
 }
 
 void test_fixed_period_subscription_input_identity() {
     test_fixed_period_clipped_input_label();
     test_fixed_period_foreign_input_identity(SubscriptionInputMismatch::Timestamp);
     test_fixed_period_foreign_input_identity(SubscriptionInputMismatch::Index);
+    test_fixed_period_alias_keeps_accepted_label();
 }
 
 // ---- a supplied fixed-period bar off its requested grid -------------------
@@ -1990,7 +2341,7 @@ void test_fixed_period_off_grid_classification() {
 
 int main(int argc, char** argv) {
     // Focused selectors keep the failing late-kind assertion and its control
-    // independently runnable for the proof lane.
+    // independently runnable.
     if (argc == 3 && std::string(argv[1]) == "--only") {
         if (std::string(argv[2]) == "off-grid-classification") {
             test_fixed_period_off_grid_classification();
@@ -2002,12 +2353,30 @@ int main(int argc, char** argv) {
             test_fixed_period_auxiliary_no_feed_bar_tail();
         } else if (std::string(argv[2]) == "clipped-session-subscription-identity") {
             test_fixed_period_subscription_input_identity();
+        } else if (std::string(argv[2]) == "auxiliary-prefix-own-close") {
+            test_fixed_period_auxiliary_prefix_own_close();
+        } else if (std::string(argv[2]) == "gap-input-completion") {
+            test_fixed_period_gap_input_does_not_confirm();
+        } else if (std::string(argv[2]) == "provider-input-identity") {
+            test_fixed_period_provider_input_label();
+            test_fixed_period_foreign_provider_label();
+        } else if (std::string(argv[2]) == "projected-input-identity") {
+            test_fixed_period_projected_input_identity(SubscriptionInputMismatch::Timestamp);
+            test_fixed_period_projected_input_identity(SubscriptionInputMismatch::Index);
+        } else if (std::string(argv[2]) == "reopen-input-completion") {
+            test_fixed_period_reopen_input();
+        } else if (std::string(argv[2]) == "identity-between-deliveries") {
+            test_fixed_period_identity_between_deliveries();
+        } else if (std::string(argv[2]) == "live-input-identity") {
+            test_fixed_period_live_input_identity();
         } else {
             std::printf(
                 "usage: test_native_htf_subscriptions "
                 "[--only off-grid-classification|late-fixed-subscription-completion|"
                 "late-fixed-subscription-control|auxiliary-no-feed-bar-tail|"
-                "clipped-session-subscription-identity]\n");
+                "clipped-session-subscription-identity|auxiliary-prefix-own-close|"
+                "gap-input-completion|provider-input-identity|projected-input-identity|"
+                "reopen-input-completion|identity-between-deliveries|live-input-identity]\n");
             return 2;
         }
         std::printf("native HTF subscriptions: %d checks, %d failures\n", checks, failures);
@@ -2018,7 +2387,9 @@ int main(int argc, char** argv) {
             "usage: test_native_htf_subscriptions "
             "[--only off-grid-classification|late-fixed-subscription-completion|"
             "late-fixed-subscription-control|auxiliary-no-feed-bar-tail|"
-            "clipped-session-subscription-identity]\n");
+            "clipped-session-subscription-identity|auxiliary-prefix-own-close|"
+            "gap-input-completion|provider-input-identity|projected-input-identity|"
+            "reopen-input-completion|identity-between-deliveries|live-input-identity]\n");
         return 2;
     }
     test_hourly_over_quarter_hour();
@@ -2041,8 +2412,18 @@ int main(int argc, char** argv) {
     test_fixed_period_early_close_gate();
     test_fixed_period_session_hole_is_not_a_close();
     test_fixed_period_late_completion_case(true);
+    test_fixed_period_late_completion_case(false);
     test_fixed_period_auxiliary_no_feed_bar_tail();
+    test_fixed_period_auxiliary_prefix_own_close();
+    test_fixed_period_gap_input_does_not_confirm();
+    test_fixed_period_provider_input_label();
+    test_fixed_period_foreign_provider_label();
+    test_fixed_period_reopen_input();
     test_fixed_period_subscription_input_identity();
+    test_fixed_period_projected_input_identity(SubscriptionInputMismatch::Timestamp);
+    test_fixed_period_projected_input_identity(SubscriptionInputMismatch::Index);
+    test_fixed_period_identity_between_deliveries();
+    test_fixed_period_live_input_identity();
     test_fixed_period_off_grid_classification();
     std::printf("native HTF subscriptions: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

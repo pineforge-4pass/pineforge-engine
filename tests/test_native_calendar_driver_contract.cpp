@@ -1343,6 +1343,29 @@ void nominal_and_clipped_confirmed_labels() {
     }
 }
 
+void nominal_label_of_realtime_successor() {
+    auto value = spec("60", "60");
+    value.session = "0930-1600,1700-2000";
+    const Bar warmup = flat(1704209400000LL);  // Jan 2, 15:30 UTC
+    const Bar successor = flat(1704213000000LL);  // 16:30 nominal, 17:00 eligible
+    TraceHost host;
+    if (!setup(host, value)) return;
+    CHECK(host.stream_begin(&warmup, 1, "", ""));
+    if (host.native_state().kind != NativeLifecycleKind::Running) return;
+    const bool skipped = host.stream_push_bar(flat(1704216600000LL));  // 17:30
+    CHECK(!skipped);
+    if (skipped) return;
+    const bool accepted = host.stream_push_bar(successor);
+    CHECK(accepted);
+    if (!accepted) return;
+    CHECK(host.stream_end(false));
+    if (!count(host, 2)) return;
+    const auto& coordinate = host.contexts[1].coordinate;
+    CHECK(coordinate.open_ms == 1704213000000LL);
+    CHECK(coordinate.eligible_open_ms == 1704214800000LL);
+    CHECK(coordinate.last_traded_close_ms == 1704216600000LL);
+}
+
 void friday_monday_continuity() {
     auto value = spec();
     value.session = "0930-1600:23456";
@@ -1792,6 +1815,31 @@ void partial_end_equal_clock_and_policy() {
     }
 }
 
+void partial_end_records_the_calculation() {
+    TraceHost host;
+    auto value = spec();
+    value.report_policy = NativeReportPolicy::KernelRecorded;
+    if (!setup(host, value)) return;
+    host.set_broker_state_hash_recording(true);
+    const Bar warmup = flat(0);
+    const bool ended = host.stream_begin(&warmup, 1, "", "")
+        && host.stream_push_tick(TradeTick{60100, 1, 107, 3})
+        && host.stream_advance_time(90000)
+        && host.stream_end(true);
+    CHECK(ended);
+    if (!ended || !count(host, 2)) return;
+
+    ReportC report{};
+    host.fill_report(&report);
+    CHECK(report.equity_curve_len == 2);
+    CHECK(report.broker_state_hash_len == 2);
+    if (report.equity_curve_len == 2) {
+        CHECK(report.equity_curve[0].time_ms == 0);
+        CHECK(report.equity_curve[1].time_ms == 60000);
+    }
+    BacktestEngine::free_report(&report);
+}
+
 void partial_end_does_not_seal_coarser_script() {
     for (auto policy : {NativeCloseExecution::NextEligiblePoint, NativeCloseExecution::AfterCalculation}) {
         TraceHost host;
@@ -2022,6 +2070,9 @@ int main() {
     run_case("C3-C4-nominal-clipped-labels-and-duplicate-refusal",
              "C3/C4 nominal clipped labels and duplicate refusal",
              nominal_and_clipped_confirmed_labels);
+    run_case("nominal-label-of-realtime-successor",
+             "realtime admits the nominal label of the immediate successor",
+             nominal_label_of_realtime_successor);
     run_case("C3-Friday-close-Monday-opening-and-missing-slot-refusal",
              "C3 Friday close Monday opening and missing-slot refusal",
              friday_monday_continuity);
@@ -2064,6 +2115,9 @@ int main() {
     run_case("D5-partial-equal-TF-end-retains-actual-floor-and-source-time",
              "D5 partial equal-TF end retains actual floor and source time",
              partial_end_equal_clock_and_policy);
+    run_case("partial-end-records-the-calculation",
+             "partial end records the calculation in the kernel report",
+             partial_end_records_the_calculation);
     run_case("D5-partial-child-does-not-force-coarser-callback",
              "D5 partial child does not force coarser callback",
              partial_end_does_not_seal_coarser_script);

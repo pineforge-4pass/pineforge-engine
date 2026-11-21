@@ -356,7 +356,7 @@ the campaign's own anchor audit found that the first thing to rot:
 | the request-epoch sentence | `native_order_v4` | `native_order_v8` native_order.hpp:46 | <!-- verified HEAD -->
 | the two host-epoch sentences | host epoch v16 | `engine_script_run_v20` native_host.hpp:20 |
 | "What still requires Pine compatibility to build" | `BacktestEngine` still holds `CapAttachment` / `OrderPriority` / `IntradayCap` | `engine.hpp` has zero references to them; the cap type is `CapAttachment` intraday_cap.hpp:19 and the constructor is `PineStrategyHost`'s pine_strategy_host.hpp:418 |
-| the rich-`run` paragraph | the rich `run` overload fails a native host | `run_rich` native_execution_consumer.cpp:11545 shows no such refusal (still unpinned by a test; the page says so) |
+| the rich-`run` paragraph | the rich `run` overload fails a native host | `run_rich` native_execution_consumer.cpp:11545 admits a configured native host; `tests/test_selected_window_routes.cpp` checks that its rich route completes. |
 | added | — | the self-aggregation recipe beside the subscriptions it is an alternative to; the open-bar lookahead warning with `current_partial_bar` native_host.hpp:1093; and `set_native_security_feed` documented as the pre-run door for a series' authoritative bars, refused in-run |
 
 ---

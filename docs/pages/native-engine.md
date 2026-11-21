@@ -475,9 +475,10 @@ timeframe arguments against the spec, preflights and pumps the batch exactly
 like the plain overload. `inputs` / `syminfo` / `overrides` are carried only as
 `NativeBeginArgs` fields to `prepare_native_begin` — the overrides as the
 opaque `overrides_opaque` (`native_host.hpp:778`), which the kernel forwards
-and never dereferences. No test pins either behaviour; prefer the plain
-overload. What *is* refused is source **mutation** through the setters
-(below).
+and never dereferences. `tests/test_selected_window_routes.cpp` checks that a
+configured native host completes the rich route. Use the plain overload when
+these extra arguments are not needed. Source **mutation** through the setters
+is refused (below).
 
 ## Native requests
 
@@ -2513,8 +2514,9 @@ and the input's `on_native_bar` follows it.
   `clear_security()`.
 
 `NativeTimeframeBarContext::completion` is `Confirmed` when the bucket closed
-on its own last contributing bar and `LazyComplete` when the next period's
-first input closed it. `interval` is the bucket's own calendar interval — its
+on its last contributing feed bar and `LazyComplete` when an input revealed
+the close without a closing feed bar, such as a primary slice with no auxiliary
+bars. `interval` is the bucket's own calendar interval — its
 period at the subscription's timeframe, located by its first contributing bar;
 `delivered_at_ms` is the input bar the delivery rides on. A bucket still open at the end of the input is never delivered.
 A C host, whose `on_timeframe_bar` signature is frozen, reads that interval
@@ -3098,7 +3100,7 @@ Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator
 aggregates with, and the one the kernel's `script_bucket_completions` query
 feeds when the Pine scheduler asks how its input span buckets
-(`ScriptBucketCursor` `native_execution_consumer.cpp:14917`). What it does
+(`ScriptBucketCursor::next` `native_execution_consumer.cpp:14917`). What it does
 **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the
