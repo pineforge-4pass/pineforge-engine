@@ -33,6 +33,7 @@ version number follows semantic versioning over the surfaces the
 - A calendar day, week or month boundary in a non-UTC time zone that falls exactly on Unix second -1 (1969-12-31 23:59:59 UTC) is now kept: a conversion result of -1 counts as a failure only when the system conversion also reports an error.
 - When the local-time conversion of such a boundary fails and no retry is left, the run now stops with the coded run failure `engine_unclassified_error` instead of continuing with a boundary of -1000 ms.
 - The calendar day boundary no longer prints a warning on stderr when local midnight cannot be converted and a later hour is used.
+- For a native host's fixed-timeframe subscription, a bucket whose period ended before the next period's first accepted input, and that is therefore delivered on that next input, now reaches the subscription callback as `NativeCompletionKind::LazyComplete` instead of `Confirmed`. This includes a bucket drained on a primary input that carries no auxiliary feed bar. The bucket that holds the current input stays `Confirmed`, and payloads, callback order and callback count are unchanged. If the accepted input and the indexed primary input of a subscription disagree, the run now stops with a contract failure, `native timeframe subscription input identity mismatch`, before the bucket is drained (#718).
 
 ## 1.14.0 — 2026-11-20
 
