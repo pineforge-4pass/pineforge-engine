@@ -95,7 +95,7 @@ ABSENT_FLOOR = {name: entry[0] - entry[1]
 # Three eight-row splits plus four report rows: 910 + 28 = 938, 337 + 28 = 365.
 # Three public Linux scratch cases were added: 941/368 full, 634/337 absent.
 # Do not derive these from stage/floor helpers: mutations must turn them red.
-LAB_SHARD_FLOORS = {'release': {False: 636, True: 943},
+LAB_SHARD_FLOORS = {'release': {False: 636, True: 945},
                     'kernel': {False: 337, True: 368}}
 # Transcribed ctestExcludeLabel(CI_VERIFY_PROFILES[profile]) results from
 # pineforge-workflow campaign/src/remote/recipes.mjs:38-53, consumed by
@@ -5149,8 +5149,8 @@ class PrivateFixtureFloors(unittest.TestCase):
         # feeds them. A profile outside the table keeps its declared value, and
         # PRIVATE_FIXTURE_ROW_COUNT bounds the pinned half by construction.
         self.assertEqual(ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS,
-                         {'release': (943, 307), 'kernel': (368, 31)})
-        self.assertEqual(FULL_FLOOR, {'release': 943, 'kernel': 368})
+                         {'release': (945, 309), 'kernel': (368, 31)})
+        self.assertEqual(FULL_FLOOR, {'release': 945, 'kernel': 368})
         self.assertEqual(ABSENT_FLOOR, {'release': 636, 'kernel': 337})
         self.assertEqual(
             {name for name in ci_verify.PINNED_SLOW_TEST_ROWS
@@ -6105,7 +6105,7 @@ class FloorDocsPointAtTheTable(unittest.TestCase):
                 self.assertIsInstance(value, ast.Constant)
                 self.assertIsInstance(value.value, int)
                 self.assertEqual(value.value, {
-                    'RELEASE_MIN_TESTS': 943, 'KERNEL_MIN_TESTS': 368,
+                    'RELEASE_MIN_TESTS': 945, 'KERNEL_MIN_TESTS': 368,
                 }[name])
         self.assertIsInstance(table, ast.Dict)
         entries = {}
@@ -6762,7 +6762,7 @@ class NativeLiveEquivalenceCTest(unittest.TestCase):
         probes = driver_probes((ROOT / 'tests' / 'native_live_equivalence_e2e.py').read_text())
         pinned = ci_verify.private_fixture_rows(ROOT)
         self.assertNotIn('native_live_equivalence_e2e', pinned)
-        self.assertEqual(len(pinned), 380 - 1 + len(probes))
+        self.assertEqual(len(pinned), 382 - 1 + len(probes))
         for probe in probes:
             self.assertIn('native_live_equivalence_e2e_' + probe, pinned)
 
