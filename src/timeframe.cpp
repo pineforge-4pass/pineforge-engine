@@ -22,22 +22,22 @@ std::string detect_timeframe(const Bar* bars, int n, int max_samples) {
     if (n < 2) return "1";
 
     int count = std::min(n - 1, max_samples);
-    std::vector<int64_t> deltas;
+    std::vector<uint64_t> deltas;
     deltas.reserve(count);
 
     for (int i = 0; i < count; ++i) {
-        int64_t d = bars[i + 1].timestamp - bars[i].timestamp;
-        if (d > 0) deltas.push_back(d);
+        const int64_t earlier = bars[i].timestamp;
+        const int64_t later = bars[i + 1].timestamp;
+        if (later <= earlier) continue;
+        // Unsigned subtraction gives the exact positive gap even across zero.
+        deltas.push_back(static_cast<uint64_t>(later) - static_cast<uint64_t>(earlier));
     }
 
     if (deltas.empty()) return "1";
 
-    // Compute median delta
+    // The upper median in whole seconds fits in int64_t even for the widest gap.
     std::sort(deltas.begin(), deltas.end());
-    int64_t median_ms = deltas[deltas.size() / 2];
-
-    // Convert to seconds
-    int64_t secs = median_ms / 1000;
+    const int64_t secs = static_cast<int64_t>(deltas[deltas.size() / 2] / 1000);
 
     // Map to nearest standard TF (TradingView format)
     // Standard TFs in seconds: 1m=60, 3m=180, 5m=300, 15m=900, 30m=1800,
