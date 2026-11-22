@@ -3029,9 +3029,9 @@ const CommandEvent* WorkingRequestCore::event_at(const EventId& id) const {
 
 const CommandEvent& WorkingRequestCore::history_at(std::size_t absolute) const {
     check_history_available();
-    if (!journal_ || absolute < history_base_ || absolute >= history_end()) {
-        throw std::out_of_range("native journal position is not retained");
-    }
+    if (!journal_ || absolute < history_base_ || absolute >= history_end())
+        throw coded<std::out_of_range>(RunFailureCode::engine_invariant, {},
+                                       "native journal position is not retained");
     return journal_->at(absolute);
 }
 

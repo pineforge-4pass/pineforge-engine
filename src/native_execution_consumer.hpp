@@ -445,9 +445,9 @@ public:
     // began, in history order, with one COPY per event -- the copy each
     // materialised row was -- so a visitor that appends to the history (a
     // cancel it issues) neither sees what it appended nor holds an event the
-    // append reallocated. It stops at, and answers, the first true a visitor
-    // returns. Driver points and account rows are never visited.
-    std::size_t first_command_after(uint64_t after_ordinal) const noexcept;
+    // append reallocated. It stops at, and answers, the first true a visitor returns. Driver points
+    // and account rows are never visited. Search and visit read spill pages: either can throw.
+    std::size_t first_command_after(uint64_t after_ordinal) const;
     // Whether a command event above `after_ordinal` is in the journal: the
     // first test first_command_after makes, which answers the history's size
     // exactly when it fails. A reader that only asks whether anything lies

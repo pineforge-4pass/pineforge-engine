@@ -12800,11 +12800,11 @@ double NativeExecutionConsumer::marked(const BacktestEngine& engine, double pric
     return engine.marked_equity(price);
 }
 
-std::size_t NativeExecutionConsumer::first_command_after(uint64_t after_ordinal) const noexcept {
+std::size_t NativeExecutionConsumer::first_command_after(uint64_t after_ordinal) const {
     const auto& history = requests_.history();
     if (history.empty() || command_ordinal(history.back()) <= after_ordinal) return history.size();
-    // A reader's cursor is usually a few events behind the tail: walk back
-    // from it, and bisect only a long suffix.
+    // A reader's cursor is usually a few events behind the tail: walk back from it, and bisect only
+    // a long suffix. The bisection reads spill pages back; a failed read throws to the caller.
     auto it = history.end();
     while (it != history.begin()) {
         auto prev = std::prev(it);
