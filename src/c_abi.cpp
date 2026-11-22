@@ -27,7 +27,7 @@
  *     strategy_position_avg_price, strategy_position_cycle_seq,
  *     strategy_closed_trade_entry_id, strategy_closed_trade_exit_id,
  *     strategy_closed_trade_exit_comment, strategy_closed_trade_close_cause,
- *     strategy_position_size, strategy_current_equity,
+ *     strategy_release_run_results_v1, strategy_position_size, strategy_current_equity,
  *     strategy_initial_capital, strategy_net_profit_sum,
  *     strategy_report_pointvalue, strategy_set_report_replay_v1,
  *     strategy_script_bars_processed), pf_output_series_limit_set_checked/pf_output_series_limit_failure,
@@ -459,11 +459,11 @@ PF_API uint64_t strategy_closed_trade_entry_incarnation(
  * range-end rows) already declared with these exact names, so a same-name
  * report-row overload is not possible.
  *
- * Returned pointers are valid until the next run() (or stream call) on this
- * handle, like strategy_get_last_error. This legacy pointer API explicitly
+ * Returned pointers are valid until the next run(), stream call, or
+ * strategy_release_run_results_v1 on this handle. This legacy pointer API
  * materializes each requested row; value/page readers use bounded storage.
- * NULL on a NULL handle or an
- * out-of-range/policy-erased row; retained sealed rows remain readable. */
+ * NULL on a NULL handle, out-of-range, policy-erased or released row; retained
+ * sealed rows are readable until release. Released rows set the last error. */
 PF_API const char* strategy_closed_trade_entry_id(pf_strategy_t s, int trade_index) {
     if (!s) return nullptr;
     const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
@@ -1649,6 +1649,14 @@ PF_API int strategy_set_account_currency_fx_scalar(pf_strategy_t s, double rate)
         return static_cast<pineforge::BacktestEngine*>(s)
                        ->set_account_currency_fx_scalar(rate)
             ? 0 : -1;
+    });
+}
+
+PF_API int strategy_release_run_results_v1(pf_strategy_t s) {
+    return pf_cabi_int(s, [&] {
+        if (!s) return -1;
+        static_cast<pineforge::BacktestEngine*>(s)->release_run_results();
+        return 0;
     });
 }
 } // extern "C"

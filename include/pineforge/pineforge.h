@@ -1494,10 +1494,10 @@ PF_API int64_t strategy_position_cycle_seq(pf_strategy_t s);
 /** Task 9: closed-trade id / exit-comment string accessors, indexing the
  *  same REPORT row space as #strategy_closed_trade_entry_incarnation
  *  (`trades_` then the range-end rows, `open_at_end`). The returned pointer
- *  is valid until the next run() (or stream call) on this handle, like
- *  #strategy_get_last_error. NULL on NULL @p s, out-of-range @p trade_index
- *  or policy-erased rows; retained sealed rows are readable. This legacy API
- *  materializes rows until the next run; full-history reads use growing RAM. */
+ *  is valid until the next run(), stream call, or #strategy_release_run_results_v1
+ *  on this handle. Returns NULL on a NULL @p s, out-of-range @p trade_index,
+ *  or a policy-erased or released row. A released row also sets the last error
+ *  and code. This legacy API materializes rows; full-history reads use growing RAM. */
 PF_API const char* strategy_closed_trade_entry_id(pf_strategy_t s, int trade_index);
 /** See #strategy_closed_trade_entry_id for the row-space/lifetime/NULL
  *  contract. The returned string is the engine's own INTERNAL exit id, not
@@ -2269,6 +2269,19 @@ PF_API int pf_map_pairs_limit_set_checked(const int64_t* maximum,
  *  rate or a refused call. A runtime library without this export lacks the
  *  symbol: look it up with `dlsym`. */
 PF_API int strategy_set_account_currency_fx_scalar(pf_strategy_t s, double rate);
+
+/** @ingroup pf_streaming
+ *  Release every scratch file still held by the completed run's stores.
+ *  Allowed only when no run or stream is in progress (stream phase IDLE or
+ *  ENDED, native host not Running). The call refuses with `setting_rejected`
+ *  during an active run or stream and leaves it unchanged. The number of
+ *  closed trades remains available. Later reads of released data, including
+ *  reports that need it, refuse with a coded error.
+ *  A second release succeeds as a no-op. The next begin or run and handle
+ *  destruction work as before.
+ *  @return 0 on success, -1 on a NULL handle, or nonzero on refusal with
+ *  #strategy_get_last_error and #strategy_get_last_error_code set. */
+PF_API int strategy_release_run_results_v1(pf_strategy_t s);
 
 #ifdef __cplusplus
 } /* extern "C" */

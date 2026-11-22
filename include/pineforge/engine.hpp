@@ -2244,8 +2244,8 @@ public:
         return i < n_closed ? trades_[(size_t)i]
                             : range_end_trades_.row((std::size_t)(i - n_closed));
     }
-    // The legacy C string ABI promises pointer lifetime until the next run.
-    // Asking for that borrowed storage explicitly materializes the requested
+    // The C string ABI borrows rows until the next run, stream call or release.
+    // Asking for that storage explicitly materializes the requested
     // row. Ordinary report/value readers never enter this compatibility path.
     const Trade& materialize_report_trade(int i) const {
         const int n_closed = static_cast<int>(trades_.size());
@@ -3073,6 +3073,17 @@ private:
     // the output shape and recording switch. Existing hosts keep their setting.
     std::optional<std::int64_t> max_output_series_ = default_output_series_limit();
     RuntimeContextService runtime_contexts_;
+
+public:
+    /// Release every scratch file still held by the completed run's stores.
+    /// Allowed only in stream phase IDLE or ENDED with no run in progress
+    /// (the native host must not be Running). An active run or stream refuses
+    /// with a coded std::logic_error (setting_rejected); the run is unchanged.
+    /// closed_trade_count() still returns the completed run's count. Later
+    /// reads of released data, including reports that need it, refuse with
+    /// a coded error. Repeating the release succeeds as a no-op. The next
+    /// begin or run() and destruction work as before.
+    void release_run_results();
 };
 
 inline constexpr std::size_t kReportSinkHeldEquityPoints = 1;

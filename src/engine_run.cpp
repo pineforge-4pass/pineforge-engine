@@ -247,4 +247,9 @@ bool BacktestEngine::has_account_currency_fx_at(std::int64_t at_ms) const noexce
         && account_currency_fx_timestamps_.front() <= at_ms;
 }
 
+void BacktestEngine::release_run_results() {
+    throw coded<std::logic_error>(RunFailureCode::setting_rejected, {},
+                                 "run results release is not supported");
+}
+
 }  // namespace pineforge

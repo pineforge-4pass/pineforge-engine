@@ -1,0 +1,6 @@
+list(APPEND TEST_SOURCES test_native_run_results_release)
+list(APPEND TEST_SOURCES test_c_abi_run_results_release)
+pineforge_add_unit_test(test_native_run_results_release)
+pineforge_add_unit_test(test_c_abi_run_results_release)
+set_tests_properties(test_native_run_results_release PROPERTIES SKIP_RETURN_CODE 77)
+set_tests_properties(test_c_abi_run_results_release PROPERTIES SKIP_RETURN_CODE 77)
