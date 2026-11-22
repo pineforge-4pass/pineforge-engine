@@ -46,6 +46,7 @@ public:
     void write_q(const pf_equity_point_t& point);
     void write_r(std::size_t global, bool terminal);
     void finish(double net, std::string_view base_sha256);
+    void release() noexcept;
     bool complete() const noexcept { return complete_; }
     bool begun() const noexcept { return writer_ != nullptr; }
     double pointvalue() const noexcept { return pointvalue_; }

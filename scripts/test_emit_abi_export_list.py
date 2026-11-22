@@ -110,12 +110,12 @@ class ExportListTests(unittest.TestCase):
                 for symbol in source_symbols(include_dir / header)
             )
         self.assertEqual(runtime, sorted(expected_runtime))
-        # Independently read PF_API rows: 115 + 3 + 3 + 5 declarations;
-        # c_abi.cpp defines 106, leaving twenty generated declarations.
-        # expectation corrected: 125 -> 126 and 105 -> 106, because the runtime
-        # adds the export strategy_set_account_currency_fx_scalar.
-        self.assertEqual(len(runtime), 126)
-        self.assertEqual(len(implemented_names), 106)
+        # PF_API: 116 + 3 + 3 + 5 declared; c_abi.cpp defines 107; 20 are generated.
+        # Prior: 125 -> 126 and 105 -> 106 (strategy_set_account_currency_fx_scalar).
+        # expectation corrected: 126 -> 127 and 106 -> 107, because the runtime
+        # adds the export strategy_release_run_results_v1.
+        self.assertEqual(len(runtime), 127)
+        self.assertEqual(len(implemented_names), 107)
         self.assertIn(
             ["strategy_stream_engine_layout_version", "pineforge.h", "yes"],
             runtime,
@@ -128,7 +128,7 @@ class ExportListTests(unittest.TestCase):
         self.assertIn(
             ["strategy_set_account_currency_fx_scalar", "pineforge.h", "yes"], runtime)
         yes_count = sum(row[2] == "yes" for row in runtime)
-        self.assertEqual(yes_count, 106)
+        self.assertEqual(yes_count, 107)
         self.assertEqual(yes_count, len(implemented_names))
         for symbol, header, _ in runtime + native:
             with self.subTest(symbol=symbol, header=header):

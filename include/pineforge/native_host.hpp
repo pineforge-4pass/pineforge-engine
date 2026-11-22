@@ -1368,6 +1368,8 @@ public:
     /// NativeRunSpec::event_retention keeps: under Window the command events
     /// the host has not yet acknowledged, and no driver point or account row;
     /// a read from below native_event_window_start() starts there.
+    /// After release_run_results(), new reads throw a coded std::logic_error
+    /// (engine_invariant). Returned snapshots retain their own data.
     std::vector<NativeMarketEvent> native_events(uint64_t after_ordinal) const;
     /// The host has read every event through `through_ordinal` (the bounded event journal).
     /// Under NativeEventRetention::Window the kernel drops the acknowledged

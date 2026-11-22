@@ -899,7 +899,8 @@ PF_API int strategy_stream_end(pf_strategy_t s, int finalize_partial_input_bar);
 /** Snapshot the cumulative warmup + realtime report. The embedded arrays are
  *  caller-owned after return and must be released with #report_free, or with
  *  #strategy_native_report_free_v1 by a host that links the kernel archive,
- *  which has no #report_free. */
+ *  which has no #report_free. After #strategy_release_run_results_v1, returns
+ *  nonzero with `engine_invariant` and publishes no arrays. */
 PF_API int strategy_stream_fill_report(pf_strategy_t s, pf_report_t* out);
 
 /** @} */ /* end of pf_streaming */
@@ -1496,8 +1497,9 @@ PF_API int64_t strategy_position_cycle_seq(pf_strategy_t s);
  *  (`trades_` then the range-end rows, `open_at_end`). The returned pointer
  *  is valid until the next run(), stream call, or #strategy_release_run_results_v1
  *  on this handle. Returns NULL on a NULL @p s, out-of-range @p trade_index,
- *  or a policy-erased or released row. A released row also sets the last error
- *  and code. This legacy API materializes rows; full-history reads use growing RAM. */
+ *  or a policy-erased or released row. A released row records `engine_invariant`
+ *  unless a run failure is already latched. This legacy API materializes rows;
+ *  full-history reads use growing RAM. */
 PF_API const char* strategy_closed_trade_entry_id(pf_strategy_t s, int trade_index);
 /** See #strategy_closed_trade_entry_id for the row-space/lifetime/NULL
  *  contract. The returned string is the engine's own INTERNAL exit id, not
@@ -2271,14 +2273,16 @@ PF_API int pf_map_pairs_limit_set_checked(const int64_t* maximum,
 PF_API int strategy_set_account_currency_fx_scalar(pf_strategy_t s, double rate);
 
 /** @ingroup pf_streaming
- *  Release every scratch file still held by the completed run's stores.
- *  Allowed only when no run or stream is in progress (stream phase IDLE or
- *  ENDED, native host not Running). The call refuses with `setting_rejected`
- *  during an active run or stream and leaves it unchanged. The number of
- *  closed trades remains available. Later reads of released data, including
- *  reports that need it, refuse with a coded error.
- *  A second release succeeds as a no-op. The next begin or run and handle
- *  destruction work as before.
+ *  Release the run's closed trade ledger, report scratch, native command
+ *  history and successor-root index after the last result read. An active
+ *  run or stream refuses with `setting_rejected` and continues unchanged.
+ *  The number of closed trades remains available. Trade row, report and
+ *  journal reads refuse with `engine_invariant` until the next begin. A
+ *  latched run failure takes precedence over a later read refusal.
+ *  Repeating the release succeeds. Success clears the last error unless
+ *  a run or setup failure is already latched. Published sink output and
+ *  report arrays already returned remain available. Borrowed row strings
+ *  expire at release.
  *  @return 0 on success, -1 on a NULL handle, or nonzero on refusal with
  *  #strategy_get_last_error and #strategy_get_last_error_code set. */
 PF_API int strategy_release_run_results_v1(pf_strategy_t s);

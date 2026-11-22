@@ -2735,6 +2735,15 @@ void PineExecutionAdapter::revive_brackets_after_margin(
     }
 }
 
+void PineExecutionAdapter::release_run_results() noexcept {
+    position_tail_spill_.reset();
+    if (position_tail_summary_) position_tail_summary_->release_scratch();
+    // These lookup stores are separate from the retained placement rows and
+    // their digests. The next begin clears and rebinds them.
+    placement_.erased_minima_.clear();
+    placement_.sequence_index_.reset();
+}
+
 void PineExecutionAdapter::reset_for_run() {
     position_tail_spill_.reset();
     position_tail_summary_ = std::make_shared<detail::AdapterPositionTailSummary>();

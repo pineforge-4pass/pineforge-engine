@@ -57,6 +57,7 @@ metrics::MetricsStreamingStatusV1 BacktestEngine::metrics_extent_receipt_v1(
     if (!out || out->struct_size != sizeof(*out) || out->version != 1)
         return MetricsStreamingStatusV1::InvalidArgument;
     auto& s = metrics_streaming_;
+    if (!s.receipt_final) trades_.check_not_released();
     if (s.no_curve && s.fold) {
         finish_metrics_streaming_v1({});
     } else if (s.active && !s.receipt_final) {
@@ -337,6 +338,7 @@ void BacktestEngine::trace(const std::string& name, double value) {
 void BacktestEngine::fill_report(ReportC* out) const try {
     const ReportSinkCallScope sink_call(*this);
     if (NativeExecutionConsumer::refuse_report_in_dispatch(*this, out)) return;
+    trades_.check_not_released();
     if (!NativeExecutionConsumer::rows_are_current(*this)
         || (last_run_status_ != 0
             && run_failure_value_of(*this).code == RunFailureCode::report_sink_failed)) {
@@ -1338,6 +1340,20 @@ int BacktestEngine::report_sink_setter_status() const {
     return 0;
 }
 
+void BacktestEngine::release_report_scratch() noexcept {
+    auto& sink = report_sink_state_;
+    sink.equity_scratch.reset();
+    sink.equity_tail_stored = false;
+    sink.selected_equity_stream.reset();
+    // Keep a completed writer's diagnostics without holding the output fd.
+    if (sink.writer) {
+        if (sink.receipt.complete) sink.writer->release();
+        else sink.writer.reset();
+    }
+    metrics_streaming_.fold.reset();
+    if (auto* replay = find_report_replay()) replay->release();
+}
+
 int BacktestEngine::set_report_sink_v1(const pf_report_sink_v1* descriptor) {
     if (descriptor && (descriptor->struct_size != sizeof(*descriptor)
         || descriptor->version != 1 || !descriptor->path || !*descriptor->path)) return -1;
@@ -2225,6 +2241,16 @@ void OpenReportRowSource::clear() noexcept {
     pnl_ = 0.0;
     excursions_.reset();
     materialized_.clear();
+    synthetic_.clear();
+}
+
+void OpenReportRowSource::release() noexcept {
+    excursions_.reset();
+    materialized_.clear();
+    // Keep the report count even for synthetic rows, without retaining
+    // their contents. The engine's report row accessors now refuse.
+    count_ = size();
+    present_ = true;
     synthetic_.clear();
 }
 

@@ -2344,6 +2344,8 @@ public:
 
 private:
     enum class TargetKind { Live, NotWorking, InvalidHandle };
+    void release_run_history() noexcept;
+    void check_history_available() const;
     // Native-private bridge. The existing opaque journal owns the resource;
     // this borrow ends at reset/move/destruction, like its other core reads.
     const detail::NativeHistoryOwner* managed_history_owner() const noexcept;

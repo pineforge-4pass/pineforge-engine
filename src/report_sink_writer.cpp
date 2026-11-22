@@ -625,6 +625,15 @@ pf_report_sink_diagnostics_v1 LineWriter::diagnostics() const noexcept {
     return result;
 }
 
+void LineWriter::release() noexcept {
+    auto& state = *state_;
+    state.fail();
+    if (!state.borrowed && state.descriptor >= 0) {
+        ::close(state.descriptor);
+        state.descriptor = -1;
+    }
+}
+
 void LineWriter::abandon() {
     auto& state = *state_;
     try {

@@ -459,9 +459,11 @@ source::PineStrategyHost::PineStrategyHost(compat::pine::CapAttachment cap)
       is_last_tick_(scheduler_.language().is_last_tick_) {
     // ab9714be LegacyCompatibilityConsumer::refuse was a no-op on this handle.
     host_mutation_guard_inert_ = true;
-    NativeExecutionConsumer::bound(*this).set_batch_input_release(
+    NativeExecutionConsumer::bound(*this).set_host_cleanup(
         this, [](void* owner) noexcept {
             static_cast<PineStrategyHost*>(owner)->scheduler_.release_batch_input();
+        }, [](void* owner) noexcept {
+            static_cast<PineStrategyHost*>(owner)->adapter_.release_run_results();
         });
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     // A fresh host folds its empty feed as one cleared at a run's end does.

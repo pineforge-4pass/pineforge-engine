@@ -27,7 +27,8 @@
  *     strategy_position_avg_price, strategy_position_cycle_seq,
  *     strategy_closed_trade_entry_id, strategy_closed_trade_exit_id,
  *     strategy_closed_trade_exit_comment, strategy_closed_trade_close_cause,
- *     strategy_release_run_results_v1, strategy_position_size, strategy_current_equity,
+ *     strategy_release_run_results_v1 (completed run scratch release),
+ *     strategy_position_size, strategy_current_equity,
  *     strategy_initial_capital, strategy_net_profit_sum,
  *     strategy_report_pointvalue, strategy_set_report_replay_v1,
  *     strategy_script_bars_processed), pf_output_series_limit_set_checked/pf_output_series_limit_failure,
@@ -80,6 +81,8 @@
 #include <signal.h>
 #include "run_abort.hpp"
 #include "retired_trade_history_read.hpp"
+#include "native_execution_consumer.hpp"
+#include "run_results_errors.hpp"
 namespace pineforge {
 void clear_native_c_host_refusal_error(BacktestEngine* engine) noexcept;
 bool native_c_host_in_postrun_hook_frame(BacktestEngine* engine) noexcept;
@@ -607,7 +610,10 @@ PF_API void strategy_set_trace_enabled(pf_strategy_t s, int on) {
  */
 PF_API const char* strategy_get_last_error(pf_strategy_t s) {
     if (!s) return nullptr;
-    return static_cast<pineforge::BacktestEngine*>(s)->last_error().c_str();
+    const auto& engine = *static_cast<const pineforge::BacktestEngine*>(s);
+    if (pineforge::NativeExecutionConsumer::cabi_run_results_release_refused(engine))
+        return pineforge::detail::ActiveRunResultsRelease::message;
+    return engine.last_error().c_str();
 }
 
 /* The stable code of the failure strategy_get_last_error reports, and its
@@ -617,12 +623,17 @@ PF_API const char* strategy_get_last_error(pf_strategy_t s) {
  * setter, like the text. */
 PF_API const char* strategy_get_last_error_code(pf_strategy_t s) {
     if (!s) return nullptr;
-    return pineforge::run_failure_code_of(*static_cast<pineforge::BacktestEngine*>(s));
+    const auto& engine = *static_cast<const pineforge::BacktestEngine*>(s);
+    if (pineforge::NativeExecutionConsumer::cabi_run_results_release_refused(engine))
+        return pineforge::run_failure_code_name(pineforge::RunFailureCode::setting_rejected);
+    return pineforge::run_failure_code_of(engine);
 }
 
 PF_API const char* strategy_get_last_error_args(pf_strategy_t s) {
     if (!s) return nullptr;
-    return pineforge::run_failure_args_of(*static_cast<pineforge::BacktestEngine*>(s));
+    const auto& engine = *static_cast<const pineforge::BacktestEngine*>(s);
+    if (pineforge::NativeExecutionConsumer::cabi_run_results_release_refused(engine)) return "{}";
+    return pineforge::run_failure_args_of(engine);
 }
 
 PF_API const char* strategy_get_run_warnings(pf_strategy_t s) {
@@ -1653,10 +1664,25 @@ PF_API int strategy_set_account_currency_fx_scalar(pf_strategy_t s, double rate)
 }
 
 PF_API int strategy_release_run_results_v1(pf_strategy_t s) {
+    if (!s) return -1;
+    auto& engine = *static_cast<pineforge::BacktestEngine*>(s);
     return pf_cabi_int(s, [&] {
-        if (!s) return -1;
-        static_cast<pineforge::BacktestEngine*>(s)->release_run_results();
-        return 0;
+        try {
+            if (pineforge::native_c_host_in_postrun_hook_frame(&engine))
+                throw pineforge::detail::ActiveRunResultsRelease();
+            engine.release_run_results();
+            return 0;
+        } catch (const pineforge::detail::ActiveRunResultsRelease&) {
+            pineforge::NativeExecutionConsumer::note_cabi_run_results_release_refusal(engine);
+            return -1;
+        }
     });
 }
 } // extern "C"
+
+namespace pineforge::detail {
+void note_cabi_run_results_read_refusal(BacktestEngine& engine,
+                                       const std::exception& error) noexcept {
+    note_cabi_refusal(&engine, &error);
+}
+} // namespace pineforge::detail

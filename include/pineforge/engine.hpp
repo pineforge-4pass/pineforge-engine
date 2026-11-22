@@ -464,6 +464,8 @@ private:
     // Reference-oracle rows with no live lot (tests only; production leaves
     // this empty).
     std::vector<Trade> synthetic_;
+    friend class BacktestEngine;
+    void release() noexcept;
 };
 }  // inline namespace engine_script_run_v20
 
@@ -1757,66 +1759,66 @@ protected:
     double closed_trade_profit(int index) const {
         if (index >= 0 && index < (int)trades_.size())
             return trades_.pnl_at(index);
-        return 0.0;
+        return trades_.unavailable_read(0.0);
     }
     double closed_trade_profit_percent(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return std::numeric_limits<double>::quiet_NaN();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(std::numeric_limits<double>::quiet_NaN());
         return trades_.pnl_pct_at(idx);
     }
     double closed_trade_commission(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return std::numeric_limits<double>::quiet_NaN();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(std::numeric_limits<double>::quiet_NaN());
         return trades_.commission_at(idx);
     }
     int closed_trade_entry_bar_index(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return na<int>();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(na<int>());
         return trades_.entry_bar_index_at(idx);
     }
     int closed_trade_exit_bar_index(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return na<int>();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(na<int>());
         return trades_.exit_bar_index_at(idx);
     }
     std::string closed_trade_entry_comment(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return std::string();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(std::string());
         return trades_.entry_comment_at(idx);
     }
     std::string closed_trade_exit_comment(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return std::string();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(std::string());
         return trades_.exit_comment_at(idx);
     }
     std::string closed_trade_entry_id(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return std::string();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(std::string());
         return trades_.entry_id_at(idx);
     }
     std::string closed_trade_exit_id(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return std::string();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(std::string());
         return trades_.exit_id_at(idx);
     }
     uint64_t closed_trade_entry_incarnation(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return 0;
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(uint64_t{0});
         return trades_.entry_incarnation_at(idx);
     }
     double closed_trade_entry_price(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return std::numeric_limits<double>::quiet_NaN();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(std::numeric_limits<double>::quiet_NaN());
         return trades_.entry_price_at(idx);
     }
     double closed_trade_exit_price(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return std::numeric_limits<double>::quiet_NaN();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(std::numeric_limits<double>::quiet_NaN());
         return trades_.exit_price_at(idx);
     }
     int64_t closed_trade_entry_time(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return 0;
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(int64_t{0});
         return trades_.entry_time_at(idx);
     }
     int64_t closed_trade_exit_time(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return 0;
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(int64_t{0});
         return trades_.exit_time_at(idx);
     }
     double closed_trade_size(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return std::numeric_limits<double>::quiet_NaN();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(std::numeric_limits<double>::quiet_NaN());
         return trades_.is_long_at(idx) ? trades_.qty_at(idx) : -trades_.qty_at(idx);
     }
     double closed_trade_max_runup(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return 0.0;
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(0.0);
         return trades_.max_runup_at(idx);
     }
     // Percent excursions: trade.max_runup / max_drawdown are stored in
@@ -1824,23 +1826,23 @@ protected:
     // cost denominator must be in currency too (entry × qty × pointvalue).
     // pointvalue=1 cancels out and matches the legacy ratio bit-for-bit.
     double closed_trade_max_runup_percent(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return 0.0;
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(0.0);
         double cost = trades_.entry_price_at(idx) * trades_.qty_at(idx) * syminfo_.pointvalue;
         return (cost > 0.0) ? (trades_.max_runup_at(idx) / cost) * 100.0 : 0.0;
     }
     double closed_trade_max_drawdown(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return 0.0;
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(0.0);
         return trades_.max_drawdown_at(idx);
     }
     double closed_trade_max_drawdown_percent(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return 0.0;
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(0.0);
         double cost = trades_.entry_price_at(idx) * trades_.qty_at(idx) * syminfo_.pointvalue;
         return (cost > 0.0) ? (trades_.max_drawdown_at(idx) / cost) * 100.0 : 0.0;
     }
 
     // --- Direction accessors ---
     std::string closed_trade_direction(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return "";
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(std::string());
         return trades_.is_long_at(idx) ? "long" : "short";
     }
     std::string open_trade_direction(int idx) const {
@@ -2241,16 +2243,18 @@ public:
     // A range-end row is rebuilt from its terminal lot mark on every value read.
     Trade get_report_trade(int i) const {
         const int n_closed = (int)trades_.size();
-        return i < n_closed ? trades_[(size_t)i]
-                            : range_end_trades_.row((std::size_t)(i - n_closed));
+        if (i < n_closed) return trades_[static_cast<std::size_t>(i)];
+        trades_.check_not_released();
+        return range_end_trades_.row(static_cast<std::size_t>(i - n_closed));
     }
     // The C string ABI borrows rows until the next run, stream call or release.
     // Asking for that storage explicitly materializes the requested
     // row. Ordinary report/value readers never enter this compatibility path.
     const Trade& materialize_report_trade(int i) const {
         const int n_closed = static_cast<int>(trades_.size());
-        return i < n_closed ? trades_.materialize(static_cast<std::size_t>(i))
-                            : range_end_trades_.materialize(static_cast<std::size_t>(i - n_closed));
+        if (i < n_closed) return trades_.materialize(static_cast<std::size_t>(i));
+        trades_.check_not_released();
+        return range_end_trades_.materialize(static_cast<std::size_t>(i - n_closed));
     }
     // Why a report row closed, from the row's own recorded facts; the report
     // index form below adds the row-space bounds. Kept together so a caller
@@ -2845,6 +2849,7 @@ private:
         ReportSinkCallScope& operator=(const ReportSinkCallScope&) = delete;
     };
     int report_sink_setter_status() const;
+    void release_report_scratch() noexcept;
     void begin_report_sink();
     void finish_report_sink(ReportC* out) const;
     void stage_report_sink_equity_point(const pf_equity_point_t& point) const;
@@ -3075,14 +3080,14 @@ private:
     RuntimeContextService runtime_contexts_;
 
 public:
-    /// Release every scratch file still held by the completed run's stores.
-    /// Allowed only in stream phase IDLE or ENDED with no run in progress
-    /// (the native host must not be Running). An active run or stream refuses
-    /// with a coded std::logic_error (setting_rejected); the run is unchanged.
-    /// closed_trade_count() still returns the completed run's count. Later
-    /// reads of released data, including reports that need it, refuse with
-    /// a coded error. Repeating the release succeeds as a no-op. The next
-    /// begin or run() and destruction work as before.
+    /// Release the run's closed trade ledger, report scratch, native command
+    /// history and successor-root index after the last result read.
+    /// An active run or stream refuses with a coded std::logic_error
+    /// (setting_rejected) without changing the run.
+    /// closed_trade_count() still returns the run's count. Trade row, report
+    /// and journal reads refuse with engine_invariant until the next begin.
+    /// Repeating the release succeeds. Published sink output and returned
+    /// owning trade and event values remain available.
     void release_run_results();
 };
 

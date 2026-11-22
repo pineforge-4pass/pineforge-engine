@@ -163,6 +163,13 @@ public:
     PineExecutionAdapter::PositionTailWork work{};
 
     void set_directory(const std::string& directory) { margins_.set_directory(directory); }
+    void release_scratch() noexcept {
+        margins_.clear();
+        all_margins_ = {};
+        active_ = safe_ = false;
+        origins_.clear();
+        live_cohorts_.clear();
+    }
 
     // This cache can be discarded at any point: uncertified/missing facts
     // ALWAYS select replay. It owns no logical broker transition. Reset

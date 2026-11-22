@@ -32,6 +32,7 @@
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
 #include <pineforge/bar.hpp>
+#include "run_results_errors.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -2506,6 +2507,16 @@ int c_refuse(CCallbackHost* host, int status) noexcept {
     return status;
 }
 
+std::vector<pineforge::NativeMarketEvent> read_native_events(
+        CCallbackHost& host, std::uint64_t after_ordinal) {
+    try {
+        return host.native_events(after_ordinal);
+    } catch (const pineforge::detail::ReleasedNativeJournalRead& error) {
+        pineforge::detail::note_cabi_run_results_read_refusal(host, error);
+        throw;
+    }
+}
+
 /* The staged/running specification's identity, which every RequestHandle a C
  * caller names belongs to. Absent before the first configure. */
 const no::RunIdentity* run_identity(const CCallbackHost& host) {
@@ -3783,7 +3794,7 @@ PF_API int strategy_native_events_v1(pf_strategy_t s, uint64_t after_ordinal,
         auto* host = host_of(s);
         if (!host) return PF_NATIVE_E_HANDLE;
         if (cap < 0 || (cap > 0 && !out)) return c_refuse(host, PF_NATIVE_E_ARGUMENT);
-        const auto events = host->native_events(after_ordinal);
+        const auto events = read_native_events(*host, after_ordinal);
         int written = 0;
         std::size_t consumed = 0;
         for (; consumed < events.size() && written < cap; ++consumed) {
@@ -4053,7 +4064,7 @@ PF_API int strategy_native_margin_call_v1(pf_strategy_t s, uint64_t ordinal,
         if (ordinal == 0u) return PF_NATIVE_ABSENT;
         /* The history is ordered by ordinal, so the call is the first row at
          * or past it, or it is not there at all. */
-        for (const auto& event : host->native_events(ordinal - 1u)) {
+        for (const auto& event : read_native_events(*host, ordinal - 1u)) {
             if (event.ordinal > ordinal) break;
             if (event.kind != pineforge::NativeEventKind::Command || !event.command) continue;
             const auto* call = std::get_if<no::MarginCallEvent>(&*event.command);

@@ -2921,6 +2921,8 @@ PF_API int strategy_native_open_lot_get_v1(pf_strategy_t s, int index,
  *  append-only, so the same @p after_ordinal always yields the same rows;
  *  under WINDOW a read answers what the window still holds, and one from
  *  below its start (#strategy_native_event_window_v1) starts there.
+ *  After #strategy_release_run_results_v1, returns PF_NATIVE_E_STATE and
+ *  records `engine_invariant` unless a run failure is already latched.
  *  @return The number written (>= 0), or a negative status. */
 PF_API int strategy_native_events_v1(pf_strategy_t s, uint64_t after_ordinal,
                                      pf_native_event_v1* out, int cap);
@@ -3158,7 +3160,8 @@ PF_API int strategy_native_risk_state_v1(pf_strategy_t s, pf_native_risk_state_v
  *  #pf_native_event_v1 #pf_native_callbacks_v1::on_margin_call is handed, or
  *  of a #PF_NATIVE_EVENT_MARGIN_CALL row #strategy_native_events_v1 returns.
  *  Legal inside `on_margin_call` and anywhere the event history is;
- *  observation only.
+ *  observation only. After results are released, a history read refuses
+ *  as in #strategy_native_events_v1.
  *
  *  @p out is an in/out size prefix: set `out->struct_size` to
  *  `sizeof(pf_native_margin_call_v1)` before the call.

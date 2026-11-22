@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- `BacktestEngine::release_run_results()` and `strategy_release_run_results_v1()` let callers close the trade ledger, report scratch, and native command history after the last result read without destroying the handle. The closed trade count remains available, and further trade row, report, or journal reads refuse until the next run. An active run or stream refuses the release.
 - Clearing or installing `3551W` no longer removes or replaces monthly prices. Without its own feed, the request groups bars by 3,551 weeks.
 - Reversing a position now keeps the profit target and stop of a resting entry on the newly opened side, even if an earlier trade used the same entry ID on the side that just closed (#964).
 - `detect_timeframe` now measures the gap between consecutive bars without overflowing when their timestamps lie far apart on opposite sides of zero; such pairs could give a wrong timeframe. Pairs that are equal or out of order are still skipped.

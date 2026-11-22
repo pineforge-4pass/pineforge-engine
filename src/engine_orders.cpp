@@ -538,6 +538,7 @@ struct TradeLedger::State {
     // and never claim a block until its write has completed.
     std::uint64_t index_zeroed_end = 0, payload_zeroed_end = 0;
     bool retiring = false;
+    bool released = false;
     std::exception_ptr rollback_failure;
     std::array<char, kPayloadTailBytes> payload_tail{};
     std::string directory;
@@ -957,8 +958,17 @@ struct TradeLedger::State {
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: row outside resident window");
     }
+    [[noreturn, gnu::cold, gnu::noinline]]
+    static void throw_released() {
+        throw detail::RetiredTradeHistoryRead(detail::RetiredTradeHistoryRead::Reason::Released);
+    }
+    [[gnu::always_inline]]
+    void check_not_released() const {
+        if (released) throw_released();
+    }
     [[gnu::always_inline]]
     void check(size_type global, bool mutable_row = false) const {
+        check_not_released();
         if (rollback_failure) std::rethrow_exception(rollback_failure);
         if (retiring && global < first) throw_check_failure(true);
         if (global >= end || (mutable_row && global < first)) throw_check_failure(false);
@@ -1369,6 +1379,13 @@ TradeLedger::TradeLedger(const TradeLedger& other)
         state_->history.bind(other.state_->history.factory, other.state_->history.extent,
                              &other.state_->history);
     }
+    if (other.state_->released) {
+        state_->first = other.state_->first;
+        state_->end = other.state_->end;
+        state_->retiring = other.state_->retiring;
+        release();
+        return;
+    }
     // A cold source remains unallocated. Reuse already cached source rows;
     // neither the source nor its copy allocates pages just for copying.
     if (other.state_->retiring) {
@@ -1428,6 +1445,25 @@ void TradeLedger::clear() {
     }
     state_.swap(next);
 }
+
+void TradeLedger::release() noexcept {
+    auto& state = *state_;
+    if (state.released) return;
+    state.released = true;
+    state.index.legacy.clear();
+    state.payload.legacy.clear();
+    state.rows.fill(State::Record{});
+    state.payload_tail.fill(0);
+    state.resident_first = state.end;
+    state.count = state.head = 0;
+    state.reset_cache();
+    state.uncached = State::CacheEntry{};
+    state.materialized.clear();
+    state.rollback_failure = nullptr;
+}
+
+bool TradeLedger::released() const noexcept { return state_->released; }
+void TradeLedger::check_not_released() const { state_->check_not_released(); }
 
 void TradeLedger::set_scratch_directory(const std::string& directory) {
     state_->index.set_directory(directory);
@@ -1580,6 +1616,7 @@ Trade TradeLedger::at(size_type global) const {
 }
 
 Trade TradeLedger::back() const {
+    state_->check_not_released();
     if (empty())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: no resident last row");
@@ -1616,19 +1653,31 @@ bool TradeLedger::exit_comment_equals(size_type global, std::string_view rhs) co
     return state_->string_equals<&State::Record::exit_comment>(global, rhs);
 }
 bool TradeLedger::entry_id_matches(int index, std::string_view rhs) const {
-    if (index < 0 || static_cast<size_type>(index) >= state_->end) return rhs.empty();
+    if (index < 0 || static_cast<size_type>(index) >= state_->end) {
+        state_->check_not_released();
+        return rhs.empty();
+    }
     return state_->string_equals<&State::Record::entry_id>(static_cast<size_type>(index), rhs);
 }
 bool TradeLedger::exit_id_matches(int index, std::string_view rhs) const {
-    if (index < 0 || static_cast<size_type>(index) >= state_->end) return rhs.empty();
+    if (index < 0 || static_cast<size_type>(index) >= state_->end) {
+        state_->check_not_released();
+        return rhs.empty();
+    }
     return state_->string_equals<&State::Record::exit_id>(static_cast<size_type>(index), rhs);
 }
 bool TradeLedger::entry_comment_matches(int index, std::string_view rhs) const {
-    if (index < 0 || static_cast<size_type>(index) >= state_->end) return rhs.empty();
+    if (index < 0 || static_cast<size_type>(index) >= state_->end) {
+        state_->check_not_released();
+        return rhs.empty();
+    }
     return state_->string_equals<&State::Record::entry_comment>(static_cast<size_type>(index), rhs);
 }
 bool TradeLedger::exit_comment_matches(int index, std::string_view rhs) const {
-    if (index < 0 || static_cast<size_type>(index) >= state_->end) return rhs.empty();
+    if (index < 0 || static_cast<size_type>(index) >= state_->end) {
+        state_->check_not_released();
+        return rhs.empty();
+    }
     return state_->string_equals<&State::Record::exit_comment>(static_cast<size_type>(index), rhs);
 }
 double TradeLedger::pnl_at(size_type global) const {
@@ -1705,6 +1754,7 @@ void TradeLedger::modify(size_type global, const std::function<void(Trade&)>& ed
 }
 
 void TradeLedger::push_back(const Trade& trade) {
+    state_->check_not_released();
     if (size() == std::numeric_limits<size_type>::max())
         throw std::length_error("trade ledger: logical end exhausted");
     // Copies and write-only runs keep a cold cache unallocated. Optional
@@ -1721,6 +1771,7 @@ void TradeLedger::push_back(const Trade& trade) {
 void TradeLedger::push_back(Trade&& trade) { push_back(static_cast<const Trade&>(trade)); }
 
 void TradeLedger::resize(size_type global_end) {
+    state_->check_not_released();
     if (state_->rollback_failure) std::rethrow_exception(state_->rollback_failure);
     if (global_end < state_->first)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
@@ -1746,6 +1797,7 @@ Trade TradeLedger::const_iterator::operator*() const { return ledger_->read(inde
 TradeLedger::const_iterator TradeLedger::begin() const { return {this, base()}; }
 TradeLedger::const_iterator TradeLedger::end() const { return {this, size()}; }
 void TradeLedger::visit(size_type first, size_type end, const Visitor& visitor) const {
+    state_->check_not_released();
     if (first > end || end > size())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: invalid visit range");
@@ -1756,6 +1808,7 @@ void TradeLedger::visit(size_type first, size_type end, const Visitor& visitor) 
 }
 
 bool TradeLedger::previous(size_type& cursor, Trade& value) const {
+    state_->check_not_released();
     if (cursor > size())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: invalid backward cursor");
@@ -1773,6 +1826,7 @@ const Trade& TradeLedger::materialize(size_type global) const {
 }
 
 void TradeLedger::seal(size_type global_end) {
+    state_->check_not_released();
     if (state_->rollback_failure) std::rethrow_exception(state_->rollback_failure);
     if (global_end < state_->first || global_end > size())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
@@ -1795,11 +1849,13 @@ class TradeLedger::Source final : public report::TradeSourceV1 {
     using Row = report::TradeRowV1;
     using Text = report::TradeTextV1;
     void range(Index first, Index count) const {
+        ledger_.check_not_released();
         const auto total = size();
         if (first > total || count > total - first)
             throw std::out_of_range("trade source range");
     }
     State::StringExtent text(Index index, Text field) const {
+        ledger_.check_not_released();
         // Validate selectors even on an otherwise invalid/empty request.
         if (field != Text::EntryId && field != Text::EntryComment
             && field != Text::ExitId && field != Text::ExitComment)
@@ -1833,6 +1889,7 @@ public:
     explicit Source(const TradeLedger& ledger) : ledger_(ledger) {}
     Index size() const override { return ledger_.size(); }
     Row at(Index index) const override {
+        ledger_.check_not_released();
         if (index >= size()) throw std::out_of_range("trade source index");
         const Trade value = ledger_.numeric_at(static_cast<size_type>(index));
         Row row{};

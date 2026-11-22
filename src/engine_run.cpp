@@ -13,6 +13,8 @@
  */
 
 #include "engine_internal.hpp"
+#include "native_execution_consumer.hpp"
+#include "run_results_errors.hpp"
 
 #include <pineforge/ta.hpp>
 
@@ -248,8 +250,23 @@ bool BacktestEngine::has_account_currency_fx_at(std::int64_t at_ms) const noexce
 }
 
 void BacktestEngine::release_run_results() {
-    throw coded<std::logic_error>(RunFailureCode::setting_rejected, {},
-                                 "run results release is not supported");
+    auto* consumer = execution_consumer_slot_.ptr.get();
+    if (stream_phase_ == StreamPhase::REALTIME || stream_warmup_mode_
+        || report_sink_setter_status() != 0
+        || (consumer && as_native_consumer(*consumer).run_results_release_busy())) {
+        throw detail::ActiveRunResultsRelease();
+    }
+    if (!trades_.released()) {
+        trades_.release();
+        range_end_trades_.release();
+        release_report_scratch();
+        chart_day_partition_ = NativeDayPartition{};
+        if (consumer) as_native_consumer(*consumer).release_run_results();
+    }
+    // An explicit release clears an earlier read or setter refusal, but
+    // leaves a failed run (or a pending setup failure) diagnosable.
+    if (last_run_status_ == 0) clear_run_failure(*this);
+    else NativeExecutionConsumer::clear_cabi_run_results_release_refusal(*this);
 }
 
 }  // namespace pineforge

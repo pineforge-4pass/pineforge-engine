@@ -21,8 +21,9 @@ extern "C" {
  *  the strings. The engine creates or truncates path, writes the version-1
  *  header at run begin, and writes checked, buffered records.
  *  NULL run_id means ""; NULL scratch_dir means the directory of path.
- *  Scratch files are engine-private and live until the next run begins or
- *  handle destruction. */
+ *  Report scratch files are engine-private and live until
+ *  #strategy_release_run_results_v1, the next run, or handle destruction.
+ *  Releasing the run's results leaves the published output file in place. */
 typedef struct pf_report_sink_v1 {
     uint32_t    struct_size;
     uint32_t    version;

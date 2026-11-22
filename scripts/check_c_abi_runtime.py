@@ -82,6 +82,7 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_closed_trade_exit_id",
     "strategy_closed_trade_exit_comment",
     "strategy_closed_trade_close_cause",
+    "strategy_release_run_results_v1",
     "strategy_position_size",
     "strategy_current_equity",
     "strategy_initial_capital",
@@ -157,12 +158,12 @@ RUNTIME_HEADERS = (
     "report_sink.h",
 )
 
-# Source inventory: pineforge.h 115 + observer 3 + window 3 + sink 5.
-# expectation corrected: 125 -> 126 and 105 -> 106, because pineforge.h declares
-# and c_abi.cpp implements strategy_set_account_currency_fx_scalar.
-EXPECTED_PUBLIC_DECLARATIONS = 126
-# c_abi.cpp implements 106 of those declarations; twenty remain generated.
-EXPECTED_RUNTIME_IMPLEMENTATIONS = 106
+# Source inventory: pineforge.h 116 + observer 3 + window 3 + sink 5.
+# expectation corrected: 126 -> 127 and 106 -> 107, because pineforge.h declares
+# and c_abi.cpp implements strategy_release_run_results_v1.
+EXPECTED_PUBLIC_DECLARATIONS = 127
+# c_abi.cpp implements 107 of those declarations; twenty remain generated.
+EXPECTED_RUNTIME_IMPLEMENTATIONS = 107
 
 # Per-module implementations, never static-runtime implementations. The
 # capability has its own declaration in native_module.hpp; the other eight

@@ -293,6 +293,14 @@ private:
     // Run-begin policy and non-public storage census; neither changes this
     // installed object's layout or the logical trade/hash representation.
     void set_history_retirement(bool);
+    void release() noexcept;
+    bool released() const noexcept;
+    void check_not_released() const;
+    template <class T>
+    T unavailable_read(T fallback) const {
+        check_not_released();
+        return fallback;
+    }
     void check_history_read(size_type) const;
     // Legacy file/arena extents; a retained capability's fstat extent enters
     // the first slot once, with zero in the second. Never RSS/charge/blocks.

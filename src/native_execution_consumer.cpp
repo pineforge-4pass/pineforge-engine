@@ -1383,6 +1383,7 @@ void NativeExecutionConsumer::fail(BacktestEngine& engine, NativeFailure failure
 
 void NativeExecutionConsumer::store_rendered(BacktestEngine& engine, const char* text,
                                              RunFailureValue value) const {
+    cabi_run_results_release_refused_ = false;
     if (setup_failure_pending_) return;
     engine.last_error_ = text ? text : "";
     run_failure_.code = value.code;
@@ -1407,6 +1408,7 @@ void NativeExecutionConsumer::render_unclassified(BacktestEngine& engine,
 }
 
 void NativeExecutionConsumer::clear_rendered(BacktestEngine& engine) const noexcept {
+    cabi_run_results_release_refused_ = false;
     if (setup_failure_pending_) return;
     engine.last_error_.clear();
     run_failure_.code = RunFailureCode::none;
@@ -1417,6 +1419,7 @@ void NativeExecutionConsumer::clear_rendered(BacktestEngine& engine) const noexc
 void NativeExecutionConsumer::note_failure_record(BacktestEngine& engine, std::string text,
                                                   RunFailureValue value) {
     NativeExecutionConsumer& consumer = bound(engine);
+    consumer.cabi_run_results_release_refused_ = false;
     if (consumer.setup_failure_pending_) return;
     engine.last_error_ = std::move(text);
     consumer.run_failure_.code = value.code;
@@ -1433,6 +1436,7 @@ void NativeExecutionConsumer::latch_void_setter_refusal(
         if (consumer.failed() || consumer.in_attempt_call_
             || std::holds_alternative<NativeRunning>(consumer.state_)
             || consumer.setup_failure_pending_) return;
+        consumer.cabi_run_results_release_refused_ = false;
         const auto value = error ? classify_run_failure(*error)
             : RunFailureValue{RunFailureCode::engine_unclassified_error, nullptr};
         engine.last_run_status_ = 1;
@@ -1468,6 +1472,28 @@ void NativeExecutionConsumer::clear_failure_record(BacktestEngine& engine) noexc
     } else {
         engine.last_error_.clear();
     }
+}
+
+bool NativeExecutionConsumer::cabi_run_results_release_refused(
+        const BacktestEngine& engine) noexcept {
+    const auto* consumer =
+        static_cast<const NativeExecutionConsumer*>(engine.execution_consumer_slot_.ptr.get());
+    return consumer && consumer->cabi_run_results_release_refused_;
+}
+
+void NativeExecutionConsumer::note_cabi_run_results_release_refusal(
+        BacktestEngine& engine) noexcept {
+    try {
+        bound(engine).cabi_run_results_release_refused_ = true;
+    } catch (...) {
+    }
+}
+
+void NativeExecutionConsumer::clear_cabi_run_results_release_refusal(
+        const BacktestEngine& engine) noexcept {
+    if (auto* consumer =
+            static_cast<NativeExecutionConsumer*>(engine.execution_consumer_slot_.ptr.get()))
+        consumer->cabi_run_results_release_refused_ = false;
 }
 
 const char* NativeExecutionConsumer::failure_code_of(const BacktestEngine& engine) noexcept {
@@ -12795,7 +12821,16 @@ std::size_t NativeExecutionConsumer::first_command_after(uint64_t after_ordinal)
     return static_cast<std::size_t>(std::distance(history.begin(), it));
 }
 
+void NativeExecutionConsumer::release_run_results() noexcept {
+    requests_.release_run_history();
+    std::vector<NativeDriverPoint>().swap(driver_log_);
+    std::vector<NativeAccountObservation>().swap(account_log_);
+    drop_presentation();
+    if (host_results_release_) host_results_release_(host_cleanup_owner_);
+}
+
 std::vector<NativeMarketEvent> NativeExecutionConsumer::events_after(uint64_t after_ordinal) const {
+    requests_.check_history_available();
     const auto& history = requests_.history();
     const auto command_begin = history.begin()
         + static_cast<std::ptrdiff_t>(first_command_after(after_ordinal));

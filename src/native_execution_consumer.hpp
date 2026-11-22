@@ -418,6 +418,9 @@ public:
     static const char* failure_code_of(const BacktestEngine& engine) noexcept;
     static const char* failure_args_of(const BacktestEngine& engine) noexcept;
     static RunFailureValue failure_value_of(const BacktestEngine& engine) noexcept;
+    static bool cabi_run_results_release_refused(const BacktestEngine& engine) noexcept;
+    static void note_cabi_run_results_release_refusal(BacktestEngine& engine) noexcept;
+    static void clear_cabi_run_results_release_refusal(const BacktestEngine& engine) noexcept;
     static const char* run_warnings_of(const BacktestEngine& engine) noexcept;
     static void mark_run_warnings_unavailable(BacktestEngine& engine) noexcept;
     void record_run_warning(int sec_id, std::string code, std::string args_json);
@@ -431,6 +434,8 @@ public:
     // fill_snapshot_report reads the latest reset attempt's rows through the same gate.
     static bool rows_are_current(const BacktestEngine& engine) noexcept;
     static void fill_snapshot_report(const BacktestEngine& engine, ReportC* out);
+    bool run_results_release_busy() const noexcept { return selected_epoch_busy(); }
+    void release_run_results() noexcept;
     std::vector<NativeMarketEvent> events_after(uint64_t after_ordinal) const;
     // The command rows of events_after(after_ordinal), read in place (the
     // in-place command journal reads). The history is in ordinal order, so those rows are exactly
@@ -456,6 +461,7 @@ public:
     }
     template <class Visit>
     bool visit_commands_after(uint64_t after_ordinal, Visit&& visit) const {
+        requests_.check_history_available();
         const auto& history = requests_.history();
         const std::size_t end = history.size();
         // The history only grows inside a run; the size is re-read anyway so
@@ -2699,7 +2705,7 @@ private:
             if (!allow_live_ || !c_.running()) {
                 engine_.runtime_contexts().end_run();
                 if (c_.batch_input_release_)
-                    c_.batch_input_release_(c_.batch_input_owner_);
+                    c_.batch_input_release_(c_.host_cleanup_owner_);
                 c_.detach_bar_views();
             }
             if (!c_.running()) c_.release_run_command_scratch();
@@ -2813,7 +2819,7 @@ private:
     // its borrowed begin array at the outer public exit. Neither address nor
     // callback identity affects matching or the consumed-prefix hash. They
     // remain installed for the host lifetime; nested entries never call them.
-    void* batch_input_owner_ = nullptr;
+    void* host_cleanup_owner_ = nullptr;
     void (*batch_input_release_)(void*) noexcept = nullptr;
 
     // Selected E records have already been emitted at capture.
@@ -2829,10 +2835,16 @@ private:
     // continuation input. Admission/drop releases the previous run's file.
     std::unique_ptr<report_sink::ScratchCurveWriter> presentation_metric_curve_;
     metrics::SpillCurve make_selected_metric_curve() const;
+    // Explicit release, separate from the input cleanup at run end.
+    void (*host_results_release_)(void*) noexcept = nullptr;
+    // The busy refusal belongs to the C call, not to the active run.
+    mutable bool cabi_run_results_release_refused_ = false;
 public:
-    void set_batch_input_release(void* owner, void (*release)(void*) noexcept) noexcept {
-        batch_input_owner_ = owner;
-        batch_input_release_ = release;
+    void set_host_cleanup(void* owner, void (*release_input)(void*) noexcept,
+                          void (*release_results)(void*) noexcept) noexcept {
+        host_cleanup_owner_ = owner;
+        batch_input_release_ = release_input;
+        host_results_release_ = release_results;
     }
 
     // Projection judges the host's pending context without publishing it via

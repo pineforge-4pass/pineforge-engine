@@ -5,6 +5,7 @@
 #include <pineforge/detail/scratch_slab.hpp>
 #include <pineforge/detail/journal_codec.hpp>
 #include "native_journal_codec.hpp"
+#include "run_results_errors.hpp"
 
 #include "native_issued_range_state.hpp"
 #include "optional_window.hpp"
@@ -1232,6 +1233,13 @@ public:
         cache_.invalidate();
         file_.reset();
     }
+    // Also close a preallocated file with no published rows.
+    void release() noexcept {
+        base_ = flushed_ = origin_ = size();
+        tail_size_ = 0;
+        cache_.invalidate();
+        file_.reset();
+    }
 
 private:
     static void read_backing(void* context, uint64_t offset, void* out, std::size_t bytes) {
@@ -1756,6 +1764,7 @@ struct WorkingRequestCore::JournalStore {
     // until their public reference/failure contract is resolved.
     detail::NativeCoreRegistration core_registration;
     std::unique_ptr<detail::NativeHistoryOwner> managed_history;
+    bool released = false;
     // Construction policy for the three lazy tail stores. Keeping physical
     // policy in this existing opaque owner preserves the public core layout.
     TailWindowConfig tail_windows;
@@ -1870,6 +1879,20 @@ struct WorkingRequestCore::JournalStore {
 
     explicit JournalStore(const RunIdentity& identity) : core_registration(identity) {
         chunks.reserve(kMaxResident / kChunk + 4);
+    }
+    void release() noexcept {
+        released = true;
+        first = end;
+        pages.reset();
+        data.reset();
+        decltype(chunks){}.swap(chunks);
+        spare.reset();
+        cache = {};
+        spill.reset();
+        // The codec is borrowed. Drop its readback cache and the borrow.
+        codec = nullptr;
+        decltype(codec_page){}.swap(codec_page);
+        codec_values = {};
     }
     // Called by a beyond-resident reserve before the operation it provisions,
     // or lazily by the first unreserved spill. No added page/cache allocation
@@ -2225,6 +2248,21 @@ std::size_t WorkingRequestCore::group_effect_receipt_base() const noexcept {
 
 std::size_t WorkingRequestCore::group_effect_receipt_count() const noexcept {
     return receipt_store_ ? static_cast<std::size_t>(receipt_store_->log.size()) : 0;
+}
+
+void WorkingRequestCore::release_run_history() noexcept {
+    if (!journal_ || journal_->released) return;
+    journal_->release();
+    history_base_ = history_end();
+    // Keep the receipt count used by the continuation fold. The result
+    // window is empty, as after retirement, and the backing is closed.
+    if (receipt_store_) receipt_store_->log.release();
+    chain_segments_.reset();
+    successor_roots_.reset();
+}
+
+void WorkingRequestCore::check_history_available() const {
+    if (journal_ && journal_->released) throw detail::ReleasedNativeJournalRead();
 }
 
 // ---- the working book's resident and spilled tiers ------------------------
@@ -2982,6 +3020,7 @@ const LiveRequest* WorkingRequestCore::find_live(const RequestHandle& handle) co
 // over the retained window: its resident events directly, its older ones
 // through the page table and one page read.
 const CommandEvent* WorkingRequestCore::event_at(const EventId& id) const {
+    check_history_available();
     if (id.run != identity_ || id.ordinal == 0 || !journal_) return nullptr;
     const auto position = journal_->find_ordinal(id.ordinal, history_base_);
     if (!position) return nullptr;
@@ -2989,6 +3028,7 @@ const CommandEvent* WorkingRequestCore::event_at(const EventId& id) const {
 }
 
 const CommandEvent& WorkingRequestCore::history_at(std::size_t absolute) const {
+    check_history_available();
     if (!journal_ || absolute < history_base_ || absolute >= history_end()) {
         throw std::out_of_range("native journal position is not retained");
     }
@@ -3042,7 +3082,7 @@ std::optional<uint64_t> WorkingRequestCore::pending_chain_floor() const {
 // noexcept boundary, and a retirement that cannot read just retires nothing
 // this time (the window stays longer, no evidence is dropped).
 std::size_t WorkingRequestCore::retire_history(uint64_t through_ordinal) {
-    if (!journal_ || history_base_ == history_end()) return 0;
+    if (!journal_ || journal_->released || history_base_ == history_end()) return 0;
     try {
         uint64_t limit = through_ordinal;
         if (const auto floor = pending_chain_floor()) {
@@ -3519,6 +3559,7 @@ std::size_t WorkingRequestCore::prior_adjustment_count(const EventId& resolution
 }
 
 GroupEffectReceipt WorkingRequestCore::group_effect_receipt(std::size_t index) const {
+    check_history_available();
     const std::size_t base = group_effect_receipt_base();
     assert(index >= base && "native group receipt index is below the retained base");
     if (index < base || index >= group_effect_receipt_count()) {
