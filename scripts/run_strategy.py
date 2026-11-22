@@ -1428,12 +1428,12 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
     runs under one harness runs identically under the other. ``params``
     itself must still be passed to ``Strategy.run(params=...)`` so Pine
     ``input()`` values reach ``strategy_set_input``. ``runtime_overrides``
-    accepts ``qty_step`` and ``mincontract`` flat or under ``syminfo_metadata``.
-    A flat ``mincontract`` must be a positive finite JSON number or null;
-    a minimum already declared in ``syminfo_metadata`` takes precedence. ``env`` (default
-    ``os.environ``) supplies the one lane fact the case runner hands every
-    run, the lane template's quantity step (``LANE_QTY_STEP_ENV``), which
-    becomes ``syminfo.mincontract``.
+    accepts ``qty_step`` and ``mincontract`` flat or under ``syminfo_metadata``:
+    each a positive finite JSON number or null (not declared), anything else
+    raises ``ValueError``; given both ways, the flat step and the nested
+    minimum are used. ``env`` (default ``os.environ``) supplies the one lane
+    fact the case runner hands every run, the lane template's quantity step
+    (``LANE_QTY_STEP_ENV``): ``syminfo.mincontract`` when none is declared.
     """
     if not isinstance(params, dict):
         params = {}
@@ -1540,44 +1540,44 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
         except (TypeError, ValueError):
             return None
 
-    # An explicit quantity increment can be supplied flat or as numeric metadata.
-    qty_step = _num(runtime_overrides.get("qty_step"))
-    if qty_step is None and isinstance(syminfo_metadata, dict):
-        qty_step = _num(syminfo_metadata.get("qty_step"))
-    if qty_step is not None and qty_step > 0.0:
-        if not isinstance(syminfo_metadata, dict):
-            syminfo_metadata = {}
-        syminfo_metadata = dict(syminfo_metadata)
-        syminfo_metadata["qty_step"] = qty_step
+    def _lot(value, name):
+        # A lot key (#716): a positive finite JSON number, or null (not declared).
+        if value is None:
+            return None
+        try:
+            valid = type(value) in (int, float) and value > 0 and math.isfinite(value)
+        except OverflowError:  # A JSON integer outside the engine's double range.
+            valid = False
+        if not valid:
+            raise ValueError(f"runtime_overrides.{name} must be a positive finite number")
+        return float(value)
+
+    nested = syminfo_metadata or {}
+    flat_minimum = _lot(runtime_overrides.get("mincontract"), "mincontract")
+    nested_minimum = _lot(nested.get("mincontract"), "syminfo_metadata.mincontract")
+    flat_step = _lot(runtime_overrides.get("qty_step"), "qty_step")
+    nested_step = _lot(nested.get("qty_step"), "syminfo_metadata.qty_step")
     # syminfo.mincontract: on every campaign symbol TradingView's smallest
     # contract IS its quantity step (tests/fixtures/syminfo_mincontract: 18
     # reference read-outs, one per lane -- BINANCE:ETHUSDT.P 0.0001,
     # BINANCE:BTCUSDT 0.00001, OANDA:EURUSD / OANDA:XAUUSD 0.01, NASDAQ:AAPL,
     # NYSE:F, NSE:NIFTY, CME_MINI:ES1! and NQ1! 1). The fact is the lane
-    # template's: its environment's PINEFORGE_VERIFY_QTY_STEP
-    # (lane_input_templates), which the case runner sets for every case of
-    # a lane that declares it and every verifier child inherits. Only a
-    # declared step counts: the Lab substitutes ETHUSDT.P's 0.0001 as
-    # runtime_overrides.qty_step where a lane declares none (the two ETH 15m
-    # templates), and records that value as its default, not as lane
-    # evidence. Generated code reads the fact through
-    # get_syminfo_metadata("mincontract") once codegen lowers it so (W2's
-    # F06, cg/w2-trio 90ab04d; codegen d7e095f still lowers na); a probe that
-    # declares its own keeps it.
+    # template's: its environment's PINEFORGE_VERIFY_QTY_STEP, which the case
+    # runner sets for every case of a lane that declares it and every verifier
+    # child inherits (#294). Only a declared step counts: where a lane declares
+    # none (the two ETH 15m templates), runtime_overrides.qty_step's 0.0001 is
+    # a default, not lane evidence. Generated code reads the fact through
+    # get_syminfo_metadata("mincontract") once codegen lowers it so.
     lane_step = _num((os.environ if env is None else env).get(LANE_QTY_STEP_ENV))
-    minimum = runtime_overrides.get("mincontract")
-    if minimum is not None:
-        try:
-            valid = type(minimum) in (int, float) and minimum > 0 and math.isfinite(minimum)
-        except OverflowError:  # A JSON integer outside the engine's double range.
-            valid = False
-        if not valid:
-            raise ValueError("runtime_overrides.mincontract must be a positive finite number")
-    elif lane_step is not None and math.isfinite(lane_step) and lane_step > 0.0:
+    # Precedence: flat step, then nested; nested minimum, then flat, then lane.
+    qty_step = nested_step if flat_step is None else flat_step
+    minimum = flat_minimum if nested_minimum is None else nested_minimum
+    if minimum is None and lane_step is not None and math.isfinite(lane_step) and lane_step > 0.0:
         minimum = lane_step
-    if minimum is not None and (syminfo_metadata or {}).get("mincontract") is None:
-        syminfo_metadata = dict(syminfo_metadata or {})
-        syminfo_metadata["mincontract"] = minimum
+    for key, value in (("qty_step", qty_step), ("mincontract", minimum)):
+        if value is not None:
+            syminfo_metadata = dict(syminfo_metadata or {})
+            syminfo_metadata[key] = value
     calendar = _session_calendar_metadata(os.environ if env is None else env,
                                           runtime_overrides.get("tickerid"))
     if calendar:
@@ -4731,9 +4731,9 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
     if dist.upper() == "VOLUME_WEIGHTED":
         dist = "ENDPOINTS"
 
-    # Keep the execution step and the script-visible minimum distinct. The
-    # image's symbol parser validates both and uses the minimum only in the
-    # absence of an explicit step.
+    # Step and minimum stay distinct (inputs_run_kwargs validated both; the
+    # image's parser checks them again and uses the minimum only without a
+    # step). No other syminfo_metadata key or declared magnifier is forwarded.
     syminfo: dict = {}
     metadata = run_kwargs.get("syminfo_metadata") or {}
     for key in ("qty_step", "mincontract"):
