@@ -119,8 +119,8 @@ retiring readers can keep a preceding slab alive too.
 
 The native core's unbound request journal has a resident cap of 2,048 events,
 in 32-event chunks, and keeps its 128-event floor. It spills older events even
-within one bar when that bar exceeds the cap before retirement. Page size
-is still 32,768 bytes and the decoded cache still has four slots.
+within one bar when that bar exceeds the cap before retirement. Pages hold up to
+32,768 bytes of events plus an 8-byte seal; the decoded cache has four slots.
 The bound `CommandScratchStore` codec instead uses its configured workspace.
 Its owning diagnostic decoder throws typed `out_of_memory` on allocation
 failure; the nonowning validation scan retains its `noexcept` status contract.

@@ -680,7 +680,7 @@ verdict, its reason or `unboundedTerms`. Private growth is capped by the
 child's `RLIMIT_AS` and a breach is the strategy's typed `memory_limit`.
 
 The native request `JournalStore` caps 2,048 committed events in 32-event chunks,
-with a keep-resident floor of 128, a 32,768-byte spill page and four decoded cache slots.
+with a keep-resident floor of 128, spill pages holding up to 32,768 bytes of events plus an 8-byte seal, and four decoded cache slots.
 A bar exceeding the cap spills before retirement. The short waiting-child
 parent-terminal fixture's 4,096-row book cap and this journal cap give the plateau
 `456*(2048 + (4096/2+2) + (32+1)) + 6720 + 524 = 1890980` bytes on GNU 13.4 x86-64,

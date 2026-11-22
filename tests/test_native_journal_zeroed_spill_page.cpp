@@ -8,7 +8,7 @@
 // each a uint32_t alternative, a uint64_t ordinal and the alternative's
 // fields; a second scratch file holds the page table, one JournalPage record
 // per page (the positions and ordinals it covers, its offset and its length).
-// Neither carries a checksum. native_events(after) finds its first command
+// Each data page ends with a seal. native_events(after) finds its first command
 // row with NativeExecutionConsumer::first_command_after
 // (src/native_execution_consumer.cpp), which walks 33 events back from the
 // tail and then bisects the rest of the retained window by ordinal, reading
@@ -95,7 +95,7 @@ constexpr std::size_t kOrders = 3000;
 constexpr std::size_t kTailWalk = 33;
 // The most one page holds: JournalStore::kChunk events, kSpillPageBytes bytes.
 constexpr std::uint64_t kPageEvents = 32;
-constexpr std::uint64_t kPageBytes = 32768;
+constexpr std::uint64_t kPageBytes = 32768 + 8;  // Event bytes plus the seal.
 
 // JournalPage as the page table file holds it: six native 64-bit words, the
 // record of page n at byte 48 * n.
