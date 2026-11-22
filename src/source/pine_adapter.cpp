@@ -12609,6 +12609,8 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         (!finite_positive(limit_price) && finite_positive(profit_ticks))
         || (!finite_positive(stop_price) && finite_positive(loss_ticks));
     const bool unresolved_relative = unresolved_trail || unresolved_ticks;
+    const bool pending_relative_only = unresolved_relative
+        && !finite_non_negative(limit_price) && !finite_non_negative(stop_price);
     // A void call leaves no relative leg for the entry's fill to resolve.
     if (unresolved_relative && !void_issue) {
         PendingRelativeExit pending;
@@ -12622,11 +12624,9 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
             [&](const PendingRelativeExit& value) {
                 return value.exit_id == exit_id && value.from_entry == from_entry;
         });
-        // The definition takes no source sequence of its own: declaring it
-        // submits nothing, so the sequences of every later request stay where
-        // they were. Its legs queue where they are submitted once the parent's
-        // fill resolves them. Only a slot the caller hands in gives it a share
-        // before that (compute_exit_reservation); no caller reserves one.
+        // The definition has no executable request until its parent fills. It
+        // stays unranked while it is the only unresolved exit; a later sibling
+        // assigns its reservation slot before sizing that sibling.
         if (existing == pending_relative_exits_.end()) {
             pending.reservation_sequence = reservation_sequence;
             pending_relative_exits_.push_back(std::move(pending));
@@ -12667,7 +12667,7 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         if (finite_non_negative(limit_price) || finite_non_negative(stop_price)) {
             // Continue below and submit the known absolute sibling.
         } else {
-        if (void_issue) return;
+        if (void_issue || (pending_relative_only && void_global_issue)) return;
         PlacementSnapshot shadow;
         shadow.family = has_trail_request ? PineOrderFamily::ExitTrail
             : (finite_positive(loss_ticks) ? PineOrderFamily::ExitStop
@@ -12689,7 +12689,7 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
                               profit_ticks, loss_ticks};
         shadow.sizing = sizing_snapshot();
         pending_write(source_shadow_pending_).push_back({std::move(shadow), exit_id});
-        return;
+        if (!materializing_relative_) return;
         }
     }
     if (std::isnan(qty) && qty_percent == 100.0) {
@@ -12863,12 +12863,16 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         if (parent != placement_.end()) observe_pending_parent(parent->second);
     }
     for (const auto& parent : pending_entries_) observe_pending_parent(parent.snapshot);
-    // A parked reversing entry is absent from the live and pending entry lists.
-    // Without it, the exit percentage falls back to the open position.
-    for (const auto& pending : pending_same_bar_commands_)
-        if (physical.signed_units != 0.0
-            && pending.snapshot.is_long != (physical.signed_units > 0.0))
+    // A same-bar entry is absent from the live and pending entry lists until
+    // the batch flush. While flat it is the pending parent of a relative
+    // exit; while a position is held, only an opposite-side parked entry
+    // needs this extra basis.
+    for (const auto& pending : pending_same_bar_commands_) {
+        if (physical.signed_units == 0.0
+            || pending.snapshot.is_long != (physical.signed_units > 0.0)) {
             observe_pending_parent(pending.snapshot);
+        }
+    }
     // TradingView's default strategy.exit(from_entry) under FIFO closes the
     // entry's own quantity -- the oldest lots first -- not the whole book
     // (tests/test_pyramiding_count_differential.cpp, P10 on its lab tv tape).
@@ -12947,6 +12951,30 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
     const double percentage_basis = ancestry_sized_target
         ? book_basis + completed_entry_units + pending_parent_units
         : live_reservation_basis;
+    // A named partial percentage definition has no reservation of its own
+    // while it is the only unresolved exit. If a later sibling is declared
+    // for the same pending entry, give the earlier definition its queue slot
+    // before sizing that sibling. This preserves the unresolved control's
+    // rank while still leaving the sibling only the remainder.
+    if (!pending_relative_only && !materializing_relative_
+        && !from_entry.empty() && !void_issue && !void_global_issue) {
+        for (auto& pending : pending_relative_exits_) {
+            if (pending.from_entry != from_entry || pending.reservation_sequence != 0
+                || !std::isnan(pending.qty)
+                || !std::isfinite(pending.qty_percent)
+                || pending.qty_percent >= 100.0 - internal::kFullPercentEps) {
+                continue;
+            }
+            pending.reservation_sequence = next_queue_sequence();
+            for (auto& shadow : source_shadow_pending_) {
+                if (shadow.snapshot.source_id == pending.exit_id
+                    && shadow.snapshot.from_entry == from_entry
+                    && shadow.snapshot.chain_origin_sequence == 0) {
+                    shadow.snapshot.chain_origin_sequence = pending.reservation_sequence;
+                }
+            }
+        }
+    }
     // The slot reserved for this call's own definition, if its caller holds
     // one. compute_exit_reservation widens reservation_sequence to the rank
     // the family's standing rows already have; a fresh leg does not carry
@@ -12964,6 +12992,25 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
     const bool reservation_ok = compute_exit_reservation(exit_id, from_entry, qty, qty_percent,
         live_reservation_basis, percentage_basis, reserved_exit_qty, reservation_sequence,
         whole_position_percent);
+    if (pending_relative_only && !materializing_relative_) {
+        if (!reservation_ok || !(reserved_exit_qty > internal::kQtyEpsilon)) {
+            const auto pending_exit = std::find_if(
+                pending_relative_exits_.begin(), pending_relative_exits_.end(),
+                [&](const PendingRelativeExit& value) {
+                    return value.exit_id == exit_id && value.from_entry == from_entry;
+                });
+            if (pending_exit != pending_relative_exits_.end())
+                pending_relative_exits_.erase(pending_exit);
+            pending_write(source_shadow_pending_).erase(
+                std::remove_if(source_shadow_pending_.begin(), source_shadow_pending_.end(),
+                    [&](const SourceShadowPending& row) {
+                        return row.snapshot.source_id == exit_id
+                            && row.snapshot.from_entry == from_entry;
+                    }),
+                source_shadow_pending_.end());
+        }
+        return;
+    }
     if (!reservation_ok) {
         if (only_opening) return;
         // clear_existing_exit_order ran before sizing on the legacy route:
@@ -15566,6 +15613,20 @@ void PineExecutionAdapter::materialize_relative_exits(
         double limit = kNaN;
         double stop = kNaN;
         double offset = value.trail_offset;
+        double resolved_qty = value.qty;
+        // A partial percentage declared before a named MARKET entry fills
+        // against the quantity that entry actually opened. The pending
+        // definition's reservation still supplies queue order; materializing
+        // the leg with this fill-time quantity keeps that reservation from
+        // being reinterpreted as a percentage of the whole cohort.
+        if (!value.from_entry.empty() && value.from_entry == opening.source_id
+            && value.reservation_sequence != 0 && std::isnan(resolved_qty)
+            && std::isfinite(value.qty_percent)
+            && value.qty_percent < 100.0 - internal::kFullPercentEps
+            && finite_positive(event.opened_units)) {
+            resolved_qty = quantize_close_units(
+                std::abs(event.opened_units), value.qty_percent);
+        }
         // `ticks` from the parent's fill, snapped to the grid on the side that
         // keeps the level at least that far away (the kernel's Directional
         // anchor rounding spells the same ladder point for an armed child).
@@ -15595,7 +15656,7 @@ void PineExecutionAdapter::materialize_relative_exits(
         try {
             exit_with_reservation_sequence(
                 value.exit_id, value.from_entry, limit, stop, value.trail_points, offset,
-                value.trail_price, value.qty_percent, value.comment, value.qty, value.oca_name,
+                value.trail_price, value.qty_percent, value.comment, resolved_qty, value.oca_name,
                 value.from_entry.empty() ? value.profit_ticks : kNaN,
                 value.from_entry.empty() ? value.loss_ticks : kNaN,
                 value.reservation_sequence);
