@@ -1,0 +1,2 @@
+# The registration rule of the private rows that read no private fixture, read back through a real CMake configure and the real CTest.
+add_test(NAME test_private_marker_rows_registration COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tests/test_private_marker_rows_registration.py "--cmake=${CMAKE_COMMAND}" "--ctest=${CMAKE_CTEST_COMMAND}" "--generator=${CMAKE_GENERATOR}" "--make-program=${CMAKE_MAKE_PROGRAM}" "--work-dir=${CMAKE_CURRENT_BINARY_DIR}/private-marker-rows-registration")
