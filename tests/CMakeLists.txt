@@ -7862,6 +7862,28 @@ set_property(TEST ${PINEFORGE_CI_VERIFY_SLICES}
     test_ci_preflight_slices_cover
     APPEND PROPERTY LABELS ci-script)
 
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    if(TARGET test_grid_close_tapes
+       AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/grid_close/w3bf02-e2-offgrid-qty/tv_trades.csv"
+       AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/syminfo_mincontract/eth-15/tv_trades.csv")
+        add_test(NAME test_entry_runner_explicit
+            COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/test_entry_quantity_runner.py
+                    $<TARGET_FILE:test_grid_close_tapes> --explicit-entry w3bf02-e2-offgrid-qty)
+    else()
+        add_test(NAME test_entry_runner_explicit COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/grid_close/w3bf02-e2-offgrid-qty/tv_trades.csv or its chart/symbol fixtures")
+        set_tests_properties(test_entry_runner_explicit PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+    endif()
+    if(TARGET test_margin_ledger_rules_tapes
+       AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_ledger_rules/flat-eth-fillexact-under/r1/tv_trades.csv")
+        add_test(NAME test_entry_runner_all_equity
+            COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/test_entry_quantity_runner.py
+                    $<TARGET_FILE:test_margin_ledger_rules_tapes> --equity-entry flat-eth-fillexact-under/r1/tv_trades.csv)
+    else()
+        add_test(NAME test_entry_runner_all_equity COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/margin_ledger_rules/flat-eth-fillexact-under/r1/tv_trades.csv")
+        set_tests_properties(test_entry_runner_all_equity PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+    endif()
+endif()
+
 # One file per lane in tests/lanes.d/<lane>.cmake (see tests/lanes.d/README.md).
 file(GLOB LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/lanes.d/*.cmake")
 list(SORT LANE_CMAKE)
@@ -8819,26 +8841,4 @@ foreach(_pf_registered_test IN LISTS _pf_registered_tests)
 endforeach()
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_custom_target(pineforge_pr_smoke DEPENDS ${PINEFORGE_PR_FAST_TESTS})
-endif()
-
-if(PINEFORGE_BUILD_SOURCE_LAYER)
-    if(TARGET test_grid_close_tapes
-       AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/grid_close/w3bf02-e2-offgrid-qty/tv_trades.csv"
-       AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/syminfo_mincontract/eth-15/tv_trades.csv")
-        add_test(NAME test_entry_runner_explicit
-            COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/test_entry_quantity_runner.py
-                    $<TARGET_FILE:test_grid_close_tapes> --explicit-entry w3bf02-e2-offgrid-qty)
-    else()
-        add_test(NAME test_entry_runner_explicit COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/grid_close/w3bf02-e2-offgrid-qty/tv_trades.csv or its chart/symbol fixtures")
-        set_tests_properties(test_entry_runner_explicit PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-    endif()
-    if(TARGET test_margin_ledger_rules_tapes
-       AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_ledger_rules/flat-eth-fillexact-under/r1/tv_trades.csv")
-        add_test(NAME test_entry_runner_all_equity
-            COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/test_entry_quantity_runner.py
-                    $<TARGET_FILE:test_margin_ledger_rules_tapes> --equity-entry flat-eth-fillexact-under/r1/tv_trades.csv)
-    else()
-        add_test(NAME test_entry_runner_all_equity COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/margin_ledger_rules/flat-eth-fillexact-under/r1/tv_trades.csv")
-        set_tests_properties(test_entry_runner_all_equity PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
-    endif()
 endif()
