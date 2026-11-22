@@ -10505,7 +10505,7 @@ bool NativeExecutionConsumer::check_fixed_subscription_input(
         const auto& accepted = *accepted_input_;
         const auto stamp = indexed ? subscription_input_bars_[index].timestamp
                                    : accepted.bar.timestamp;
-        const auto& interval = accepted.context.input_interval;
+        const auto& interval = accepted.interval;
         // Calendar aliases name the same slot. A provider stamp outside
         // those aliases must match the stamp actually accepted.
         if (accepted.context.input_index == index
@@ -10569,12 +10569,12 @@ bool NativeExecutionConsumer::feed_fixed_subscription(
             const int first_index = subscription.bucket_first_index;
             const auto first_ms = first_index >= 0
                 ? subscription.bucket_first_ms : bucket->bar.timestamp;
-            // Only the first observed bucket can hold the bar just added.
-            // Later rows from this drain have no such contribution.
-            const bool own_close = contributed && bucket->sub_bar_count > 0;
+            // The bar just added reaches this horizon. It closes the bucket it
+            // joined and every later row of this drain that no feed bar can
+            // join (a session-end sliver); a drain before it only reveals.
+            const bool own_close = contributed;
             const auto kind = own_close || !has_completion_input
                 ? NativeCompletionKind::Confirmed : NativeCompletionKind::LazyComplete;
-            contributed = false;
             input_ms = next_ms = 0;
             subscription.bucket_first_index = -1;
             subscription.bucket_first_ms = 0;
@@ -11251,7 +11251,7 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
     input_context.input_index = index;
     input_context.completes_script_interval =
         interval->next_period_open_ms >= script_interval->next_period_open_ms;
-    const AcceptedInput accepted{input_context, bar, bar.timestamp};
+    const AcceptedInput accepted{input_context, bar, bar.timestamp, *interval};
     struct AcceptedInputScope {
         NativeExecutionConsumer& consumer;
         const AcceptedInput* previous;
@@ -12088,8 +12088,8 @@ bool NativeExecutionConsumer::finalize_observed_tick_slot(
         }
         has_forming_ = false;
         forming_tick_volume_ = TickVolume{};
-        if (const auto* spec = spec_ptr(); equal && !failed() && spec
-            && spec->report_policy == NativeReportPolicy::KernelRecorded) {
+        // A calculation like the others: the report policy decides what is recorded.
+        if (equal && !failed()) {
             record_script_report_point(engine, interval.open_ms);
         }
         return !failed();

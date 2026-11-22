@@ -683,6 +683,8 @@ public:
 
     double runup() const { return open_trade_max_runup(0); }
     double drawdown() const { return open_trade_max_drawdown(0); }
+    double equity_peak_runup() const { return max_runup_; }
+    double equity_peak_drawdown() const { return max_drawdown_; }
 
 private:
     int host_ordinal_ = 0;
@@ -1840,6 +1842,43 @@ void partial_end_records_the_calculation() {
     BacktestEngine::free_report(&report);
 }
 
+// The equity extremes and the position peak measure the run, not its report:
+// the same partial end must leave them equal under either recording policy.
+// Setup copied from partial_end_equal_clock_and_policy (AfterCalculation,
+// finalize: the buy fills at 90000) and partial_end_records_the_calculation.
+void partial_end_extremes_do_not_depend_on_the_report_policy() {
+    struct Extremes {
+        double contracts;
+        double drawdown;
+        double runup;
+    };
+    std::vector<Extremes> measured;
+    for (auto policy : {NativeReportPolicy::HostRecorded, NativeReportPolicy::KernelRecorded}) {
+        TraceHost host;
+        auto value = spec();
+        value.close_execution = NativeCloseExecution::AfterCalculation;
+        value.report_policy = policy;
+        if (!setup(host, value)) return;
+        const Bar warmup = flat(0);
+        CHECK(host.stream_begin(&warmup, 1, "", ""));
+        host.callback = [](TraceHost& h) { CHECK(h.submit_market(buy()).status == SubmitStatus::Accepted); };
+        CHECK(host.stream_push_tick(TradeTick{60100, 1, 107, 3}));
+        CHECK(host.stream_advance_time(90000));
+        CHECK(host.stream_end(true));
+        CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+        if (!count(host, 2)) return;
+        const auto executed = fills(host);
+        CHECK(executed.size() == 1);
+        if (!executed.empty()) CHECK(executed[0].effective_time_ms() == 90000);
+        measured.push_back({host.max_contracts_held_all(), host.equity_peak_drawdown(),
+                            host.equity_peak_runup()});
+    }
+    if (measured.size() != 2) return;
+    near(measured[0].contracts, measured[1].contracts);
+    near(measured[0].drawdown, measured[1].drawdown);
+    near(measured[0].runup, measured[1].runup);
+}
+
 void partial_end_does_not_seal_coarser_script() {
     for (auto policy : {NativeCloseExecution::NextEligiblePoint, NativeCloseExecution::AfterCalculation}) {
         TraceHost host;
@@ -2118,6 +2157,9 @@ int main() {
     run_case("partial-end-records-the-calculation",
              "partial end records the calculation in the kernel report",
              partial_end_records_the_calculation);
+    run_case("partial-end-extremes-do-not-depend-on-the-report-policy",
+             "partial end folds the extremes under every report policy",
+             partial_end_extremes_do_not_depend_on_the_report_policy);
     run_case("D5-partial-child-does-not-force-coarser-callback",
              "D5 partial child does not force coarser callback",
              partial_end_does_not_seal_coarser_script);

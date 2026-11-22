@@ -2167,12 +2167,12 @@ private:
     std::size_t driver_mark_count_ = 0;
     std::uint64_t applied_events_ = 0;
     NativeDecisionContext callback_context_{};
-    // Stack-borrowed only while the validated input is being consumed.
-    // Capture the stamp by value before any callback can observe the input.
+    // Borrowed while the input is consumed; stamp and interval are copies no callback can edit.
     struct AcceptedInput {
         const NativeInputContext& context;
         const Bar& bar;
         std::int64_t stamp;
+        native_calendar::NativeInterval interval;
     };
     const AcceptedInput* accepted_input_ = nullptr;
     std::optional<NativeInputContext> input_callback_context_;

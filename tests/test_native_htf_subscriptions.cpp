@@ -1416,6 +1416,37 @@ void check_exchange_day_series(const ExchangeDayRoute& route) {
         route.aux != 0 ? day::bars(route.aux, route.early_close) : std::vector<Bar>{});
 }
 
+void test_fixed_period_session_end_sliver() {
+    namespace day = native_fixed_period_fixture::exchange;
+    scenario = "fixed-period session-end sliver closes with its covering input";
+    const auto bars = day::bars(30, day::kCloseMinute);
+    auto spec = base_spec("30", "30", "native-fixed-session-end-sliver");
+    spec.type = "stock";
+    spec.timezone = day::kTimezone;
+    spec.session = day::kSession;
+    NativeTimeframeSubscription series;
+    series.tf = "75";
+    series.authoritative_bars = day::native(75, day::kCloseMinute);
+    spec.subscriptions.push_back(series);
+
+    SeriesHost host;
+    host.probes = 1;
+    const auto setup = host.configure_native(spec);
+    CHECK(setup.status == NativeSetupStatus::Applied);
+    if (setup.status != NativeSetupStatus::Applied) return;
+    host.run(bars.data(), static_cast<int>(bars.size()), "30", "30",
+             false, 4, MagnifierDistribution::ENDPOINTS);
+    CHECK(host.last_error().empty());
+
+    const auto sliver_open = day::at(0, 15 * 60 + 45);
+    const auto sliver = std::find_if(host.deliveries.begin(), host.deliveries.end(),
+        [sliver_open](const Delivery& delivery) { return delivery.bar.timestamp == sliver_open; });
+    CHECK(sliver != host.deliveries.end());
+    if (sliver == host.deliveries.end()) return;
+    CHECK(sliver->context.delivered_at_ms == day::at(0, 15 * 60 + 30));
+    CHECK(sliver->context.completion == NativeCompletionKind::Confirmed);
+}
+
 // The session-day's last accepted input ends the requested period it leaves
 // open: the 75-minute period that opened at 12:00 is delivered on the last
 // input of a 13:00 (and of a 12:30) close, when the next accepted input opens
@@ -2032,7 +2063,7 @@ void test_fixed_period_clipped_input_label() {
     CHECK(delivery.context.delivered_at_ms == 1704214800000LL);  // 17:00 UTC
 }
 
-enum class SubscriptionInputMismatch { Timestamp, Index };
+enum class SubscriptionInputMismatch { Timestamp, Index, TimestampAndInterval };
 
 class SubscriptionInputMismatchHost final : public NativeStrategyHost {
 public:
@@ -2047,13 +2078,15 @@ public:
 
     void on_native_input(const Bar&, const NativeInputContext& context) override {
         if (++inputs_seen != at_input_) return;
-        // Change one identity field after chart admission. The tape is owned
-        // by this test, and the context is the consumer's mutable stack local.
-        if (mismatch_ == SubscriptionInputMismatch::Timestamp) {
-            indexed_bar_.timestamp = foreign_timestamp_;
-        } else {
+        // The tape is owned by this test, and the context is a mutable local.
+        if (mismatch_ == SubscriptionInputMismatch::Index) {
             const_cast<NativeInputContext&>(context).input_index = 1 - context.input_index;
+            return;
         }
+        indexed_bar_.timestamp = foreign_timestamp_;
+        if (mismatch_ == SubscriptionInputMismatch::TimestampAndInterval)
+            const_cast<NativeInputContext&>(context).input_interval.eligible_open_ms =
+                foreign_timestamp_;
     }
 
     void on_native_timeframe_bar(const Bar&, const NativeTimeframeBarContext& context) override {
@@ -2116,9 +2149,17 @@ void test_fixed_period_foreign_provider_label() {
 }
 
 void test_fixed_period_projected_input_identity(SubscriptionInputMismatch mismatch) {
-    scenario = mismatch == SubscriptionInputMismatch::Timestamp
-        ? "fixed-period lookahead rejects a foreign input timestamp"
-        : "fixed-period lookahead rejects a foreign input index";
+    switch (mismatch) {
+    case SubscriptionInputMismatch::Timestamp:
+        scenario = "fixed-period lookahead rejects a foreign input timestamp";
+        break;
+    case SubscriptionInputMismatch::Index:
+        scenario = "fixed-period lookahead rejects a foreign input index";
+        break;
+    case SubscriptionInputMismatch::TimestampAndInterval:
+        scenario = "fixed-period lookahead rejects a foreign timestamp even with a changed interval";
+        break;
+    }
     Bar bars[] = {
         {100, 101, 99, 100, 1, utc_ms(2024, 1, 2, 0, 0)},
         {110, 111, 109, 110, 1, utc_ms(2024, 1, 2, 1, 0)},
@@ -2349,6 +2390,8 @@ int main(int argc, char** argv) {
             test_fixed_period_late_completion_case(true);
         } else if (std::string(argv[2]) == "late-fixed-subscription-control") {
             test_fixed_period_late_completion_case(false);
+        } else if (std::string(argv[2]) == "session-end-sliver") {
+            test_fixed_period_session_end_sliver();
         } else if (std::string(argv[2]) == "auxiliary-no-feed-bar-tail") {
             test_fixed_period_auxiliary_no_feed_bar_tail();
         } else if (std::string(argv[2]) == "clipped-session-subscription-identity") {
@@ -2363,6 +2406,7 @@ int main(int argc, char** argv) {
         } else if (std::string(argv[2]) == "projected-input-identity") {
             test_fixed_period_projected_input_identity(SubscriptionInputMismatch::Timestamp);
             test_fixed_period_projected_input_identity(SubscriptionInputMismatch::Index);
+            test_fixed_period_projected_input_identity(SubscriptionInputMismatch::TimestampAndInterval);
         } else if (std::string(argv[2]) == "reopen-input-completion") {
             test_fixed_period_reopen_input();
         } else if (std::string(argv[2]) == "identity-between-deliveries") {
@@ -2373,7 +2417,7 @@ int main(int argc, char** argv) {
             std::printf(
                 "usage: test_native_htf_subscriptions "
                 "[--only off-grid-classification|late-fixed-subscription-completion|"
-                "late-fixed-subscription-control|auxiliary-no-feed-bar-tail|"
+                "late-fixed-subscription-control|session-end-sliver|auxiliary-no-feed-bar-tail|"
                 "clipped-session-subscription-identity|auxiliary-prefix-own-close|"
                 "gap-input-completion|provider-input-identity|projected-input-identity|"
                 "reopen-input-completion|identity-between-deliveries|live-input-identity]\n");
@@ -2386,7 +2430,7 @@ int main(int argc, char** argv) {
         std::printf(
             "usage: test_native_htf_subscriptions "
             "[--only off-grid-classification|late-fixed-subscription-completion|"
-            "late-fixed-subscription-control|auxiliary-no-feed-bar-tail|"
+            "late-fixed-subscription-control|session-end-sliver|auxiliary-no-feed-bar-tail|"
             "clipped-session-subscription-identity|auxiliary-prefix-own-close|"
             "gap-input-completion|provider-input-identity|projected-input-identity|"
             "reopen-input-completion|identity-between-deliveries|live-input-identity]\n");
@@ -2409,6 +2453,7 @@ int main(int argc, char** argv) {
     test_fixed_period_fine_primary_and_sparse_boundary();
     test_fixed_period_confirmed_stream_and_tick_contract();
     test_fixed_period_exchange_early_close();
+    test_fixed_period_session_end_sliver();
     test_fixed_period_early_close_gate();
     test_fixed_period_session_hole_is_not_a_close();
     test_fixed_period_late_completion_case(true);
@@ -2422,6 +2467,7 @@ int main(int argc, char** argv) {
     test_fixed_period_subscription_input_identity();
     test_fixed_period_projected_input_identity(SubscriptionInputMismatch::Timestamp);
     test_fixed_period_projected_input_identity(SubscriptionInputMismatch::Index);
+    test_fixed_period_projected_input_identity(SubscriptionInputMismatch::TimestampAndInterval);
     test_fixed_period_identity_between_deliveries();
     test_fixed_period_live_input_identity();
     test_fixed_period_off_grid_classification();
