@@ -52,7 +52,7 @@ def test_runner_lot_declarations(tmp_path):
             assert actual == expected, (overrides, actual, expected)
 
 
-def test_flat_mincontract_requires_a_lot_size(tmp_path):
+def test_flat_mincontract_must_be_positive_finite_number(tmp_path):
     import pytest
 
     for value in (False, True, "0.01", 0, -1, math.nan, math.inf, 10**400):
