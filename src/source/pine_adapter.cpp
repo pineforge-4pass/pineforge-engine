@@ -11666,9 +11666,9 @@ bool PineExecutionAdapter::entry_order_working(const SourceId* id) const {
     return false;
 }
 
-// Whether the book holds a lot `id` opened. The cohort facts cannot answer
-// alone: a reversal by an entry of the reversed side's own id clears them
-// after its opening records the new lot (purge_brackets_after_applied_reversal).
+// Whether the book holds a lot `id` opened, read from the book's open lots by
+// entry label, not from the cohort facts. Since 1.8.0 a reversal by an entry
+// of the reversed side's own id keeps its cohort credit.
 bool PineExecutionAdapter::open_lot_of(const SourceId& id) const {
     auto& work = pending_scan_work_.open_lot;
     observe_pending_scan(work);
