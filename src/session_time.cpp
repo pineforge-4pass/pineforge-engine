@@ -1,6 +1,7 @@
 #include <pineforge/session_time.hpp>
 #include <pineforge/native_calendar.hpp>
 #include <pineforge/na.hpp>
+#include <pineforge/run_failure.hpp>
 #include <pineforge/timeframe.hpp>
 #include "timezone.hpp"
 #include <algorithm>
@@ -382,7 +383,8 @@ static int64_t zoned_calendar_boundary_ms(const std::tm& date, int retry_hours =
         if (seconds != static_cast<time_t>(-1) || error == 0)
             return static_cast<int64_t>(seconds) * 1000;
         if (hour == retry_hours)
-            throw std::system_error(error, std::generic_category(), "mktime");
+            throw coded<std::system_error>(RunFailureCode::engine_unclassified_error, {},
+                std::system_error(error, std::generic_category(), "mktime"));
     }
 }
 
