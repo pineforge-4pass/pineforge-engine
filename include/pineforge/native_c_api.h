@@ -1028,10 +1028,10 @@ typedef enum pf_native_path_phase_e {
  *  `NativeCompletionKind`: #pf_native_decision_v1::completion and the
  *  `completion` argument of #pf_native_callbacks_v1::on_timeframe_bar. */
 typedef enum pf_native_completion_kind_e {
-    PF_NATIVE_COMPLETION_KIND_CONFIRMED         = 0, /**< Its own last contributing bar. */
-    PF_NATIVE_COMPLETION_KIND_LAZY_COMPLETE     = 1, /**< The NEXT interval's first input: a
-                                                      *   session-clipped bar, or a hole over
-                                                      *   the last slot. */
+    PF_NATIVE_COMPLETION_KIND_CONFIRMED         = 0, /**< Its own last contributing bar reached its close,
+                                                      *   clipped or not (a sliver: the bar that covers it). */
+    PF_NATIVE_COMPLETION_KIND_LAZY_COMPLETE     = 1, /**< A later input revealed the close, or an opted-in
+                                                      *   batch horizon sealed a script interval. */
     PF_NATIVE_COMPLETION_KIND_SESSION_SHORTENED = 2, /**< The session close clipped it. */
     PF_NATIVE_COMPLETION_KIND_PARTIAL_FINALIZED = 3  /**< A stream end finalized a forming
                                                       *   observed slot. */
@@ -2523,8 +2523,8 @@ typedef struct pf_native_callbacks_v1 {
                       const pf_native_decision_v1* at);
     /** One completed bucket of a declared series. `completion` is a
      *  #pf_native_completion_kind_t: CONFIRMED when the bucket's own last
-     *  contributing bar closed it, LAZY_COMPLETE when the next period's first
-     *  input did. */
+     *  contributing bar closed it (for a bucket no bar falls in, the bar that
+     *  covers it), LAZY_COMPLETE when a later input revealed the close. */
     int (*on_timeframe_bar)(void* user, const pf_bar_t* bar, uint32_t subscription,
                             uint32_t completion, int64_t delivered_at_ms);
     int (*on_margin_call)(void* user, const pf_native_event_v1* margin_call);

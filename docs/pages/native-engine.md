@@ -475,10 +475,10 @@ timeframe arguments against the spec, preflights and pumps the batch exactly
 like the plain overload. `inputs` / `syminfo` / `overrides` are carried only as
 `NativeBeginArgs` fields to `prepare_native_begin` — the overrides as the
 opaque `overrides_opaque` (`native_host.hpp:778`), which the kernel forwards
-and never dereferences. `tests/test_selected_window_routes.cpp` checks that a
-configured native host completes the rich route. Use the plain overload when
-these extra arguments are not needed. Source **mutation** through the setters
-is refused (below).
+and never dereferences. `tests/test_selected_window_routes.cpp` checks that a configured native host completes
+the rich route, `tests/test_native_adapter_lowering_l1.cpp` that `syminfo` and a non-null `inputs` pointer
+arrive, and `tests/test_run_inputs_overrides_l4d.cpp` that a non-null `overrides` is applied. Use the plain
+overload when these extra arguments are not needed. Source **mutation** through the setters is refused (below).
 
 ## Native requests
 
