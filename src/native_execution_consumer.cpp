@@ -15560,4 +15560,32 @@ bool NativeExecutionConsumer::applied_open_is_current(const NativeCoordinate& co
             && modeled_open_of_floored_bucket(coordinate, decision_floor()));
 }
 
+// The placement feed_fixed_subscription makes for its own observations, statement for
+// statement, for a host whose own series keep a fixed clock: a label in a break can name an
+// interval that still has traded time. A label before its slot's first traded instant moves
+// onto that instant, an instant inside a break onto the next span start of its session day,
+// and neither passes the horizon. A change to either copy must be made to both. At the end
+// of the file, like the definition above, so that no cited line moves.
+std::int64_t NativeExecutionConsumer::fixed_clock_seat(
+        std::int64_t stamp_ms, std::int64_t eligible_open_ms, std::int64_t horizon_ms) const {
+    auto observed_ms = stamp_ms;
+    if (observed_ms < horizon_ms) {
+        observed_ms = std::min(horizon_ms, std::max(observed_ms, eligible_open_ms));
+        if (observed_ms < horizon_ms && !calendar_.all_day()
+            && !native_calendar::in_session(calendar_, observed_ms, calendar_memo_)) {
+            const auto day = native_calendar::session_day_at(calendar_, observed_ms, calendar_memo_);
+            const auto stamp = observed_ms;
+            observed_ms = horizon_ms;
+            if (day) {
+                for (const auto& span : day->spans) {
+                    if (span.first <= stamp) continue;
+                    observed_ms = std::min(horizon_ms, span.first);
+                    break;
+                }
+            }
+        }
+    }
+    return observed_ms;
+}
+
 }  // namespace pineforge::engine_script_run_v20

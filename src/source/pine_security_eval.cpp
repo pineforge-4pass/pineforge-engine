@@ -1005,8 +1005,8 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         if (!chart) return;
         const auto previous_chart = pine.native_gap_chart_open;
         pine_begin_native_fixed_chart(state, chart->open_ms);
+        std::optional<native_calendar::NativeInterval> input;  // resolved by input_horizon()
         const auto input_horizon = [&] {
-            std::optional<native_calendar::NativeInterval> input;
             if (calling) {
                 const auto calendar = native_calendar::parse_session(syminfo_.session, syminfo_.timezone);
                 const auto tf = native_calendar::parse_timeframe(security_input_tf_);
@@ -1154,15 +1154,19 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         }
         // A tick or an out-of-session input supplies no confirmed horizon.
         const auto horizon = input_horizon();
-        if (horizon <= input_bar.timestamp) return;
-        if (!state.fixed_clock.cursor_ms) state.fixed_clock.cursor_ms = input_bar.timestamp;
-        pine_drain_native_fixed_security(state, input_bar.timestamp);
-        state.aggregator.observe_fixed(state.fixed_clock, input_bar);
+        if (!input || horizon <= input_bar.timestamp) return;
+        Bar seat = input_bar;  // a label outside traded time is seated as the kernel clock seats it
+        seat.timestamp = consumer.fixed_clock_seat(seat.timestamp, input->eligible_open_ms, horizon);
+        if (!state.fixed_clock.cursor_ms && seat.timestamp >= horizon) return;  // starts no clock
+        if (!state.fixed_clock.cursor_ms) state.fixed_clock.cursor_ms = seat.timestamp;
+        pine_drain_native_fixed_security(state, seat.timestamp);
+        if (seat.timestamp >= horizon) return;  // no traded time before the horizon: not observed
+        state.aggregator.observe_fixed(state.fixed_clock, seat);
         ++state.feed_count;
         // This input and its accepted successor say whether it was its
         // session-day's last: the early-close context of the bucket it leaves open.
         pine_drain_native_fixed_security(
-            state, horizon, input_bar.timestamp, security_next_input_ms_);
+            state, horizon, seat.timestamp, security_next_input_ms_);
         return;
     }
 

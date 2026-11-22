@@ -3086,6 +3086,12 @@ public:
     // same site-and-code key as record_run_warning, so a repeat adds nothing,
     // and the array is rendered again when the key is new.
     void record_live_run_warning(int site_id, std::string code, std::string args_json);
+    // The instant a fixed clock observes an input at: its label `stamp_ms`, moved onto traded
+    // time of this run's calendar and never past `horizon_ms`, the end of what the input is
+    // accepted for. `eligible_open_ms` is the first traded instant of the input's slot. For a
+    // host whose own series keep a fixed clock (defined at the end of the source file).
+    std::int64_t fixed_clock_seat(std::int64_t stamp_ms, std::int64_t eligible_open_ms,
+                                  std::int64_t horizon_ms) const;
 };
 
 // The same lazy backing used by RunCommandScratch's Book binding. Kept in
