@@ -343,6 +343,7 @@
     "native terms roster units are not finite",
     "native time advance regresses the decision floor",
     "native timeframe subscription feed was refused",
+    "native timeframe subscription input identity mismatch",
     "native timeframe subscription names an undeclared auxiliary feed",
     "native timeframe subscription names an undeclared instrument feed",
     "native timeframe subscription parse failed at begin",
