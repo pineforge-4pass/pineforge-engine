@@ -2240,8 +2240,10 @@ private:
         // entry order was working, which TradingView voids
         // (PlacementSnapshot::void_global_issue): no entry's fill arms it.
         bool void_global = false;
-        // A queue slot reserved for the definition; zero when it holds none,
-        // and the parent's fill then ranks its legs as they are submitted.
+        // A queue slot reserved for the definition; zero until the call has
+        // admitted a positive share. The slot survives until the parent's
+        // fill and ranks the materialized legs where the definition was
+        // created.
         std::uint64_t reservation_sequence = 0;
     };
 
