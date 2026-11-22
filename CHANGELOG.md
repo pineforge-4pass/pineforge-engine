@@ -7,6 +7,8 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased (1.15.0)
 
+- `request.security_lower_tf` does less bookkeeping for each lower-timeframe bar it delivers, and a script with a `request.*` call does less of it on every chart bar; results are unchanged. (#965)
+
 ### Fixed
 
 - Clearing or installing `3551W` no longer removes or replaces monthly prices. Without its own feed, the request groups bars by 3,551 weeks.

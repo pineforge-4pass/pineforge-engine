@@ -967,13 +967,31 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         // each per-sub-bar value. The counter is incremented after every
         // dispatch so callers see 0, 1, ..., ratio-1 in sequence.
         pine.lower_tf_sub_bar_index = 0;
+        // Reuse the fixed facts for this site. Each callback still gets its
+        // own frame and body caller, visible to any nested request.
+        const int sec_id = state.sec_id;
+        PineRequestDelivery delivery;
+        delivery.publication = delivery.publication_present = delivery.actual_complete = true;
         for (const auto& synthetic_bar : synthetic_bars) {
             state.feed_count++;
             state.current_bar = synthetic_bar;
             state.current_sub_bar_count = 1;
             state.eval_complete_count++;
-            dispatch_pine_request(state, synthetic_bar, true,
-                                  state.eval_complete_count - 1, true);
+            const auto slot = state.eval_complete_count - 1;
+            if (security_history_publication_replay_ || pine.request_selection_enabled
+                || state.sec_id != sec_id) {
+                dispatch_pine_request(state, synthetic_bar, true, slot, true);
+            } else {
+                delivery.requested_slot = slot;
+                delivery.caller = request_active_caller_;
+                delivery.caller_valid = delivery.caller != 0;
+                {
+                    PineRequestDeliveryScope delivery_scope(
+                        *this, sec_id, delivery, synthetic_bar.timestamp);
+                    dispatch_security_eval(state, synthetic_bar, true, slot);
+                }
+                pine.last_request_delivery = delivery;
+            }
             pine.lower_tf_sub_bar_index++;
         }
         return;

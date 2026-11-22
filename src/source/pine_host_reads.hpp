@@ -130,5 +130,13 @@ inline bool run_aggregates_input_bars(const NativeExecutionConsumer& consumer,
 void take_run_facts(NativeExecutionConsumer& consumer, const PineExecutionAdapter& adapter,
                     std::uint64_t run);
 
+#ifndef NDEBUG
+// Debug-only counts on this thread: ordered searches of the request caller
+// catalog, and rows it was asked to add. Defined in pine_strategy_host.cpp
+// and read by tests/test_lower_tf_caller_work.cpp. Nothing else reads them.
+extern thread_local std::uint64_t request_caller_lookups_for_test;
+extern thread_local std::uint64_t request_caller_insertions_for_test;
+#endif
+
 }  // namespace detail
 }  // namespace pineforge::source

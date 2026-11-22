@@ -1941,6 +1941,12 @@ source::PineRequestDeliveryScope::~PineRequestDeliveryScope() {
     host_.pop_request_delivery();
 }
 
+#ifndef NDEBUG
+// Declared in pine_host_reads.hpp for the control that reads them.
+thread_local std::uint64_t source::detail::request_caller_lookups_for_test = 0;
+thread_local std::uint64_t source::detail::request_caller_insertions_for_test = 0;
+#endif
+
 bool source::PineStrategyHost::RequestCallerIds::same_series(
         const RequestCallerKey& a, const RequestCallerKey& b) noexcept {
     return a.kind == b.kind && a.first == b.first && a.third == b.third
@@ -1954,21 +1960,139 @@ std::uint64_t source::PineStrategyHost::RequestCallerIds::caller_at(
     return run.caller + offset * run.stride;
 }
 
+// Counts the catalogs built and cleared on any thread. A hint taken under an
+// earlier count may name released rows, so it is never read again.
+// (<atomic> comes with pineforge/engine.hpp.)
+static std::atomic<std::uint64_t> request_caller_generation{1};
+
+// Per entry: the row at or before the last key this thread placed (`at`), the
+// row after it (`next`), and the row count at which the two were neighbours.
+// A catalog releases rows only all at once and never changes a key, so `at`
+// stays one of its rows for the whole generation.
+struct source::PineStrategyHost::RequestCallerIds::Hint {
+    static constexpr std::size_t entries = 13;
+    // One entry per key kind below 5; the requested bodies (kinds 5 and 6)
+    // spread over the other eight by site or instance. Two keys that share
+    // an entry only cost a search.
+    static std::size_t entry(std::uint8_t kind, std::int64_t first) noexcept {
+        return kind < 5 ? kind : 5 + (static_cast<std::uint64_t>(first) & 7);
+    }
+    using Position = decltype(RequestCallerIds::runs_)::iterator;
+    const RequestCallerIds* owner = nullptr;
+    std::uint64_t generation = 0;
+    bool known[entries] = {};
+    std::size_t rows[entries] = {};
+    Position at[entries], next[entries];
+};
+
+source::PineStrategyHost::RequestCallerIds::Hint&
+source::PineStrategyHost::RequestCallerIds::hint() noexcept {
+    static thread_local Hint mine;
+    return mine;
+}
+
+void source::PineStrategyHost::RequestCallerIds::retire() noexcept {
+    request_caller_generation.fetch_add(1, std::memory_order_relaxed);
+}
+
+// This thread's hint when its two rows are neighbours with `key` between
+// them (at <= key < next), so `next` is upper_bound(key) and `at` is the row
+// before it. Null when the ordinary search has to run.
+source::PineStrategyHost::RequestCallerIds::Hint*
+source::PineStrategyHost::RequestCallerIds::bracket(
+        const RequestCallerKey& key) const noexcept {
+    Hint& mine = hint();
+    const std::size_t index = Hint::entry(key.kind, key.first);
+    if (mine.owner != this || !mine.known[index]
+        || mine.generation != request_caller_generation.load(std::memory_order_relaxed))
+        return nullptr;
+    if (mine.rows[index] != runs_.size()) {
+        // A row was added since: read the row after `at` again.
+        mine.next[index] = std::next(mine.at[index]);
+        mine.rows[index] = runs_.size();
+    }
+    const auto following = mine.next[index];
+    if (key < mine.at[index]->first
+        || (following != runs_.end() && !(key < following->first)))
+        return nullptr;
+    return &mine;
+}
+
 std::optional<std::uint64_t> source::PineStrategyHost::RequestCallerIds::find(
         const RequestCallerKey& key) const noexcept {
-    auto next = runs_.upper_bound(key);
-    if (next == runs_.begin()) return std::nullopt;
-    const auto& entry = *std::prev(next);
-    if (!same_series(entry.first, key) || key.second > entry.second.last)
+    auto covering = runs_.end();
+    if (const Hint* placed = bracket(key)) {
+        covering = placed->at[Hint::entry(key.kind, key.first)];
+    } else {
+#ifndef NDEBUG
+        ++detail::request_caller_lookups_for_test;
+#endif
+        auto next = runs_.upper_bound(key);
+        if (next == runs_.begin()) return std::nullopt;
+        covering = std::prev(next);
+    }
+    if (!same_series(covering->first, key) || key.second > covering->second.last)
         return std::nullopt;
-    return caller_at(entry.first, entry.second, key.second);
+    return caller_at(covering->first, covering->second, key.second);
+}
+
+bool source::PineStrategyHost::RequestCallerIds::append_static_next(
+        int sec_id, std::int64_t slot, std::int64_t phase,
+        std::uint64_t caller) noexcept {
+    // Every fact is read from the live rows: the hint is this catalog's and
+    // this generation's, no row was added since its two rows were neighbours,
+    // its row is this site's run in this phase ending one slot earlier with
+    // consecutive callers, and no later row of the site follows it.
+    Hint& mine = hint();
+    constexpr std::uint8_t kind = 5;
+    const std::size_t index = Hint::entry(kind, sec_id);
+    if (mine.owner != this || !mine.known[index] || mine.rows[index] != runs_.size()
+        || mine.generation != request_caller_generation.load(std::memory_order_relaxed))
+        return false;
+    const RequestCallerKey& first = mine.at[index]->first;
+    Run& run = mine.at[index]->second;
+    if (first.kind != kind || first.first != sec_id || first.third != phase
+        || first.occurrence != 0 || !first.text.empty() || slot - 1 != run.last
+        || (run.stride != 1 && first.second != run.last)
+        || caller != caller_at(first, run, run.last) + 1)
+        return false;
+    const auto beyond = mine.next[index];
+    if (beyond != runs_.end() && beyond->first.kind == kind && beyond->first.first == sec_id)
+        return false;
+    run.last = slot;
+    run.stride = 1;
+    return true;
 }
 
 void source::PineStrategyHost::RequestCallerIds::emplace(
         const RequestCallerKey& key, std::uint64_t caller) {
-    auto next = runs_.upper_bound(key);
+#ifndef NDEBUG
+    ++detail::request_caller_insertions_for_test;
+#endif
+    Hint* const placed = bracket(key);
+#ifndef NDEBUG
+    if (placed == nullptr) ++detail::request_caller_lookups_for_test;
+#endif
+    const std::size_t index = Hint::entry(key.kind, key.first);
+    auto next = placed ? placed->next[index] : runs_.upper_bound(key);
+    // `at` now holds or precedes `key`, and `next` is the row after it.
+    const auto remember = [&](decltype(next) at) {
+        Hint& mine = hint();
+        const auto generation =
+            request_caller_generation.load(std::memory_order_relaxed);
+        if (mine.owner != this || mine.generation != generation) {
+            mine = Hint{};
+            mine.owner = this;
+            mine.generation = generation;
+        }
+        mine.known[index] = true;
+        mine.at[index] = at;
+        mine.next[index] = next;
+        mine.rows[index] = runs_.size();
+    };
     if (next != runs_.begin()) {
-        auto& entry = *std::prev(next);
+        const auto prior = placed ? placed->at[index] : std::prev(next);
+        auto& entry = *prior;
         const RequestCallerKey& first = entry.first;
         Run& run = entry.second;
         if (same_series(first, key)) {
@@ -1980,6 +2104,7 @@ void source::PineStrategyHost::RequestCallerIds::emplace(
                 if (caller == caller_at(first, run, run.last) + stride) {
                     run.last = key.second;
                     run.stride = stride;
+                    remember(prior);
                     return;
                 }
             }
@@ -2000,12 +2125,16 @@ void source::PineStrategyHost::RequestCallerIds::emplace(
                 const std::int64_t left_last = right.second - 1;
                 // Allocate the tail before changing the old run. A failed
                 // insertion must retain every previously assigned identity.
-                runs_.emplace(std::move(right), tail);
+                // The tail is now the row after `key`.
+                next = runs_.emplace(std::move(right), tail).first;
                 run.last = left_last;
             }
         }
     }
-    runs_.emplace(key, Run{caller, key.second, 0});
+    // `next` is upper_bound(key), so the new row goes in without a search.
+    const auto rows = runs_.size();
+    const auto added = runs_.emplace_hint(next, key, Run{caller, key.second, 0});
+    if (runs_.size() != rows) remember(added);
 }
 
 std::uint64_t source::PineStrategyHost::request_caller_id(
@@ -2017,10 +2146,22 @@ std::uint64_t source::PineStrategyHost::request_caller_id(
     return caller;
 }
 
+// find(open_ms), answered from the last row when that settles it: a forward
+// run asks for its newest chart bar or for a later one.
+template <typename Rows>
+static auto newest_or_find(Rows& rows, std::int64_t open_ms) {
+    if (!rows.empty()) {
+        const auto newest = std::prev(rows.end());
+        if (newest->first == open_ms) return newest;
+        if (newest->first < open_ms) return rows.end();
+    }
+    return rows.find(open_ms);
+}
+
 std::uint64_t source::PineStrategyHost::request_chart_caller_for(
         std::int64_t script_open_ms) {
     if (script_open_ms == std::numeric_limits<std::int64_t>::min()) return 0;
-    auto found = request_chart_callers_.find(script_open_ms);
+    auto found = newest_or_find(request_chart_callers_, script_open_ms);
     return found == request_chart_callers_.end() ? 0 : found->second.caller;
 }
 
@@ -2028,7 +2169,8 @@ std::uint64_t source::PineStrategyHost::request_input_caller(
         const NativeInputContext& context) {
     if (pine_security_states_.empty() && foreign_security_sites_.empty()
         && !runtime_contexts().history_enabled()) return 0;
-    auto chart_row = request_chart_callers_.find(context.script_interval.open_ms);
+    auto chart_row = newest_or_find(
+        request_chart_callers_, context.script_interval.open_ms);
     if (chart_row == request_chart_callers_.end()) {
         RequestCallerKey chart_key;
         chart_key.kind = 2; // chart caller admitted from a real input
@@ -2057,7 +2199,8 @@ std::uint64_t source::PineStrategyHost::request_input_caller(
         const NativeDecisionContext& context) {
     if (pine_security_states_.empty() && foreign_security_sites_.empty()
         && !runtime_contexts().history_enabled()) return 0;
-    auto chart_row = request_chart_callers_.find(context.script_interval.open_ms);
+    auto chart_row = newest_or_find(
+        request_chart_callers_, context.script_interval.open_ms);
     if (chart_row == request_chart_callers_.end()) {
         RequestCallerKey chart_key;
         chart_key.kind = 2;
@@ -2088,7 +2231,8 @@ std::uint64_t source::PineStrategyHost::request_body_caller(
         const NativeDecisionContext& context) {
     if (pine_security_states_.empty() && foreign_security_sites_.empty()
         && !runtime_contexts().history_enabled()) return 0;
-    auto chart_row = request_chart_callers_.find(context.script_interval.open_ms);
+    auto chart_row = newest_or_find(
+        request_chart_callers_, context.script_interval.open_ms);
     if (chart_row == request_chart_callers_.end()) {
         RequestCallerKey chart_key;
         chart_key.kind = 2; // quiet/body caller with an actual coordinate
@@ -2225,19 +2369,20 @@ void source::PineStrategyHost::set_request_caller_scope(
 
 void source::PineStrategyHost::push_request_delivery(
         int sec_id, const PineRequestDelivery& delivery, std::int64_t body_open_ms) {
-    RequestDeliveryFrame frame;
-    frame.sec_id = sec_id;
-    frame.delivery = delivery;
-    frame.body_open_ms = body_open_ms;
-    if (delivery.caller_valid && delivery.requested_slot >= 0) {
-        RequestCallerKey key;
-        key.kind = 5; // a static evaluator's real requested body/phase
-        key.first = sec_id;
-        key.second = delivery.requested_slot;
-        key.third = static_cast<std::int64_t>(detail::run_phase(*this));
-        frame.body_caller = request_caller_id(key);
+    const auto slot = delivery.requested_slot;
+    std::uint64_t body_caller = 0;
+    if (delivery.caller_valid && slot >= 0) {
+        // A callback can fail the run, so read the live phase.
+        const auto phase = static_cast<std::int64_t>(detail::run_phase(*this));
+        if (!delivery.replay
+            && request_caller_ids_.append_static_next(
+                sec_id, slot, phase, request_next_caller_)) {
+            body_caller = request_next_caller_++;
+        } else {
+            body_caller = request_caller_id({5, sec_id, slot, phase, 0, {}}); // static body
+        }
     }
-    request_delivery_stack_.push_back(frame);
+    request_delivery_stack_.push_back({sec_id, nullptr, delivery, body_caller, body_open_ms});
 }
 
 void source::PineStrategyHost::push_request_delivery(
