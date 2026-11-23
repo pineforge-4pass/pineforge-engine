@@ -8717,6 +8717,80 @@ if(TARGET test_issue_937_journal_comment)
     set_tests_properties(test_issue_937_spanning_page_seal PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 # --- lane issue-937 end ---
+# --- lane issue-810-case-a begin ---
+# Each case runs the executable registered by the lane include above.
+if(TARGET test_issue810_case_a)
+    add_test(NAME test_issue810_case_a_g2_end_close_stale
+        COMMAND test_issue810_case_a g2_end_close_stale)
+    add_test(NAME test_issue810_case_a_g2_end_close_final_position
+        COMMAND test_issue810_case_a g2_end_close_final_position)
+
+    add_test(NAME test_issue810_case_a_g3_live_entry_odd_steps_limit_first
+        COMMAND test_issue810_case_a g3_live_entry_odd_steps_limit_first)
+    add_test(NAME test_issue810_case_a_g3_live_entry_odd_steps_stop_first
+        COMMAND test_issue810_case_a g3_live_entry_odd_steps_stop_first)
+    add_test(NAME test_issue810_case_a_g3_live_entry_whole_steps_limit_first
+        COMMAND test_issue810_case_a g3_live_entry_whole_steps_limit_first)
+    add_test(NAME test_issue810_case_a_g3_live_entry_whole_steps_stop_first
+        COMMAND test_issue810_case_a g3_live_entry_whole_steps_stop_first)
+
+    add_test(NAME test_issue810_case_a_g4_live_entry_odd_steps_limit_first
+        COMMAND test_issue810_case_a g4_live_entry_odd_steps_limit_first)
+    add_test(NAME test_issue810_case_a_g4_live_entry_odd_steps_stop_first
+        COMMAND test_issue810_case_a g4_live_entry_odd_steps_stop_first)
+    add_test(NAME test_issue810_case_a_g4_live_entry_whole_steps_limit_first
+        COMMAND test_issue810_case_a g4_live_entry_whole_steps_limit_first)
+    add_test(NAME test_issue810_case_a_g4_live_entry_whole_steps_stop_first
+        COMMAND test_issue810_case_a g4_live_entry_whole_steps_stop_first)
+
+    add_test(NAME test_issue810_case_a_f3_exact_entry_fill_bar
+        COMMAND test_issue810_case_a f3_exact_entry_fill_bar)
+    add_test(NAME test_issue810_case_a_f3_exact_entry_fill_phase
+        COMMAND test_issue810_case_a f3_exact_entry_fill_phase)
+    add_test(NAME test_issue810_case_a_f3_exact_entry_fill_price
+        COMMAND test_issue810_case_a f3_exact_entry_fill_price)
+    add_test(NAME test_issue810_case_a_f3_exact_partial_exit_bar
+        COMMAND test_issue810_case_a f3_exact_partial_exit_bar)
+    add_test(NAME test_issue810_case_a_f3_exact_partial_exit_price
+        COMMAND test_issue810_case_a f3_exact_partial_exit_price)
+    add_test(NAME test_issue810_case_a_f3_exact_remainder_exit_bar
+        COMMAND test_issue810_case_a f3_exact_remainder_exit_bar)
+    add_test(NAME test_issue810_case_a_f3_exact_remainder_exit_price
+        COMMAND test_issue810_case_a f3_exact_remainder_exit_price)
+
+    add_test(NAME test_issue810_case_a_f3_a_absolute_control_entry_fill_bar
+        COMMAND test_issue810_case_a f3_a_absolute_control_entry_fill_bar)
+    add_test(NAME test_issue810_case_a_f3_a_absolute_control_entry_fill_phase
+        COMMAND test_issue810_case_a f3_a_absolute_control_entry_fill_phase)
+    add_test(NAME test_issue810_case_a_f3_a_absolute_control_entry_fill_price
+        COMMAND test_issue810_case_a f3_a_absolute_control_entry_fill_price)
+    add_test(NAME test_issue810_case_a_f3_a_absolute_control_partial_exit_bar
+        COMMAND test_issue810_case_a f3_a_absolute_control_partial_exit_bar)
+    add_test(NAME test_issue810_case_a_f3_a_absolute_control_partial_exit_price
+        COMMAND test_issue810_case_a f3_a_absolute_control_partial_exit_price)
+    add_test(NAME test_issue810_case_a_f3_a_absolute_control_remainder_exit_bar
+        COMMAND test_issue810_case_a f3_a_absolute_control_remainder_exit_bar)
+    add_test(NAME test_issue810_case_a_f3_a_absolute_control_remainder_exit_price
+        COMMAND test_issue810_case_a f3_a_absolute_control_remainder_exit_price)
+
+    add_test(NAME test_issue810_case_a_f3_b_market_add_control_base_entry_bar
+        COMMAND test_issue810_case_a f3_b_market_add_control_base_entry_bar)
+    add_test(NAME test_issue810_case_a_f3_b_market_add_control_base_entry_price
+        COMMAND test_issue810_case_a f3_b_market_add_control_base_entry_price)
+    add_test(NAME test_issue810_case_a_f3_b_market_add_control_separate_market_add_bar
+        COMMAND test_issue810_case_a f3_b_market_add_control_separate_market_add_bar)
+    add_test(NAME test_issue810_case_a_f3_b_market_add_control_separate_market_add_price
+        COMMAND test_issue810_case_a f3_b_market_add_control_separate_market_add_price)
+    add_test(NAME test_issue810_case_a_f3_b_market_add_control_market_add_close_bar
+        COMMAND test_issue810_case_a f3_b_market_add_control_market_add_close_bar)
+    add_test(NAME test_issue810_case_a_f3_b_market_add_control_market_add_close_price
+        COMMAND test_issue810_case_a f3_b_market_add_control_market_add_close_price)
+    add_test(NAME test_issue810_case_a_f3_b_market_add_control_base_close_bar
+        COMMAND test_issue810_case_a f3_b_market_add_control_base_close_bar)
+    add_test(NAME test_issue810_case_a_f3_b_market_add_control_base_close_price
+        COMMAND test_issue810_case_a f3_b_market_add_control_base_close_price)
+endif()
+# --- lane issue-810-case-a end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
