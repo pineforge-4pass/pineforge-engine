@@ -7,6 +7,9 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased (1.15.0)
 
+### Fixed
+
+- Clearing or installing `3551W` no longer removes or replaces monthly prices. Without its own feed, the request groups bars by 3,551 weeks.
 - `detect_timeframe` now measures the gap between consecutive bars without overflowing when their timestamps lie far apart on opposite sides of zero; such pairs could give a wrong timeframe. Pairs that are equal or out of order are still skipped.
 - TA length and Keltner Channel argument errors without a bar context now begin `Error before the first bar: `. Map capacity errors use the same prefix and report `bar_index: -1` without a bar context, including during native run preparation and startup. (#933)
 - `pf_version_get().commit_sha` now returns an empty string when the build's Git SHA is unavailable (#929).

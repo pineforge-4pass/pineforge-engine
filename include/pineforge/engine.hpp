@@ -1513,7 +1513,7 @@ protected:
     // Layout-unconditional like the aux feed's siblings above.
     struct NativeSecurityFeed {
         std::string tf;
-        int seconds = 0;
+        int64_t seconds = 0;  // full day/week duration; -1 for a monthly feed
         std::vector<Bar> bars;
     };
     std::vector<NativeSecurityFeed> native_security_feeds_;

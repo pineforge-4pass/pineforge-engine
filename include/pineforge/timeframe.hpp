@@ -74,7 +74,7 @@ inline bool tf_is_seconds(const std::string& tf) {
 bool tf_change(int64_t prev_ms, int64_t curr_ms, const std::string& tf);
 
 /// Compute how many input bars fit into one target bar.
-/// Returns positive int for ratio-based, -1 for calendar-based (month),
+/// Returns positive int for ratio-based, -1 for calendar-based aggregation,
 /// -2 if target < input (error).
 int tf_ratio(const std::string& input_tf, const std::string& target_tf);
 
@@ -363,7 +363,7 @@ public:
     /// Ratio-based: every `ratio` input bars produce one output bar.
     explicit TimeframeAggregator(int ratio);
 
-    /// Calendar-based: aggregate until day/week/month boundary.
+    /// Calendar-based: aggregate until a day, week group (W/nW), or month boundary.
     TimeframeAggregator(const std::string& target_tf,
                         const std::string& input_tf);
 
@@ -496,7 +496,7 @@ public:
     /// 2026-09-05: the Sun 08-31 17:00 stamp runs to Tue 09-02 15:45 and is
     /// Tuesday's bar), so no D period closes at the pause, none opens at the
     /// reopen, and a data hole inside a native day is not a close. A W / M
-    /// period groups the native days by the nominal week / month of their
+    /// period groups the native days by the week group or month of their
     /// trade date (the holiday session belongs to the next trade date, so to
     /// its week). bar_label_ms is the stamp of the bar's native period,
     /// bucket_open_ms the group's first stamp, period_changes compares
@@ -504,7 +504,7 @@ public:
     /// the last input bar before the next native stamp. The partition covers
     /// the feed: an input bar before the first stamp keeps the nominal key,
     /// and so does one at or after the LAST stamp's nominal period close
-    /// (session_period_close_ms of feed_period, the feed's own timeframe --
+    /// (the full weekly group for nW, otherwise the close of feed_period --
     /// DAY for a daily feed), since without a next stamp nothing proves the
     /// last native bar reaches further; a chart day the feed does not hold
     /// stays a nominal session-day bucket with no native bar to substitute.
@@ -661,7 +661,7 @@ private:
     enum class Mode { PASSTHROUGH, RATIO, CALENDAR };
 
     Mode mode_ = Mode::PASSTHROUGH;
-    int ratio_ = 1;                    // for RATIO mode
+    int ratio_ = 1;                    // input-bar ratio, or weeks per calendar bucket
     CalendarPeriod cal_period_ = CalendarPeriod::NONE; // for CALENDAR mode
     int64_t target_seconds_ = 0;       // wall-clock seconds for RATIO boundary detection
     int64_t input_seconds_ = 0;        // input bar duration (seconds), when known
