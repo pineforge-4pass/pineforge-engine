@@ -3165,9 +3165,19 @@ public:
         unsigned char boundary = 0U;
     };
 
+    // What follows an input, as the cursor's holder knows it: the open of the input after the
+    // one at `position`, or 0 when it is not known. A cursor given one tells a fixed-width
+    // aggregator that open, so a bucket no later input falls in ends at a session break while
+    // one that still takes inputs after the break runs on to its own end. Without one the
+    // aggregator is told nothing, as it was before, and waits in both cases.
+    struct After {
+        std::int64_t (*open)(const void* holder, std::size_t position);
+        const void* holder;
+    };
+
     explicit ScriptBucketCursor(const NativeRunSpec&,
         std::shared_ptr<TimeframeAggregator::PeriodSource> source = {},
-        std::int64_t first_ms = 0, std::int64_t last_ms = 0);
+        std::int64_t first_ms = 0, std::int64_t last_ms = 0, After after = {});
     Flags next(const Bar&);
     void reset();
     std::size_t position() const noexcept { return position_; }
@@ -3182,6 +3192,7 @@ private:
     std::shared_ptr<TimeframeAggregator::PeriodSource> source_;
     std::int64_t first_ms_ = 0;
     std::int64_t last_ms_ = 0;
+    After after_{};
     std::size_t position_ = 0;
     Flags last_{};
 };

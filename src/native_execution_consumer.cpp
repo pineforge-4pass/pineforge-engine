@@ -15083,19 +15083,19 @@ void NativeExecutionConsumer::set_script_period_source(
 
 ScriptBucketCursor::ScriptBucketCursor(const NativeRunSpec& spec,
         std::shared_ptr<TimeframeAggregator::PeriodSource> source,
-        std::int64_t first_ms, std::int64_t last_ms)
+        std::int64_t first_ms, std::int64_t last_ms, After after)
     : script_tf_(spec.script_tf), input_tf_(spec.input_tf), timezone_(spec.timezone),
       session_(spec.session), aggregator_(script_tf_, input_tf_, timezone_, session_),
-      source_(std::move(source)), first_ms_(first_ms), last_ms_(last_ms) {
+      source_(std::move(source)), first_ms_(first_ms), last_ms_(last_ms), after_(after) {
     if (source_) aggregator_.set_native_period_source(source_);
 }
 
 ScriptBucketCursor::Flags ScriptBucketCursor::next(const Bar& bar) {
-    // With a generated partition, use its next-period comparison rather
-    // than the nominal one-day close projection of a DAY aggregator.
-    const auto next_ms = source_
-        ? bar.timestamp + static_cast<std::int64_t>(tf_to_seconds(input_tf_)) * 1000
-        : 0;
+    // A generated partition compares its next period; a cursor told what follows passes that open.
+    const bool told = !source_ && after_.open && aggregator_.supports_fixed_completion();
+    if (told) aggregator_.set_early_close_completes(false);  // its other next-input rules stay off
+    const auto next_ms = told ? after_.open(after_.holder, position_) : !source_ ? 0
+        : bar.timestamp + static_cast<std::int64_t>(tf_to_seconds(input_tf_)) * 1000;
     const AggregatedBar aggregate = aggregator_.feed(bar, next_ms);
     last_.complete = aggregate.is_complete ? 1U : 0U;
     last_.boundary = aggregate.is_complete

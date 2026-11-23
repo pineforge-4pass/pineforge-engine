@@ -264,9 +264,9 @@ void PineScheduler::run_begin(PineStrategyHost& host) {
     // walks. Equal literals use native passthrough flags (complete=1,
     // boundary=0). Calendar chart population is counted separately below:
     // its final natural close need not appear in the request preview.
-    if (needs_aggregation && state.spec
-        && state.spec->input_tf != state.spec->script_tf) {
-        ScriptBucketCursor counting(*state.spec, chart_periods, first_ms, last_ms);
+    if (needs_aggregation && state.spec && state.spec->input_tf != state.spec->script_tf) {
+        const ScriptBucketCursor::After after{&PineScheduler::retained_open_after, this};
+        ScriptBucketCursor counting(*state.spec, chart_periods, first_ms, last_ms, after);
         expected_source_bars_ = 0;
         std::int64_t previous_open = std::numeric_limits<std::int64_t>::min();
         for (std::size_t i = 0; i < input_script_size_; ++i) {
@@ -283,9 +283,9 @@ void PineScheduler::run_begin(PineStrategyHost& host) {
             }
         }
         input_script_cursor = std::make_unique<ScriptBucketCursor>(
-            *state.spec, chart_periods, first_ms, last_ms);
+            *state.spec, chart_periods, first_ms, last_ms, after);
         consumed_script_cursor_ = std::make_unique<ScriptBucketCursor>(
-            *state.spec, chart_periods, first_ms, last_ms);
+            *state.spec, chart_periods, first_ms, last_ms, after);
     }
     if (calendar_chart) {
         const auto count = detail::run_consumer(host).batch_script_population(
@@ -1046,6 +1046,15 @@ void PineScheduler::recalculate(const native_order::ExecutionAppliedEvent& event
             (void)host.execute_current({handle, NativeCurrentPriceRule::NearestTick});
         }
     }
+}
+
+// What a script-bucket cursor of this scheduler is told follows a retained input.
+std::int64_t PineScheduler::retained_open_after(const void* scheduler,
+                                                std::size_t position) noexcept {
+    const auto& self = *static_cast<const PineScheduler*>(scheduler);
+    const InputView retained = self.retained_input();
+    if (position + 1 < retained.size()) return retained[position + 1].timestamp;
+    return self.retains_stream() ? 0 : std::numeric_limits<std::int64_t>::max();
 }
 
 } // namespace pineforge::source

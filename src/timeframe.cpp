@@ -1048,13 +1048,13 @@ int64_t session_period_last_traded_close_ms(int64_t ms, const std::string& tz,
     return session_day_close_real_ms(last, tz, session);
 }
 
-/// Exclusive close (real epoch ms) of the session WINDOW that holds `ms`,
-/// where an intraday bucket that ends at `bucket_end_ms` is clipped: the session-day's close
-/// (session_period_last_traded_close_ms, DAY) for a session without breaks and for the day's last
-/// window; the break that ends an earlier window otherwise -- 11:30 for a 10:45 bar of
-/// 0900-1130,1230-1500, and 15:00 for its 12:45 bar, not the 11:30 that closed its first window.
-/// A break the bucket trades past does not clip it: in that session's "240" 09:00 bucket, which
-/// ends at 13:00, the 10:45 bar reads 15:00 as well. A bar inside a break reads the break it
+/// Exclusive close (real epoch ms) of the session WINDOW that holds `ms`, where an intraday bucket
+/// that ends at `bucket_end_ms` is clipped: the session-day's close for a session without breaks
+/// and for the day's last window; the break that ends an earlier window otherwise -- 11:30 for a
+/// 10:45 bar of 0900-1130,1230-1500, and 15:00 for its 12:45 bar. A break the bucket trades past
+/// does not clip it: in that session's "240" 09:00 bucket, which ends at 13:00, the 10:45 bar
+/// reads 15:00 as well. A caller that knows the bucket takes no further input passes the lowest
+/// instant as its end, and every break ahead clips it. A bar inside a break reads the break it
 /// follows, as a bar after the day's close reads that close.
 static int64_t session_window_close_ms(int64_t ms, const std::string& tz,
                                        const std::string& session, int64_t bucket_end_ms) {
@@ -1295,13 +1295,13 @@ std::optional<AggregatedBar> TimeframeAggregator::next_fixed_completion(
                 continue;
             }
         }
-        const auto prefix = clock.observed_count > 0
-            ? clock.observed.timestamp : cursor;
+        const auto prefix = clock.observed_count > 0 ? clock.observed.timestamp : cursor;
         const auto bucket = intraday_bucket(cursor, target_seconds_,
             anchor_tz_, anchor_session_, &native_late_opens_, prefix);
-        const bool windowed = target_seconds_ < kSecPerDay && has_trading_session(anchor_session_);
-        const auto close = !windowed ? bucket.end_ms : std::min(bucket.end_ms,
-            session_window_close_ms(cursor, anchor_tz_, anchor_session_, bucket.end_ms));
+        auto close = bucket.end_ms;
+        if (target_seconds_ < kSecPerDay && has_trading_session(anchor_session_))
+            close = std::min(close, session_window_close_ms(cursor, anchor_tz_, anchor_session_,
+                next_input_ms < close ? close : INT64_MIN));  // no input follows: a break ends it
         if (close <= cursor) return std::nullopt;
         if (close > horizon_ms) {
             // Exchange early close: feed_ratio_mode's rule for a merged bucket
@@ -1456,8 +1456,8 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
                     const int64_t next_ms =
                         input_bar.timestamp + input_seconds * 1000;
                     singleton_session_final =
-                        next_ms >= session_window_close_ms(
-                            input_bar.timestamp, atz, asess, input_bucket.end_ms);
+                        next_ms >= session_window_close_ms(input_bar.timestamp, atz, asess,
+                            next_input_ms < input_bucket.end_ms ? input_bucket.end_ms : INT64_MIN);
                     // Early close (round 8, family U): the session's last
                     // chart bar can also be the FIRST bar of the bucket it
                     // leaves open -- the 12:00 CT bar of a 12:15 CT
@@ -1543,12 +1543,12 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
             // and finalized on the 11:15 bar, while the buckets after the
             // 12:30 reopen run to their count, real end or the day's close
             // (session_window_close_ms; the day's own close for one window).
-            // A bucket trading on both sides of a break is not clipped: "240" 09:00 runs to 13:00.
+            // A bucket that trades on after a break is not clipped; with no input to come, it is.
             if (!complete && input_seconds > 0 && target_seconds < kSecPerDay
                 && has_trading_session(asess)) {
                 const int64_t next_ms = input_bar.timestamp + input_seconds * 1000;
                 complete = next_ms >= session_window_close_ms(input_bar.timestamp, atz, asess,
-                                                              input_bucket.end_ms);
+                    next_input_ms < input_bucket.end_ms ? input_bucket.end_ms : INT64_MIN);
             }
             // Chart-close completion (round 8, family P): TradingView
             // finalizes an intraday HTF bucket -- and the chart timeframe's
