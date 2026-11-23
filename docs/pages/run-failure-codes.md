@@ -416,8 +416,9 @@ choose the location, set `TMPDIR` to a disk-backed directory such as
 the trade ledger or the report files.
 
 The English templates describe the texts a code is raised with; they are not
-a grammar. A `{name}` marks a part that varies and need not be an argument of
-that name, and one text can sit under more than one code: a frame that fails
+a grammar or an exhaustive list of all texts a run may return. A `{name}`
+marks a part that varies and need not be an argument of that name, and one
+text can sit under more than one code: a frame that fails
 after an inner failure was recorded (`native current execution failed`, the
 configure refusal above) keeps its own text and carries that failure's code:
 `run_aborted` after an abort whose report was cleared, `engine_invariant` when
