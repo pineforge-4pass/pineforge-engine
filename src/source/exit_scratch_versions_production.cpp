@@ -158,29 +158,32 @@ public:
         }
     }
     template<class T> void scalar(T& value) {
-        if constexpr (std::is_enum_v<T>) {
-            std::underlying_type_t<T> underlying{};
-            scalar(underlying);
-            value = static_cast<T>(underlying);
+        static_assert(std::is_arithmetic_v<T>);
+        std::array<unsigned char, 8> encoded{};
+        bytes(reinterpret_cast<char*>(encoded.data()), encoded.size());
+        std::uint64_t word = 0;
+        for (unsigned i = 0; i < encoded.size(); ++i)
+            word |= static_cast<std::uint64_t>(encoded[i]) << (i * 8);
+        if constexpr (std::is_same_v<T, double>) {
+            std::memcpy(&value, &word, sizeof(word));
+        } else if constexpr (std::is_signed_v<T>) {
+            std::int64_t signed_word = 0;
+            std::memcpy(&signed_word, &word, sizeof(word));
+            if (signed_word < std::numeric_limits<T>::min()
+                || signed_word > std::numeric_limits<T>::max()) invalid();
+            value = static_cast<T>(signed_word);
         } else {
-            std::array<unsigned char, 8> encoded{};
-            bytes(reinterpret_cast<char*>(encoded.data()), encoded.size());
-            std::uint64_t word = 0;
-            for (unsigned i = 0; i < encoded.size(); ++i)
-                word |= static_cast<std::uint64_t>(encoded[i]) << (i * 8);
-            if constexpr (std::is_same_v<T, double>) {
-                std::memcpy(&value, &word, sizeof(word));
-            } else if constexpr (std::is_signed_v<T>) {
-                std::int64_t signed_word = 0;
-                std::memcpy(&signed_word, &word, sizeof(word));
-                if (signed_word < std::numeric_limits<T>::min()
-                    || signed_word > std::numeric_limits<T>::max()) invalid();
-                value = static_cast<T>(signed_word);
-            } else {
-                if (word > std::numeric_limits<T>::max()) invalid();
-                value = static_cast<T>(word);
-            }
+            if (word > std::numeric_limits<T>::max()) invalid();
+            value = static_cast<T>(word);
         }
+    }
+    template<class E, class... Values> void enumerated(E& result, Values... allowed) {
+        using Raw = std::underlying_type_t<E>;
+        static_assert(sizeof...(Values) > 0 && (std::is_same_v<E, Values> && ...));
+        Raw raw{};
+        scalar(raw);
+        if (!((raw == static_cast<Raw>(allowed)) || ...)) invalid();
+        result = static_cast<E>(raw);
     }
 private:
     const CommandScratchStore& store_;
@@ -203,7 +206,65 @@ void read_variant(Archive& archive, Variant& value, std::uint64_t index) {
 
 template<class Archive, class T> void payload_fields(Archive& a, T& v) {
     using V = std::remove_const_t<T>;
-    if constexpr (std::is_arithmetic_v<V> || std::is_enum_v<V>) {
+    if constexpr (std::is_enum_v<V> && Archive::reading) {
+        // This is the stored vocabulary. A new enum field needs its own
+        // decoder, even when its underlying integer type is already supported.
+        if constexpr (std::is_same_v<V, PineOrderFamily>)
+            a.enumerated(v, V::Entry, V::Close, V::CloseAll, V::ExitLimit, V::ExitStop,
+                         V::ExitTrail, V::Order, V::Margin, V::Risk);
+        else if constexpr (std::is_same_v<V, PineCancellationCause>)
+            a.enumerated(v, V::None, V::Replacement, V::Dependency, V::Admission, V::Explicit);
+        else if constexpr (std::is_same_v<V, PositionSide>)
+            a.enumerated(v, V::FLAT, V::LONG, V::SHORT);
+        else if constexpr (std::is_same_v<V, OrderBirthCause>)
+            a.enumerated(v, V::Unattributed, V::DirectCommand, V::ChartEvaluation, V::FillEvaluation);
+        else if constexpr (std::is_same_v<V, BirthCursorDomain>)
+            a.enumerated(v, V::None, V::HistoricalPath, V::MagnifierTicks);
+        else if constexpr (std::is_same_v<V, BirthCursorPosition>)
+            a.enumerated(v, V::None, V::Point, V::Segment);
+        else if constexpr (std::is_same_v<V, compat::pine::HistoricalBirthReach>)
+            a.enumerated(v, V::Standard, V::ExtremeWaypoints);
+        else if constexpr (std::is_same_v<V, compat::pine::LimitContinuationCause>)
+            a.enumerated(v, V::LaterSameOpen, V::FirstHighRecross);
+        else if constexpr (std::is_same_v<V, admission::CommandKind>)
+            a.enumerated(v, V::Entry, V::Raw, V::Cancel, V::CancelAll);
+        else if constexpr (std::is_same_v<V, admission::Checkpoint>)
+            a.enumerated(v, V::DefaultGross, V::ExplicitPair, V::TerminalGross);
+        else if constexpr (std::is_same_v<V, exit_legs::Leg>)
+            a.enumerated(v, V::Stop, V::Limit, V::Trail);
+        else if constexpr (std::is_same_v<V, exit_legs::Domain>)
+            a.enumerated(v, V::Ordinary, V::FillRecalc, V::Magnifier, V::MagnifierFillRecalc, V::RawTicks);
+        else if constexpr (std::is_same_v<V, exit_legs::Phase>)
+            a.enumerated(v, V::Observation, V::AfterMargin);
+        else if constexpr (std::is_same_v<V, exit_legs::Fold>)
+            a.enumerated(v, V::Prefix, V::Continue);
+        else if constexpr (std::is_same_v<V, native_order::HostSizedKind>)
+            a.enumerated(v, V::Open, V::Close);
+        else if constexpr (std::is_same_v<V, native_order::Side>)
+            a.enumerated(v, V::Long, V::Short);
+        else if constexpr (std::is_same_v<V, native_order::SizeTime>)
+            a.enumerated(v, V::AtMatch, V::AtAcceptance);
+        else if constexpr (std::is_same_v<V, native_order::SizePrice>)
+            a.enumerated(v, V::Resolved, V::Signal, V::SignalOnTick);
+        else if constexpr (std::is_same_v<V, native_order::ExecutionGridPolicy>)
+            a.enumerated(v, V::SnapToGrid, V::ExplicitUnits);
+        else if constexpr (std::is_same_v<V, native_order::ScopeClaim>)
+            a.enumerated(v, V::Gross, V::NetOfSiblings);
+        else if constexpr (std::is_same_v<V, native_order::ScopeBasis>)
+            a.enumerated(v, V::AtMatch, V::AtAcceptance);
+        else if constexpr (std::is_same_v<V, native_order::NativeAnchorRounding>)
+            a.enumerated(v, V::Raw, V::HalfUp, V::Directional);
+        else if constexpr (std::is_same_v<V, native_order::NativeArmVisibility>)
+            a.enumerated(v, V::Working, V::PendingUntilArmed);
+        else if constexpr (std::is_same_v<V, native_order::NativeArmFirstMatch>)
+            a.enumerated(v, V::AtArmPrint, V::AfterArmPrint);
+        else if constexpr (std::is_same_v<V, native_order::NativeArmScope>)
+            a.enumerated(v, V::OwnerLot, V::Book);
+        else if constexpr (std::is_same_v<V, native_order::GroupEffect>)
+            a.enumerated(v, V::Cancel, V::Reduce);
+        else
+            static_assert(unsupported_payload<V>, "exit payload enum values must be enumerated");
+    } else if constexpr (std::is_arithmetic_v<V> || std::is_enum_v<V>) {
         static_assert(!std::is_floating_point_v<V> || std::is_same_v<V, double>);
         a.scalar(v);
     } else if constexpr (std::is_same_v<V, std::string>) {
