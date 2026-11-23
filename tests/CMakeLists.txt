@@ -7876,6 +7876,13 @@ if(TARGET test_issue_920_bool_input)
         PINEFORGE_ISSUE_920_RUNNER="${PROJECT_SOURCE_DIR}/scripts/run_strategy.py")
 endif()
 # --- lane issue-920 end ---
+# --- lane issue-956 begin ---
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    target_compile_definitions(test_run_json_strategy_digest PRIVATE
+        "PF_ISSUE_956_PYTHON=\"${Python3_EXECUTABLE}\""
+        "PF_ISSUE_956_TEST=\"${CMAKE_CURRENT_SOURCE_DIR}/test_run_json_strategy_digest.py\"")
+endif()
+# --- lane issue-956 end ---
 
 # --- lane scratch-directory-resolution-and-fallback begin ---
 # Scratch resolution: only these opted-in existing targets need the interposer's linkage.
