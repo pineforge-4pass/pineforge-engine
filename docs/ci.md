@@ -1007,9 +1007,9 @@ gates:
    (`scripts/corpus_trades_identity.py`). A probe whose hash moved is named
    with its expected and produced sha256 and the first rows of its file that
    differ from the pinned corpus tape.
-2. **Tiers.** `scripts/verify_corpus.py --all --quiet` must still print its
-   pinned headline, currently
-   `Verified 312 strategies — excellent=311, strong=0, moderate=0, weak=0, minimal=0, anomaly=1, engine_only=0, missing=0`.
+2. **Tiers.** `scripts/verify_corpus.py --all --quiet` must print the
+   headline pinned for the grader that counts unmatched trades on both sides:
+   `Verified 312 strategies — excellent=301, strong=10, moderate=0, weak=0, minimal=0, anomaly=1, engine_only=0, missing=0`.
 
 Both always run, so one command reports both. Exit 0 is parity, 1 is drift, 2
 is "the check could not run" (no gitlink, wrong corpus commit, modified pinned
@@ -1041,10 +1041,9 @@ produce a file, and its header must be the tape's header, optionally plus a
 column declared in `ALLOWED_EXTRA_COLUMNS`. An undeclared column is drift.
 
 The two gates are not redundant. A one-tick slippage change on a single probe
-moves its trades and its baseline hash while `verify_corpus.py` still reports
-`excellent=311, strong=0, anomaly=1`: the tier verifier grades against the
-TradingView tape with tolerances, so it cannot see a regression that stays
-inside them. The baseline can.
+can move its trades and its baseline hash without moving the tier headline:
+the tier verifier grades against the TradingView tape with tolerances. The
+byte comparison detects changes that stay inside those tolerances.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |

@@ -1222,7 +1222,9 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     matched = align_by_time(tv_cmp, eng_cmp)
 
     if not matched and not mark_pairs:
-        label = "excellent" if len(tv_cmp) == 0 and len(eng_cmp) == 0 else "minimal"
+        tv_count, eng_count = len(tv_cmp), len(eng_cmp)
+        count_abs_delta = tv_count + eng_count
+        label = "excellent" if count_abs_delta == 0 else "minimal"
         # The historical both-empty Excellent branch returned before reading
         # override metadata. Keep that exact behavior while fixing declared
         # divergence for the non-excellent zero-alignment branch.
@@ -1237,13 +1239,14 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
             tv_path=tv_path,
             eng_path=eng_path,
             no_aligned_trades=True,
-            tv_count=len(tv_cmp),
-            eng_count=len(eng_cmp),
+            tv_count=tv_count,
+            eng_count=eng_count,
             tv_raw_count=len(tv),
             eng_raw_count=len(eng),
-            count_delta=relative_max(len(tv_cmp), len(eng_cmp)),
-            count_abs_delta=abs(len(tv_cmp) - len(eng_cmp)),
-            count_ok=len(tv_cmp) == len(eng_cmp),
+            count_delta=count_abs_delta / max(tv_count, eng_count, 1),
+            count_abs_delta=count_abs_delta,
+            count_ok=count_abs_delta == 0,
+            unmatched_in_window=count_abs_delta,
         )
 
     # Resolve parity profile (strict vs production) per probe.
@@ -1292,8 +1295,17 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     eng_gate_n = len(eng_gate) + n_gate_marks
     gating_matched_n = len(gating_matched) + n_gate_marks
 
-    count_abs_delta = abs(tv_gate_n - eng_gate_n)
-    count_delta = relative_max(tv_gate_n, eng_gate_n)
+    # Count unmatched rows on both sides. A pair crossing an interior
+    # boundary contributes only its in-window row as matched. Use the full
+    # alignment, since the metric gate can fall back to out-of-window pairs.
+    # Paired range-end marks already left both pools and cannot add a miss.
+    if bounds is None:
+        tv_paired_n = eng_paired_n = len(matched)
+    else:
+        tv_paired_n = len(interior_matched)
+        eng_paired_n = sum(is_interior(e.entry_time * 1000, bounds) for _, e in matched)
+    count_abs_delta = (len(tv_gate) - tv_paired_n) + (len(eng_gate) - eng_paired_n)
+    count_delta = count_abs_delta / max(tv_gate_n, eng_gate_n, 1)
     # A mark pair's entry is a fill on both sides, so the identity gate
     # sees it with the others: the engine's range-end row must carry an
     # entry incarnation at a TV-proven multi-entry key exactly as any
@@ -1366,7 +1378,9 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         has_cross_entry_fifo_allocation(tv_sched_rows)
         or has_cross_entry_fifo_allocation(eng_sched_rows)
     )
-    if fragmented_fifo and entry_p90 < 1e-12 and count_delta < STRONG_COUNT_DELTA:
+    # Keep the schedule size guard independent of the unmatched-trade grade.
+    if (fragmented_fifo and entry_p90 < 1e-12
+            and relative_max(tv_gate_n, eng_gate_n) < STRONG_COUNT_DELTA):
         sched_exit_deltas, sched_pnl_deltas = schedule_exit_metrics(tv_sched_rows, eng_sched_rows)
         if sched_exit_deltas:
             sched_exit_p90 = percentile(sched_exit_deltas, grade_percentile)
@@ -1381,9 +1395,8 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
 
     # --- Report-only field-coverage deltas (NOT gated) ---
     # Extends the historical 4-dimension gate (count/entry/exit/pnl) to qty,
-    # pnl_pct, MFE, MAE, plus p100 worst-case and an unmatched-in-window count,
-    # so tail / masked divergences are surfaced rather than absorbed. These do
-    # NOT affect the tier label (report-only field coverage). A mark pair's
+    # pnl_pct, MFE, MAE, plus p100 worst-case, so tail divergences are surfaced
+    # rather than absorbed. These do NOT affect the tier label. A mark pair's
     # qty is a fill's and is compared; its pnl_pct / MFE / MAE are the mark's
     # and stay out, like its P&L, which is reported at TradingView's precision
     # below: the engine's exact P&L rounded to cents against TV's cents.
@@ -1407,14 +1420,9 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     pnlpct_p100 = max(pnlpct_deltas) if pnlpct_deltas else 0.0
     mfe_p90     = percentile(mfe_deltas, 0.90) if mfe_deltas else 0.0
     mae_p90     = percentile(mae_deltas, 0.90) if mae_deltas else 0.0
-    unmatched_in_window = max(tv_gate_n, eng_gate_n) - gating_matched_n
 
     entry_ok = entry_p90  < thresh["entry"]
-    # Count mismatch is a primary reproduction signal. Percent thresholds can
-    # hide dozens of missing/extra trades in large strategies, so excellent
-    # requires exact gated TV/engine count parity. Any non-zero absolute count
-    # mismatch is an engine/codegen gap unless separately proven as a TV/export
-    # anomaly.
+    # Excellent requires no unmatched trade in either gated pool.
     count_ok = count_abs_delta == 0
     # HARD GATES ONLY. The former heuristic escape hatches (tiny_exit_pnl_noise,
     # strong_exit_pnl_coupling, pnl_validated_exit_noise, and the mae_* waivers)
@@ -1548,7 +1556,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         coverage_ok=cov_excellent,
         distinct_entry_identity_ok=distinct_entry_identity_ok,
         distinct_entry_mismatches=distinct_entry_mismatches,
-        unmatched_in_window=unmatched_in_window,
+        unmatched_in_window=count_abs_delta,
         open_mark_pairs=len(mark_pairs),
         open_mark_pnl_cent_exact=open_mark_pnl_cent_exact,
         open_mark_pnl_max_abs_usd=open_mark_pnl_max_abs_usd,
@@ -1601,6 +1609,7 @@ def _print_verification(result: VerificationResult, *, show_diffs: int = 0) -> N
         f"  Matched:       {result.matched_count} ({match_pct:.1f}% of TV)\n"
         f"{interior_line}"
         f"  Count delta:           {result.count_delta * 100:8.4f}%  ({check(result.count_ok)}; abs={result.count_abs_delta})\n"
+        f"  Unmatched-in-window:   {result.unmatched_in_window}\n"
         f"  Entry-price p90 delta: {result.entry_p90  * 100:8.4f}%  ({check(result.entry_ok)})\n"
         f"  Exit-price  p90 delta: {result.exit_p90   * 100:8.4f}%  ({check(result.exit_ok)})\n"
         f"  PnL         p90 delta: {result.pnl_p90    * 100:8.4f}%  ({check(result.pnl_ok)})\n"
@@ -1611,7 +1620,6 @@ def _print_verification(result: VerificationResult, *, show_diffs: int = 0) -> N
         f"  Qty   p90/p100 delta:  {percentile(result.qty_deltas,0.90)*100:.4f}% / {result.qty_p100*100:.4f}%\n"
         f"  PnL%  p90/p100 (pts):  {percentile(result.pnlpct_deltas,0.90):.4f} / {result.pnlpct_p100:.4f}\n"
         f"  MFE/MAE p90 delta:     {result.mfe_p90*100:.4f}% / {result.mae_p90*100:.4f}%\n"
-        f"  Unmatched-in-window:   {result.unmatched_in_window}\n"
         f"  Range-end mark pairs:  {result.open_mark_pairs}  (TV 'Open' row <-> engine range-end row of one lot; "
         f"matched, entry gated, exit/pnl not; P&L at cents: {result.open_mark_pnl_cent_exact}/{result.open_mark_pairs} exact, "
         f"max miss ${result.open_mark_pnl_max_abs_usd:.2f})\n"

@@ -306,7 +306,7 @@ the affected scripts and how to recognise it.
 
 An `engineErrors` entry (the "engine errors" count above) is not always an engine failure: it can also be a probe that was not graded because its reference data is incomplete. Release 1.13.0 records one such entry, the open corpus probe `validation/ta-stochastic-rsi-cross-01`.
 
-Known issue ([#836](https://github.com/pineforge-4pass/pineforge-engine/issues/836)): the parity scoreboard counts unmatched trades net instead of gross, so a probe with one engine-only and one TradingView-only trade still grades excellent; counted gross, 24 of the 7,989 graded probes (7,959 excellent and 30 strong instead of 7,983 and 6) and 10 of the 312 open reference probes (301 excellent instead of 311) grade one tier lower, with no trade list changed, and the corrected grader is planned for a release after 1.14.0.
+The published snapshot above used net trade counts. In the regrade reported in [issue #836](https://github.com/pineforge-4pass/pineforge-engine/issues/836), counting unmatched trades on both sides moved 24 of the 7,989 graded probes and 10 of the 312 open reference probes from Excellent to Strong using the same trade lists.
 
 Release **1.4.0 (2026-10-08)** maps to **<!-- pf:releases[1.4.0].scoreboard.excellent|int -->7,983<!-- /pf --> excellent / <!-- pf:releases[1.4.0].scoreboard.strong|int -->6<!-- /pf --> strong** on <!-- pf:releases[1.4.0].scoreboard.graded|int -->7,989<!-- /pf --> graded probes (baseline <!-- pf:releases[1.4.0].scoreboard.id|code -->`pineforge-parity-baseline-20261007-engine-b3192bfc`<!-- /pf -->, promoted <!-- pf:releases[1.4.0].scoreboard.date -->2026-10-07<!-- /pf --> UTC), with <!-- pf:releases[1.4.0].scoreboard.belowStrong|int -->0<!-- /pf --> below strong and <!-- pf:releases[1.4.0].scoreboard.engineErrors|int -->0<!-- /pf --> engine errors. These are recorded grading outcomes for that pair and population.
 
@@ -316,7 +316,7 @@ The quantities above render from the public [facts tokens](https://github.com/pi
 
 | Board | Test set | Result |
 |---|---|---|
-| **Public** — [open corpus](https://github.com/pineforge-4pass/pineforge-corpus) | 312 reference strategies on BINANCE:ETHUSDT.P 15m, Apache-2.0, reproducible by anyone | this repository's sweep of the v1.0.1 library: **311 excellent + 1 declared anomaly**; the <!-- pf:scoreboard.corpusProbes\|int -->309<!-- /pf --> of them in the measured population: **<!-- pf:scoreboard.scopes.corpus.excellent\|int -->309<!-- /pf --> excellent** |
+| **Public** — [open corpus](https://github.com/pineforge-4pass/pineforge-corpus) | 312 reference strategies on BINANCE:ETHUSDT.P 15m, Apache-2.0, reproducible by anyone | this repository's earlier sweep of the v1.0.1 library using net counts: **311 excellent + 1 declared anomaly**; the <!-- pf:scoreboard.corpusProbes\|int -->309<!-- /pf --> of them in the measured population: **<!-- pf:scoreboard.scopes.corpus.excellent\|int -->309<!-- /pf --> excellent** |
 | **Closed test** | <!-- pf:inventory.closedProbes\|int -->7,680<!-- /pf --> probes of <!-- pf:inventory.closedScripts\|int -->741<!-- /pf --> TradingView scripts across the <!-- pf:scoreboard.lanes\|int -->18<!-- /pf --> lanes: <!-- pf:inventory.communityScripts\|int -->680<!-- /pf --> community-shared scripts (<!-- pf:inventory.communityProbes\|int -->7,179<!-- /pf --> probes), private under TradingView's Terms of Service, and <!-- pf:inventory.probeScripts\|int -->61<!-- /pf --> probe scripts the maintainers wrote (<!-- pf:inventory.probeScriptProbes\|int -->501<!-- /pf --> probes) | **<!-- pf:scoreboard.scopes.closed.excellent\|int -->7,674<!-- /pf --> excellent + <!-- pf:scoreboard.scopes.closed.strong\|int -->6<!-- /pf --> strong** |
 
 ### Lane by lane
@@ -340,8 +340,8 @@ The hard lane combines <!-- pf:scoreboard.hardLane.corpusProbes|int -->309<!-- /
 
 Every script is exported from TradingView as-is (its own inputs, its own defaults) with the chart's trade list at full precision, transpiled with [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss), and run by this engine on the same OHLCV bars. The two trade lists are aligned trade-for-trade and graded by [`scripts/verify_corpus.py`](scripts/verify_corpus.py):
 
-- **excellent** — the same number of trades, ≥ 99% of TradingView's trades matched, the distinct-entry identity check passed, entry and exit prices within 0.01% and PnL within 1% at the 90th percentile (trailing-stop scripts are graded on the *production* profile: exits within 0.02% and PnL within 1%, since a trail fill depends on TradingView's sub-bar path);
-- **strong** — ≥ 95% matched, trade count within 6%, entries within 0.1% and exits within 0.5% at p90;
+- **excellent** — every in-window trade on both sides has a match, ≥ 99% of TradingView's trades matched, the distinct-entry identity check passed, entry and exit prices within 0.01% and PnL within 1% at the 90th percentile (trailing-stop scripts are graded on the *production* profile: exits within 0.02% and PnL within 1%, since a trail fill depends on TradingView's sub-bar path);
+- **strong** — ≥ 95% matched, unmatched trades on both sides total less than 6% of the larger in-window trade count, entries within 0.1% and exits within 0.5% at p90;
 - **moderate** — ≥ 75% coverage with ≥ 90% of the in-window trades matched; **weak** — at least one match; **minimal** — none.
 
 The closed-test grades are the maintainers' own measurement of a fixed population; only the public board can be re-run from this repository.

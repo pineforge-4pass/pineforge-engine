@@ -1034,9 +1034,12 @@ The declared profile limits in
 | Strict | 1.0% | < 0.01% | < 0.01% | < 1.0% |
 | Trail / production | 1.0% | < 0.01% | < 0.02% | < 1.0% |
 
-For both profiles, an `excellent` grade requires exact gated trade-count
-parity; the declared 1.0% count limit does not permit missing or extra
-trades for that grade. The entry, exit and P&L gates require each strategy's
+For both profiles, an `excellent` grade requires every trade in the
+grading window on each side to have a match. One TradingView-only trade and one
+engine-only trade count as two misses, even when the lists have equal totals.
+The percentage divides the number of misses by the larger in-window trade
+count; `strong` requires less than 6%. The 1.0% declared count limit does
+not apply to `excellent`. The entry, exit and P&L gates require each strategy's
 90th-percentile (p90) delta to be strictly below the corresponding limit.
 The verifier computes p90 by sorting the deltas and linearly interpolating
 at index `(n - 1) * 0.90`. Exit and P&L are per-strategy gates, not

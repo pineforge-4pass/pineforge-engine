@@ -211,7 +211,7 @@ For each slot:
 
 - aligns trades, then trims both lists to their common match window;
 - consolidates fragments and pairs range-end marks;
-- requires the exact trade count and at least 99 % coverage for *excellent*;
+- requires every in-window trade on both sides to have a match and at least 99 % coverage for *excellent*;
 - applies the strict or production threshold profile;
 - honours the slot's `inputs.json` overrides.
 

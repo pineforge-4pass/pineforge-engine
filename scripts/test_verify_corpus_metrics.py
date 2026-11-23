@@ -668,12 +668,12 @@ class FragmentConsolidationIdentityTests(unittest.TestCase):
 
         self.assertEqual(result.tv_count, 2)
         self.assertEqual(result.eng_count, 2)
-        self.assertEqual(result.count_abs_delta, 0)
-        self.assertEqual(result.unmatched_in_window, 1)
+        self.assertEqual(result.count_abs_delta, 2)
+        self.assertEqual(result.unmatched_in_window, 2)
         self.assertTrue(result.coverage_ok)
         self.assertFalse(result.distinct_entry_identity_ok)
         self.assertEqual(result.distinct_entry_mismatches, 1)
-        self.assertEqual(result.label, "strong")
+        self.assertEqual(result.label, "weak")
 
 
 PRIVATE_FIXTURE_SKIP_LITERAL = "SKIP private fixtures not present: "
