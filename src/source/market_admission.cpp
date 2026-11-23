@@ -199,15 +199,20 @@ detail::ScratchStatus append_journal_record(Journal& journal,
     if (status != Status::not_found) return status;
     status = codec.store.begin();
     if (status != Status::ok) return status;
-    detail::ScratchHandle handle = detail::scratch_no_handle;
+    const auto requested_sequence = summary.sequence;
     if (codec.abandoned && codec.abandoned > journal.retired_prefix_.last_sequence) {
         const jc::WordSource abandoned(codec.abandoned);
         const detail::ScratchSpanSource empty({nullptr,0});
+        detail::ScratchHandle handle = detail::scratch_no_handle;
         status = codec.store.put(abandoned,empty,handle);
     }
     if (status == Status::ok) {
-        const jc::WordSource key(summary.sequence);
-        status = codec.store.put(key,source,handle);
+        const auto validate = [&](const detail::ScratchByteSource& stored) noexcept {
+            const auto checked = scan_journal_record(stored,codec.buffer(),summary);
+            if (checked != Status::ok) return checked;
+            return summary.sequence == requested_sequence ? Status::ok : Status::corrupt;
+        };
+        status = jc::put_checked(codec.store,requested_sequence,source,validate);
     }
     status = jc::finish(codec.store,status);
     if (status == Status::ok) {
@@ -221,7 +226,7 @@ detail::ScratchStatus append_journal_record(Journal& journal,
         if (summary.rejected && journal.rejection_gate_.valid
             && summary.sequence > journal.rejection_gate_.sequence)
             journal.rejection_gate_ = {summary.sequence,summary.rejected_bar,true};
-    } else codec.failed_sequence = summary.sequence;
+    } else codec.failed_sequence = requested_sequence;
     return status;
 }
 
