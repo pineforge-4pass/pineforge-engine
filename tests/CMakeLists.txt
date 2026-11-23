@@ -7869,6 +7869,14 @@ foreach(lane_file IN LISTS LANE_CMAKE)
     include("${lane_file}")
 endforeach()
 
+# --- lane issue-920 begin ---
+if(TARGET test_issue_920_bool_input)
+    target_compile_definitions(test_issue_920_bool_input PRIVATE
+        PINEFORGE_ISSUE_920_PYTHON="${Python3_EXECUTABLE}"
+        PINEFORGE_ISSUE_920_RUNNER="${PROJECT_SOURCE_DIR}/scripts/run_strategy.py")
+endif()
+# --- lane issue-920 end ---
+
 # --- lane scratch-directory-resolution-and-fallback begin ---
 # Scratch resolution: only these opted-in existing targets need the interposer's linkage.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
