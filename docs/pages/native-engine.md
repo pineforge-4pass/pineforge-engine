@@ -502,6 +502,12 @@ five commands through `strategy_native_submit_v1` / `_replace_v1` /
 (`native_c_api.h:2829-2917`), under the same legality rule; see *Driving the
 kernel from C* below.
 
+A C++ caller driving `WorkingRequestCore` directly must set the submit or
+replace surface to `General` or `MarketOnly`. A submit origin must be `Host`,
+`KernelLiquidation`, or `KernelRisk`. Both the prepared and direct forms throw
+`std::invalid_argument` for an undeclared value before preparing or recording
+the command. The host methods above supply these values themselves.
+
 `native_order::Request` values belong to `native_order_v8`
 (`native_order.hpp:46`); identity types stay `native_order_v1`. Label/comment
 remain inert text. The market default path still constructs from:
@@ -1463,15 +1469,16 @@ live side has no maintenance fraction included, because withdrawing a resting
 liquidation is part of the check; `CalculationOnly`, which rests nothing,
 offers only the points it could act on.
 
-**Events and hooks.** A kernel-issued request carries
+**Events and hooks.** A request issued by the margin model carries
 `RequestDefinition::origin == RequestOrigin::KernelLiquidation`; every host
-request is `RequestOrigin::Host`. When it fills, a `MarginCallEvent` joins the
+request is `RequestOrigin::Host`. When a liquidation fills, a `MarginCallEvent` joins the
 command history directly after its own `ExecutionAppliedEvent`, carrying the
 mark, the equity on the model's basis and the requirement at that mark, the
 solved liquidation price, the filled units and the signed book on either
 side. The host sees
 `on_native_applied` first and `on_native_margin_call` immediately after, with
-the same cursor.
+the same cursor. A risk-limit flatten is a `KernelRisk` request and cannot
+produce a margin-call receipt.
 
 **Naming the ticket.** `liquidation_label` and `liquidation_comment` are the
 ticket the kernel books its own liquidation under. Left empty they are the
