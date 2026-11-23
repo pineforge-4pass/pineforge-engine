@@ -31,7 +31,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <variant>
 #include <vector>
 
 using namespace pineforge;
@@ -74,13 +73,8 @@ constexpr double kStepBasePrice = 100.0;
 constexpr double kStepStopPrice = 99.0;
 constexpr double kStepGap = 0.25;
 constexpr double kStepOvershoot = 0.5;
-// The limit-first POOC row ends here. In the stop-first sizing row,
-// let the first post-entry calculation drain; on the next quiet bar
-// observe both working exits before sending the first crossing.
+// The script offers an end close after both crossing bars.
 constexpr int kStepEndCloseBar = 3;
-constexpr int kPoocBookBar = 2;
-constexpr int kPoocStopTouchBar = kPoocBookBar + 1;
-constexpr int kPoocStopFirstEnd = kPoocStopTouchBar + 2;
 // The live-entry step rows: a commission in percent, the one setting that
 // keeps their entry from being held, and the bar of their end close.  Their
 // entry fills one bar later than under process_orders_on_close.
@@ -172,8 +166,7 @@ bool step_stop_first(Mode mode) {
 }
 
 int step_end_close_bar(Mode mode) {
-    if (is_live_step_mode(mode)) return kLiveEndCloseBar;
-    return step_stop_first(mode) ? kPoocStopFirstEnd : kStepEndCloseBar;
+    return is_live_step_mode(mode) ? kLiveEndCloseBar : kStepEndCloseBar;
 }
 
 struct Applied {
@@ -184,6 +177,7 @@ struct Applied {
     double price = kNaN;
     double position_after = 0.0;
     NativePathPhase phase = NativePathPhase::None;
+    bool after_calculation_close = false;
 };
 
 struct EndClose {
@@ -219,7 +213,7 @@ public:
         set_syminfo_metadata("qty_step", kQtyStep);
     }
 
-    void on_source_bar(const Bar&) override {
+    void on_source_bar(const Bar& current) override {
         last_source_bar_ = pine_bar_index();
         switch (mode_) {
             case Mode::Exact:
@@ -244,7 +238,7 @@ public:
             case Mode::LiveEntryOddStepsStopFirst:
             case Mode::LiveEntryWholeStepsLimitFirst:
             case Mode::LiveEntryWholeStepsStopFirst:
-                on_step_bar();
+                on_step_bar(current);
                 return;
             case Mode::StepChecksEmptyInput:
             case Mode::StepChecksStaleInput:
@@ -260,7 +254,8 @@ public:
                             event.opened_units, event.closed_units,
                             event.resolved_price,
                             physical_position().signed_units,
-                            context.coordinate.path_phase});
+                            context.coordinate.path_phase,
+                            event.cursor.point.provenance == NativePriceProvenance::AfterCalculationClose});
     }
 
     double trade_size(int index) const { return closed_trade_size(index); }
@@ -282,12 +277,8 @@ public:
     bool held_partial_staged() const { return held_partial_staged_; }
     bool held_full_exit_placed() const { return held_full_exit_placed_; }
     bool step_entry_order_at_signal() const { return step_entry_order_at_signal_; }
-    // -1 distinguishes a missed observation from an observed empty book.
-    int half_before_stop = -1;
-    int rest_before_stop = -1;
-    bool stop_book_seen() const {
-        return half_before_stop == 1 && rest_before_stop == 1;
-    }
+    // The delivered path is independent of whether either order filled.
+    int stop_first_paths = 0;
 
 private:
     void exit(const char* id, const char* from, double limit, double stop,
@@ -377,7 +368,7 @@ private:
     // script makes it on a last bar.  It is called only while something is
     // still held, so whatever the two exits leave shows up as a third closing
     // fill.  Rounding noise far below a step is not a holding.
-    void on_step_bar() {
+    void on_step_bar(const Bar& current) {
         if (pine_bar_index() == 0) {
             strategy_entry("Long", true, kNaN, kNaN, step_entry_qty(mode_),
                            "step-entry");
@@ -398,16 +389,11 @@ private:
             }
             return;
         }
-        const bool pooc_stop = is_pooc_step_mode(mode_) && step_stop_first(mode_);
-        if (pooc_stop && pine_bar_index() == kPoocBookBar) {
-            half_before_stop = rest_before_stop = 0;
-            for (const auto& working : native_working_requests()) {
-                const auto& order = working.definition->request;
-                if (order.label == "Half" && std::holds_alternative<no::Limit>(order.trigger))
-                    ++half_before_stop;
-                if (order.label == "Rest" && std::holds_alternative<no::Stop>(order.trigger))
-                    ++rest_before_stop;
-            }
+        const bool pooc = is_pooc_step_mode(mode_);
+        if (pooc && pine_bar_index() == 1 && current.open > kStepStopPrice
+            && current.low < kStepStopPrice && current.close > kStepStopPrice
+            && current.high < kStepBasePrice + kStepProfitTicks * kMinTick) {
+            ++stop_first_paths;
         }
         if (pine_bar_index() == step_end_close_bar(mode_)) {
             // Observe the guarded action even when it has nothing to close.
@@ -514,8 +500,7 @@ struct Observed {
     int last_source_bar = -1;
     EndClose end_close;
     double final_position = kNaN;
-    int half_before_stop = -1;
-    int rest_before_stop = -1;
+    int stop_first_paths = 0;
 };
 
 Observed observe(Probe& probe) {
@@ -530,8 +515,7 @@ Observed observe(Probe& probe) {
     seen.last_source_bar = probe.last_source_bar();
     seen.end_close = probe.end_close();
     seen.final_position = probe.physical_position().signed_units;
-    seen.half_before_stop = probe.half_before_stop;
-    seen.rest_before_stop = probe.rest_before_stop;
+    seen.stop_first_paths = probe.stop_first_paths;
     return seen;
 }
 
@@ -849,12 +833,12 @@ bool check_b_pending(Probe& probe, const std::vector<Bar>& bars) {
 //         fill yet, and the next bar's modeled open is the fill.
 //       - src/source/pine_adapter.cpp:3135-3136: without
 //         process_orders_on_close an order executes at the next eligible
-//         point; :20089-20091: its quote is the next open.
+//         point; :20109-20111: its quote is the next open.
 //   R2  A level given in ticks is the entry's fill price moved by that many
 //       ticks.
 //       - docs/pages/pine-to-native.md:343-345: at the parent's fill the
 //         level becomes the fill plus the offset, in ticks.
-//       - src/source/pine_adapter.cpp:15582-15588
+//       - src/source/pine_adapter.cpp:15602-15608
 //         (materialize_relative_exits): the limit is the entry's fill price
 //         plus the profit ticks, on the tick grid.
 //   R3  A limit that a crossing reaches fills at its level, and a sell stop
@@ -863,8 +847,8 @@ bool check_b_pending(Probe& probe, const std::vector<Bar>& bars) {
 //         limit's level, and a crossing books the level itself.
 //       - docs/pine-adapter-kernel-notes.md:238: a stop is quoted at
 //         min(open, stop) for a sell.
-//       - src/source/pine_adapter.cpp:20090: max/min(open, stop) for a stop;
-//         :21866-21867: a touched level fills at its level.  The adapter
+//       - src/source/pine_adapter.cpp:20110: max/min(open, stop) for a stop;
+//         :21886-21887: a touched level fills at its level.  The adapter
 //         leaves a limit's price to the kernel's matcher.
 //   R4  Exits reserve the entry's quantity in the order they were placed,
 //       and a later full exit is left what the earlier ones have not
@@ -881,7 +865,7 @@ bool check_b_pending(Probe& probe, const std::vector<Bar>& bars) {
 //         (compute_exit_reservation), :6226-6227 and :6277-6303
 //         (reconcile_deferred_exit_reservations): the entry's quantity goes
 //         to its exits in queue order, each taking what the ones before it
-//         leave; :12901-12924 (exit_with_reservation_sequence): a waiting
+//         leave; :12902-12925 (exit_with_reservation_sequence): a waiting
 //         partial exit gets its place when a later exit of the entry is
 //         placed.
 //   R5  An exit placed while its entry was unfilled holds a fixed share of
@@ -893,11 +877,11 @@ bool check_b_pending(Probe& probe, const std::vector<Bar>& bars) {
 //         reservation when a live owner is bound.
 //       - CHANGELOG.md:29 (unreleased, #810): the partial exit is sized from
 //         the quantity the entry actually opens.
-//       - src/source/pine_adapter.cpp:15569-15581
+//       - src/source/pine_adapter.cpp:15589-15601
 //         (materialize_relative_exits): the partial exit's quantity is its
 //         percentage of what the entry opened; :6321-6327
 //         (reconcile_deferred_exit_reservations): each exit's units are
-//         written on its order rows; :17384-17399 (resolve_source_terms): a
+//         written on its order rows; :17404-17419 (resolve_source_terms): a
 //         fixed reservation executes as written.
 //   R6  A closing order closes no more than is held and never opens a
 //       position.
@@ -909,7 +893,7 @@ bool check_b_pending(Probe& probe, const std::vector<Bar>& bars) {
 //   R7  An order that has filled is not filled again.
 //       - docs/pages/fill-model.md:176: a retired object is not dispatched
 //         again.
-//       - src/source/pine_adapter.cpp:26707-26709 (on_applied): an exit that
+//       - src/source/pine_adapter.cpp:26727-26729 (on_applied): an exit that
 //         has filled on an opening does not fill again on that opening.
 bool check_held_entry(Probe& probe, Mode mode, const std::vector<Bar>& bars) {
     const char* name = mode_name(mode);
@@ -1110,25 +1094,15 @@ std::vector<Bar> bars_for(Mode mode) {
         const double later = base + kStepGap;
         const double above = base + kStepProfitTicks * kMinTick + kStepOvershoot;
         const double below = kStepStopPrice - kStepOvershoot;
-        if (step_stop_first(mode)) {
-            // No earlier crossing to miss or fill. Keep just one touch
-            // of each level, on separate bars, with the stop strictly first.
-            return {
-                bar(0, base, base, base, base),
-                bar(1, later, later, later, later),
-                bar(kPoocBookBar, later, later, later, later),
-                bar(kPoocStopTouchBar, later, later, below, later),
-                bar(kPoocStopTouchBar + 1, later, above, later, later),
-                bar(kPoocStopFirstEnd, later, later, later, later),
-                bar(kPoocStopFirstEnd + 1, later, later, later, later),
-            };
-        }
+        const bool stop_first = step_stop_first(mode);
         return {
             bar(0, base, base, base, base),
-            bar(1, later, above, later, later),
-            bar(2, later, later, below, later),
-            bar(kStepEndCloseBar, later, later, later, later),
-            bar(kStepEndCloseBar + 1, later, later, later, later),
+            stop_first ? bar(1, later, later, below, later)
+                       : bar(1, later, above, later, later),
+            stop_first ? bar(2, later, above, later, later)
+                       : bar(2, later, later, below, later),
+            bar(3, later, later, later, later),
+            bar(4, later, later, later, later),
         };
     }
     return {
@@ -1159,8 +1133,8 @@ std::vector<Bar> bars_for(Mode mode) {
 //
 // The live-entry rows place the same orders without process_orders_on_close
 // and with a commission.  Their entry is a working order when the exits are
-// placed and fills at the next bar's open (R1). Each feed specifies its own
-// crossing bars; the POOC stop-first feed observes both exits before either.
+// placed and fills at the next bar's open (R1). In either POOC stop-first
+// row the sole stop crossing is on the bar immediately after the entry.
 //
 // The applied position after the second exit, the position seen by the
 // end-close calculation, and the final physical position are separate
@@ -1222,8 +1196,7 @@ Comparison end_close_check(const Observed& seen, Mode mode) {
     Comparison r{"nothing_left_for_end_close", true};
     require_completed(r, seen, mode);
     if (is_pooc_step_mode(mode) && step_stop_first(mode)) {
-        r.one(seen.half_before_stop, "working Half limit count before stop");
-        r.one(seen.rest_before_stop, "working Rest stop count before stop");
+        r.one(seen.stop_first_paths, "N+1 stop-only crossing count");
     }
     const auto entry = named_fill(seen, "Long");
     const auto half = named_fill(seen, "Half");
@@ -1276,6 +1249,40 @@ void report_end_close(const Observed& seen, Mode row, const char* input) {
                 closing_fill_count(seen));
 }
 
+Comparison stop_first_alignment(const Observed& seen, const StepCase& step) {
+    Comparison aligned{"aligned_signal_and_first_stop_path", true};
+    const bool completed = seen.error.empty() && seen.lifecycle == NativeLifecycleKind::Completed;
+    aligned.require(completed, "completed run", completed, true);
+    aligned.require(seen.end_close.visits == 1, "end-close calculation count",
+                    seen.end_close.visits, 1);
+    const Applied* entry = nullptr;
+    std::size_t entries = 0;
+    for (const auto& fill : seen.applied) {
+        if (fill.label == "Long" && fill.opened > 0.0) {
+            entry = &fill;
+            ++entries;
+        }
+    }
+    aligned.one(entries, "Long fill count");
+    if (entry) {
+        aligned.require(entry->bar == step_entry_bar(step), "signal bar",
+                        entry->bar, step_entry_bar(step));
+        aligned.require(entry->after_calculation_close, "POOC close point",
+                        entry->after_calculation_close, true);
+        aligned.require(near(entry->opened, step.entry_qty), "row entry quantity",
+                        entry->opened, step.entry_qty);
+        aligned.require(near(entry->price, kStepBasePrice), "signal close price",
+                        entry->price, kStepBasePrice);
+    }
+    aligned.require(seen.stop_first_paths == 1, "N+1 stop-only crossing count",
+                    seen.stop_first_paths, 1);
+    if (!aligned.missing) {
+        aligned.actual = seen.stop_first_paths;
+        aligned.expected = 1;
+    }
+    return aligned;
+}
+
 std::vector<Comparison> step_checks(const Observed& seen, Mode mode) {
     const auto step = step_case(mode);
     std::vector<const Applied*> entries;
@@ -1309,7 +1316,7 @@ std::vector<Comparison> step_checks(const Observed& seen, Mode mode) {
     const double rest = entry != nullptr && partial != nullptr
         ? entry->opened - partial->closed : kNaN;                      // R4
     // The bar with the first crossing in this row's feed (bars_for).
-    const int first_bar = step.on_close ? (step.stop_first ? kPoocStopTouchBar : 1) : 2;
+    const int first_bar = step_entry_bar(step) + 1;
     const int partial_bar = step.stop_first ? first_bar + 1 : first_bar;
     const int full_bar = step.stop_first ? first_bar : first_bar + 1;
 
@@ -1400,6 +1407,17 @@ std::vector<Comparison> step_checks(const Observed& seen, Mode mode) {
     }
     if (!seen.applied.empty())
         for (auto& r : out) require_completed(r, seen, mode);
+    if (step.on_close && step.stop_first) {
+        const auto aligned = stop_first_alignment(seen, step);
+        if (aligned.missing) {
+            for (auto& c : out) {
+                const auto name = c.name;
+                c = aligned;
+                c.name = name;
+            }
+        }
+        out.insert(out.begin(), aligned);
+    }
     return out;
 }
 
@@ -1549,16 +1567,14 @@ bool run_g2_control(const char* selector, bool final_position_only) {
                           "observation source row", true))
         return false;
 
-    // The corrected A6 feed has applied both named exits before this prefix
-    // stops. Credit staleness only if its observation agrees with the real
-    // positive about the fills and is already flat.
+    // With the A7 feed, both exits are due before this prefix stops.
+    // Credit staleness only if it saw the stop-only crossing, agrees
+    // with the real positive about the fills, and is already flat.
     const Observed stale = observe_run(row, bars, end);
     const bool prefix_ok = verify_prefix(stale, row, end - 1, "STALE");
     Comparison snapshot{"two_exits_before_end_close", true};
-    snapshot.expect(stale.half_before_stop == 1, "working Half limit count",
-                    stale.half_before_stop, 1);
-    snapshot.expect(stale.rest_before_stop == 1, "working Rest stop count",
-                    stale.rest_before_stop, 1);
+    snapshot.expect(stale.stop_first_paths == 1, "N+1 stop-only crossing count",
+                    stale.stop_first_paths, 1);
     snapshot.expect(closing_fill_count(stale) == 2, "closing fill count",
                     closing_fill_count(stale), 2);
     snapshot.expect(near(stale.final_position, positive.final_position), "prefix final position",
@@ -1674,10 +1690,75 @@ bool run_retained_step_controls(Mode mode) {
                                  Mode::LiveEntryWholeStepsLimitFirst, stale);
 }
 
+bool run_step_checks_on_empty_input() {
+    const char* name = mode_name(Mode::StepChecksEmptyInput);
+    bool ok = run_retained_step_controls(Mode::StepChecksEmptyInput);
+    for (const Mode row : {Mode::PoocOddStepsStopFirst, Mode::PoocWholeStepsStopFirst}) {
+        const std::string prefix = std::string(mode_name(row)) + ":";
+        const auto results = step_checks(Observed{}, row);
+        ok = check(!results.empty(), name, (prefix + "checks_were_run").c_str()) && ok;
+        for (const auto& result : results)
+            ok = check(!result.ok && result.missing, name,
+                       (prefix + result.name).c_str()) && ok;
+    }
+    return ok;
+}
+
+// A real same-size limit-first run has the same order ids and entry point,
+// but offers no stop-only window on N+1. None of its results may be paired
+// with the stop-first row. First authenticate the donor itself.
+bool reject_other_crossing_order(const char* name, Mode row, Mode donor) {
+    const auto bars = bars_for(donor);
+    const auto seen = observe_run(donor, bars, static_cast<int>(bars.size()));
+    const auto own = step_case(donor);
+    const auto results = step_checks(seen, row);
+    const double limit = kStepBasePrice + kStepProfitTicks * kMinTick;
+    const Applied* entry = nullptr;
+    int entries = 0, limits_first = 0, stops_later = 0;
+    for (const auto& fill : seen.applied) {
+        if (fill.label == "Long" && fill.opened > 0.0) { ++entries; entry = &fill; }
+        if (fill.label == "Half" && fill.closed > 0.0 && fill.bar == step_entry_bar(own) + 1
+            && near(fill.price, limit)) ++limits_first;
+        if (fill.label == "Rest" && fill.closed > 0.0 && fill.bar == step_entry_bar(own) + 2
+            && near(fill.price, kStepStopPrice)) ++stops_later;
+    }
+    const bool completed = seen.error.empty() && seen.lifecycle == NativeLifecycleKind::Completed;
+    const bool donor_ready = completed && seen.end_close.visits == 1
+        && seen.stop_first_paths == 0 && entries == 1 && entry->after_calculation_close
+        && entry->bar == step_entry_bar(own) && near(entry->price, kStepBasePrice)
+        && near(entry->opened, own.entry_qty) && limits_first == 1 && stops_later == 1;
+    const std::string prefix = std::string(mode_name(row)) + ":other_touch_order:";
+    if (!donor_ready) {
+        for (const auto& r : results)
+            std::printf("CHECK mode=%s name=%s%s status=NOT COMPARED reason=stale donor "
+                        "actual=completed:%d,end:%d,first_stop_paths:%d,Long:%d,first_limit:%d,later_stop:%d "
+                        "expected=completed:1,end:1,first_stop_paths:0,Long:1,first_limit:1,later_stop:1\n",
+                        name, prefix.c_str(), r.name, completed, seen.end_close.visits,
+                        seen.stop_first_paths, entries, limits_first, stops_later);
+        return false;
+    }
+    bool ok = check(!results.empty(), name, (prefix + "checks_were_run").c_str());
+    for (const auto& r : results)
+        ok = check(!r.ok && r.missing && std::string_view(r.missing) == "N+1 stop-only crossing count",
+                   name, (prefix + r.name).c_str(), r.actual, r.expected) && ok;
+    return ok;
+}
+
+// The stale-input row, for both entry forms and the immediate-stop window.
+bool run_step_checks_on_stale_input() {
+    const char* name = mode_name(Mode::StepChecksStaleInput);
+    bool ok = run_retained_step_controls(Mode::StepChecksStaleInput);
+    ok = reject_other_crossing_order(name, Mode::PoocOddStepsStopFirst,
+                                     Mode::PoocOddStepsLimitFirst) && ok;
+    ok = reject_other_crossing_order(name, Mode::PoocWholeStepsStopFirst,
+                                     Mode::PoocWholeStepsLimitFirst) && ok;
+    return ok;
+}
+
 bool run_mode(Mode mode) {
     const char* name = mode_name(mode);
-    if (mode == Mode::StepChecksEmptyInput || mode == Mode::StepChecksStaleInput)
-        return run_retained_step_controls(mode);
+    if (mode == Mode::StepChecksEmptyInput) return run_step_checks_on_empty_input();
+    if (mode == Mode::StepChecksStaleInput) return run_step_checks_on_stale_input();
     Probe probe(mode);
     const auto bars = bars_for(mode);
     probe.fixture_retain_all_events();
@@ -1717,22 +1798,6 @@ bool run_mode(Mode mode) {
     if (is_step_mode(mode)) {
         const auto seen = observe(probe);
         const auto results = step_checks(seen, mode);
-        if (is_pooc_step_mode(mode) && step_stop_first(mode)) {
-            const bool ready = probe.stop_book_seen();
-            std::printf("CHECK mode=%s name=both_exits_working_before_stop status=%s "
-                        "actual=Half:%d,Rest:%d expected=Half:1,Rest:1 "
-                        "reason=%s\n", name, ready ? "PASS" : "NOT COMPARED",
-                        probe.half_before_stop, probe.rest_before_stop,
-                        probe.half_before_stop < 0 ? "observation bar did not run"
-                            : "working limit and stop counts before first touch");
-            if (!ready) {
-                for (const auto& r : results)
-                    std::printf("CHECK mode=%s name=%s status=NOT COMPARED reason=book prerequisite "
-                                "actual=Half:%d,Rest:%d expected=Half:1,Rest:1\n",
-                                name, r.name, probe.half_before_stop, probe.rest_before_stop);
-                return false;
-            }
-        }
         report_end_close(seen, mode, "ROW");
         return report_step_checks(results, name);
     }
