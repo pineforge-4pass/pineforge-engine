@@ -3470,8 +3470,7 @@ std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
                 scratch_put(scratch, {scratch_permutation, target++, 0, 0},
                             scratch_bytes(mapping.data(), sizeof mapping));
             });
-        // Apply disjoint permutation cycles with one saved Trade. Erasing a
-        // mapping marks that target visited in backing, without a RAM bitmap.
+        // One saved Trade carries each cycle; erasing a mapping marks its target visited.
         for (std::size_t cycle = start; cycle < end; ++cycle) {
             auto handle = scratch_find(scratch, {scratch_permutation, cycle, 0, 0});
             if (handle == ::pineforge::detail::scratch_no_handle) continue;
@@ -3485,13 +3484,13 @@ std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
                     scratch_buffer(mapping.data(), sizeof mapping)), scratch);
                 const auto source = static_cast<std::size_t>(mapping[0]);
                 const auto phase = static_cast<std::uint8_t>(mapping[1]);
-                // Both indices are global; only the adapter translates the
-                // sealed base. Clear an existing phase even when None moves
-                // here, without extending an absent all-None tail.
+                // The indices are global. Clear an existing phase when None
+                // moves here without extending an absent all-None tail.
                 if (phase != none || adapter.exit_phase_value(current) != none)
                     adapter.set_exit_phase(current, phase);
-                ++adapter.exit_group_work_.replacements; if (source == cycle) trades.replace(current, row);
-                else trades.replace(current, trades[source]);
+                ++adapter.exit_group_work_.replacements;
+                if (source == cycle) trades.replace_deferred(current, row);
+                else trades.replace_deferred(current, trades[source]);
                 if (replay)
                     replay->replace(current, source == cycle ? saved_replay : replay->trade(source));
                 require_trade_scratch(scratch.erase(handle), scratch);
@@ -3503,6 +3502,7 @@ std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
                                                   "incomplete trade scratch permutation");
             }
         }
+        trades.finish_replacements();
         transaction.finish(); adapter.finish_exit_group_sort(scratch, scratch_before);
         return start;
     }

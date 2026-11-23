@@ -530,6 +530,12 @@ statistics below with Pine's closed-trade statistics, aggregate C
 `gross_loss` sign conversion apply to the report as printed only when
 range-end reporting is off.
 
+`strategy.avg_trade_percent`, `strategy.avg_winning_trade_percent` and
+`strategy.avg_losing_trade_percent` read running totals over closed trades,
+so reading them takes constant time as the trade list grows. They use the
+same row order with or without a report sink. Report-only marks for
+positions still open at the end of the run do not enter these averages.
+
 | Pine | C++ | C | Runs in | Notes |
 | --- | --- | --- | --- | --- |
 | `strategy.account_currency` | No separate native account code | No separate native account code | `hello_kernel.cpp` / `native_fx_roll_strategy.cpp` | The instrument's quote code is `currency` native_run_spec.hpp:639 (`currency` pineforge.h:504). Pine uses the declared account code, or the quote code for `currency.NONE` or an omitted currency. A native host supplies the conversion directly: `account_fx` native_run_spec.hpp:650 is the positive scalar and `configure_native_fx_curve` native_host.hpp:1228 stages a timestamped curve. The FX-roll example runs a JPY account on a USD-quoted stock through such a curve, and a step of it is a margin check point of its own. |

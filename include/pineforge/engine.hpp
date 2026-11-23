@@ -1291,11 +1291,11 @@ protected:
         return (n > 0) ? (net_profit_sum_ / (double)n) : 0.0;
     }
     double avg_trade_percent() const {
-        double s = trade_percent_prefix_.all_sum;
-        std::size_t n = trade_percent_prefix_.all_count;
-        // Continue the original left fold over the resident rows.
-        for (const auto& t : trades_) { s += t.pnl_pct; ++n; }
-        return n > 0 ? s / static_cast<double>(n) : 0.0;
+        // Includes sealed rows and excludes report-only range-end marks.
+        const auto& fold = trades_.percent_fold();
+        return fold.all_count > 0
+            ? fold.all_sum / static_cast<double>(fold.all_count)
+            : 0.0;
     }
     double avg_winning_trade() const {
         return (win_trades_count_ > 0) ? (gross_profit_sum_ / (double)win_trades_count_) : 0.0;
@@ -1305,21 +1305,21 @@ protected:
     }
     double avg_winning_trade_percent() const {
         if (win_trades_count_ <= 0) return 0.0;
-        double s = trade_percent_prefix_.win_sum;
-        std::size_t c = trade_percent_prefix_.win_count;
-        for (const auto& t : trades_) {
-            if (t.pnl > 0.0) { s += t.pnl_pct; ++c; }
-        }
-        return (c > 0) ? (s / (double)c) : 0.0;
+        const auto& fold = trades_.percent_fold();
+        // Membership follows the money P&L, not the percentage's sign.
+        const auto count = fold.win_count;
+        const auto sum = fold.win_sum;
+        return count > 0
+            ? sum / static_cast<double>(count) : 0.0;
     }
     double avg_losing_trade_percent() const {
         if (loss_trades_count_ <= 0) return 0.0;
-        double s = trade_percent_prefix_.loss_sum;
-        std::size_t c = trade_percent_prefix_.loss_count;
-        for (const auto& t : trades_) {
-            if (t.pnl < 0.0) { s += t.pnl_pct; ++c; }
-        }
-        return (c > 0) ? (s / (double)c) : 0.0;
+        const auto& fold = trades_.percent_fold();
+        // Keep the sign of the stored losing percentages.
+        const auto count = fold.loss_count;
+        const auto sum = fold.loss_sum;
+        return count > 0
+            ? sum / static_cast<double>(count) : 0.0;
     }
     double open_trades_capital_held() const {
         if (position_side_ == PositionSide::FLAT) return 0.0;
@@ -2989,9 +2989,6 @@ protected:
     void fold_report_equity_extreme(double equity);
     void refold_equity_tail();
     void present_report_equity_tail(ReportC* out) const;
-    // Sealed closed rows only; range-end report rows never enter these sums.
-    // Each accessor continues its own sum one resident row at a time, so a
-    // separately accumulated tail cannot change floating-point grouping.
     struct TradePercentPrefix {
         double all_sum = 0.0;
         double win_sum = 0.0;
@@ -3000,6 +2997,9 @@ protected:
         std::size_t win_count = 0;
         std::size_t loss_count = 0;
     };
+    // Keep the old sealed-prefix layout for the previous inline accessors.
+    // The current accessors read the complete fold from TradeLedger.
+    // Sealing and reset still maintain this legacy prefix as before.
     // @broker-state begin
     TradePercentPrefix trade_percent_prefix_;
     // @broker-state end
