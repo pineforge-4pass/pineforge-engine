@@ -3402,7 +3402,8 @@ class PostFleetRunnerPolicy(unittest.TestCase):
         # "Where the full suites run" section and re-words the trigger map.
         # expectation corrected: 2170 -> 2177, because the shard/join contract
         # paragraph adds seven lines to docs/ci.md.
-        self.assertEqual(len(docs.splitlines()), 2177)
+        # expectation corrected: 2177 -> 2188, because the baseline promotion guard extends the CI guide.
+        self.assertEqual(len(docs.splitlines()), 2188)
         # The test-owned job catalog defines the protected label inventory.
         tables = re.findall(
             r"^\| Workflow \| Events/callers \| Inline jobs' `runs-on` \|\n"
@@ -5905,7 +5906,8 @@ class PreflightFailures(unittest.TestCase):
         # "Where the full suites run" section and re-words the trigger map.
         # expectation corrected: 2170 -> 2177, because the shard/join contract
         # paragraph adds seven lines to docs/ci.md.
-        self.assertEqual(len(text.splitlines()), 2177)
+        # expectation corrected: 2177 -> 2188, because the baseline promotion guard extends the CI guide.
+        self.assertEqual(len(text.splitlines()), 2188)
         slices = tuple(name for name in EXPECTED_PR_SLOW_ROWS
                        if name.startswith('test_ci_verify_slice_'))
         self.assertTrue(slices, 'verifier slice inventory must not be empty')
