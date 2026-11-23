@@ -254,15 +254,31 @@ template<class A> struct Schema {
             if constexpr (A::owning) {
                 if (!a.good()) return;
             }
+            const auto nonfill = [&](const OrderBirth& expected) {
+                if (!a.good()) return;
+                const auto& cursor = expected.cursor();
+                const double absent_price = expected.cursor_price();
+                // The fold normalizes NaNs; the absent price on the wire must match exactly.
+                if (bar != expected.bar() || timestamp != expected.timestamp()
+                    || domain != cursor.domain() || position != cursor.position()
+                    || index != cursor.index() || count != cursor.count()
+                    || std::memcmp(&price, &absent_price, sizeof price) != 0
+                    || first != expected.first_fill() || last != expected.last_fill()
+                    || ordinal != expected.evaluation_ordinal()) {
+                    a.in.status = Status::corrupt;
+                    return;
+                }
+                if constexpr (A::owning) value = expected;
+            };
             switch (cause) {
             case OrderBirthCause::Unattributed:
-                if constexpr (A::owning) value = OrderBirth{};
+                nonfill(OrderBirth{});
                 break;
             case OrderBirthCause::DirectCommand:
-                if constexpr (A::owning) value = OrderBirth::direct_command(bar,timestamp);
+                nonfill(OrderBirth::direct_command(bar,timestamp));
                 break;
             case OrderBirthCause::ChartEvaluation:
-                if constexpr (A::owning) value = OrderBirth::chart_evaluation(bar,timestamp);
+                nonfill(OrderBirth::chart_evaluation(bar,timestamp));
                 break;
             case OrderBirthCause::FillEvaluation: {
                 const bool segment = position != BirthCursorPosition::Point;
