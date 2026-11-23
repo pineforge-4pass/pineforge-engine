@@ -1102,9 +1102,20 @@ PF_API int  strategy_last_run_status(pf_strategy_t s);
  *  for a later plain historical replay must be explicitly turned back off.
  *  Effects when @p on is non-zero:
  *    1. `barstate.islast` is false for that bar.
- *    2. `session.islastbar` and `session.islastbar_regular` start from the
- *       open-ended session-close fact: ending the batch does not by
- *       itself close the forming bar's session. See the scope below.
+ *    2. Pine starts `session.islastbar_regular` and `session.islastbar`
+ *       from the kernel's open-ended session close, so ending the batch
+ *       does not by itself close the forming bar's session. For a regular
+ *       intraday bar that opens at or after a dated symbol calendar
+ *       interval's open and before its close (see
+ *       #strategy_set_syminfo_metadata), Pine sets both flags to whether
+ *       the bar's open plus one chart timeframe step reaches or passes the
+ *       dated close. On an extended-hours chart, `session.islastbar` can
+ *       also account for pre- and post-market bars. If the next retained
+ *       input at or after the end of a regular closing bar's interval
+ *       is post-market under the recurring session on the same local day,
+ *       Pine clears `session.islastbar` on the regular bar and keeps
+ *       `session.islastbar_regular` true. A later post-market bar can
+ *       carry `session.islastbar` instead.
  *    3. `bar_index` stays put; `last_bar_index` is frozen at the horizon
  *       bar (`horizon_bars - 1`), when @p horizon_bars > 0. `last_bar_time`
  *       is exact when the horizon bar is in the script-bar array, one
@@ -1113,27 +1124,32 @@ PF_API int  strategy_last_run_status(pf_strategy_t s);
  *       extrapolated from the first input bar instead.
  *    4. The range-end synthetic close row/trade is skipped (no
  *       `open_at_end` row); the final equity point keeps `open_profit`.
+ *    5. On interior bars, both kernel session-close facts agree when there
+ *       is a retained successor.
  *
- *  Scope: the Pine source host's scheduler applies these where it publishes
- *  a script bar to the generated script. The session-predicate step runs
- *  when the timeframe is supplied or detected from at least two bars in
- *  `run(bars, n)`. With fewer bars in that overload, `session.ismarket`
- *  and `session.islastbar` keep their reset-state `false` regardless of @p on.
+ *  Scope: the Pine host sets the session flags before publishing a script
+ *  bar when the timeframe is supplied or detected. In `run(bars, n)` with
+ *  fewer than two bars, the timeframe is undetected; `session.ismarket`
+ *  and both last-bar flags stay false.
  *
- *  In intraday batches, including under aggregation, the first retained
- *  input after a script bar maps to its successor. Both session-close
- *  facts use it when available: an in-session bar closes its day if the
- *  successor is out of session or belongs to another session day.
- *  Without a successor, the open-ended fact uses the calendar's next
- *  eligible input slot, across any declared breaks.
- *  A supplied Pine symbol calendar can override the close for covered
- *  regular intraday bars. On extended-hours charts, `session.islastbar`
- *  can account for pre- and post-market bars.
+ *  In intraday batches, including aggregation from a supported lower input
+ *  timeframe, the kernel uses the first retained input after the current
+ *  script bar to find its successor script bar. Both kernel close facts
+ *  mark an in-session bar as last if the successor is out of session or
+ *  belongs to another session day, even if the recurring session has
+ *  another slot that day. When no successor is available, the open-ended
+ *  close uses the next eligible input slot in the recurring session,
+ *  skipping declared breaks. This fallback cannot see an early close
+ *  absent from the session string.
+ *
+ *  The dated Pine symbol calendar does not change the kernel's schedule
+ *  or add bars. For the separate live probe protocol's input requirements,
+ *  see #strategy_set_probe_suppress_tail_logic.
  *  `strategy_stream_begin` refuses a handle with this flag set.
- *  Default off (@p on == 0): every historical run stays byte-identical to
- *  before this flag existed. The mode belongs to the Pine source host; on
- *  a host that models no still-forming tail bar (a bare kernel host) the
- *  call is accepted and inert, as it always was there. */
+ *  Default off (@p on == 0) keeps the ordinary historical batch semantics.
+ *  The Pine source host interprets this mode. A bare kernel host, which
+ *  models no still-forming tail bar, accepts the call and leaves its run
+ *  unchanged. */
 PF_API void strategy_set_realtime_tail(pf_strategy_t s, int on, int horizon_bars);
 /** Live probe tail suppression (spec §3.2): the LAST script bar of the array
  *  fed to every subsequent run() is matched but not calculated. The kernel
@@ -1687,13 +1703,13 @@ PF_API void strategy_set_syminfo_mintick(pf_strategy_t s, double mintick);
  *  (e.g. 50 for ES). Non-positive and NaN values record a typed refusal. Call before #run_backtest / #run_backtest_full. */
 PF_API void strategy_set_syminfo_pointvalue(pf_strategy_t s, double pointvalue);
 
-/** Inject a fundamental/exchange metadata value by Pine member name (e.g.
- *  "shares_outstanding_total"); un-injected reads return na. Quantity step: a
- *  declared "qty_step", or a finite "mincontract" > 0 while no "qty_step" is
- *  declared, sets the order quantity grid. Call before #run_backtest[_full].
- *  series_origin_ms declares the reference series' first bar open
- *  in epoch ms and enables chart EMA SMA seeding plus request.security warmup
- *  from the first whole bucket opening at/after that origin. */
+/** Set Pine metadata before #run_backtest or #run_backtest_full (unset fundamental reads return na).
+ *  `qty_step`, or finite positive `mincontract` when `qty_step` is unset, sets the quantity grid.
+ *  `series_origin_ms` names the first reference bar open in epoch ms for chart EMA SMA seeding
+ *  and request.security warmup from the first whole bucket opening at or after that origin.
+ *  For a Pine symbol calendar, set `symbol_calendar_days` to N. For each i from 0 to N - 1,
+ *  set `symbol_calendar_open:<i>` and `symbol_calendar_close:<i>` in epoch ms. The Pine host
+ *  installs the ascending, nonoverlapping intervals at run begin. */
 PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
                                           double value);
 
