@@ -16,4 +16,7 @@ when the merge commit on `main` carries the gated PR head's tree (PRs are
 squash-merged, so the head itself never lands on `main`), both required
 statuses are success on that head, and the maintainers' private campaign tool finds the merge gate's
 parity verdict for that tree; it then adopts the pair that verdict measured.
-Anything else exits green without promoting.
+Manual dispatch can re-fire a promotion from `main`. Its five inputs must
+match GitHub's record of a PR merged into `main`; missing or mismatched inputs
+fail the guard. After the guard succeeds, ineligible baselines exit green
+without promoting.

@@ -1,6 +1,6 @@
 # PineForge parity campaign — post-merge baseline promotion.
 #
-# Install into BOTH product repos, unchanged (the repo axis is auto-detected):
+# Promotion runs in both product repos (the repo axis is auto-detected):
 #   pineforge-engine/.github/workflows/promote-baseline.yml
 #   pineforge-codegen-oss/.github/workflows/promote-baseline.yml
 #
@@ -9,22 +9,23 @@
 # now on the base branch carries the gated PR head's TREE (a squash merge mints
 # a new commit; the strict up-to-date rule keeps its tree the head's), the gate
 # is green on that head, and `lab promote` finds the verdict that binds it:
-#   engine   pineforge/parity success on the PR head (pineforge/verify is advisory);
+#   engine   pineforge/verify and pineforge/parity success on the PR head;
 #            lab promote adopts the pair the merge gate's parity verdict
 #            measured — the merged engine with the codegen the sweep measured
 #            (ruling R2, 2026-09-26), PASS or neutral alike
-#   codegen  no failing check-run on the PR head; lab promote needs a pr-gate
-#            PASS binding (baseline engine, merged codegen), exact head
-# Otherwise it exits green without promoting.
+#   codegen  required gate success and no failing current check-run on the PR
+#            head; lab promote needs a pr-gate PASS binding (baseline engine,
+#            merged codegen), exact head
+# An ineligible baseline exits green after the guard succeeds.
 #
-# It runs on a push to main, using MAIN's own copy at refs/heads/main. The
-# Protected GKE runner group 15 admits this allowlisted workflow at that ref. The
-# promotion identity's WIF condition pins job_workflow_ref to
+# It runs on hosted runners using MAIN's own copy at refs/heads/main.
+# The promotion identity's WIF condition pins job_workflow_ref to
 # `<repo>/.github/workflows/promote-baseline.yml@refs/heads/main` and the run
 # ref to refs/heads/main, with no event restriction
 # (terraform/gcp/github-wif.tf:133-134), so a push to main satisfies both gates.
 # The pushed SHA must resolve to exactly one merged PR with that merge commit
-# and base main; no match or ambiguity skips promotion. It checks out and runs
+# and base main; no match or ambiguity skips promotion. A manual dispatch
+# must match the five fields of a PR merged into main. It checks out and runs
 # no PR code: it fetches the PR head's objects only to compare trees.
 #
 # The plane is GCP: the
@@ -83,10 +84,10 @@ on:
         description: "the PR number"
         required: true
       pr_url:
-        description: "the PR url (recorded in the merge receipt)"
+        description: "the PR URL in this repository (recorded in the merge receipt)"
         required: true
       merged_at:
-        description: "ISO-8601 merge time"
+        description: "UTC merge time in YYYY-MM-DDTHH:MM:SSZ form"
         required: true
 
 concurrency:
@@ -98,8 +99,7 @@ permissions:
   # commits/{sha}/pulls needs pull-request read access for the repo-scoped
   # token, including when this unchanged workflow is installed in a private repo.
   pull-requests: read
-  # The engine axis admits on pineforge/parity; pineforge/verify is advisory.
-  # Read `statuses`; the codegen axis reads check-runs: `checks`.
+  # Both axes read commit statuses; the codegen axis also reads check-runs.
   statuses: read
   checks: read
   # Workload identity federation mints the GCP credential from the job's own
@@ -143,6 +143,50 @@ jobs:
               for value in "$INPUT_MERGE_SHA" "$INPUT_HEAD_SHA" "$INPUT_PR_NUMBER" "$INPUT_PR_URL" "$INPUT_MERGED_AT"; do
                 [[ -n "${value//[[:space:]]/}" && "$value" != *$'\n'* && "$value" != *$'\r'* ]] || fail "empty or unreadable dispatch input"
               done
+              [[ "$INPUT_MERGE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "merge_commit must be a full lowercase commit SHA"
+              [[ "$INPUT_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "head_sha must be a full lowercase commit SHA"
+              [[ "$INPUT_PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || fail "pr_number must be a positive decimal integer"
+              [ "$INPUT_PR_URL" = "https://github.com/$REPO/pull/$INPUT_PR_NUMBER" ] || fail "pr_url must be the pull request URL in this repository"
+              [[ "$INPUT_MERGED_AT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail "merged_at must use YYYY-MM-DDTHH:MM:SSZ"
+              if ! dispatch_pr=$(gh api "repos/$REPO/pulls/$INPUT_PR_NUMBER"); then
+                fail "pr_number API lookup failed"
+              fi
+              python3 - 3<<<"$dispatch_pr" <<'DISPATCH_PY'
+          import json
+          import os
+
+          def fail(reason):
+              print(f"::error title=authz::{reason}")
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+                  summary.write(f"authz: REFUSED: {reason}\n")
+              raise SystemExit(1)
+
+          def reject_constant(value):
+              raise ValueError(f"invalid JSON constant: {value}")
+
+          try:
+              with open(3, encoding="utf-8") as stream:
+                  pr = json.load(stream, parse_constant=reject_constant)
+          except (OSError, ValueError, RecursionError):
+              fail("unreadable dispatch PR response")
+          number = pr.get("number") if isinstance(pr, dict) else None
+          if not (type(number) is int and str(number) == os.environ["INPUT_PR_NUMBER"]):
+              fail("pr_number does not match the PR API response")
+          base = pr.get("base")
+          if not (pr.get("state") == "closed" and pr.get("merged") is True
+                  and isinstance(base, dict) and base.get("ref") == "main"):
+              fail("dispatch PR is not merged into main")
+          head = pr.get("head")
+          fields = (
+              ("merge_commit", pr.get("merge_commit_sha"), "INPUT_MERGE_SHA"),
+              ("head_sha", head.get("sha") if isinstance(head, dict) else None, "INPUT_HEAD_SHA"),
+              ("pr_url", pr.get("html_url"), "INPUT_PR_URL"),
+              ("merged_at", pr.get("merged_at"), "INPUT_MERGED_AT"),
+          )
+          for name, actual, input_name in fields:
+              if actual != os.environ[input_name]:
+                  fail(f"{name} does not match the merged PR")
+          DISPATCH_PY
               printf '%s\n' "merge_sha=$INPUT_MERGE_SHA" "head_sha=$INPUT_HEAD_SHA" \
                 "pr_number=$INPUT_PR_NUMBER" "pr_url=$INPUT_PR_URL" \
                 "merged_at=$INPUT_MERGED_AT" "ok=true" >> "$GITHUB_OUTPUT"
@@ -372,14 +416,44 @@ jobs:
             if ! jq -es '
               reduce (.[][]) as $s ({};
                 if has($s.context) then . else .[$s.context] = $s.state end)
-              | .["pineforge/parity"] == "success"
+              | .["pineforge/verify"] == "success" and .["pineforge/parity"] == "success"
             ' <<< "$statuses" >/dev/null; then
-              echo "::notice::pineforge/parity must be success on $HEAD_SHA — skipping"
+              echo "::notice::pineforge/verify and pineforge/parity must both be success on $HEAD_SHA — skipping"
               echo "green=false" >> "$GITHUB_OUTPUT"; exit 0
             fi
           else
-            bad=$(gh api "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs" \
-              --jq '[.check_runs[] | select(.conclusion=="failure" or .conclusion=="cancelled" or .conclusion=="timed_out" or .conclusion=="action_required")] | length')
+            # A current gate status takes priority over the legacy gate
+            # check-run. Evaluate only the latest check-run of each app/name.
+            runs=$(gh api --paginate \
+              "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100")
+            check_result=$(jq -ers '
+              if length == 0 or any(.[]; (.check_runs | type) != "array") then
+                error("invalid check-runs response")
+              else
+                [.[].check_runs[]] | group_by([.app.id, .name]) | map(max_by(.id))
+                | [any(.name == "gate" and .conclusion == "success"),
+                   (map(select(.conclusion == "failure" or .conclusion == "cancelled"
+                               or .conclusion == "timed_out" or .conclusion == "action_required")) | length)]
+                | @tsv
+              end
+            ' <<< "$runs")
+            read -r gate bad <<< "$check_result"
+            gate_statuses=$(gh api --paginate \
+              "repos/${{ github.repository }}/commits/$HEAD_SHA/statuses?per_page=100")
+            gate_status=$(jq -ers '
+              if length == 0 or any(.[]; type != "array") then
+                error("invalid statuses response")
+              else
+                [ .[][] | select(.context == "gate") ][0]
+                | if . == null then "absent"
+                  elif .state == "success" then "success"
+                  else "blocked" end
+              end
+            ' <<< "$gate_statuses")
+            if [[ "$gate_status" != success && ( "$gate_status" != absent || "$gate" != true ) ]]; then
+              echo "::notice::the required gate context has not succeeded on $HEAD_SHA — not green; skipping"
+              echo "green=false" >> "$GITHUB_OUTPUT"; exit 0
+            fi
             if [ "$bad" != "0" ]; then
               echo "::notice::$bad failing check-run(s) on $HEAD_SHA — not green; skipping"
               echo "green=false" >> "$GITHUB_OUTPUT"; exit 0
@@ -412,11 +486,17 @@ jobs:
           ref: ${{ vars.WORKFLOW_REF || 'main' }}
           token: ${{ steps.app.outputs.token }}
           path: .workflow
+          persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: steps.ci.outputs.green == 'true'
         with:
           node-version: '22'
+
+      - name: Install campaign dependencies
+        if: steps.ci.outputs.green == 'true'
+        # Install before the auth action creates its GCP credentials.
+        run: npm ci --prefix .workflow/campaign
 
       - name: Authenticate to GCP
         if: steps.ci.outputs.green == 'true'
@@ -439,18 +519,23 @@ jobs:
           curl -fsSLo /tmp/cloud-sql-proxy \
             https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.1/cloud-sql-proxy.linux.amd64
           chmod +x /tmp/cloud-sql-proxy
+          if ( : </dev/tcp/127.0.0.1/5433 ) 2>/dev/null; then
+            echo "cloud-sql-proxy port 5433 is already in use" >&2
+            exit 1
+          fi
           /tmp/cloud-sql-proxy --port 5433 \
             gen-lang-client-0864094636:asia-east1:pineforge-workflow-pg &
-          for _ in $(seq 1 30); do
-            if (exec 3<>/dev/tcp/127.0.0.1/5433) 2>/dev/null; then exit 0; fi
+          proxy_pid=$!
+          for _ in {1..30}; do
+            if ! kill -0 "$proxy_pid" 2>/dev/null; then
+              echo "cloud-sql-proxy exited before becoming ready" >&2
+              exit 1
+            fi
+            if ( : </dev/tcp/127.0.0.1/5433 ) 2>/dev/null; then exit 0; fi
             sleep 1
           done
           echo "cloud-sql-proxy did not become ready" >&2
           exit 1
-
-      - name: Install campaign dependencies
-        if: steps.ci.outputs.green == 'true'
-        run: npm ci --prefix .workflow/campaign
 
       - name: Promote baseline
         if: steps.ci.outputs.green == 'true'
