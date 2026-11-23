@@ -492,7 +492,8 @@ bool check_b_pending(Probe& probe, const std::vector<Bar>& bars) {
     int half_bar = -1;
     ok = check(probe.b_relative_shadow_seen(), name,
                "relative_pending_shadow_seen") && ok;
-    ok = check(probe.b_relative_shadow_rank() == 0, name,
+    ok = check(probe.b_relative_shadow_seen()
+               && probe.b_relative_shadow_rank() == 0, name,
                "relative_pending_shadow_rank",
                static_cast<double>(probe.b_relative_shadow_rank()), 0) && ok;
     const bool entry_reached = has_applied(probe, "B", 0.0, 0.02, &entry_bar);
@@ -724,10 +725,12 @@ bool check_held_entry(Probe& probe, Mode mode, const std::vector<Bar>& bars) {
         if (closed > opened + 1e-9 || row.position_after < -1e-9)
             within_held = false;
     }
-    ok = check(within_held, name, "no_fill_exceeds_held_quantity") && ok;
+    ok = check(opened > 0.0 && within_held, name,
+               "no_fill_exceeds_held_quantity") && ok;
     ok = check(opened > 0.0 && near(closed, opened), name,
                "closed_equals_opened", closed, opened) && ok;
-    ok = check(near(probe.physical_position().signed_units, 0.0), name,
+    ok = check(opened > 0.0
+               && near(probe.physical_position().signed_units, 0.0), name,
                "final_position_flat",
                probe.physical_position().signed_units, 0.0) && ok;
 
