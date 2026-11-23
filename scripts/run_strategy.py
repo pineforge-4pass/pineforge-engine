@@ -79,7 +79,8 @@ import struct
 import sys
 import tempfile
 import time
-from contextlib import ExitStack
+import warnings
+from contextlib import ExitStack, suppress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
@@ -3359,6 +3360,84 @@ def _with_tail_bar(bars, n: int, tail: tuple):
     return extended, n + 1
 
 
+_OHLCV_TIMESTAMP = re.compile(r"[+-]?[0-9]+")
+_OHLCV_BAR_DTYPE = [
+    ("open", "<f8"), ("high", "<f8"), ("low", "<f8"),
+    ("close", "<f8"), ("volume", "<f8"), ("timestamp", "<i8"),
+]
+_OHLCV_TIMESTAMP_ERROR = "expected a decimal integer timestamp in the signed 64-bit range"
+
+
+def _parse_ohlcv_timestamp(cell: str | None) -> int:
+    if cell is None or not _OHLCV_TIMESTAMP.fullmatch(cell.strip()):
+        raise ValueError(_OHLCV_TIMESTAMP_ERROR)
+    stamp = int(cell)
+    if not -(2**63) <= stamp < 2**63:
+        raise ValueError(_OHLCV_TIMESTAMP_ERROR)
+    return stamp
+
+
+class _OhlcvTimestampError(ValueError):
+    pass
+
+
+def _ohlcv_timestamp_at(cell: str | None, path: Path, line: int) -> int:
+    try:
+        return _parse_ohlcv_timestamp(cell)
+    except ValueError:
+        raise _OhlcvTimestampError(
+            f"OHLCV CSV {path} line {line}: {_OHLCV_TIMESTAMP_ERROR}, got {cell!r}"
+        ) from None
+
+
+def _ohlcv_dict_rows(stream, path: Path):
+    reader = csv.DictReader(stream)
+    for row in reader:
+        # DictReader may skip a blank record without updating its own count.
+        yield row, _ohlcv_timestamp_at(row["timestamp"], path, reader.reader.line_num)
+
+
+def _numpy_ohlcv(np, stream, *, timestamps_only: bool = False,
+                 warn_empty: bool = False):
+    """Read selected columns without routing timestamps through a float."""
+    header = next(csv.reader(stream), ())
+    names = ("timestamp",) if timestamps_only else tuple(name for name, _ in _OHLCV_BAR_DTYPE)
+    cols = tuple(header.index(name) for name in names)
+    converters = {cols[-1]: _parse_ohlcv_timestamp}
+    dtype = "<i8" if timestamps_only else _OHLCV_BAR_DTYPE
+    try:
+        with warnings.catch_warnings():
+            if not warn_empty:
+                warnings.filterwarnings("ignore", message="loadtxt: input contained no data")
+            return np.loadtxt(stream, delimiter=",", comments=None, quotechar='"', usecols=cols,
+                              dtype=dtype, converters=converters, ndmin=1,
+                              encoding="utf-8")
+    except (ValueError, OverflowError):
+        # Replay through csv: NumPy row indices omit blank lines, and csv also
+        # handles quoted cells. Report an invalid timestamp's physical line.
+        pass
+    except TypeError as error:
+        # NumPy before 1.23 cannot recognize quoted delimiters.
+        if "unexpected keyword argument 'quotechar'" not in str(error):
+            raise
+    stream.seek(0)
+    return None
+
+
+def _ohlcv_timestamp_mask(np, stamps, start_ms, end_ms):
+    keep = np.ones(len(stamps), dtype=bool)
+    # Comparing int64 arrays with a bound outside int64 can promote to float.
+    if ((start_ms is not None and start_ms >= 2**63)
+            or (end_ms is not None and end_ms < -(2**63))):
+        keep.fill(False)
+        return keep
+    if start_ms is not None and start_ms > -(2**63):
+        keep &= stamps >= start_ms
+    if end_ms is not None and end_ms < 2**63 - 1:
+        keep &= stamps <= end_ms
+    return keep
+
+
 def _load_bars(csv_path: Path, *, ohlcv_start_ms: int | None = None,
                ohlcv_end_ms: int | None = None) -> tuple[ctypes.Array, int, str]:
     """Read OHLCV CSV (timestamp, open, high, low, close, volume) into BarC[].
@@ -3372,56 +3451,32 @@ def _load_bars(csv_path: Path, *, ohlcv_start_ms: int | None = None,
     Returns ``(effective_bars, effective_count, source_feed_sha256)``. The hash
     covers every parsed source row before either bound is applied.
     """
-    # Vectorized load: parsing the CSV and building the BarC[] with a per-bar
-    # Python/ctypes loop is ~99% of a run's wall time (the C++ backtest itself is
-    # ~20ms at ~27M bar/s). numpy parses the whole feed at once and BarC[] shares
-    # its exact memory layout (5x float64 + 1x int64, no padding), so a single
-    # from_buffer_copy builds the array with zero Python-level per-bar work
-    # (measured: 1m feed 4.93s -> 0.62s, byte-identical output). Falls back to the
-    # explicit loop if numpy is unavailable.
+    # NumPy parses the prices in bulk and packs BarC's layout directly. Only
+    # the timestamp field uses a Python converter, keeping millisecond values
+    # exact in the packed records and in the selection mask.
     try:
         import numpy as _np
     except ImportError:
         _np = None
-    if _np is not None:
-        with csv_path.open(newline="", encoding="utf-8") as f:
-            header = f.readline().strip().split(",")
-        col = {name: header.index(name)
-               for name in ("open", "high", "low", "close", "volume", "timestamp")}
-        a = _np.loadtxt(csv_path, delimiter=",", skiprows=1, ndmin=2)
-        source_n = len(a)
-        dt = _np.dtype([("open", "<f8"), ("high", "<f8"), ("low", "<f8"),
-                        ("close", "<f8"), ("volume", "<f8"), ("timestamp", "<i8")])
-        if dt.itemsize != _SOURCE_FEED_RECORD.size:  # pragma: no cover - invariant
-            raise RuntimeError("canonical OHLCV dtype does not match <5dq>")
-        source_rows = _np.empty(source_n, dtype=dt)
-        for name in ("open", "high", "low", "close", "volume"):
-            source_rows[name] = a[:, col[name]] if source_n else []
-        source_rows["timestamp"] = (
-            a[:, col["timestamp"]].astype("<i8") if source_n else [])
-        feed_hasher = _new_source_feed_hasher()
-        feed_hasher.update(memoryview(source_rows))
-        source_feed_sha256 = feed_hasher.hexdigest()
-
-        rows = source_rows
-        if a.size and (ohlcv_start_ms is not None or ohlcv_end_ms is not None):
-            ts = a[:, col["timestamp"]]
-            keep = _np.ones(len(a), dtype=bool)
-            if ohlcv_start_ms is not None:
-                keep &= ts >= ohlcv_start_ms
-            if ohlcv_end_ms is not None:
-                keep &= ts <= ohlcv_end_ms
-            rows = source_rows[keep]
-        n = len(rows)
-        bars = (BarC * n).from_buffer_copy(rows.tobytes()) if n else (BarC * 0)()
-        return bars, n, source_feed_sha256
-    # Fallback (no numpy): explicit parse + per-bar build.
     rows: list[tuple[float, float, float, float, float, int]] = []
     feed_hasher = _new_source_feed_hasher()
     with csv_path.open(newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            ts = int(row["timestamp"])
+        if _np is not None:
+            source_rows = _numpy_ohlcv(_np, f, warn_empty=True)
+            if source_rows is not None:
+                if source_rows.dtype.itemsize != _SOURCE_FEED_RECORD.size:  # pragma: no cover
+                    raise RuntimeError("canonical OHLCV dtype does not match <5dq>")
+                feed_hasher.update(memoryview(source_rows))
+                selected = source_rows
+                if ohlcv_start_ms is not None or ohlcv_end_ms is not None:
+                    keep = _ohlcv_timestamp_mask(
+                        _np, source_rows["timestamp"], ohlcv_start_ms, ohlcv_end_ms)
+                    selected = source_rows[keep]
+                n = len(selected)
+                bars = (BarC * n).from_buffer_copy(selected.tobytes()) if n else (BarC * 0)()
+                return bars, n, feed_hasher.hexdigest()
+
+        for row, ts in _ohlcv_dict_rows(f, csv_path):
             parsed = (float(row["open"]), float(row["high"]), float(row["low"]),
                       float(row["close"]), float(row["volume"]), ts)
             _update_source_feed_hash(feed_hasher, parsed)
@@ -3453,50 +3508,33 @@ def _load_aux_bars_snapshot(
     with csv_path.open("rb") as handle:
         snapshot = handle.read()
     source_file_sha256 = hashlib.sha256(snapshot).hexdigest()
-    lines = snapshot.splitlines()
-    if not lines:
+    if not snapshot:
         raise ValueError(
             f"auxiliary request.security OHLCV export is empty: {csv_path}")
-    header = lines[0].decode("utf-8-sig").strip().split(",")
-    col = {name: header.index(name)
-           for name in ("open", "high", "low", "close", "volume", "timestamp")}
 
     try:
         import numpy as _np
     except ImportError:
         _np = None
-    if _np is not None:
-        if any(line.strip() for line in lines[1:]):
-            data = _np.loadtxt(
-                io.BytesIO(snapshot), delimiter=",", skiprows=1, ndmin=2)
-        else:
-            data = _np.empty((0, len(header)), dtype="<f8")
-        count = len(data)
-        dtype = _np.dtype([
-            ("open", "<f8"), ("high", "<f8"), ("low", "<f8"),
-            ("close", "<f8"), ("volume", "<f8"), ("timestamp", "<i8"),
-        ])
-        rows = _np.empty(count, dtype=dtype)
-        for name in ("open", "high", "low", "close", "volume"):
-            rows[name] = data[:, col[name]] if count else []
-        rows["timestamp"] = (
-            data[:, col["timestamp"]].astype("<i8") if count else [])
-        canonical = _new_source_feed_hasher()
-        canonical.update(memoryview(rows))
-        bars = ((BarC * count).from_buffer_copy(rows.tobytes())
-                if count else (BarC * 0)())
-        return bars, count, canonical.hexdigest(), source_file_sha256
-
-    parsed_rows: list[tuple[float, float, float, float, float, int]] = []
     canonical = _new_source_feed_hasher()
-    reader = csv.DictReader(io.StringIO(snapshot.decode("utf-8-sig")))
-    for row in reader:
-        parsed = (
-            float(row["open"]), float(row["high"]), float(row["low"]),
-            float(row["close"]), float(row["volume"]), int(row["timestamp"]),
-        )
-        _update_source_feed_hash(canonical, parsed)
-        parsed_rows.append(parsed)
+    parsed_rows: list[tuple[float, float, float, float, float, int]] = []
+    with io.TextIOWrapper(io.BytesIO(snapshot), newline="", encoding="utf-8-sig") as f:
+        if _np is not None:
+            rows = _numpy_ohlcv(_np, f)
+            if rows is not None:
+                count = len(rows)
+                canonical.update(memoryview(rows))
+                bars = ((BarC * count).from_buffer_copy(rows.tobytes())
+                        if count else (BarC * 0)())
+                return bars, count, canonical.hexdigest(), source_file_sha256
+
+        for row, ts in _ohlcv_dict_rows(f, csv_path):
+            parsed = (
+                float(row["open"]), float(row["high"]), float(row["low"]),
+                float(row["close"]), float(row["volume"]), ts,
+            )
+            _update_source_feed_hash(canonical, parsed)
+            parsed_rows.append(parsed)
     count = len(parsed_rows)
     bars = (BarC * count)()
     for index, (open_, high, low, close, volume, timestamp) in enumerate(
@@ -3590,9 +3628,7 @@ def _load_window_ms(csv_path: Path) -> tuple[int, int]:
     first: int | None = None
     last: int | None = None
     with csv_path.open(newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            ts = int(row["timestamp"])
+        for _, ts in _ohlcv_dict_rows(f, csv_path):
             if first is None:
                 first = ts
             last = ts
@@ -3932,21 +3968,27 @@ def _trim_ohlcv_csv(ohlcv_path: Path, start_ms: int | None, end_ms: int | None) 
     downstream). The caller unlinks the file."""
     if start_ms is None and end_ms is None:
         return None
-    import tempfile
-    fd, p = tempfile.mkstemp(suffix=".csv", prefix="pf_ohlcv_")
-    out = Path(p)
-    with ohlcv_path.open(newline="", encoding="utf-8") as fin, \
-            os.fdopen(fd, "w", newline="") as fout:
-        r = csv.DictReader(fin)
-        w = csv.DictWriter(fout, fieldnames=r.fieldnames)
-        w.writeheader()
-        for row in r:
-            ts = int(row["timestamp"])
-            if start_ms is not None and ts < int(start_ms):
-                continue
-            if end_ms is not None and ts > int(end_ms):
-                continue
-            w.writerow(row)
+    out = None
+    try:
+        with ohlcv_path.open(newline="", encoding="utf-8") as fin, \
+                tempfile.NamedTemporaryFile(mode="w", newline="", suffix=".csv",
+                                            prefix="pf_ohlcv_", delete=False) as fout:
+            out = Path(fout.name)
+            r = csv.DictReader(fin)
+            w = csv.DictWriter(fout, fieldnames=r.fieldnames)
+            w.writeheader()
+            for row in r:
+                ts = _ohlcv_timestamp_at(row["timestamp"], ohlcv_path, r.reader.line_num)
+                if start_ms is not None and ts < int(start_ms):
+                    continue
+                if end_ms is not None and ts > int(end_ms):
+                    continue
+                w.writerow(row)
+    except BaseException:
+        if out is not None:
+            with suppress(OSError):
+                out.unlink()
+        raise
     return out
 
 
@@ -4152,28 +4194,20 @@ def _feed_timestamps(csv_path: Path, *, ohlcv_start_ms: int | None = None,
         import numpy as _np
     except ImportError:
         _np = None
-    if _np is not None:
-        import warnings
-        with csv_path.open(newline="", encoding="utf-8") as f:
-            header = f.readline().strip().split(",")
-        with warnings.catch_warnings():
-            # An empty feed: _load_bars already warns once for the run.
-            warnings.filterwarnings("ignore", message="loadtxt: input contained no data")
-            ts = _np.loadtxt(csv_path, delimiter=",", skiprows=1,
-                             usecols=header.index("timestamp"), ndmin=1).astype("<i8")
-        keep = _np.ones(len(ts), dtype=bool)
-        if ohlcv_start_ms is not None:
-            keep &= ts >= int(ohlcv_start_ms)
-        if ohlcv_end_ms is not None:
-            keep &= ts <= int(ohlcv_end_ms)
-        return [int(t) for t in ts[keep]]
+    start_ms = int(ohlcv_start_ms) if ohlcv_start_ms is not None else None
+    end_ms = int(ohlcv_end_ms) if ohlcv_end_ms is not None else None
     out: list[int] = []
     with csv_path.open(newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            ts_row = int(row["timestamp"])
-            if ohlcv_start_ms is not None and ts_row < int(ohlcv_start_ms):
+        if _np is not None:
+            # _load_bars already warns about an empty feed for the run.
+            ts = _numpy_ohlcv(_np, f, timestamps_only=True)
+            if ts is not None:
+                return ts[_ohlcv_timestamp_mask(_np, ts, start_ms, end_ms)].tolist()
+
+        for _, ts_row in _ohlcv_dict_rows(f, csv_path):
+            if start_ms is not None and ts_row < start_ms:
                 continue
-            if ohlcv_end_ms is not None and ts_row > int(ohlcv_end_ms):
+            if end_ms is not None and ts_row > end_ms:
                 continue
             out.append(ts_row)
     return out
@@ -4351,9 +4385,7 @@ def _describe_tv_entry_window(w: TvEntryWindow) -> str:
 def _infer_bar_interval_ms(csv_path: Path) -> int:
     prev: int | None = None
     with csv_path.open(newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            ts = int(row["timestamp"])
+        for _, ts in _ohlcv_dict_rows(f, csv_path):
             if prev is not None:
                 return max(1, ts - prev)
             prev = ts
@@ -4425,8 +4457,8 @@ def _daily_bars_rebuilt(chart_ohlcv: Path, feed: Path,
     earlier bar to step its last minute from), does not rebuild it."""
     chart: dict[int, tuple[float, ...]] = {}
     with chart_ohlcv.open(newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            chart[int(float(row["timestamp"]))] = tuple(
+        for row, ts in _ohlcv_dict_rows(f, chart_ohlcv):
+            chart[ts] = tuple(
                 float(row[k] or 0.0) for k in ("open", "high", "low", "close", "volume"))
     stamps = list(chart_ts)
     if not stamps:
@@ -4444,7 +4476,10 @@ def _daily_bars_rebuilt(chart_ohlcv: Path, feed: Path,
         cols = [header.index(name) for name in
                 ("timestamp", "open", "high", "low", "close", "volume")]
         for rec in reader:
-            ts = int(float(rec[cols[0]]))
+            if not rec:
+                continue
+            cell = rec[cols[0]] if len(rec) > cols[0] else None
+            ts = _ohlcv_timestamp_at(cell, feed, reader.line_num)
             if ts < stamps[0]:
                 continue
             while k + 1 < len(stamps) and ts >= stamps[k + 1]:
@@ -5352,6 +5387,8 @@ def _dump_harness_sink_json(document, destination):
 if __name__ == "__main__":
     try:
         sys.exit(main())
+    except _OhlcvTimestampError as error:
+        sys.exit(f"error: {error}")
     except RuntimeError as error:
         # The engine's run-failure code, before the traceback: the traceback's
         # last line stays the engine's text, as before.
