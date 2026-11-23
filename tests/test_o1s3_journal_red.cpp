@@ -891,7 +891,7 @@ std::vector<no::CommandEvent> native_examples(const no::RunIdentity& run) {
     for (std::size_t i = 0; i != states.size(); ++i)
         events.emplace_back(no::ActivatedEvent{0, before, no::ActivationKind::StopLimit,
             states[i], states[(i + 1) % states.size()], 97 + double(i), cursor});
-    applied.definition.reset(); // Absent shared values and terminal optionals.
+    // The terminal reason is optional; both applied scopes require the definition.
     applied.terminal = true; applied.terminal_reason.reset();
     applied.allowance_before = no::AllowanceUnset{};
     applied.scope = pineforge::execution::OpeningExposure{17, -71};
