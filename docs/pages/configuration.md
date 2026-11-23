@@ -26,12 +26,21 @@ strategy_set_input(s, "Source",          "close");
 | `bool`    | `"true"` / `"false"` |
 | `string`  | the string itself (no quoting) |
 | `source`  | one of `"open"`, `"high"`, `"low"`, `"close"`, `"hl2"`, `"hlc3"`, `"ohlc4"`, `"hlcc4"` |
-| `color`   | hex `"#RRGGBB"` or `"#AARRGGBB"` |
+| `color`   | packed ARGB as a decimal integer string, e.g. `"4294901760"` for opaque red |
 | `timeframe` | TV-style — `"1"`, `"5"`, `"60"`, `"1D"`, `"1W"` |
 
 The `key` is the input's title, exactly as it appears in the Pine
 `title=` argument. If no title was given, the runtime falls back to
 the variable identifier.
+
+If you leave an input unset, the script uses its default. When the script reads
+a numeric or boolean override, an empty or invalid value stops the run with an
+error naming the input. Use a complete number (`"12abc"` is invalid) and pass
+whole decimal strings for integers (`"12.5"` is invalid). The boolean getter
+also accepts `"1"` and `"0"`. With the legacy C setter, read the error after
+the run with `strategy_get_last_error`. The `--inputs` and `PINEFORGE_INPUTS`
+interfaces can report the error earlier when the strategy offers checked
+setters, which validate inputs before execution.
 
 @note Unknown keys are silently accepted and ignored. This lets
 harnesses set a superset of inputs across multiple strategies without

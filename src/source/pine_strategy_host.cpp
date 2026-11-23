@@ -764,9 +764,9 @@ void source::PineStrategyHost::on_native_run_begin() {
         rethrow_latched_setting(error);
     } catch (const std::exception& error) {
         const auto failure = classify_run_failure(error);
-        // An unsupported selected chart must fail the admitted generation at
-        // begin, before the native driver can consume input or capture results.
-        if (adapter_.stream_mode_ || failure.code == RunFailureCode::window_mode_unsupported) throw;
+        // Refuse invalid settings and unsupported selected charts before pumping input.
+        if (adapter_.stream_mode_ || failure.code == RunFailureCode::window_mode_unsupported
+            || failure.code == RunFailureCode::setting_rejected) throw;
         source_prepare_failed_ = true;
         note_run_failure(*this, std::string(error.what()), failure);
     } catch (...) {

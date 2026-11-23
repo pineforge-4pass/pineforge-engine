@@ -16,14 +16,16 @@
 #include "native_execution_consumer.hpp"
 #include "run_results_errors.hpp"
 
+#include <pineforge/run_failure.hpp>
 #include <pineforge/ta.hpp>
 
 #include <algorithm>
-#include <cctype>
-#include <deque>
 #include <cmath>
+#include <cstddef>
+#include <deque>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
 #include <unordered_set>
 
 namespace pineforge {
@@ -174,41 +176,68 @@ void BacktestEngine::reset_run_state() {
 }
 
 // --- Input injection helpers ---
-double BacktestEngine::get_input_double(const std::string& key, double default_val) const {
-    auto it = inputs_.find(key);
-    if (it != inputs_.end()) {
-        try { return std::stod(it->second); } catch (...) {}
-    }
-    return default_val;
+namespace {
+
+[[noreturn]] void reject_input(const std::string& key, const char* expected) {
+    const std::string input_error_message =
+        "Invalid value for input '" + key + "': expected " + expected;
+    throw coded<std::invalid_argument>(RunFailureCode::setting_rejected,
+        {{"input", key}, {"reason", "unparseable_value"}}, input_error_message);
 }
 
+template <typename T>
+T parse_numeric_input(const std::string& key, const std::string& text, const char* expected) {
+    // Preserve the conversion used for valid values; require it to consume all
+    // bytes and report its parse errors as rejected settings.
+    std::size_t consumed = 0;
+    T parsed{};
+    try {
+        if constexpr (std::is_same_v<T, double>) {
+            parsed = std::stod(text, &consumed);
+        } else if constexpr (std::is_same_v<T, int>) {
+            parsed = std::stoi(text, &consumed);
+        } else {
+            parsed = std::stoll(text, &consumed);
+        }
+    } catch (const std::invalid_argument&) {
+        reject_input(key, expected);
+    } catch (const std::out_of_range&) {
+        reject_input(key, expected);
+    }
+    if (consumed != text.size()) reject_input(key, expected);
+    if constexpr (std::is_floating_point_v<T>) {
+        if (!std::isfinite(parsed)) reject_input(key, expected);
+    }
+    return parsed;
+}
+
+}  // namespace
+
+double BacktestEngine::get_input_double(const std::string& key, double default_val) const {
+    const auto it = inputs_.find(key);
+    return it == inputs_.end() ? default_val
+                              : parse_numeric_input<double>(key, it->second, "a finite number");
+}
 
 int BacktestEngine::get_input_int(const std::string& key, int default_val) const {
-    auto it = inputs_.find(key);
-    if (it != inputs_.end()) {
-        try { return std::stoi(it->second); } catch (...) {}
-    }
-    return default_val;
+    const auto it = inputs_.find(key);
+    return it == inputs_.end() ? default_val
+                              : parse_numeric_input<int>(key, it->second, "an integer");
 }
-
 
 int64_t BacktestEngine::get_input_int64(const std::string& key, int64_t default_val) const {
-    auto it = inputs_.find(key);
-    if (it != inputs_.end()) {
-        try { return std::stoll(it->second); } catch (...) {}
-    }
-    return default_val;
+    const auto it = inputs_.find(key);
+    return it == inputs_.end() ? default_val
+                              : parse_numeric_input<int64_t>(key, it->second, "a 64-bit integer");
 }
 
-
 bool BacktestEngine::get_input_bool(const std::string& key, bool default_val) const {
-    auto it = inputs_.find(key);
-    if (it != inputs_.end()) {
-        const std::string& v = it->second;
-        if (v == "true" || v == "1") return true;
-        if (v == "false" || v == "0") return false;
-    }
-    return default_val;
+    const auto it = inputs_.find(key);
+    if (it == inputs_.end()) return default_val;
+    const std::string& v = it->second;
+    if (v == "true" || v == "1") return true;
+    if (v == "false" || v == "0") return false;
+    reject_input(key, "true, false, 1 or 0");
 }
 
 
