@@ -545,6 +545,16 @@ void test_stddev_recompute() {
     double r1 = sd1.recompute(val_B);
     double r2 = sd2.compute(val_B);
     CHECK_EQ(r1, r2, "StdDev recompute should equal fresh compute");
+
+    ta::StdDev seed(2);
+    seed.compute(1.0);
+    seed.compute(na<double>());
+    CHECK(seed.recompute(3.0) == 1.0, "A replacement can seed both moment sums");
+    CHECK(is_na(seed.recompute(na<double>())), "Removing the seed restores warm-up");
+    CHECK(seed.recompute(5.0) == 2.0, "Reseeding uses only the committed prefix");
+    CHECK(seed.compute(9.0) == 2.0, "The window now holds 5 and 9");
+    CHECK(seed.recompute(na<double>()) == 2.0, "Removing 9 restores the window of 1 and 5");
+    CHECK(seed.compute(3.0) == 1.0, "A retracted 9 must not enter the next window");
     printf("OK\n");
 }
 
