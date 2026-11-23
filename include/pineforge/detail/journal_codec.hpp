@@ -229,6 +229,21 @@ inline ScratchStatus finish(CommandScratchStore& store, ScratchStatus status) no
     }
     return status;
 }
+
+// Join the caller's transaction. Validate the value and length at the returned
+// handle while rollback is still possible; the caller's source is no longer read.
+template<class Validate>
+ScratchStatus put_checked(CommandScratchStore& store, std::uint64_t key,
+                         const ScratchByteSource& value, Validate validate) noexcept {
+    ScratchHandle handle = scratch_no_handle;
+    auto status = store.put(WordSource(key), value, handle);
+    if (status != ScratchStatus::ok) return status;
+    ScratchRecordInfo info;
+    status = store.point(handle, info);
+    if (status != ScratchStatus::ok) return status;
+    return validate(StoreSource(store, handle, info.value_bytes));
+}
+
 inline ScratchStatus put(CommandScratchStore& store, std::uint64_t key,
                          const ScratchByteSource& value) noexcept {
     auto status = store.begin();

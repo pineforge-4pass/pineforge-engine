@@ -2240,16 +2240,24 @@ void bind_journal_codec(WorkingRequestCore& core, detail::CommandScratchStore& s
 
 ReadStatus append_journal_record(WorkingRequestCore& core,
                                 const detail::ScratchByteSource& source) noexcept {
+    namespace jc = detail::journal_codec;
     if (!core.journal_ || !core.journal_->codec) return ReadStatus::programming_error;
     auto& journal = *core.journal_;
     if (journal.end == std::numeric_limits<uint64_t>::max())
         return ReadStatus::programming_error;
     uint64_t ordinal = 0;
-    auto status = scan_journal_record(source,
-        {journal.codec_page.data(), journal.codec_page.size()}, ordinal);
+    const auto validate = [&](const detail::ScratchByteSource& record) noexcept {
+        const auto status = scan_journal_record(record,
+            {journal.codec_page.data(), journal.codec_page.size()}, ordinal);
+        if (status != ReadStatus::ok) return status;
+        return ordinal > core.last_ordinal_ ? ReadStatus::ok : ReadStatus::corrupt;
+    };
+    auto status = validate(source);
     if (status != ReadStatus::ok) return status;
-    if (!ordinal || ordinal <= core.last_ordinal_) return ReadStatus::corrupt;
-    status = detail::journal_codec::put(*journal.codec, journal.end, source);
+    status = journal.codec->begin();
+    if (status != ReadStatus::ok) return status;
+    status = jc::put_checked(*journal.codec, journal.end, source, validate);
+    status = jc::finish(*journal.codec, status);
     if (status == ReadStatus::ok) {
         ++journal.end;
         core.last_ordinal_ = ordinal;
