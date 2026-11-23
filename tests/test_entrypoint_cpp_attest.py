@@ -30,9 +30,17 @@ class Box:
         self.indir = root / "in"
         self.prefix = root / "prefix"
         self.bin = root / "bin"
+        self.packages = root / "packages"
         self.called = root / "gxx-called"
         for d in (self.indir, self.prefix / "bin", self.prefix / "lib", self.prefix / "include", self.bin):
             d.mkdir(parents=True)
+        package = self.packages / "pineforge_codegen"
+        package.mkdir(parents=True)
+        (package / "__init__.py").touch()
+        (package / "cpp_allowlist.py").write_text(
+            "def check_generated_cpp(text):\n"
+            f"    return [] if text == {CPP_BYTES.decode()!r} else [object()]\n",
+            encoding="utf-8")
         (self.prefix / "lib" / "libpineforge.a").write_bytes(b"")
         gxx = self.bin / "g++"
         gxx.write_text(
@@ -54,7 +62,8 @@ class Box:
         env = {k: v for k, v in os.environ.items()
                if not k.startswith("PINEFORGE_")}
         env.update({"PATH": f"{self.bin}:{os.environ['PATH']}", "PINEFORGE_PREFIX": str(self.prefix),
-                    "PINEFORGE_IN_DIR": str(self.indir), "TMPDIR": str(self.root)})
+                    "PINEFORGE_IN_DIR": str(self.indir), "TMPDIR": str(self.root),
+                    "PYTHONPATH": str(self.packages), "PYTHONDONTWRITEBYTECODE": "1"})
         env.update(extra or {})
         return subprocess.run(["bash", str(ENTRYPOINT)], env=env, stdin=subprocess.DEVNULL,
                               capture_output=True, encoding="utf-8", errors="replace", check=False)

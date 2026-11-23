@@ -61,9 +61,11 @@ class Box:
         self.prefix = root / "prefix"
         self.tools = root / "tools"
         self.trace = root / "trace"
+        packages = root / "packages"
+        codegen = packages / "pineforge_codegen"
         self.processes = []
         for directory in (self.indir, self.prefix / "bin", self.prefix / "lib",
-                          self.tools, self.trace):
+                          self.tools, self.trace, codegen):
             directory.mkdir(parents=True)
         archive = Path(os.environ.get("PINEFORGE_ENTRYPOINT_TEST_ARCHIVE",
                                       str(ROOT / "build/lib/libpineforge.a"))).resolve()
@@ -89,7 +91,13 @@ class Box:
                 (self.prefix / "bin/bind_compiled_inventory.py", "binder.py")):
             destination.write_bytes((FIXTURES / source).read_bytes())
             destination.chmod(destination.stat().st_mode | stat.S_IXUSR)
-        (self.indir / "strategy.cpp").write_bytes((FIXTURES / "strategy.cpp").read_bytes())
+        fixture = (FIXTURES / "strategy.cpp").read_bytes()
+        (self.indir / "strategy.cpp").write_bytes(fixture)
+        (codegen / "__init__.py").touch()
+        # These rows isolate the compiler and its limits from the source policy.
+        (codegen / "cpp_allowlist.py").write_text(
+            "def check_generated_cpp(text):\n"
+            f"    return [] if text.startswith({fixture.decode()!r}) else [object()]\n")
         (self.indir / "ohlcv.csv").write_text(
             "timestamp,open,high,low,close,volume\n"
             "1700000000000,10,13,9,12,1\n"
@@ -100,6 +108,8 @@ class Box:
                     if not name.startswith(("PINEFORGE_", "PF_ENTRYPOINT_FIXTURE_"))}
         self.env.update({
             "PATH": f"{self.tools}:{os.environ['PATH']}",
+            "PYTHONPATH": str(packages),
+            "PYTHONDONTWRITEBYTECODE": "1",
             "PINEFORGE_PREFIX": str(self.prefix),
             "PINEFORGE_IN_DIR": str(self.indir),
             "PINEFORGE_ALLOW_UNATTESTED_CPP": "1",
@@ -240,6 +250,18 @@ def pipe_read_bytes(result, role="driver"):
     return sum(counts)
 
 
+def compare_frozen_compiler_argv(box, before, after):
+    mounted = os.fsencode(box.indir / "strategy.cpp")
+    snapshot = os.fsencode(box.root / "work/strategy.cpp")
+    assert before.argv and after.argv, (
+        f"NOT COMPARED: expected compiler argv from both runs; "
+        f"base={before.argv!r}, head={after.argv!r}")
+    base_args, head_args = before.argv.split(b"\0"), after.argv.split(b"\0")
+    assert base_args.count(mounted) == head_args.count(snapshot) == 1, (base_args, head_args)
+    assert mounted not in head_args
+    assert head_args == [snapshot if arg == mounted else arg for arg in base_args]
+
+
 def test_off_argv_environment_descriptors_and_success_bytes_match_frozen_main(box):
     before = box.run(entrypoint=box.reference, trace_processes=True)
     after = box.run(trace_processes=True)
@@ -248,24 +270,28 @@ def test_off_argv_environment_descriptors_and_success_bytes_match_frozen_main(bo
     assert before.artifact_sha256 is not None
     assert before.artifact_sha256 == after.artifact_sha256
     assert before.stderr == after.stderr
-    assert before.argv == after.argv
+    compare_frozen_compiler_argv(box, before, after)
     assert before.environment == after.environment
     assert before.records["driver"]["as"] == after.records["driver"]["as"]
     assert before.records["driver"]["cpu"] == after.records["driver"]["cpu"]
     assert before.records["driver"]["descriptors"] == after.records["driver"]["descriptors"]
     creations = r"\b(?:clone|clone3|fork|vfork)\("
     assert re.findall(creations, before.syscalls), "no process-creation observations"
-    assert re.findall(creations, before.syscalls) == re.findall(creations, after.syscalls)
+    assert re.findall(creations, after.syscalls), "no process-creation observations on head"
     executions = r'\bexecve\("([^"]+)"'
-    assert re.findall(executions, before.syscalls), "no exec observations"
-    assert re.findall(executions, before.syscalls) == re.findall(executions, after.syscalls)
+    before_execs, after_execs = (re.findall(executions, run.syscalls) for run in (before, after))
+    driver = str(box.tools / "g++")
+    assert driver in before_execs and driver in after_execs, (before_execs, after_execs)
+    # The entrypoint now has copy and policy processes before g++; the
+    # compiler and subsequent program launches still match the frozen run.
+    assert before_execs[before_execs.index(driver):] == after_execs[after_execs.index(driver):]
     assert before.records["driver"]["stdout"] == before.records["driver"]["stderr"]
     assert after.records["driver"]["stdout"] == after.records["driver"]["stderr"]
     assert Path(after.records["driver"]["parent_exe"]).samefile(shutil.which("bash"))
     assert after.argv.split(b"\0")[:-1] == [
         b"-std=c++17", b"-O2", b"-ffp-contract=off", b"-fPIC", b"-shared",
         os.fsencode(f"-I{box.prefix}/include"), b"-I/usr/include/eigen3",
-        os.fsencode(box.indir / "strategy.cpp"),
+        os.fsencode(box.root / "work/strategy.cpp"),
         b"-Wl,--whole-archive", os.fsencode(box.prefix / "lib/libpineforge.a"),
         b"-Wl,--no-whole-archive", b"-o", os.fsencode(box.root / "work/strategy.so")]
 
@@ -276,7 +302,7 @@ def test_explicit_limits_allow_an_ordinary_success_without_changing_compile_argv
     assert before.returncode == after.returncode == 0, (before.stderr, after.stderr)
     assert before.stdout == after.stdout
     assert before.stderr == after.stderr
-    assert before.argv == after.argv
+    compare_frozen_compiler_argv(box, before, after)
 
 
 @pytest.mark.parametrize("limits", [{}, {WALL: NEVER_REACHED_WALL, ADDRESS: str(2 << 30),
@@ -288,7 +314,8 @@ def test_real_syntax_failure_keeps_exit_three_and_the_original_bytes(box, limits
     after = box.run(limits)
     assert before.returncode == after.returncode == 3, (before.stderr, after.stderr)
     assert before.stdout == after.stdout == b""
-    assert before.stderr == after.stderr
+    assert before.stderr.replace(os.fsencode(box.indir / "strategy.cpp"),
+                                 os.fsencode(box.root / "work/strategy.cpp")) == after.stderr
     assert b"this is deliberately invalid C++;" in after.stderr, after.stderr
     assert b"fatal error:" not in after.stderr, after.stderr
     assert after.stderr.endswith(COMPILE_FAILURE)
@@ -429,7 +456,7 @@ def test_zero_wall_ceiling_keeps_the_frozen_direct_process_table(box):
     assert before.returncode == after.returncode == 0, (before.stderr, after.stderr)
     assert before.stdout == after.stdout == b'{"signals":[2.0,-3.0]}\n'
     assert before.stderr == after.stderr
-    assert before.argv == after.argv
+    compare_frozen_compiler_argv(box, before, after)
     before_environment = set(before.environment.rstrip(b"\0").split(b"\0"))
     after_environment = set(after.environment.rstrip(b"\0").split(b"\0"))
     assert after_environment - before_environment == {b"PINEFORGE_COMPILE_WALL_MS=0"}
