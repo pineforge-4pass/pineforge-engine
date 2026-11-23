@@ -5785,7 +5785,7 @@ class PreflightFailures(unittest.TestCase):
             (1, '        default: false', '        default: true'),
             (1, NATIVE_EXCLUSION, ''),
             # Baseline promotion starts from main's push and runs no PR code;
-            # it needs the newest parity status on the resolved PR head.
+            # it needs the newest verify and parity statuses on the resolved PR head.
             (2, '  push:\n    branches: [main]\n', '  pull_request:\n'),
             (2, '  statuses: read', '  checks: read'),
             (2, '  id-token: write', '  id-token: none'),
@@ -6009,7 +6009,7 @@ class PreflightFailures(unittest.TestCase):
 
     def test_baseline_promotion_rejects_later_pr_head_checkout(self):
         finding = ("baseline promotion must run main's copy and require "
-                   "the latest head parity status only (verify is advisory)")
+                   "the latest head verify and parity statuses")
         self.assertNotIn(finding, ci_workflow_findings(*self.ci_sources(),
                                                       others=self.other_sources()))
         anchor = '      - name: Mint an org App token to read the campaign tooling\n'
@@ -6021,11 +6021,15 @@ class PreflightFailures(unittest.TestCase):
         self.assertIn(finding, findings)
 
     def promotion_head_gate_result(self, pages, *, workflow=None,
-                                   token='fixture-token', api_exit=0):
+                                   token='fixture-token', api_exit=0, axis='engine',
+                                   check_pages=()):
         """Run the workflow's head gate with real jq and a fake API transport."""
         bash = shutil.which('bash')
-        if bash is None or shutil.which('jq') is None:
-            self.fail('NOT RUN: bash and jq are required for promotion head-status cases')
+        jq = shutil.which('jq')
+        if bash is None or jq is None:
+            self.fail('NOT COMPARED: promotion head gate tools; expected [bash and jq], '
+                      f'actual [bash {"present" if bash else "missing"}, '
+                      f'jq {"present" if jq else "missing"}]')
         workflow = self.ci_sources()[2] if workflow is None else workflow
         script = job_script(workflow, 'promote', 'Confirm the gate on the PR head')
         script = script.replace('${{ github.repository }}', 'owner/engine')
@@ -6035,47 +6039,49 @@ class PreflightFailures(unittest.TestCase):
             gh = root / 'gh'
             gh.write_text('#!' + sys.executable + ' -I\n'
                 'import json, os, pathlib, sys\n'
-                f'pages = {pages!r}\napi_exit = {api_exit!r}\n'
+                f'pages = {pages!r}\ncheck_pages = {check_pages!r}\napi_exit = {api_exit!r}\n'
                 'args = sys.argv[1:]\n'
                 'with pathlib.Path(__file__).with_name("lookup").open("a") as log:\n'
                 '    log.write(" ".join(args) + "\\n")\n'
-                'if (os.environ.get("GH_TOKEN") != "fixture-token" or args != '
-                '["api", "--paginate", "repos/owner/engine/commits/" + "a" * 40 '
-                '+ "/statuses?per_page=100"]):\n'
+                'endpoints = {"statuses": pages, "check-runs": check_pages}\n'
+                'prefix = "repos/owner/engine/commits/" + "a" * 40 + "/"\n'
+                'if os.environ.get("GH_TOKEN") != "fixture-token":\n'
                 '    raise SystemExit(2)\n'
-                'for page in pages: print(json.dumps(page))\n'
-                'raise SystemExit(api_exit)\n')
+                'for route, response in endpoints.items():\n'
+                '    if args == ["api", "--paginate", prefix + route + "?per_page=100"]:\n'
+                '        for page in response: print(json.dumps(page))\n'
+                '        raise SystemExit(api_exit)\n'
+                'raise SystemExit(2)\n')
             gh.chmod(0o755)
             output = root / 'outputs'
             lookup = root / 'lookup'
             result = subprocess.run(
                 [bash, '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
                 env={'PATH': directory + os.pathsep + os.environ.get('PATH', '/usr/bin:/bin'),
-                     'GH_TOKEN': token, 'HEAD_SHA': 'a' * 40, 'AXIS': 'engine',
+                     'GH_TOKEN': token, 'HEAD_SHA': 'a' * 40, 'AXIS': axis,
                      'GITHUB_OUTPUT': str(output)},
                 capture_output=True, text=True)
             return (result, output.read_text() if output.exists() else '',
                     lookup.read_text() if lookup.exists() else '')
 
-    def test_baseline_promotion_accepts_only_latest_parity(self):
+    def test_baseline_promotion_requires_the_latest_head_gate(self):
         sources = self.ci_sources()
-        # The published parity-only workflow is the positive input, unchanged.
-        # On the old checker this must fail with the actual contract finding.
         self.assertEqual(ci_workflow_findings(*sources), [])
         parity = {'context': 'pineforge/parity', 'state': 'success'}
         verify = {'context': 'pineforge/verify', 'state': 'success'}
         cases = (
-            ('parity-only', [[parity]], True),
-            ('verify-failed', [[{**verify, 'state': 'failure'}, parity]], True),
-            ('verify-pending', [[{**verify, 'state': 'pending'}, parity]], True),
+            ('parity-only', [[parity]], False),
+            ('verify-failed', [[{**verify, 'state': 'failure'}, parity]], False),
+            ('verify-pending', [[{**verify, 'state': 'pending'}, parity]], False),
             ('both-green', [[verify, parity]], True),
             ('verify-only', [[verify]], False),
             ('no-statuses', [[]], False),
             ('parity-failed', [[verify, {**parity, 'state': 'failure'}]], False),
             ('parity-pending', [[verify, {**parity, 'state': 'pending'}]], False),
             ('parity-on-later-page', [[verify], [parity]], True),
-            ('newer-red', [[{**parity, 'state': 'failure'}], [parity, verify]], False),
-            ('newer-pending', [[{**parity, 'state': 'pending'}], [parity]], False),
+            ('newer-parity-red', [[{**parity, 'state': 'failure'}], [parity, verify]], False),
+            ('newer-parity-pending', [[{**parity, 'state': 'pending'}], [parity, verify]], False),
+            ('newer-verify-red', [[{**verify, 'state': 'failure'}], [verify, parity]], False),
             ('newer-green', [[parity], [{**parity, 'state': 'failure'}, verify]], True),
         )
         for name, pages, green in cases:
@@ -6086,6 +6092,30 @@ class PreflightFailures(unittest.TestCase):
                 self.assertEqual(output, f'green={str(green).lower()}\n')
                 self.assertEqual(lookup, 'api --paginate repos/owner/engine/commits/'
                                  + 'a' * 40 + '/statuses?per_page=100\n')
+
+        gate = {'context': 'gate', 'state': 'success'}
+        pending = {**gate, 'state': 'pending'}
+        legacy = {'id': 10, 'app': {'id': 1}, 'name': 'gate', 'conclusion': 'success'}
+        smoke = {'id': 11, 'app': {'id': 1}, 'name': 'smoke', 'conclusion': 'failure'}
+        cases = (
+            ('no-gate', [[]], [[]], False),
+            ('legacy-only-on-later-page', [[]], [[], [legacy]], True),
+            ('legacy-superseded', [[]], [[legacy], [{**legacy, 'id': 12, 'conclusion': None}]], False),
+            ('status-only', [[gate]], [[]], True),
+            ('newer-pending-status', [[pending], [gate]], [[legacy]], False),
+            ('failing-run-on-later-page', [[gate]], [[legacy], [smoke]], False),
+            ('older-failure', [[gate]], [[smoke], [{**smoke, 'id': 12, 'conclusion': 'success'}]], True),
+        )
+        for name, statuses, runs, green in cases:
+            with self.subTest(codegen_gate=name):
+                result, output, lookup = self.promotion_head_gate_result(
+                    statuses, workflow=sources[2], axis='codegen',
+                    check_pages=[{'check_runs': page} for page in runs])
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(output, f'green={str(green).lower()}\n')
+                prefix = 'api --paginate repos/owner/engine/commits/' + 'a' * 40
+                self.assertEqual(lookup, prefix + '/check-runs?per_page=100\n'
+                                 + prefix + '/statuses?per_page=100\n')
 
     def test_baseline_promotion_head_gate_refuses_status_transport_errors(self):
         pages = [[{'context': 'pineforge/parity', 'state': 'success'}]]
@@ -6102,19 +6132,19 @@ class PreflightFailures(unittest.TestCase):
         self.assertEqual(ci_workflow_findings(*original), [])
         parity = '.["pineforge/parity"] == "success"'
         verify = '.["pineforge/verify"] == "success"'
+        required = verify + ' and ' + parity
         finding = ("baseline promotion must run main's copy and require "
-                   "the latest head parity status only (verify is advisory)")
-        for predicate in (verify + ' and ' + parity, parity + ' and ' + verify,
-                          parity + '\n              and ' + verify,
-                          '(' + parity, parity + ')', '((' + parity + ')',
-                          '(' + parity + '))', '(' + parity + ') or true',
-                          '(' + parity + ') and true', 'not (' + parity + ')',
-                          '(' + parity + ') | true',
-                          verify, 'true', '.["pineforge/parity"] == "failure"'):
+                   "the latest head verify and parity statuses")
+        for predicate in (verify + ' or ' + parity, '(' + required, required + ')',
+                          '((' + required + ')', '(' + required + '))',
+                          '(' + required + ') or true', '(' + required + ') and true',
+                          'not (' + required + ')', '(' + required + ') | true',
+                          verify, parity, 'true',
+                          required.replace('== "success"', '== "failure"', 1)):
             with self.subTest(predicate=predicate):
                 changed = original.copy()
                 changed[2] = in_step(changed[2], 'promote', 'Confirm the gate on the PR head',
-                                     parity, predicate)
+                                     required, predicate)
                 self.assertNotEqual(changed[2], original[2])
                 self.assertIn(finding, ci_workflow_findings(*changed))
 
@@ -6122,30 +6152,29 @@ class PreflightFailures(unittest.TestCase):
         original = self.ci_sources()
         self.assertEqual(ci_workflow_findings(*original), [])
         parity = '.["pineforge/parity"] == "success"'
+        verify = '.["pineforge/verify"] == "success"'
+        required = verify + ' and ' + parity
         finding = ("baseline promotion must run main's copy and require "
-                   "the latest head parity status only (verify is advisory)")
+                   "the latest head verify and parity statuses")
         cases = (
-            ('parenthesized-parity-only',
-             '(.["pineforge/parity"] == "success")', []),
+            ('parenthesized-verify-and-parity', '(' + required + ')', []),
             ('neither-required', 'true', [finding]),
-            ('parenthesized-verify-and-parity',
-             '(.["pineforge/verify"] == "success" and .["pineforge/parity"] == "success")',
-             [finding]),
-            ('verify-only', '.["pineforge/verify"] == "success"', [finding]),
+            ('parenthesized-parity-only', '(' + parity + ')', [finding]),
+            ('verify-only', verify, [finding]),
         )
         for name, predicate, expected in cases:
             with self.subTest(policy=name):
                 changed = original.copy()
                 changed[2] = in_step(changed[2], 'promote', 'Confirm the gate on the PR head',
-                                     parity, predicate)
+                                     required, predicate)
                 self.assertNotEqual(changed[2], original[2])
                 self.assertEqual(ci_workflow_findings(*changed), expected)
-        for predicate in ('  ' + parity + '  ', '( ( ' + parity + ' ) )',
-                          '(\n              ( ' + parity + ' )\n              )'):
+        for predicate in ('  ' + required + '  ', '( ( ' + required + ' ) )',
+                          '(\n              ( ' + required + ' )\n              )'):
             with self.subTest(wrapping=predicate):
                 changed = original.copy()
                 changed[2] = in_step(changed[2], 'promote', 'Confirm the gate on the PR head',
-                                     parity, predicate)
+                                     required, predicate)
                 self.assertNotEqual(changed[2], original[2])
                 self.assertEqual(ci_workflow_findings(*changed), [])
 
@@ -6331,7 +6360,7 @@ class PreflightFailures(unittest.TestCase):
                 self.assertIn(before, changed[2])
                 changed[2] = changed[2].replace(before, after, 1)
                 self.assertIn("baseline promotion must run main's copy and require "
-                              "the latest head parity status only (verify is advisory)",
+                              "the latest head verify and parity statuses",
                               ci_workflow_findings(*changed))
 
     @staticmethod
@@ -10478,18 +10507,20 @@ class BaselinePromotionResolution(unittest.TestCase):
         self.assertNotIn('::notice::', stdout)
         self.assertTrue(called)
 
-    def test_dispatch_returns_exact_inputs_without_a_pr_lookup(self):
-        values, stdout, called = self.run_resolver(
-            [[self.merged_pr()]], sha='f' * 40, event='workflow_dispatch', inputs={
-                'INPUT_MERGE_SHA': 'd' * 40, 'INPUT_HEAD_SHA': 'e' * 40,
-                'INPUT_PR_NUMBER': '712', 'INPUT_PR_URL': 'https://github.com/owner/engine/pull/712',
-                'INPUT_MERGED_AT': '2026-10-20T01:02:03Z'})
-        self.assertEqual(values, {
+    def test_dispatch_returns_exact_inputs_after_verifying_the_pr(self):
+        record = self.resolver_record(
+            [[self.merged_pr()]], sha='f' * 40, event='workflow_dispatch',
+            inputs=self.dispatch_inputs(), details=self.dispatch_pr())
+        self.assertEqual(record['values'], {
             'merge_sha': 'd' * 40, 'head_sha': 'e' * 40, 'pr_number': '712',
             'pr_url': 'https://github.com/owner/engine/pull/712',
             'merged_at': '2026-10-20T01:02:03Z', 'ok': 'true'})
-        self.assertNotIn('::notice::', stdout)
-        self.assertFalse(called)
+        self.assertNotIn('::notice::', record['resolver'].stdout)
+        self.assertEqual(record['lookup'], 'api repos/owner/engine/pulls/712\n')
+
+    def dispatch_pr(self):
+        return self.merged_pr(sha='d' * 40, head='e' * 40, number=712,
+                              merged_at='2026-10-20T01:02:03Z')
 
     def dispatch_inputs(self):
         return {'INPUT_MERGE_SHA': 'd' * 40, 'INPUT_HEAD_SHA': 'e' * 40,
@@ -10681,12 +10712,12 @@ class BaselinePromotionResolution(unittest.TestCase):
 
     def test_dispatch_keeps_its_guard_arm_and_all_five_inputs(self):
         record = self.resolver_record([], event='workflow_dispatch', inputs=self.dispatch_inputs(),
-                                       authorize=True)
+                                       details=self.dispatch_pr(), authorize=True)
         self.assertEqual(record['authorization'].returncode, 0,
                          record['authorization'].stdout + record['authorization'].stderr)
         self.assertEqual(record['authorized'], 'ok=true\n')
         self.assertIn('authz: allowed (workflow_dispatch)', record['summary'])
-        self.assertEqual(record['lookup'], '')
+        self.assertEqual(record['lookup'], 'api repos/owner/engine/pulls/712\n')
         for key in self.dispatch_inputs():
             for value in ('', '   ', 'bad\nok=true', 'bad\rvalue'):
                 with self.subTest(input=key, value=value):
@@ -10696,6 +10727,38 @@ class BaselinePromotionResolution(unittest.TestCase):
                     self.assertEqual(values, {})
                     self.assertFalse(called)
                     self.assertIn('empty or unreadable dispatch input', stdout)
+        pr = self.dispatch_pr()
+        cases = (
+            ('pr_number', dict(pr, number=713), 'pr_number does not match'),
+            ('merge_commit', dict(pr, merge_commit_sha='c' * 40), 'merge_commit does not match'),
+            ('head_sha', dict(pr, head={'sha': 'c' * 40}), 'head_sha does not match'),
+            ('pr_url', dict(pr, html_url='https://github.com/owner/other/pull/712'),
+             'pr_url does not match'),
+            ('merged_at', dict(pr, merged_at='2026-10-21T01:02:03Z'), 'merged_at does not match'),
+            ('unmerged', dict(pr, merged=False), 'dispatch PR is not merged into main'),
+            ('wrong base', dict(pr, base={'ref': 'other'}), 'dispatch PR is not merged into main'),
+        )
+        for field, details, reason in cases:
+            with self.subTest(api_field=field):
+                refused = self.resolver_record(
+                    [], event='workflow_dispatch', inputs=self.dispatch_inputs(), details=details,
+                    detail_number=712, authorize=True, expected_code=1)
+                self.assertEqual(refused['lookup'], 'api repos/owner/engine/pulls/712\n')
+                self.assertEqual(refused['values'], {})
+                self.assertIsNone(refused['authorization'])
+                self.assertIn('authz: REFUSED: ' + reason, refused['summary'])
+        for raw_details, detail_exit, reason in (
+                ('', 0, 'unreadable dispatch PR response'),
+                ('{}', 0, 'pr_number does not match'),
+                (None, 1, 'pr_number API lookup failed')):
+            with self.subTest(response=raw_details, exit_code=detail_exit):
+                refused = self.resolver_record(
+                    [], event='workflow_dispatch', inputs=self.dispatch_inputs(), details=pr,
+                    raw_details=raw_details, detail_exit=detail_exit, authorize=True, expected_code=1)
+                self.assertEqual(refused['lookup'], 'api repos/owner/engine/pulls/712\n')
+                self.assertEqual(refused['values'], {})
+                self.assertIsNone(refused['authorization'])
+                self.assertIn('authz: REFUSED: ' + reason, refused['summary'])
 
     def test_push_and_dispatch_refuse_unsupported_refs_before_api_or_checkout(self):
         for event in ('push', 'workflow_dispatch'):
@@ -10713,7 +10776,7 @@ class BaselinePromotionResolution(unittest.TestCase):
         cases = (
             ('          [ "$REF" = refs/heads/main ] || fail "baseline promotion requires refs/heads/main"\n',
              '', {'event': 'workflow_dispatch', 'ref': 'refs/heads/develop',
-                   'inputs': self.dispatch_inputs()}),
+                   'inputs': self.dispatch_inputs(), 'details': self.dispatch_pr()}),
             ('pr.get("merged") is not True', 'False',
              {'details': dict(self.merged_pr(), merged=False)}),
             ('field(pr, "head", "sha") != field(selected, "head", "sha")', 'False',

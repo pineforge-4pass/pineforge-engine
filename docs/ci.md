@@ -1386,32 +1386,40 @@ tooling) runs `main`'s own copy on a `push` to `main` and runs no PR code.
 It resolves the pushed SHA through the commit's associated PRs, requiring
 exactly one merged PR whose `merge_commit_sha` is that SHA and whose base is
 `main`; no match or ambiguity exits green with a notice. Manual dispatch
-retains its five merge inputs. It requires `pineforge/parity` success on
-the resolved PR head (`pineforge/verify` is advisory) and a merge commit on `main` that carries
-exactly that head's tree (PRs are squash-merged, so the head itself never lands
-on the base branch). It hands the campaign tool the merge commit, the PR head and that
+requires five inputs: the merge commit, PR head, PR number, PR URL and UTC
+merge time (`YYYY-MM-DDTHH:MM:SSZ`). The PR API must confirm all five values
+and that the PR was merged into `main`. Both triggers require the latest
+`pineforge/verify` and `pineforge/parity` statuses to be successful on the
+resolved PR head and a merge commit on `main` that carries exactly that head's
+tree (PRs are squash-merged, so the head itself never lands on the base branch).
+It hands the campaign tool the merge commit, the PR head and that
 tree, and the tool promotes the pair the merge gate's parity verdict measured
 for the tree; after the guard succeeds, ineligible baseline cases exit green
 without promoting.
 
-`promote-guard` resolves the pushed SHA and must pass before the credential job runs.
-It reads the selected PR's full API response to obtain the merger, checking
+`promote-guard` must pass before the credential job runs.
+On a push, it reads the selected PR's full API response to obtain the merger, checking
 that its merge commit, base, head and merge time match the selected result.
 The guard has only `pull-requests: read` permission for
 these API reads, with no checkout, release secrets or OIDC permission.
-Every resolved PR requires a non-fork head in this repository and an author whose association is `OWNER`, `MEMBER` or `COLLABORATOR`, whose login is an allowlisted bot, or whose GitHub permission is `admin`, `maintain` or `write`.
+On a push, the PR requires a non-fork head in this repository and an author whose association is `OWNER`, `MEMBER` or `COLLABORATOR`, whose login is an allowlisted bot, or whose GitHub permission is `admin`, `maintain` or `write`.
 The permission fallback admits private organization members reported as `CONTRIBUTOR`; a failed or empty author lookup refuses promotion.
 The merger login must be nonempty and must be an allowlisted bot or have `admin`, `maintain` or `write` permission; a failed or empty lookup refuses promotion.
 Every required PR identity field must be readable and nonempty; an invalid field fails red.
 Only `dependabot[bot]` and `pineforge-app[bot]` are allowlisted bots.
-Manual `workflow_dispatch` events pass the guard because dispatch requires write access.
+Manual `workflow_dispatch` requires write access. A missing or mismatched
+dispatch input fails the guard and leaves the credential job skipped.
 Every other event fails the guard before credentials are available.
+
 Pushes are restricted to `branches: [main]`, resolved PRs must target `main`,
 and the guard refuses a manual dispatch on any ref except `refs/heads/main`.
 The credential job needs the guard and requires both its successful result
 and the authorization step's `ok=true` output. A skipped or failed guard, or
 a resolver skip, cannot start that job. All merge metadata comes from the
 guard's outputs; push payloads supply no PR identity fields.
+
+The campaign tooling checkout uses its read-only App token only to fetch the
+repository. Dependencies install before the GCP authentication step.
 
 The full corpus sweep remains a separate acceptance step. The nightly and
 manual corpus workflow, and the maintainers' full parity verification, keep
@@ -1784,8 +1792,9 @@ which is then re-fired by manual dispatch.
 
 The named promotion exception requires exactly `push` and
 `workflow_dispatch`, pins the push filter to `branches: [main]`, and requires
-the shared concurrency group without cancellation. Its resolver reads page
-JSON from file descriptor 3, with the SHA passed through the environment.
+the shared concurrency group without cancellation. On push, its resolver
+reads page JSON from file descriptor 3, with the SHA passed through the
+environment.
 Malformed or excessively nested JSON, or a response that is not an array of
 page arrays of PR objects, exits green with a notice and `ok=false`, without
 merge metadata. The pins retain all four PR conditions and the exactly-one
@@ -1793,6 +1802,8 @@ rule. Tests run the real resolver against fixture API responses, including
 multiple pages and responses larger than Linux's per-environment-string limit.
 A full API read of the selected PR must still match its merge, base, head and
 merge time, and supply readable identity fields; failures there refuse red.
+Manual dispatch reads the full PR record through the same file descriptor.
+An unreadable response or a record that does not match the inputs fails the guard.
 
 Legacy `PF_CI_LABELS` metadata does not select runners. Verification and
 parity commands use `$(getconf _NPROCESSORS_ONLN)` for parallelism.

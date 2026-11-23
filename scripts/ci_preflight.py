@@ -839,6 +839,50 @@ PROMOTE_GUARD = r'''  promote-guard:
               for value in "$INPUT_MERGE_SHA" "$INPUT_HEAD_SHA" "$INPUT_PR_NUMBER" "$INPUT_PR_URL" "$INPUT_MERGED_AT"; do
                 [[ -n "${value//[[:space:]]/}" && "$value" != *$'\n'* && "$value" != *$'\r'* ]] || fail "empty or unreadable dispatch input"
               done
+              [[ "$INPUT_MERGE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "merge_commit must be a full lowercase commit SHA"
+              [[ "$INPUT_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "head_sha must be a full lowercase commit SHA"
+              [[ "$INPUT_PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || fail "pr_number must be a positive decimal integer"
+              [ "$INPUT_PR_URL" = "https://github.com/$REPO/pull/$INPUT_PR_NUMBER" ] || fail "pr_url must be the pull request URL in this repository"
+              [[ "$INPUT_MERGED_AT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail "merged_at must use YYYY-MM-DDTHH:MM:SSZ"
+              if ! dispatch_pr=$(gh api "repos/$REPO/pulls/$INPUT_PR_NUMBER"); then
+                fail "pr_number API lookup failed"
+              fi
+              python3 - 3<<<"$dispatch_pr" <<'DISPATCH_PY'
+          import json
+          import os
+
+          def fail(reason):
+              print(f"::error title=authz::{reason}")
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+                  summary.write(f"authz: REFUSED: {reason}\n")
+              raise SystemExit(1)
+
+          def reject_constant(value):
+              raise ValueError(f"invalid JSON constant: {value}")
+
+          try:
+              with open(3, encoding="utf-8") as stream:
+                  pr = json.load(stream, parse_constant=reject_constant)
+          except (OSError, ValueError, RecursionError):
+              fail("unreadable dispatch PR response")
+          number = pr.get("number") if isinstance(pr, dict) else None
+          if not (type(number) is int and str(number) == os.environ["INPUT_PR_NUMBER"]):
+              fail("pr_number does not match the PR API response")
+          base = pr.get("base")
+          if not (pr.get("state") == "closed" and pr.get("merged") is True
+                  and isinstance(base, dict) and base.get("ref") == "main"):
+              fail("dispatch PR is not merged into main")
+          head = pr.get("head")
+          fields = (
+              ("merge_commit", pr.get("merge_commit_sha"), "INPUT_MERGE_SHA"),
+              ("head_sha", head.get("sha") if isinstance(head, dict) else None, "INPUT_HEAD_SHA"),
+              ("pr_url", pr.get("html_url"), "INPUT_PR_URL"),
+              ("merged_at", pr.get("merged_at"), "INPUT_MERGED_AT"),
+          )
+          for name, actual, input_name in fields:
+              if actual != os.environ[input_name]:
+                  fail(f"{name} does not match the merged PR")
+          DISPATCH_PY
               printf '%s\n' "merge_sha=$INPUT_MERGE_SHA" "head_sha=$INPUT_HEAD_SHA" \
                 "pr_number=$INPUT_PR_NUMBER" "pr_url=$INPUT_PR_URL" \
                 "merged_at=$INPUT_MERGED_AT" "ok=true" >> "$GITHUB_OUTPUT"
@@ -5640,11 +5684,9 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
         for job, body in _jobs(workflow).items():
             if any(_CONTINUE_ON_ERROR.match(line) for line in _code(body)):
                 findings.append(f'{name} job {job} must not continue on error')
-    # Baseline promotion is pineforge-workflow's campaign/ci/promote-baseline.yml,
-    # installed unchanged. Main's own copy runs on push to main and resolves
-    # exactly one merged PR in the guard before authorizing its API identities.
-    # PR objects are fetched only for tree comparison. Both events retain
-    # the newest engine head parity status and the codegen check-run rule.
+    # Main's copy resolves one merged PR on push or verifies the dispatch
+    # inputs against GitHub before admitting promotion. PR objects are fetched
+    # only for tree comparison. Both events read the latest required verdicts.
     promote_job = _jobs(promote).get('promote', '')
     guard_job = _jobs(promote).get('promote-guard', '')
     guard_steps = _steps(guard_job)
@@ -5707,15 +5749,17 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             or any(_step_values(step, 'if') != ["steps.ci.outputs.green == 'true'"]
                    for step in promote_steps[4:])):
         findings.append('baseline promotion must guard resolution, tree and gate checks before credentials')
+    engine_gate, _, codegen_gate = head_gate.partition('\n          else\n')
     head_predicates = re.findall(r'^[ \t]*\|[ \t]*(.*?)\s*\' <<< "\$statuses"',
-                                 head_gate, re.MULTILINE | re.DOTALL)
+                                 engine_gate, re.MULTILINE | re.DOTALL)
     for index, predicate in enumerate(head_predicates):
         predicate = predicate.strip()
-        # Only whole-expression wrappers may surround the exact parity atom.
-        # Unbalanced wrappers and compound expressions cannot reduce to it.
+        # Allow wrapping around the entire required conjunction.
         while predicate.startswith('(') and predicate.endswith(')'):
             predicate = predicate[1:-1].strip()
-        head_predicates[index] = predicate
+        head_predicates[index] = ' '.join(predicate.split())
+    required_head = '.["pineforge/verify"] == "success" and .["pineforge/parity"] == "success"'
+    status_pages = '/commits/$HEAD_SHA/statuses?per_page=100'
     if (_events(promote) != {'push', 'workflow_dispatch'}
             or re.search(r'^  pull_request(?:_target)?:', promote, re.MULTILINE)
             or '  statuses: read' not in promote
@@ -5724,14 +5768,15 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             or promote.count('needs.promote-guard.outputs.head_sha') != 3
             or promote.count('needs.promote-guard.outputs.pr_number') != 2
             or promote.count('refs/pull/') != 1
-            or '/commits/$HEAD_SHA/statuses?per_page=100' not in head_gate
-            or 'gh api --paginate' not in head_gate
-            or 'reduce (.[][]) as $s' not in head_gate
-            or 'if has($s.context) then . else .[$s.context] = $s.state end' not in head_gate
-            or head_predicates != ['.["pineforge/parity"] == "success"']
-            or head_gate.count('echo "green=false" >> "$GITHUB_OUTPUT"; exit 0') != 2):
+            or status_pages not in engine_gate or status_pages not in codegen_gate
+            or '/commits/$HEAD_SHA/check-runs?per_page=100' not in codegen_gate
+            or 'gh api --paginate' not in engine_gate or codegen_gate.count('gh api --paginate') != 2
+            or 'reduce (.[][]) as $s' not in engine_gate
+            or 'if has($s.context) then . else .[$s.context] = $s.state end' not in engine_gate
+            or head_predicates != [required_head]
+            or head_gate.count('echo "green=false" >> "$GITHUB_OUTPUT"; exit 0') != 3):
         findings.append("baseline promotion must run main's copy and require "
-                        "the latest head parity status only (verify is advisory)")
+                        "the latest head verify and parity statuses")
     # The job pin cannot see inherited workflow settings.
     for key in ('defaults', 'env'):
         if _job_values(promote, key):
