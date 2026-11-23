@@ -73,6 +73,11 @@ is set), the same choice is `--report-sink PATH` (a file) or
 report carries `NULL` trades and equity curve and the totals in its summary;
 read the records from the sink. See [Report schema](@ref report_schema).
 
+For a path sink, require successful report capture and a completed engine
+receipt before accepting the file. A failed final sync leaves the receipt
+incomplete and the writer tries to truncate the file to its last data record
+(`write_trailer` at `src/report_sink_writer.cpp:643`).
+
 The default **unjailed** `run_json` route, with a sink-capable module,
 installs a temporary path sink (`_new_report_sink`
 docker/run_json.py:6166-6206; `_ReportSink` docker/run_json.py:6790-6842).
