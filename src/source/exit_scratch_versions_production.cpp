@@ -51,9 +51,6 @@ PF_EXIT_PAYLOAD_MEMBER(DefinitionRevision, exit_legs::Definition, revision_);
 PF_EXIT_PAYLOAD_MEMBER(DefinitionPrices, exit_legs::Definition, value_);
 PF_EXIT_PAYLOAD_MEMBER(ExpansionCapture, ReservationExpansion, capture_);
 PF_EXIT_PAYLOAD_MEMBER(GrowthOwner, ReservationGrowthSource, reservation_owner_);
-PF_EXIT_PAYLOAD_MEMBER(AdmissionObservation, admission::Draft, observation_);
-PF_EXIT_PAYLOAD_MEMBER(AdmissionReview, admission::Draft, review_);
-PF_EXIT_PAYLOAD_MEMBER(AdmissionSizing, admission::Draft, sizing_revision_);
 #undef PF_EXIT_PAYLOAD_MEMBER
 
 template<class T, class Tag> decltype(auto) member(T& value, Tag tag) {
@@ -495,11 +492,34 @@ template<class Archive, class T> void payload_fields(Archive& a, T& v) {
         a(member(v, ExpansionCapture{}));
     } else if constexpr (std::is_same_v<V, ReservationExpansionCapture>) {
         a(v.position_cycle, v.side, v.first_later_admission);
+        if constexpr (Archive::reading) {
+            // The capture retains neither the receiver nor the original capacity.
+            if (v.position_cycle <= 0
+                || (v.side != PositionSide::LONG && v.side != PositionSide::SHORT)
+                || v.first_later_admission == 0) a.invalid();
+        }
     } else if constexpr (std::is_same_v<V, ReservationGrowthSource>) {
         a(member(v, GrowthOwner{}));
+        if constexpr (Archive::reading) {
+            // Only the receiver of assign_capture(source, receiver) is stored.
+            if (v.reservation_owner() == 0) a.invalid();
+        }
     } else if constexpr (std::is_same_v<V, admission::Draft>) {
-        a(member(v, AdmissionObservation{}), member(v, AdmissionReview{}),
-          member(v, AdmissionSizing{}));
+        if constexpr (Archive::reading) {
+            std::shared_ptr<const admission::CommandObservation> observation;
+            std::optional<admission::ReviewReceipt> review;
+            std::optional<admission::SizingRevision> sizing;
+            a(observation, review, sizing);
+            try {
+                if (observation) v.bind(std::move(observation));
+                if (review) v.reviewed(*review);
+                if (sizing) v.sizing_revised(*sizing);
+            } catch (const std::logic_error&) {
+                a.invalid();
+            }
+        } else {
+            a(v.observation(), v.review(), v.sizing_revision());
+        }
     } else if constexpr (std::is_same_v<V, admission::CommandObservation>) {
         a(v.command, v.kind, v.birth, v.id, v.requested_quantity, v.quantity_type,
           v.buy, v.prices, v.oca_name, v.oca_type, v.configuration, v.bar,
