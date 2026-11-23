@@ -60,6 +60,13 @@ fill cursor and fill numbers by the same rules as readback. For example, a
 fill evaluation whose first fill number is zero returns `ScratchStatus::corrupt`
 before the journal stores it or consumes its sequence.
 
+For a `FillEvaluation` birth, the stored `cursor_position` must be `Point` or
+`Segment` (`src/source/admission_journal_codec.cpp:338-339`). `None` is valid
+for an order that was not placed during a fill. On a fill, `None` or an
+unknown position makes append return `ScratchStatus::corrupt` without
+consuming the sequence. Owning decode and the validated fold return the same
+status: the destination event, fold summary and digest keep their prior values.
+
 A per-order review or sizing receipt names the original command. Its event must
 follow that command and its bar cannot precede the placement bar. Review progress
 is the first actual receipt, with identical replay allowed and conflicting
