@@ -256,9 +256,9 @@ std::string trade_line(const std::string& entry_id) {
         + "\",\"\",\"\"]\n";
 }
 
-std::string trailer_line(std::size_t rows, const std::string& digest) {
+std::string trailer_line(std::size_t rows, const std::string& digest, std::size_t trades = 1) {
     return "{\"trailer\":\"pf-report-sink\",\"version\":1,\"counts\":{\"E\":" + std::to_string(rows)
-        + ",\"T\":1},\"sha256\":\"" + digest + "\"}\n";
+        + ",\"T\":" + std::to_string(trades) + "},\"sha256\":\"" + digest + "\"}\n";
 }
 
 // Where the record bytes end relative to a window: exactly on a boundary,
@@ -371,6 +371,7 @@ std::size_t syncs(std::size_t from, std::size_t to) {
 
 // The per-window writer's flush sequence without its per-flush syncs, then
 // exactly one fdatasync, whose injected errno is `error` (0: success).
+// If that call fails, a final truncation removes the attempted trailer.
 void expect_sequence(const std::string& row, std::size_t prefix, std::size_t total, int error) {
     require(!probe.overflow, row + ": the fixed I/O event log overflowed");
     const auto plan = flushes(prefix, total);
@@ -399,8 +400,16 @@ void expect_sequence(const std::string& row, std::size_t prefix, std::size_t tot
     require(synced, row + ": call " + std::to_string(at) + " is " + describe(at)
             + "; expected one fdatasync after the last of " + std::to_string(plan.size()) + " flushes");
     ++at;
+    if (error) {
+        const bool rolled_back = at < probe.count && probe.events[at].op == Op::ftruncate
+            && probe.events[at].position == static_cast<long long>(prefix)
+            && probe.events[at].result == 0;
+        require(rolled_back, row + ": call " + std::to_string(at) + " is " + describe(at)
+                + "; expected rollback ftruncate(" + std::to_string(prefix) + ")");
+        ++at;
+    }
     require(at == probe.count, row + ": " + std::to_string(probe.count - at)
-            + " sink call(s) follow the deferred sync, first " + describe(at));
+            + " extra sink call(s), first " + describe(at));
     require(probe.calls[slot(Op::fsync)] == 0, row + ": Linux synchronizes the sink with fdatasync only");
 }
 
@@ -605,7 +614,7 @@ void row_bytes(const std::string& directory) {
 
 // Condition 2: an injected EIO at the deferred sync fails write_trailer with
 // the per-window sync's type and text, after every byte was written, and
-// leaves no receipt.
+// rolls back the trailer without leaving a receipt.
 void row_sync_fault(const std::string& directory) {
     const auto population = make_population(kRows, Tail::inside);
     PathSink sink(directory, "sync-fault.sink");
@@ -748,8 +757,9 @@ void row_engine_sync_fault(const std::string& directory) {
     expect_engine_failure(host, reason_args("sink_io"));
     require(host.last_error().find(expected) != std::string::npos,
             "the latched failure text names the failed sync: " + host.last_error());
-    const auto bytes = contents(sink.path);
-    expect_sequence("engine_sync_fault", record_prefix(bytes), bytes.size(), EIO);
+    const auto prefix = file_size(sink.path);
+    const auto trailer_size = trailer_line(kEngineBars, std::string(64, '0'), 0).size();
+    expect_sequence("engine_sync_fault", prefix, prefix + trailer_size, EIO);
     pineforge::ReportC again{};
     host.fill_report(&again);
     require(again.trades == nullptr && again.equity_curve == nullptr && again.total_trades == 0,
