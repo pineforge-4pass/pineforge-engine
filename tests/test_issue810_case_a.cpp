@@ -715,17 +715,21 @@ bool check_held_entry(Probe& probe, Mode mode, const std::vector<Bar>& bars) {
 
     // R6: no fill takes more than was held before it, and the exits together
     // close what the entry opened, so nothing is left open and nothing is
-    // closed twice.
+    // closed twice.  The first is said of fills that close something, so it
+    // is credited only when one was seen: a stream with the entry alone has
+    // no fill to hold against what was held.
     double opened = 0.0;
     double closed = 0.0;
+    int closing_fills = 0;
     bool within_held = true;
     for (const auto& row : probe.applied()) {
         opened += row.opened;
         closed += row.closed;
+        if (row.closed > 0.0) ++closing_fills;
         if (closed > opened + 1e-9 || row.position_after < -1e-9)
             within_held = false;
     }
-    ok = check(opened > 0.0 && within_held, name,
+    ok = check(opened > 0.0 && closing_fills > 0 && within_held, name,
                "no_fill_exceeds_held_quantity") && ok;
     ok = check(opened > 0.0 && near(closed, opened), name,
                "closed_equals_opened", closed, opened) && ok;
@@ -922,6 +926,16 @@ StepCase step_case(Mode mode) {
     return {step_entry_qty(mode), step_stop_first(mode), is_pooc_step_mode(mode)};
 }
 
+// The bar on which a step row's script places its three orders (on_step_bar),
+// and the bar on which its entry then fills: the signal bar under
+// process_orders_on_close, at that bar's close (R1'), and the bar after it
+// without, at that bar's open (R1).
+constexpr int kStepSignalBar = 0;
+
+int step_entry_bar(const StepCase& step) {
+    return step.on_close ? kStepSignalBar : kStepSignalBar + 1;
+}
+
 std::vector<StepCheck> step_checks(const Observed& seen, const StepCase& step) {
     std::vector<const Applied*> entries;
     std::vector<const Applied*> partials;
@@ -963,15 +977,21 @@ std::vector<StepCheck> step_checks(const Observed& seen, const StepCase& step) {
     std::vector<StepCheck> out;
     // R1' or R1: the entry fills once, for its quantity, at the close of the
     // bar that placed it under process_orders_on_close, and at the next bar's
-    // open without it.  Later bars open higher, so the price tells the two
-    // apart.  A live entry must also have been a working order when the
-    // exits were placed.
+    // open without it.  Later bars open higher, so the price tells the signal
+    // close from a later open.  It does not tell one later open from another:
+    // the live-entry feed opens every bar after the first at one price.  So a
+    // live entry's fill is also read for its bar, which must be the bar after
+    // the signal bar.  A live entry must also have been a working order when
+    // the exits were placed.
     const double entry_price = step.on_close
         ? kStepBasePrice : kStepBasePrice + kStepGap;
     const bool entry_form = step.on_close || seen.entry_order_at_signal;
+    const bool entry_bar_ok = step.on_close
+        || (entry != nullptr && entry->bar == step_entry_bar(step));
     out.push_back({step.on_close ? "entry_filled_at_signal_close"
                                  : "live_entry_filled_at_next_open",
-                   entry != nullptr && entry_form && near(entry->price, entry_price)
+                   entry != nullptr && entry_form && entry_bar_ok
+                       && near(entry->price, entry_price)
                        && near(entry->opened, step.entry_qty),
                    entry != nullptr ? entry->opened : kNaN, step.entry_qty});
     // R7: each exit fills once.
@@ -1064,7 +1084,8 @@ bool run_step_checks_on_empty_input() {
 //   - the finished run of the other quantity, left over from another row.
 // Every check must fail on at least one of them: nothing a check says about
 // the exits may hold on the first, and the second is not this row's entry.  A
-// line of this row passes when the named check fails on one of them.
+// line of this row passes when the named check fails on one of them, and that
+// one was first verified to be the observation it is taken for.
 bool step_checks_reject_stale(const char* name, Mode row, Mode other) {
     const StepCase own = step_case(row);
     Observed earlier = observe_step_run(row);
@@ -1078,19 +1099,49 @@ bool step_checks_reject_stale(const char* name, Mode row, Mode other) {
     earlier.applied.resize(kept);
     earlier.trades.clear();
     const std::string prefix = std::string(mode_name(row)) + ":";
-    bool ok = check(earlier.applied.size() == 1, name,
+    // The earlier snapshot is the entry's fill only if its one fill opens this
+    // row's entry: the entry's quantity, on the entry's bar, closing nothing.
+    // The count alone does not say so: when no fill opens anything, the loop
+    // above keeps them all.
+    const Applied* snapshot =
+        earlier.applied.size() == 1 ? &earlier.applied.front() : nullptr;
+    const bool earlier_is_entry = snapshot != nullptr && snapshot->label == "Long"
+        && near(snapshot->opened, own.entry_qty) && !(snapshot->closed > 0.0)
+        && snapshot->bar == step_entry_bar(own);
+    bool ok = check(earlier_is_entry, name,
                     (prefix + "earlier_snapshot_is_the_entry_fill").c_str(),
                     static_cast<double>(earlier.applied.size()), 1.0);
-    ok = check(leftover.applied.size() > 1 && !leftover.trades.empty(), name,
+    // The leftover run is finished only if its entry and both of its exits
+    // have filled, its last fill leaves nothing held, and a trade has closed.
+    // An entry and one exit already have two fills and a closed trade.
+    bool leftover_entry = false;
+    bool leftover_partial = false;
+    bool leftover_full = false;
+    for (const auto& fill : leftover.applied) {
+        if (fill.opened > 0.0 && fill.label == "Long") leftover_entry = true;
+        if (!(fill.closed > 0.0)) continue;
+        if (fill.label == "Half") leftover_partial = true;
+        if (fill.label == "Rest") leftover_full = true;
+    }
+    const bool leftover_flat = !leftover.applied.empty()
+        && near(leftover.applied.back().position_after, 0.0);
+    const bool leftover_is_finished = leftover_entry && leftover_partial
+        && leftover_full && leftover_flat && !leftover.trades.empty();
+    ok = check(leftover_is_finished, name,
                (prefix + "leftover_run_is_finished").c_str(),
                static_cast<double>(leftover.applied.size())) && ok;
     const auto on_earlier = step_checks(earlier, own);
     const auto on_leftover = step_checks(leftover, own);
     ok = check(!on_earlier.empty() && on_earlier.size() == on_leftover.size(), name,
                (prefix + "checks_were_run").c_str()) && ok;
+    // A check's failure is credited only on an observation that was verified
+    // above to be the one it is taken for.
     for (std::size_t index = 0; index < on_earlier.size() && index < on_leftover.size();
          ++index) {
-        ok = check(!on_earlier[index].ok || !on_leftover[index].ok, name,
+        const bool fails_on_earlier = earlier_is_entry && !on_earlier[index].ok;
+        const bool fails_on_leftover =
+            leftover_is_finished && !on_leftover[index].ok;
+        ok = check(fails_on_earlier || fails_on_leftover, name,
                    (prefix + on_earlier[index].name).c_str()) && ok;
     }
     return ok;
