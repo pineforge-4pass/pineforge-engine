@@ -134,6 +134,7 @@ void hash_native_handle_vector(BrokerStateHashSink& f,
     f.u(handles.size());
     for (const auto& handle : handles) hash_native_handle(f, handle);
 }
+void hash_bound_openings(BrokerStateHashSink&, const native_order::BindOpenings&);
 void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& value) {
     f.i(static_cast<std::int64_t>(value.family)); f.s(value.source_id); f.s(value.from_entry);
     f.s(value.comment); f.s(value.oca_name); f.i(value.oca_type); f.i(value.qty_type);
@@ -343,7 +344,7 @@ void hash_native_request(BrokerStateHashSink& f, const native_order::Request& re
     } else if (const auto* opening = std::get_if<native_order::BindOpening>(&request.owner)) {
         hash_native_handle(f, opening->opening); f.i(opening->cycle);
     } else if (const auto* openings = std::get_if<native_order::BindOpenings>(&request.owner)) {
-        hash_native_handle_vector(f, openings->openings); f.i(openings->cycle);
+        hash_bound_openings(f, *openings);
     } else if (const auto* cohort = std::get_if<native_order::BindCohort>(&request.owner)) {
         f.u(cohort->cohort.value);
     }
@@ -352,7 +353,6 @@ void hash_native_request(BrokerStateHashSink& f, const native_order::Request& re
         f.u(group->group); f.i(group->cohort); f.i(static_cast<std::int64_t>(group->effect));
     }
 }
-
 } // namespace
 
 void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
@@ -1377,5 +1377,27 @@ void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const
         hash_selected_intents(f, *intents);
     adapter_.hash_state(f); scheduler_.hash_state(f);
 }
+
+namespace {
+void hash_bound_openings(BrokerStateHashSink& f, const native_order::BindOpenings& binding) {
+    if (const auto* external = binding.external_openings.get()) {
+        const auto count = external->count();
+        f.u(count);
+        for (std::uint64_t i = 0; i < count; ++i) {
+            native_order::RequestHandle handle;
+            const auto status = external->opening_at(i, handle);
+            if (status != detail::ScratchStatus::ok)
+                throw coded<std::logic_error>(
+                    status == detail::ScratchStatus::io_error
+                        ? RunFailureCode::scratch_io_failed : RunFailureCode::engine_invariant,
+                    {}, "could not read a bound opening for the adapter state hash");
+            hash_native_handle(f, handle);
+        }
+    } else {
+        hash_native_handle_vector(f, binding.openings);
+    }
+    f.i(binding.cycle);
+}
+} // namespace
 
 } // namespace pineforge
