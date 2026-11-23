@@ -8,9 +8,11 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
+#include <stdexcept>
 #include <string>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/run_failure.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
@@ -21,6 +23,16 @@ struct GetterHarness : public pineforge::source::PineStrategyHost {
     void on_source_bar(const Bar& /*bar*/) override {}
     int64_t call(const std::string& key, int64_t default_val) const {
         return get_input_int64(key, default_val);
+    }
+
+    bool rejects(const std::string& key, int64_t default_val) const {
+        try {
+            call(key, default_val);
+        } catch (const std::invalid_argument& error) {
+            return classify_run_failure(error).code == RunFailureCode::setting_rejected
+                && std::string(error.what()).find("'" + key + "'") != std::string::npos;
+        }
+        return false;
     }
 };
 
@@ -57,13 +69,14 @@ void test_valid_int64_epoch_ms() {
              "2100-01-01 ms epoch survives int64 round-trip");
 }
 
-void test_invalid_string_returns_default() {
+void test_invalid_string_is_rejected() {
     GetterHarness h;
+    // expectation corrected: 7 and 99 -> rejection, because the overrides are present but malformed (#918).
     h.set_input("garbage", "not-a-number");
-    CHECK_EQ(h.call("garbage", 7), 7, "unparseable input falls back to default");
+    CHECK_EQ(h.rejects("garbage", 7), true, "unparseable input is rejected");
 
     h.set_input("empty", "");
-    CHECK_EQ(h.call("empty", 99), 99, "empty value falls back to default");
+    CHECK_EQ(h.rejects("empty", 99), true, "empty input is rejected");
 }
 
 void test_negative_value() {
@@ -79,7 +92,7 @@ int main() {
     printf("--- get_input_int64 ---\n");
     test_missing_key_returns_default();
     test_valid_int64_epoch_ms();
-    test_invalid_string_returns_default();
+    test_invalid_string_is_rejected();
     test_negative_value();
     printf("\n=== Results: %d / %d passed ===\n", tests_passed, tests_run);
     return tests_passed == tests_run ? 0 : 1;

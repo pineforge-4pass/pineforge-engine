@@ -692,3 +692,22 @@ assertion survived.
 | tests/test_small_money_margin_residual.cpp:108-203 | 6 CHECKs | HistoryProbe direct ledger/history setup | the base writes trade history, realized balance and pending owner state directly to manufacture the residual boundary; the twin reaches the same boundary through a real opening and public trade rows | tests/test_small_money_margin_residual_l4a.cpp:75 public run status; tests/test_small_money_margin_residual_l4a.cpp:76 public margin-row count; tests/test_small_money_margin_residual_l4a.cpp:77 public survivor quantity |
 | tests/test_stop_open_margin_script_state.cpp:249-345 | 13 CHECKs | stop-origin identity and PendingGuard groups | lot-incarnation/origin flags and PendingGuard scenarios directly fabricate and execute the retired pending owner, which has no public mutable mirror | tests/test_stop_open_margin_script_state_l4a.cpp:84 public margin row; tests/test_stop_open_margin_script_state_l4a.cpp:85 public public-path trade count; tests/test_stop_open_margin_script_state_l4a.cpp:86 public retained path outcome |
 | tests/test_pending_order_identity.cpp:93-463 | 97 CHECKs | retired pending-owner/OCA mutation matrix | the base drives the deleted PendingOrder book and private matcher directly; the switched twin uses real source commands and observes request incarnations, OCA identity, trade rows and live lots | tests/test_pending_order_identity_l4d.cpp:50 public request identity; tests/test_pending_order_identity_l4d.cpp:51 public incarnation; tests/test_pending_order_identity_l4d.cpp:52 public cohort identity |
+
+## Appendix 6 — Corrections to observable expectations
+
+Issue #918 changes the result of reading a supplied malformed numeric or
+boolean override. The previous fallback values are the reported defect. The
+base test and its L4d twin now check that the getter rejects the value with
+`setting_rejected` and names the input. The base manifest re-records this one
+family so all 70 assertions still use ordinary literal matching. This record
+does not waive any assertion in Appendix 5.
+
+| v1.14.0 base check | Malformed override | Old result | Corrected base / L4d twin |
+| --- | --- | --- | --- |
+| `tests/test_run_inputs_overrides.cpp:87` | `garbage="not-a-number"` | `3.5` | rejection at base `:97`, twin `:111` |
+| `tests/test_run_inputs_overrides.cpp:89` | `empty=""` (float) | `99.0` | rejection at base `:99`, twin `:113` |
+| `tests/test_run_inputs_overrides.cpp:102` | `bad="xyz"` | `13` | rejection at base `:112`, twin `:126` |
+| `tests/test_run_inputs_overrides.cpp:104` | `empty=""` (int) | `-1` | rejection at base `:114`, twin `:128` |
+| `tests/test_run_inputs_overrides.cpp:115` | `bad="abc"` (int64) | `8` | rejection at base `:126`, twin `:140` |
+| `tests/test_run_inputs_overrides.cpp:135` | `weird="yes"` | `true` | rejection at base `:146`, twin `:160` |
+| `tests/test_run_inputs_overrides.cpp:136` | `weird="yes"` | `false` | rejection at base `:147`, twin `:161` |
