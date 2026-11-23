@@ -1,5 +1,6 @@
 #include <pineforge/detail/journal_codec.hpp>
 #include "../src/source/admission_journal_codec.hpp"
+#include "admission_legacy_fold.hpp"
 
 #include <algorithm>
 #include <array>
@@ -118,7 +119,7 @@ Status legacy_fold(const pd::ScratchByteSource& source, pd::ScratchBuffer page,
     auto status = ad::scan_journal_record(source, page, candidate);
     if (status != Status::ok) return status;
     auto next = digest;
-    if (candidate.sequence > after_sequence) status = ad::fold_journal_record(source, page, next);
+    if (candidate.sequence > after_sequence) status = admission_test::fold_after_scan(source, page, next);
     if (status == Status::ok) { summary = candidate; digest = next; }
     return status;
 }
@@ -204,6 +205,36 @@ void valid_rows() {
         }
         expected = model.fold(expected);
     }
+
+    // Sequence zero exercises the difference between a standalone record and
+    // a window with frontier zero. Use reflection as the digest oracle for
+    // the four birth forms, including the nonfill fields checked on import.
+    ad::ReviewEvent mixed;
+    mixed.receipt = {0, ad::Checkpoint::TerminalGross, 8, 0};
+    mixed.book.resize(4);
+    mixed.book[0].birth = pineforge::OrderBirth::direct_command(12, 12000);
+    mixed.book[1].birth = pineforge::OrderBirth::chart_evaluation(11, 11000);
+    // book[2] is unattributed.
+    mixed.book[3].birth = pineforge::OrderBirth::fill_evaluation(10, 10000,
+        pineforge::BirthCursor::point(pineforge::BirthCursorDomain::HistoricalPath, 1, 4),
+        1.5, 7, 9, 2);
+    const ad::Event event = std::move(mixed);
+    const auto encoded = ad::encode_journal_record(event);
+    const auto reflected = Model(event).fold(seed);
+    if (encoded.size() <= 8 || reflected == seed)
+        throw std::runtime_error("NOT COMPARED mixed births: expected bytes > 8 and digest != "
+            + std::to_string(seed) + ", actual bytes=" + std::to_string(encoded.size())
+            + " digest=" + std::to_string(reflected));
+    std::array<std::byte, 512> page{};
+    const pd::ScratchBuffer buffer{page.data(), page.size()};
+    auto digest = seed;
+    require(ad::fold_journal_record(encoded, buffer, digest) == Status::ok && digest == reflected,
+            "standalone fold includes the record at sequence zero");
+    ad::JournalRecordSummary summary{991, -31, true};
+    digest = seed;
+    require(ad::fold_validated_journal_record(encoded, buffer, summary, digest, 0) == Status::ok
+            && summary.sequence == 0 && !summary.rejected && digest == seed,
+            "window at zero validates that same record without hashing it");
 }
 
 void compare_failure(const Bytes& wire, std::uint64_t fault,
