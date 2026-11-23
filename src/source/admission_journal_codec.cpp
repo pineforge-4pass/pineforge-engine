@@ -175,7 +175,12 @@ template<bool Owning, bool Folding = false> struct Load {
         std::array<char, kJournalFoldFieldBytes> bytes{};
         in.bytes(bytes.data(), key.length);
         if (!good()) return;
-        if (std::memcmp(bytes.data(), key.bytes.data(), key.length) || in.word() != tag<T>()) {
+        if (std::memcmp(bytes.data(), key.bytes.data(), key.length)) {
+            in.status = Status::corrupt; return;
+        }
+        const auto read_tag = in.word();
+        if (!good()) return;
+        if (read_tag != tag<T>()) {
             in.status = Status::corrupt; return;
         }
         if constexpr (Folding) {
