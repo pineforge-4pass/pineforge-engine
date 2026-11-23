@@ -16,6 +16,12 @@ created only by its canonical owner, and retains old values when a successor
 replaces its current definition. Deferred closes acquire an incarnation before
 lifecycle attachment.
 
+When the C++ source adapter restores a saved placement or pending order, the
+target and its current definition must name the same incarnation, and the
+target owner must be zero or positive. Before attachment, both incarnations
+are zero. A record that violates either rule raises `ExitScratchError` with
+status `corrupt`.
+
 The native reducer in `exit_leg_lifecycle.hpp` accepts exact target incarnation,
 owner and revision, a cause frame, and a typed action: bind owner, suspend selected
 legs, stage replacement, cancel deferred activation, restore generations, complete
