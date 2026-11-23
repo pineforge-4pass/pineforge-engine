@@ -120,7 +120,7 @@ namespace {
 
 void throw_timeframe_refusal(const NativeRunSpec&, NativeRunSpecValidation);
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
-
+template<class Visit> void visit_bound_openings(const native_order::BindOpenings&, const Visit&);
 void check_slippage_fill_price(double value, bool has_basis) {
     if (has_basis && !std::isfinite(value)) {
         engine_command_value_invalid_or_count("slippage.fill_price", EngineValueStage::slippage,
@@ -4365,7 +4365,7 @@ void PineExecutionAdapter::sweep_retired_rows(const NativeDecisionContext& conte
             root(opening->opening.incarnation);
         } else if (const auto* openings
                    = std::get_if<native_order::BindOpenings>(&request.owner)) {
-            for (const auto& handle : openings->openings) root(handle.incarnation);
+            visit_bound_openings(*openings, root);
         }
     };
     for (const auto& leg : pending_bracket_legs_) {
@@ -30481,7 +30481,7 @@ void PineExecutionAdapter::retire_origin_prefixes() {
         } else if (const auto* opening = std::get_if<native_order::BindOpening>(&request.owner)) {
             name(opening->opening.incarnation);
         } else if (const auto* openings = std::get_if<native_order::BindOpenings>(&request.owner)) {
-            for (const auto& opening : openings->openings) name(opening.incarnation);
+            visit_bound_openings(*openings, name);
         }
     };
     const auto live_names = [&](const native_order::RequestHandle& handle) {
@@ -30568,8 +30568,8 @@ PineExecutionAdapter::retirement_population() const {
         else if (const auto* opening = std::get_if<native_order::BindOpening>(&request.owner))
             result.owners += opening->opening.incarnation != 0;
         else if (const auto* openings = std::get_if<native_order::BindOpenings>(&request.owner))
-            for (const auto& opening : openings->openings)
-                result.owners += opening.incarnation != 0;
+            visit_bound_openings(*openings,
+                [&](std::uint64_t incarnation) { result.owners += incarnation != 0; });
     };
     for (const auto& leg : pending_bracket_legs_) owners(leg.request);
     for (const auto& entry : pending_entries_) owners(entry.request);
@@ -31832,7 +31832,7 @@ bool PineExecutionAdapter::capture_retirement_inputs(RetirementInputs& inputs) c
         } else if (const auto* opening = std::get_if<native_order::BindOpening>(&value.owner)) {
             root(opening->opening.incarnation);
         } else if (const auto* openings = std::get_if<native_order::BindOpenings>(&value.owner)) {
-            for (const auto& opening : openings->openings) root(opening.incarnation);
+            visit_bound_openings(*openings, root);
         }
     };
     for (const auto& handle : live_handles_) {
@@ -32450,6 +32450,17 @@ void throw_timeframe_refusal(const NativeRunSpec& spec,
     text += script->unit() == native_calendar::TimeframeUnit::Second
         ? ", for example 1-second bars." : ", for example 1-minute bars.";
     throw coded<std::logic_error>(RunFailureCode::run_options_rejected, args, text);
+}
+
+template<class Visit>
+void visit_bound_openings(const native_order::BindOpenings& owner, const Visit& visit) {
+    const auto* external = owner.external_openings.get();
+    const auto count = native_order::opening_count(owner.openings, external);
+    for (std::uint64_t i = 0; i < count; ++i) {
+        native_order::RequestHandle member;
+        detail::exit_scratch_check(native_order::opening_at(owner.openings, external, i, member));
+        visit(member.incarnation);
+    }
 }
 
 } // namespace

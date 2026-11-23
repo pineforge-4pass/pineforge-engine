@@ -2792,10 +2792,11 @@ void fill_open_lot(const pineforge::NativeOpenLot& lot, pf_native_open_lot_v1& o
     out.entry_label = lot.entry_label.c_str();
     out.entry_comment = lot.entry_comment.c_str();
 }
-
-void fill_working(const pineforge::NativeWorkingRequest& live, pf_native_working_v1& out) {
+void fill_working_openings(const no::BindOpenings&, pf_native_working_v1&);
+void fill_working(const pineforge::NativeWorkingRequest& live, pf_native_working_v1& out,
+                  std::uint32_t size) {
     std::memset(&out, 0, sizeof(out));
-    out.struct_size = static_cast<std::uint32_t>(sizeof(out));
+    out.struct_size = size;
     out.version = PF_NATIVE_API_VERSION;
     const auto& definition = *live.definition;
     out.incarnation = definition.handle.incarnation;
@@ -2842,8 +2843,8 @@ void fill_working(const pineforge::NativeWorkingRequest& live, pf_native_working
             out.owner_n = 1u;
             out.owner_cycle = owner.cycle;
         } else if constexpr (std::is_same_v<T, no::BindOpenings>) {
-            out.owner_handle = owner.openings.empty() ? 0u : owner.openings.front().incarnation;
-            out.owner_n = static_cast<std::uint32_t>(owner.openings.size());
+            // Older layouts don't ask for membership and need no backing read.
+            if (out.struct_size == sizeof(out)) fill_working_openings(owner, out);
             out.owner_cycle = owner.cycle;
         } else if constexpr (std::is_same_v<T, no::BindCohort>) {
             out.owner_handle = owner.cohort.value;
@@ -3756,8 +3757,7 @@ PF_API int strategy_native_working_get_v1(pf_strategy_t s, int index,
             return c_refuse(host, PF_NATIVE_E_ARGUMENT);
         }
         pf_native_working_v1 row;
-        fill_working(cache[static_cast<std::size_t>(index)], row);
-        row.struct_size = struct_size;
+        fill_working(cache[static_cast<std::size_t>(index)], row, struct_size);
         std::memcpy(out, &row, struct_size);
         return PF_NATIVE_OK;
     });
@@ -4296,6 +4296,21 @@ PF_API int strategy_native_declare_opened_lot_entry_bar_mask_v1(pf_strategy_t s,
 }
 
 }  /* extern "C" */
+
+namespace {
+void fill_working_openings(const no::BindOpenings& owner, pf_native_working_v1& out) {
+    const auto* external = owner.external_openings.get();
+    const auto count = no::opening_count(owner.openings, external);
+    if (count > std::numeric_limits<std::uint32_t>::max())
+        throw std::overflow_error("working owner count exceeds the C field");
+    no::RequestHandle first;
+    if (count && no::opening_at(owner.openings, external, 0, first)
+                     != pineforge::detail::ScratchStatus::ok)
+        throw std::runtime_error("cannot read first opening of working request");
+    out.owner_handle = first.incarnation;
+    out.owner_n = static_cast<std::uint32_t>(count);
+}
+}  // namespace
 
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
