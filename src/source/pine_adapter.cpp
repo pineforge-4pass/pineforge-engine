@@ -13034,6 +13034,30 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         }
         return;
     }
+    // A full exit placed while flat behind a waiting partial percentage
+    // definition is admitted above, but not given its quantity yet. The
+    // reservation counts such a definition as its percentage of the pending
+    // entry, unrounded, while its own fill rounds it down to the quantity
+    // step (materialize_relative_exits): the remainder taken here would leave
+    // that difference open. The exit stays unsized, like one placed beside an
+    // entry that is held to the end of its calculation, and
+    // reconcile_deferred_exit_reservations sizes it when the entry fills,
+    // from what the rounded exits ahead of it leave.
+    const bool sized_behind_waiting_definition = dynamic && !void_issue
+        && physical.signed_units == 0.0 && std::isfinite(reserved_exit_qty)
+        && (!std::isfinite(requested_qty_percent)
+            || requested_qty_percent >= 100.0 - internal::kFullPercentEps)
+        && std::any_of(pending_relative_exits_.begin(), pending_relative_exits_.end(),
+            [&](const PendingRelativeExit& value) {
+                return value.from_entry == from_entry && value.exit_id != exit_id
+                    && !value.void_global && value.reservation_sequence != 0
+                    && std::isnan(value.qty);
+            });
+    if (sized_behind_waiting_definition) {
+        reserved_exit_qty = kNaN;
+        qty_percent = std::isfinite(requested_qty_percent)
+            ? std::clamp(requested_qty_percent, 0.0, 100.0) : 100.0;
+    }
     // Resolved legs receive their source sequence when submitted, and
     // remember() ranks each by it or by the predecessor it replaces. Only a
     // slot reserved for the call's own definition travels with them;
