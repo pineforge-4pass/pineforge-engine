@@ -181,6 +181,7 @@ def corpus_input_values(params, *, declared_input_names=None) -> dict[str, str]:
     settings receipt, not Pine variable aliases. Without a binding, a
     metadata-spelled key might be a real input and cannot safely be discarded.
     Every other key reaches the native setter, including unrecognized keys.
+    JSON booleans keep their lowercase spelling for the native setter.
     """
     if declared_input_names is None:
         if any(_is_corpus_metadata_key(key) for key in params):
@@ -190,7 +191,8 @@ def corpus_input_values(params, *, declared_input_names=None) -> dict[str, str]:
         declared_input_names = ()
     declared = frozenset(declared_input_names)
     return {
-        str(key): str(value) for key, value in params.items()
+        str(key): json.dumps(value) if isinstance(value, bool) else str(value)
+        for key, value in params.items()
         if str(key) in declared or not _is_corpus_metadata_key(key)
     }
 

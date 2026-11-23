@@ -199,6 +199,11 @@ python3 scripts/run_strategy.py . --ohlcv tutorial/data/btcusdt_15m_7d.csv --no-
 
 Run it from the engine checkout, with `strategy.pine` there, after the `cmake --install` above (with a prebuilt tarball instead, add `-I<its directory>/include` and link its `lib/libpineforge.a`). Engine v1.3.0 pairs with pineforge-codegen 1.3.0, as v1.2.0 does with 1.2.0, v1.1.0 with 1.1.0, v1.0.1 with 1.0.1 and v1.0.0 with 1.0.0; codegen 0.10.4 emits C++ for engine v0.13.1, which the headers of v1.0.0, v1.0.1, v1.1.0, v1.2.0 and v1.3.0 no longer compile. No codegen release has a command-line entry point, so transpile through `transpile()`. The compile line above is for Linux; with Clang, add `-fbracket-depth=1024`. A macOS/Clang source build instead links `-Wl,-force_load,/usr/local/lib/libpineforge.a`. Linking the whole archive is what puts the runtime's C exports (`pf_abi_version`, the `strategy_stream_*` family) in the module; a script that uses `matrix.*` also needs Eigen's include directory.
 
+With this checkout's `scripts/run_strategy.py`, set Pine inputs by name in
+`inputs.json` in the strategy directory, or use `--inputs-json <path>` to select
+another file. For a boolean input, use JSON `true` or `false`, for example
+`{"Long only": true}`.
+
 ### 2. C++, against the kernel
 
 Subclass `NativeStrategyHost`, describe the run once, hand it bars. No Pine,
