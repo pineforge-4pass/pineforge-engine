@@ -100,7 +100,7 @@ Mount points (provide exactly one of `strategy.pine` / `strategy.cpp`):
 | Host path        | Container path        | Required | Notes                             |
 | ---------------- | --------------------- | :------: | --------------------------------- |
 | `strategy.pine`  | `/in/strategy.pine`   | preferred | PineScript v6 source; transpiled in-container |
-| `strategy.cpp`   | `/in/strategy.cpp`    | back-compat | Pre-transpiled PineForge translation unit (used only if no `.pine`). Refused unless `PINEFORGE_STRATEGY_CPP_SHA256` holds the sha256 of exactly these bytes, or `PINEFORGE_ALLOW_UNATTESTED_CPP=1` (local trust only; a hosted caller must never set it) |
+| `strategy.cpp`   | `/in/strategy.cpp`    | back-compat | Pre-transpiled PineForge translation unit (used only if no `.pine`). Must pass the bundled codegen allowlist. The host must set `PINEFORGE_STRATEGY_CPP_SHA256` to the SHA-256 of those exact bytes unless `PINEFORGE_ALLOW_UNATTESTED_CPP=1` (local trust only; a hosted caller must never set it). |
 | `ohlcv.csv`      | `/in/ohlcv.csv`       | yes      | `timestamp,open,high,low,close,volume` |
 
 ### Check the compiled strategy before loading
@@ -125,8 +125,8 @@ boundary.
 Set `PINEFORGE_BUILD_ONLY` to exactly `1` or `true` and
 `PINEFORGE_WORK_DIR` to the absolute path of an existing empty directory
 created by the caller. Phase 1 performs the normal source resolution,
-attestation, translation, compilation and selected-window inventory binding,
-then writes `engine-step.json` and exits 0. Its stdout is empty; stderr ends
+attestation, C++ allowlist checking, translation, compilation and selected-window
+inventory binding, then writes `engine-step.json` and exits 0. Its stdout is empty; stderr ends
 with `[pineforge] build complete; engine step not started`. The engine has
 not run. The caller owns this directory and its eventual cleanup. The
 build-only checks and manifest publication live inside `entrypoint.sh`,
@@ -151,8 +151,8 @@ is the single Bash array assembled for the ordinary engine invocation.
 phase 2 performs no interpreter lookup through `PATH`. An interpreter
 resolution that is relative, or a manifest publication failure, returns
 status 4 with `harness_internal_error`. Other phase-1 failures retain their
-ordinary statuses: missing input or C++ attestation 2, compilation or binding
-3, compile-guard refusal 4, translation 5.
+ordinary statuses: missing input or C++ attestation or allowlist refusal 2,
+copying, compilation or binding 3, compile-guard refusal 4, translation 5.
 
 The caller must execute **every element of the manifest's `argv`, in order**,
 without shell splitting, adding flags or reconstructing the command.
@@ -247,7 +247,7 @@ Statuses 3 (compile or bind failure) and 5 (transpile failure) are
 build-phase-only; the engine step never returns them. Status 4 is only the
 entrypoint's mapping, or a usage/limit failure of an opt-in compile guard or
 of build-only (including a manifest publication failure). The entrypoint's
-2 means missing input or C++ attestation failure; the engine step's argparse
+2 means missing input or a C++ attestation or allowlist refusal; the engine step's argparse
 2 has a different meaning despite sharing the number.
 The entrypoint maps **every nonzero engine status to 4**, with
 `[pineforge] backtest failed` on stderr. The manifest's structured
@@ -268,12 +268,9 @@ not hashed by the build. `artifacts.request_feed_inventory` is null when no
 inventory was bound. Keep these inputs and the installation's interpreter,
 modules and native dependencies readable until the engine exits.
 
-The library, inventory files and manifest persist in `work_dir`, as does
-the compiled source except on the non-selected path with
-`PINEFORGE_ALLOW_UNATTESTED_CPP=1`: that path leaves the source at
-`/in/strategy.cpp` (or the configured input directory), so `artifacts.cpp`
-and `--generated-cpp` refer to the caller-mutable input mount. Keep that
-source readable and verify its hash before phase 2 too. The existing
+The library, inventory files, manifest and compiled source persist in `work_dir`.
+For mounted C++ this source is the private copy used for the allowlist and
+compilation, including with `PINEFORGE_ALLOW_UNATTESTED_CPP=1`. The existing
 inventory binder may also retain its temporary publication file.
 Phase 2 must finish before the caller removes these files. Engine writes go
 to stdout, the inherited report descriptor when selected, and temporary
@@ -1144,8 +1141,8 @@ directly (for example `base64 -d | shasum -a 256`).
 | Code | Meaning |
 | ---: | ------- |
 |  `0` | Success — JSON report, C++ in transpile-only mode, or empty stdout after a build-only run |
-|  `2` | Missing input mount (`/in/strategy.pine` or `/in/strategy.cpp`, and `/in/ohlcv.csv`), or a mounted `strategy.cpp` the host did not vouch for (one typed `run_request_invalid` line on stdout) |
-|  `3` | `g++` compile or selected inventory binding failed, including a stop by a limit the host applied (no cause is inferred) |
+|  `2` | Missing input mount, or a mounted `strategy.cpp` refused by attestation or the allowlist (one `run_request_invalid` line on stdout for either C++ refusal) |
+|  `3` | Copy of `strategy.cpp`, `g++` compile or selected inventory binding failed, including a stop by a limit the host applied (no cause is inferred) |
 |  `4` | Backtest aborted at runtime, a compile guard refused its settings or stopped compilation, or a build-only request or manifest failed |
 |  `5` | Transpile failed (unsupported Pine construct or syntax error) |
 

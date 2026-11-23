@@ -102,7 +102,7 @@
 #                        inventory is passed to run_json.py, never an empty one, and run_json.py
 #                        refuses the run. A supplied file that is unreadable, not strict JSON or
 #                        not that of the C++ bytes compiled ends the run (exit 3).
-#                        On the selected path /in/strategy.cpp is copied once into the per-run
+#                        A mounted /in/strategy.cpp is copied once into the per-run
 #                        work dir, and that private copy is what g++ compiles, the binder reads
 #                        and run_json.py gets as --generated-cpp (--transpiled stays false), so a
 #                        change the caller makes to its file afterwards cannot change what was
@@ -111,9 +111,8 @@
 #
 # Exit codes:
 #   0  success (JSON report, C++ in transpile-only mode, or empty build-only stdout)
-#   2  missing input mount
-#   3  compile failure (g++; on the selected path also copying a pre-transpiled strategy.cpp
-#      into the work dir, or binding the request-feed inventory)
+#   2  missing input mount or mounted C++ attestation/allowlist refusal
+#   3  compile failure (g++, copying a mounted strategy.cpp, or binding the request-feed inventory)
 #   4  backtest, compile-guard or build-only request/manifest failure
 #   5  transpile failure (unsupported Pine construct or syntax error)
 #
@@ -258,7 +257,7 @@ def manifest(arguments):
                 },
                 "build_phase_only": [3, 5],
                 "entrypoint_only_codes": {
-                    "2": "missing input or C++ attestation failure "
+                    "2": "missing input or C++ attestation/allowlist refusal "
                          "(a different meaning from the engine step's 2)",
                     "3": "compile/bind",
                     status: "full-run mapping of ANY non-zero engine status, or a usage/limit "
@@ -395,21 +394,14 @@ if [[ -f "${PINE}" ]]; then
     SRC="${GEN}"
     TRANSPILED=true
 elif [[ -f "${SRC_CPP}" ]]; then
-    SRC="${SRC_CPP}"
     TRANSPILED=false
     if [[ "${SELECTED}" == "true" ]]; then
         INVENTORY_IN="${PINEFORGE_REQUEST_FEED_INVENTORY:-}"
     fi
-    # Freeze the caller's bytes once into the private work dir (GEN). From here g++, the
-    # binder and run_json.py's --generated-cpp all use that one file, so the caller's
-    # mutable file is read only here. A failed copy ends the run before compile and run.
-    # The unattested local-only path (PINEFORGE_ALLOW_UNATTESTED_CPP=1) freezes only on the
-    # selected-window path, as before.
-    if [[ "${SELECTED}" == "true" || "${PINEFORGE_ALLOW_UNATTESTED_CPP:-}" != "1" ]]; then
-        cp -- "${SRC_CPP}" "${GEN}" >&2 \
-            || { echo "[pineforge] cannot snapshot strategy.cpp into the work dir" >&2; exit 3; }
-        SRC="${GEN}"
-    fi
+    # Attest, check and compile the same private snapshot in both trust modes.
+    cp -- "${SRC_CPP}" "${GEN}" >&2 \
+        || { echo "[pineforge] cannot snapshot strategy.cpp into the work dir" >&2; exit 3; }
+    SRC="${GEN}"
     # A mounted strategy.cpp is native code run in this process. Compile it only when the
     # host vouches for these exact bytes (PINEFORGE_STRATEGY_CPP_SHA256, set in the container's
     # environment, which the mount's author does not control), or on the explicit local opt-out.
@@ -429,6 +421,31 @@ elif [[ -f "${SRC_CPP}" ]]; then
             printf '%s\n' '{"engine":"pineforge","error":"entrypoint.sh: error: mounted strategy.cpp is not vouched for by a matching PINEFORGE_STRATEGY_CPP_SHA256","code":"run_request_invalid","args":{"option":"generated_cpp"}}'
             exit 2
         fi
+    fi
+    # Local opt-out skips only the digest. Use the same policy as Pine translation.
+    if ! python3 - "${SRC}" >&2 <<'PY'
+import sys
+
+# Drop the implicit current-directory import path.
+if sys.path and sys.path[0] == "":
+    del sys.path[0]
+
+from pathlib import Path
+
+try:
+    from pineforge_codegen.cpp_allowlist import check_generated_cpp
+
+    cpp = Path(sys.argv[1]).read_bytes().decode("utf-8")
+    findings = check_generated_cpp(cpp) if cpp.strip() else None
+except Exception:
+    sys.exit(1)
+
+sys.exit(0 if isinstance(findings, list) and not findings else 1)
+PY
+    then
+        echo "[pineforge] refused: mounted strategy.cpp did not pass the generated-C++ allowlist" >&2
+        printf '%s\n' '{"engine":"pineforge","error":"entrypoint.sh: error: mounted strategy.cpp did not pass the generated-C++ allowlist","code":"run_request_invalid","args":{"option":"generated_cpp"}}'
+        exit 2
     fi
 else
     echo "error: missing input — mount /in/strategy.pine (preferred) or /in/strategy.cpp" >&2
