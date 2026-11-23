@@ -563,7 +563,7 @@ part of the runtime API — the consumer compiler emits those inline.
 
 Inputs are stored as `std::unordered_map<std::string, std::string>` on
 the engine. Generated strategy code reads them through typed getters
-that fall back to the Pine default on missing key or parse failure:
+that use the Pine default when no override was supplied:
 
 ```cpp
 double  get_input_double(const std::string& key, double  default_val) const;
@@ -575,10 +575,11 @@ const Series<double>& get_input_source(const std::string& key,
                                        const Series<double>& default_series) const;
 ```
 
-`get_input_bool` accepts `"true" / "1"` and `"false" / "0"` (anything
-else returns the default). `get_input_double` / `_int` / `_int64` route
-through `std::stod` / `std::stoi` / `std::stoll` with a try / catch
-around parse errors. `get_input_int64` backs 64-bit input payloads such
+`get_input_bool` accepts `"true" / "1"` and `"false" / "0"`.
+The numeric getters require a complete number in range: a decimal integer
+for `get_input_int` and `get_input_int64`, or a finite number for
+`get_input_double`. Malformed overrides stop the run with `setting_rejected`
+and an error naming the input. `get_input_int64` backs 64-bit input payloads such
 as `input.color` (packed ARGB). `get_input_source` backs `input.source`
 runtime overrides: it resolves a native source name (`"open"`, `"high"`,
 `"low"`, `"close"`, `"volume"`, `"hl2"`, `"hlc3"`, `"ohlc4"`, `"hlcc4"`)
