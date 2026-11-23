@@ -205,6 +205,12 @@ The `strategy_library_incompatible` row also includes the two released
 1.5.0 outputs reasons, `outputs_api_mismatch` and `outputs_manifest_invalid`,
 in addition to its six released 1.4.0 reasons.
 
+When a trusted parent sets `PINEFORGE_STRATEGY_SO_SHA256`, the JSON harness
+checks the strategy library before opening it. A digest mismatch, unreadable
+file, empty file or nonregular file is `strategy_library_incompatible` with
+`reason: load_failed`. An empty or malformed expected digest is
+`run_request_invalid` with `option: arguments`. These refusals exit 1.
+
 `outputs_limit` admits reasons `too_many_events`, `too_many_rows` and
 `too_many_series`. The first two carry `max` `INT_MAX`. Series are unlimited
 by default. `--limit-output-series N` (`N >= 0`) applies before strategy creation; 0

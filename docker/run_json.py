@@ -2961,7 +2961,7 @@ _REQUIRED_EXPORTS = ("strategy_create", "strategy_set_input", "strategy_set_over
 
 def load_strategy(so_path: Path) -> ctypes.CDLL:
     try:
-        lib = ctypes.CDLL(str(so_path))
+        lib = ctypes.CDLL(_strategy_load_path(so_path))
     except OSError as e:
         raise StrategyLibraryError(f"cannot load the strategy library: {e}",
                                    {"reason": "load_failed"}) from None
@@ -9700,6 +9700,35 @@ def _output_series_resources(sink, series):
 
 def _report_series_count(document):
     return len((document.get("outputs") or {}).get("series", ()))
+
+
+def _strategy_load_path(so_path: Path) -> str:
+    """When requested, verify the file before giving its path to the loader."""
+    expected = os.environ.get("PINEFORGE_STRATEGY_SO_SHA256")
+    if expected is None:
+        return str(so_path)
+    if re.fullmatch(r"[0-9a-fA-F]{64}", expected) is None:
+        raise _request_invalid("error: PINEFORGE_STRATEGY_SO_SHA256 must be 64 hexadecimal digits",
+                               "arguments")
+    # A bare filename means a loader search, not the file in cwd. The caller
+    # keeps this path and its contents stable until the loader opens it.
+    path = Path(so_path).absolute()
+    digest = hashlib.sha256()
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("SHA-256 verification requires a nonempty regular file")
+        chunk = os.read(fd, 64 * 1024)
+        if not chunk:
+            raise OSError("SHA-256 verification requires a nonempty regular file")
+        while chunk:
+            digest.update(chunk)
+            chunk = os.read(fd, 64 * 1024)
+    finally:
+        os.close(fd)
+    if digest.hexdigest() != expected.lower():
+        raise OSError("SHA-256 mismatch")
+    return str(path)
 
 
 if __name__ == "__main__":
