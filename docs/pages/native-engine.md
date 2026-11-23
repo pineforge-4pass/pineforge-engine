@@ -3680,6 +3680,16 @@ the request's own authority — opening handles, position cycles and cohort
 handles — never a source identifier. A bracket child that is still waiting for
 its parent has no scope and resolves only after the parent fill.
 
+A native C++ host can submit or replace a `BindOpenings` close with either an
+inline list or an external reader. The order core freezes the accepted handles
+in canonical order. The continuation hash includes the same count and handles
+in either form, both for the request owner (`hash_owner`,
+`src/native_execution_consumer.cpp:813`) and for its authority (`hash_authority`,
+`src/native_execution_consumer.cpp:894`). Two such closes share a sibling claim
+only when their cycles and canonical lists match (`same_reduction_scope`,
+`src/native_execution_consumer.cpp:723`). If a required handle cannot be read,
+the hash or sizing call reports the failure without returning a partial result.
+
 `ScopeBasis` chooses *when* the scope is measured. `AtMatch` (the default)
 reads the bound scope as it stands at the matching candidate, so two 50 %
 siblings executed in turn on one 10-unit lot close 5 then 2.5.

@@ -34,10 +34,10 @@
 #include <utility>
 #include <variant>
 #include "native_cohort_target_work.hpp"
+#include "native_opening_membership.hpp"
 namespace pineforge {
 inline namespace engine_script_run_v20 {
 namespace {
-
 template<class T>
 void reserve_next(std::vector<T>& values) {
     if (values.size() == values.max_size())
@@ -741,16 +741,15 @@ bool same_reduction_scope(const native_order::Authority& left,
     if (const auto* a = std::get_if<native_order::OpeningsClose>(&left)) {
         const auto& b = std::get<native_order::OpeningsClose>(right);
         if (a->cycle != b.cycle) return false;
-        if (!a->external_openings && !b.external_openings) return a->openings == b.openings;
-        const auto count = native_order::opening_count(a->openings, a->external_openings.get());
-        if (count != native_order::opening_count(b.openings, b.external_openings.get())) return false;
-        // The core canonicalizes both spellings before installing the authority.
-        const auto member = [](const native_order::OpeningsClose& close, std::uint64_t i) {
-            return close.external_openings ? frozen_opening_at(*close.external_openings, i)
-                                           : close.openings[static_cast<std::size_t>(i)];
-        };
-        for (std::uint64_t i = 0; i != count; ++i) {
-            if (member(*a, i) != member(b, i)) return false;
+        const native_order::OpeningMembership left_members(*a);
+        const native_order::OpeningMembership right_members(b);
+        if (left_members.is_inline() && right_members.is_inline())
+            return a->openings == b.openings;
+        const auto count = left_members.size();
+        if (count != right_members.size()) return false;
+        // Both spellings are canonical at enrollment; an unreadable handle is an error.
+        for (std::uint64_t i = 0; i < count; ++i) {
+            if (left_members[i] != right_members[i]) return false;
         }
         return true;
     }
@@ -811,22 +810,17 @@ void hash_capacity(F& f, const native_order::Capacity& capacity) noexcept {
     if (const auto* budget = std::get_if<native_order::PointBudget>(&capacity)) f.d(budget->units);
 }
 
-template <class F>
-void hash_owner(F& f, const native_order::Owner& owner) noexcept {
+void hash_owner(OpeningMembershipFold<StateFold>& f, const native_order::Owner& owner) noexcept {
     f.u(owner.index());
     std::visit([&](const auto& value) {
         using T = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<T, native_order::Independent>) {
         } else if constexpr (std::is_same_v<T, native_order::WaitForApplied>) {
             hash_handle(f, value.parent);
-            // Visibility is request state: folded only when set, so every
-            // Working child keeps the digest it had before the knob existed.
+            // Default visibility, first match and scope contribute no words.
             if (value.visibility != native_order::NativeArmVisibility::Working) {
                 f.u(static_cast<uint64_t>(value.visibility));
             }
-            // Likewise the first-match rule, under its own tag so it can
-            // never read as a visibility: every AtArmPrint child keeps the
-            // digest it had before the knob existed.
             if (value.first_match != native_order::NativeArmFirstMatch::AtArmPrint) {
                 f.s("first_match");
                 f.u(static_cast<uint64_t>(value.first_match));
@@ -839,8 +833,14 @@ void hash_owner(F& f, const native_order::Owner& owner) noexcept {
             hash_handle(f, value.opening);
             f.i(value.cycle);
         } else if constexpr (std::is_same_v<T, native_order::BindOpenings>) {
-            f.i(value.cycle); f.u(value.openings.size());
-            for (const auto& handle : value.openings) hash_handle(f, handle);
+            f.i(value.cycle);
+            if (value.external_openings) {
+                f.hash_external(*value.external_openings,
+                    [&](const auto& member) noexcept { hash_handle(f, member); });
+            } else {
+                f.u(value.openings.size());
+                for (const auto& handle : value.openings) hash_handle(f, handle);
+            }
         } else if constexpr (std::is_same_v<T, native_order::BindCohort>) {
             hash_cohort_handle(f, value.cohort);
         } else {
@@ -859,8 +859,7 @@ void hash_group(F& f, const native_order::Group& group) noexcept {
     }
 }
 
-template <class F>
-void hash_request(F& f, const native_order::Request& request) noexcept {
+void hash_request(OpeningMembershipFold<StateFold>& f, const native_order::Request& request) noexcept {
     hash_intent(f, request.intent);
     f.s(request.label);
     f.s(request.comment);
@@ -868,9 +867,7 @@ void hash_request(F& f, const native_order::Request& request) noexcept {
     hash_capacity(f, request.capacity);
     hash_owner(f, request.owner);
     hash_group(f, request.group);
-    // Folded only when the request is anchored, so every absolute request
-    // keeps its prior digest; the rounding folds only when set, so every
-    // Raw anchor keeps the digest it had before the rounding existed.
+    // Absolute requests contribute no anchor; Raw rounding contributes no word.
     if (const auto* anchor = std::get_if<native_order::FromOwnerFill>(&request.anchor)) {
         f.d(anchor->offset);
         f.b(anchor->ticks);
@@ -894,8 +891,7 @@ void hash_remaining_projection(F& f, const native_order::RemainingProjection& re
     }
 }
 
-template <class F>
-void hash_authority(F& f, const native_order::Authority& authority) noexcept {
+void hash_authority(OpeningMembershipFold<StateFold>& f, const native_order::Authority& authority) noexcept {
     f.u(authority.index());
     const auto hash_enrollment = [&](const native_order::Enrollment& enrollment) {
         f.u(enrollment.index());
@@ -933,8 +929,13 @@ void hash_authority(F& f, const native_order::Authority& authority) noexcept {
             hash_enrollment(value.enrollment);
         } else if constexpr (std::is_same_v<T, native_order::OpeningsClose>) {
             f.i(value.cycle); f.u(static_cast<uint64_t>(value.side));
-            f.u(value.openings.size());
-            for (const auto& handle : value.openings) hash_handle(f, handle);
+            if (value.external_openings) {
+                f.hash_external(*value.external_openings,
+                    [&](const auto& member) noexcept { hash_handle(f, member); });
+            } else {
+                f.u(value.openings.size());
+                for (const auto& handle : value.openings) hash_handle(f, handle);
+            }
             hash_enrollment(value.enrollment);
         } else if constexpr (std::is_same_v<T, native_order::CohortClose>) {
             hash_cohort_handle(f, value.cohort);
@@ -944,9 +945,8 @@ void hash_authority(F& f, const native_order::Authority& authority) noexcept {
     }, authority);
 }
 
-// The cohort rosters: live matching authority, walked at every read. Their
-// receipts are append-only history of the roster commands and fold through a
-// running digest instead, one receipt at its commit (hash_cohort_receipt).
+// Rosters are live matching authority, walked at each read. Their append-only
+// receipts fold separately, once per commit.
 template <class F>
 void hash_cohorts(F& f, const native_order::WorkingRequestCore& requests) noexcept {
     const auto& cohorts = requests.cohorts();
@@ -1056,8 +1056,9 @@ void hash_pending(F& f, const native_order::PendingAdjustments& pending) noexcep
     }
 }
 
-template <class F>
-void hash_definition(F& f, const native_order::DefinitionRef& definition) noexcept {
+void hash_definition(
+        OpeningMembershipFold<StateFold>& f,
+        const native_order::DefinitionRef& definition) noexcept {
     f.b(static_cast<bool>(definition));
     if (!definition) return;
     hash_handle(f, definition->handle);
@@ -2298,7 +2299,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
         std::abort();
     }
 #endif
-    StateFold f;
+    OpeningMembershipFold<StateFold> f;
     f.run_base = requests_.identity().run_number;
     f.s(kNativeConsumerSemanticVersion);
     f.s(kNativeDriverSemanticVersion);
@@ -2452,15 +2453,15 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     hash_tz_identity(f, tz_identity_);
     f.s(requests_.identity().session_key);
     f.u(requests_.live().size());
-    // A row outside the heap is read back for this fold, and that read can
-    // fail; the hash cannot throw. The core carries the failure, the fold
-    // stops at the row it could not read, and the next read of the book --
-    // native_continuation_hash's own, before it answers -- throws it again.
+    // A resident opening list can require scratch I/O just like a spilled row.
+    // Stop at the first failure, even if the authority shares the owner's reader.
     try {
         for (const auto& live : requests_.live()) {
             hash_definition(f, live.definition);
+            if (f.read_failure) break;
             hash_remaining(f, live.remaining);
             hash_authority(f, live.authority);
+            if (f.read_failure) break;
             hash_trigger_state(f, live.trigger_state);
             hash_allowance(f, live.allowance);
             hash_pending(f, live.pending);
@@ -2472,13 +2473,12 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
             if (live.sizing_price) { f.u(3); f.d(*live.sizing_price); }
         }
     } catch (...) {
-        // A book that never spilled reads nothing back: nothing else here
-        // throws, and what would is left to noexcept as before.
-        if (!requests_.carry_book_read_failure(std::current_exception())) std::terminate();
+        f.read_failure = std::current_exception();
     }
-    // The host-maintained roster is durable matching authority.  Fold it
-    // immediately after the request table so a membership-only change cannot
-    // share a continuation identity with an otherwise identical run.
+    if (f.read_failure) {
+        requests_.carry_live_read_failure(std::move(f.read_failure));
+        return 0;
+    }
     hash_cohorts(f, requests_);
     f.u(cohort_receipts_.count);
     f.u(cohort_receipts_.h);
@@ -6080,7 +6080,8 @@ double NativeExecutionConsumer::sibling_claimed_units(
         const native_order::LiveRequest& live) const {
     double claimed = 0.0;
     // A spilled row can leave the book's ring during this walk. Keep what
-    // we compare, and let either a row or a frozen membership read fail the candidate.
+    // we compare, and let either a row or a frozen membership read fail the
+    // candidate before the caller sees any part of the claim.
     const native_order::RequestHandle handle = live.handle();
     const native_order::Authority authority = live.authority;
     for (const auto& other : requests_.live()) {
@@ -6307,12 +6308,11 @@ std::optional<double> NativeExecutionConsumer::resolve_sized_units(
         scope = *live.sizing_scope;
     }
     if (fraction->claim == native_order::ScopeClaim::NetOfSiblings) {
+        requests_.rethrow_book_read_failure();
         scope -= sibling_claimed_units(live);
     }
     if (!std::isfinite(scope) || scope <= 0.0) return std::nullopt;
-    // units = scope * fraction, one binary64 multiplication. A percent-spelled
-    // caller converts percent -> fraction itself, so no second rounding step
-    // enters here.
+    // The caller converts percent to a fraction; one binary64 multiplication sizes it.
     const double units = scope * fraction->fraction;
     // A fraction whose product is its scope's own held total -- fraction 1,
     // "close it all", of the gross scope as it stands -- resolves to that
