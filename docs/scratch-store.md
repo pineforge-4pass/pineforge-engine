@@ -56,7 +56,7 @@ is refused.
 The native order and market admission journals reject an imported record with
 an undeclared enum value, even when the number fits its field. Both
 `append_journal_record` (`src/native_order.cpp:2210`, `src/source/market_admission.cpp:182`)
-and `decode_journal_record` (`src/native_journal_codec.cpp:373`, `src/source/admission_journal_codec.cpp:587`)
+and `decode_journal_record` (`src/native_journal_codec.cpp:407`, `src/source/admission_journal_codec.cpp:587`)
 return `ScratchStatus::corrupt`. The native ordinal or the outstanding admission
 sequence remains available for a valid retry.
 

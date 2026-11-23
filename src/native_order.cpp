@@ -2248,7 +2248,7 @@ ReadStatus append_journal_record(WorkingRequestCore& core,
     uint64_t ordinal = 0;
     const auto validate = [&](const detail::ScratchByteSource& record) noexcept {
         const auto status = scan_journal_record(record,
-            {journal.codec_page.data(), journal.codec_page.size()}, ordinal);
+            {journal.codec_page.data(), journal.codec_page.size()}, core.identity(), ordinal);
         if (status != ReadStatus::ok) return status;
         return ordinal > core.last_ordinal_ ? ReadStatus::ok : ReadStatus::corrupt;
     };
