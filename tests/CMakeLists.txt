@@ -7681,6 +7681,10 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     set_target_properties(test_heap_census_unique_ids PROPERTIES ENABLE_EXPORTS ON)
 endif()
 
+# Broker-state hash sink string writer: appended here so that no line-pinned registration above moves.
+list(APPEND TEST_SOURCES test_broker_state_sink_string_view)
+pineforge_add_unit_test(test_broker_state_sink_string_view)
+
 # O(1) seam 3 journal-codec red clauses: eleven executables over one test file, one clause each.
 # They link the source layer (pine_adapter.hpp, pine_command_scratch_production.hpp), so a
 # kernel-only configure must not create them.
