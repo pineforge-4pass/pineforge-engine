@@ -156,6 +156,8 @@ def test_run_strategy_docker_runner_sends_overrides_as_strategy_run_does(tmp_pat
                                                                          monkeypatch):
     # The release image's run_json refuses a JSON boolean or null; both
     # runners send strategy property overrides as strings.
+    # The image's run_json refuses a JSON boolean or null; the Docker runner
+    # sends them as wire text, with lowercase booleans for the generated setter.
     (tmp_path / "generated.cpp").write_text("// generated\n")
     sent = {}
 
@@ -166,12 +168,14 @@ def test_run_strategy_docker_runner_sends_overrides_as_strategy_run_does(tmp_pat
         sent.update(kw)
         raise Sent
     monkeypatch.setattr(pf_release_run, "run_release", run_release)
-    overrides = {"process_orders_on_close": True, "initial_capital": 1000,
+    overrides = {"process_orders_on_close": True, "calc_on_order_fills": False,
+                 "initial_capital": 1000,
                  "commission_value": 0.04, "default_qty_type": "cash", "slippage": None}
     with pytest.raises(Sent):
         run_strategy._run_via_docker(tmp_path, tape, {"Length": 5, "Use Filter": False},
                                      {"strategy_overrides": overrides}, None, None)
-    assert sent["overrides"] == {"process_orders_on_close": "True", "initial_capital": "1000",
+    assert sent["overrides"] == {"process_orders_on_close": "true", "calc_on_order_fills": "false",
+                                 "initial_capital": "1000",
                                  "commission_value": "0.04", "default_qty_type": "cash",
                                  "slippage": "None"}
     # expectation corrected: "False" -> "false", because Pine boolean inputs require lowercase.
