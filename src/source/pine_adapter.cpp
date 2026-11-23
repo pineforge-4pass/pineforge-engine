@@ -2471,8 +2471,8 @@ void PineExecutionAdapter::purge_brackets_after_applied_reversal(
         }
         if ((exit && targets_prior) || stale_margin) stale.push_back(handle);
     }
-    for (const auto& handle : stale) {
-        (void)require_host().cancel(handle);
+    for (const auto& handle : stale) {  // a cancel of an ended request would journal NotWorking
+        if (require_host().native_working_request(handle)) (void)require_host().cancel(handle);
         retire(handle);
     }
     const auto held = cohorts_by_id_.held_rows();
