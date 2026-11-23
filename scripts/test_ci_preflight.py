@@ -742,6 +742,7 @@ class AppTokenEnvironments(unittest.TestCase):
     def test_real_minting_jobs_have_exactly_the_inventoried_environments(self):
         expected = {
             ('release.yml', 'release'): ['release'],
+            ('release.yml', 'prebuilt-x86'): ['release-toolchain'],
             ('release.yml', 'notify-hub'): ['release'],
             ('release-ruleset-probe.yml', 'probe'): ['release'],
             ('promote-baseline.yml', 'promote'): ['release-bot'],
@@ -1912,6 +1913,8 @@ class OptionCAdmission(unittest.TestCase):
                  "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))"),
                 ('pineforge-4pass/pineforge-engine/.github/workflows/release.yml@{0}',
                  'pineforge-4pass/pineforge-engine/.github/workflows/other.yml@{0}'),
+                ('    environment: release-toolchain\n', ''),
+                ('    environment: release-toolchain\n', '    environment: release\n'),
                 ('      contents: read\n      id-token: write',
                  '      contents: write\n      id-token: write'),
                 ('--password-stdin', '--password "${REGISTRY_ACCESS_TOKEN}"'),
@@ -13091,7 +13094,11 @@ class SplitHostedReleaseAdmission(unittest.TestCase):
         gke_bytes = gke_fixture.read_bytes()
         self.assertEqual(hashlib.sha256(gke_bytes).hexdigest(),
                          '21025075090a0a40bfd7360e54a36a0c9bbac9bb8109fbbaa86edce347c27b87')
-        self.split = split_bytes.decode('utf-8')
+        # Keep the recorded fixture's bytes. Exercise its layout with the
+        # current x86 environment before making the admission mutations.
+        self.split = in_job(split_bytes.decode('utf-8'), 'prebuilt-x86',
+                            '    runs-on: ubuntu-24.04\n',
+                            '    runs-on: ubuntu-24.04\n    environment: release-toolchain\n')
         self.legacy = legacy_bytes.decode('utf-8')
         self.shipped = release.read_text(encoding='utf-8')
         self.gke = legacy_gke_arm_smoke(gke_bytes.decode('utf-8'))

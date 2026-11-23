@@ -1742,8 +1742,9 @@ Both runner-group mirrors are empty for the hosted workflows. The helper require
 host UID 1001, records the actual host UID/GID and Docker version bytes, and keeps
 the container user at `1001:123`. Docker command failures remain failures.
 
-The x86 auth contract permits only `release.yml` on `workflow_dispatch` from main
-(tag refs are refused), with provider `projects/76767776102/locations/global/workloadIdentityPools/pineforge-github/providers/github-oidc`,
+The x86 auth contract requires the `release-toolchain` environment and permits
+only `release.yml` on `workflow_dispatch` from main (tag refs are refused), with
+provider `projects/76767776102/locations/global/workloadIdentityPools/pineforge-github/providers/github-oidc`,
 dedicated reader `engine-release-toolchainreader@gen-lang-client-0864094636.iam.gserviceaccount.com`,
 and `google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093`.
 It sets `create_credentials_file: false`, `export_environment_variables: false`
@@ -1757,6 +1758,26 @@ against those job outputs before any release upload. Missing or mismatched hashe
 refuse the job. Notify follows upload; dry runs retain the artifacts and publish
 nothing. Both builds retain the v1.10.0 archive comparison, fixed GLIBC 2.35 ceiling,
 `__isoc23_*` refusal, and every-library inventory; x86 also consumes its packed archive.
+
+Before using this workflow, create `release-toolchain` in the engine repository
+with required reviewers and a deployment rule for the `main` branch only.
+Prevent self-review, disallow bypassing protection rules, and keep the release
+App secrets in `release`.
+
+In Google Cloud, restrict the dedicated reader's Workload Identity Federation
+grant to tokens with the `release-toolchain` environment. Require the engine
+repository, `workflow_dispatch`, `refs/heads/main`, the exact `release.yml`
+workflow ref, and the CEL condition
+`has(assertion.environment) && assertion.environment == 'release-toolchain'`.
+Apply it to the provider if it serves only this reader. For a shared provider,
+scope the reader's impersonation grant to a mapped attribute that includes those
+same checks and remove the reader's old grant without the environment check.
+Keep other identities' grants intact. With GitHub's default subject format, the
+job's subject is `repo:pineforge-4pass/pineforge-engine:environment:release-toolchain`;
+update any reader policy that expects the old branch subject and keep checking
+the separate `ref` claim. These settings are outside the workflow file. Apply
+them before dispatch, and verify an approved `dry_run` from `main` before a
+publishing run.
 
 The PR diagnostic checks out only the exact same-repository head without persisted
 credentials and prints actual id, Docker client/server versions and storage driver.
