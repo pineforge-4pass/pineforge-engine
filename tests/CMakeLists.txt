@@ -8329,6 +8329,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 # --- lane deferred-sink-sync end ---
 
+# --- lane issue-921 begin ---
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(test_issue_921_report_sink_sync PRIVATE "-Wl,--wrap=fdatasync")
+endif()
+# --- lane issue-921 end ---
+
 # --- lane resident-command-scratch begin ---
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
     target_link_options(test_command_scratch_spill PRIVATE

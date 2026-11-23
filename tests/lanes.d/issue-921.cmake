@@ -1,0 +1,5 @@
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND TEST_SOURCES test_issue_921_report_sink_sync)
+    pineforge_add_unit_test(test_issue_921_report_sink_sync)
+    set_tests_properties(test_issue_921_report_sink_sync PROPERTIES LABELS "sink_sync")
+endif()
