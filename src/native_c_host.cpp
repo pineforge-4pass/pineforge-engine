@@ -2507,10 +2507,10 @@ int c_refuse(CCallbackHost* host, int status) noexcept {
     return status;
 }
 
-std::vector<pineforge::NativeMarketEvent> read_native_events(
-        CCallbackHost& host, std::uint64_t after_ordinal) {
+template <typename Fn>
+int guard_native_event_read(CCallbackHost& host, Fn&& read) {
     try {
-        return host.native_events(after_ordinal);
+        return read();
     } catch (const pineforge::detail::ReleasedNativeJournalRead& error) {
         pineforge::detail::note_cabi_run_results_read_refusal(host, error);
         throw;
@@ -3794,32 +3794,32 @@ PF_API int strategy_native_events_v1(pf_strategy_t s, uint64_t after_ordinal,
         auto* host = host_of(s);
         if (!host) return PF_NATIVE_E_HANDLE;
         if (cap < 0 || (cap > 0 && !out)) return c_refuse(host, PF_NATIVE_E_ARGUMENT);
-        const auto events = read_native_events(*host, after_ordinal);
-        int written = 0;
-        std::size_t consumed = 0;
-        for (; consumed < events.size() && written < cap; ++consumed) {
-            pf_native_event_v1 row;
-            if (!translate_event(events[consumed], row)) continue;
-            out[written++] = row;
-        }
-        /* Ordinals are non-decreasing, not strictly increasing: an applied
-         * execution and the account observation it produced share one. A
-         * caller resumes from the last returned ordinal, so a page that ended
-         * in the middle of such a group would lose its siblings forever.
-         * Give the whole group back on the next page instead. A cap below the
-         * group size (2 today) cannot honour that and is left as written. */
-        if (written == cap && written > 1) {
-            const std::uint64_t tail = out[written - 1].ordinal;
-            for (std::size_t next = consumed; next < events.size(); ++next) {
-                pf_native_event_v1 probe;
-                if (!translate_event(events[next], probe)) continue;
-                if (probe.ordinal == tail) {
-                    while (written > 1 && out[written - 1].ordinal == tail) --written;
-                }
-                break;
+        return guard_native_event_read(*host, [&] {
+            const auto events = host->native_events(after_ordinal);
+            int written = 0;
+            std::size_t consumed = 0;
+            for (; consumed < events.size() && written < cap; ++consumed) {
+                pf_native_event_v1 row;
+                if (!translate_event(events[consumed], row)) continue;
+                out[written++] = row;
             }
-        }
-        return written;
+            /* An applied execution and its account observation share an
+             * ordinal. Leave a partial group for the next page so advancing
+             * the cursor does not lose its other rows. Keep the page as
+             * written if cap is below the group size (2 today). */
+            if (written == cap && written > 1) {
+                const std::uint64_t tail = out[written - 1].ordinal;
+                for (std::size_t next = consumed; next < events.size(); ++next) {
+                    pf_native_event_v1 probe;
+                    if (!translate_event(events[next], probe)) continue;
+                    if (probe.ordinal == tail) {
+                        while (written > 1 && out[written - 1].ordinal == tail) --written;
+                    }
+                    break;
+                }
+            }
+            return written;
+        });
     });
 }
 
@@ -4062,17 +4062,17 @@ PF_API int strategy_native_margin_call_v1(pf_strategy_t s, uint64_t ordinal,
         if (!out) return c_refuse(host, PF_NATIVE_E_ARGUMENT);
         if (out->struct_size != sizeof(pf_native_margin_call_v1)) return c_refuse(host, PF_NATIVE_E_STRUCT);
         if (ordinal == 0u) return PF_NATIVE_ABSENT;
-        /* The history is ordered by ordinal, so the call is the first row at
-         * or past it, or it is not there at all. */
-        for (const auto& event : read_native_events(*host, ordinal - 1u)) {
-            if (event.ordinal > ordinal) break;
-            if (event.kind != pineforge::NativeEventKind::Command || !event.command) continue;
-            const auto* call = std::get_if<no::MarginCallEvent>(&*event.command);
-            if (!call || call->ordinal != ordinal) continue;
-            *out = margin_call_economics(*call);
-            return PF_NATIVE_OK;
-        }
-        return PF_NATIVE_ABSENT;
+        return guard_native_event_read(*host, [&] {
+            for (const auto& event : host->native_events(ordinal - 1u)) {
+                if (event.ordinal > ordinal) break;
+                if (event.kind != pineforge::NativeEventKind::Command || !event.command) continue;
+                const auto* call = std::get_if<no::MarginCallEvent>(&*event.command);
+                if (!call || call->ordinal != ordinal) continue;
+                *out = margin_call_economics(*call);
+                return PF_NATIVE_OK;
+            }
+            return PF_NATIVE_ABSENT;
+        });
     });
 }
 

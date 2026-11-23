@@ -1842,7 +1842,7 @@ protected:
 
     // --- Direction accessors ---
     std::string closed_trade_direction(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(std::string());
+        if (idx < 0 || idx >= (int)trades_.size()) { trades_.check_not_released(); return {}; }
         return trades_.is_long_at(idx) ? "long" : "short";
     }
     std::string open_trade_direction(int idx) const {

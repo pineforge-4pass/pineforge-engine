@@ -21550,6 +21550,30 @@
   },
   {
    "file": "src/native_execution_consumer.cpp",
+   "symbol": "<temp:vector>",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: release_run_results ( ) noexcept #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: vector < NativeDriverPoint >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "<temp:vector>",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: release_run_results ( ) noexcept #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: vector < NativeAccountObservation >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
@@ -23511,6 +23535,19 @@
    ],
    "cls": "grow",
    "spelling": "chunks . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
+   "symbol": "first",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "struct WorkingRequestCore :: JournalStore #1",
+    "void release ( ) noexcept #1"
+   ],
+   "cls": "assign",
+   "spelling": "first = . . .",
    "ordinal": 1
   },
   {
