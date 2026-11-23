@@ -8,6 +8,48 @@ namespace {
 namespace jc = detail::journal_codec;
 using Status = detail::ScratchStatus;
 
+// Switch on the enum itself so -Wswitch diagnoses a missing schema member.
+// No fallback overload: a new enum field needs its own list to compile.
+#define MEMBER(name) case E::name:
+#define MEMBERS(type, cases) constexpr bool declared(type value) noexcept { \
+    using E = type; switch (value) { cases return true; } return false; }
+MEMBERS(HostSizedKind, MEMBER(Open) MEMBER(Close))
+MEMBERS(Side, MEMBER(Long) MEMBER(Short))
+MEMBERS(ExecutionGridPolicy, MEMBER(SnapToGrid) MEMBER(ExplicitUnits))
+MEMBERS(SizeTime, MEMBER(AtMatch) MEMBER(AtAcceptance))
+MEMBERS(SizePrice, MEMBER(Resolved) MEMBER(Signal) MEMBER(SignalOnTick))
+MEMBERS(ScopeClaim, MEMBER(Gross) MEMBER(NetOfSiblings))
+MEMBERS(ScopeBasis, MEMBER(AtMatch) MEMBER(AtAcceptance))
+MEMBERS(NativeAnchorRounding, MEMBER(Raw) MEMBER(HalfUp) MEMBER(Directional))
+MEMBERS(NativeArmVisibility, MEMBER(Working) MEMBER(PendingUntilArmed))
+MEMBERS(NativeArmFirstMatch, MEMBER(AtArmPrint) MEMBER(AfterArmPrint))
+MEMBERS(NativeArmScope, MEMBER(OwnerLot) MEMBER(Book))
+MEMBERS(GroupEffect, MEMBER(Cancel) MEMBER(Reduce))
+MEMBERS(NativePriceProvenance, MEMBER(Confirmed) MEMBER(ObservedPrint) MEMBER(ModeledOHLCOpen)
+        MEMBER(ModeledOHLCClose) MEMBER(CarriedOpen) MEMBER(AfterCalculationClose)
+        MEMBER(PartialFinalized) MEMBER(Calculation) MEMBER(CurrentExecution))
+MEMBERS(NativePathPhase, MEMBER(None) MEMBER(Open) MEMBER(High) MEMBER(Low) MEMBER(Close))
+MEMBERS(NativeCompletionKind, MEMBER(Confirmed) MEMBER(LazyComplete) MEMBER(SessionShortened)
+        MEMBER(PartialFinalized))
+MEMBERS(RequestOrigin, MEMBER(Host) MEMBER(KernelLiquidation) MEMBER(KernelRisk))
+MEMBERS(NativeCandidatePriceKind, MEMBER(PointPrice) MEMBER(TriggerLevel) MEMBER(CurrentQuote))
+MEMBERS(OpeningShape, MEMBER(Transact) MEMBER(ReverseTo) MEMBER(CloseOpposite))
+MEMBERS(CommandSurface, MEMBER(General) MEMBER(MarketOnly))
+MEMBERS(RequestRejectReason, MEMBER(InvalidQuantity) MEMBER(OffGrid) MEMBER(InvalidTrigger)
+        MEMBER(InvalidCapacity) MEMBER(InvalidOwner) MEMBER(InvalidQuantityBasis)
+        MEMBER(InvalidGroup) MEMBER(PlacementAdmission))
+MEMBERS(CancelReason, MEMBER(User) MEMBER(Group) MEMBER(OwnerGone) MEMBER(UnsupportedRelation)
+        MEMBER(Superseded))
+MEMBERS(MatchRejectReason, MEMBER(NonpositivePrice) MEMBER(OpeningDirection) MEMBER(MaxAbsUnits)
+        MEMBER(MaxOpenLots) MEMBER(InitialMargin) MEMBER(TermsUnresolved) MEMBER(InvalidTerms)
+        MEMBER(NoOppositeExposure) MEMBER(HostPrecommit) MEMBER(RiskLimit) MEMBER(UnrepresentableQuantity))
+MEMBERS(AppliedTerminalReason, MEMBER(WorkingUnitsSatisfied) MEMBER(Flattened) MEMBER(TargetExhausted))
+MEMBERS(ActivationKind, MEMBER(Stop) MEMBER(StopLimit) MEMBER(TrailArm) MEMBER(TrailTrigger))
+MEMBERS(RiskLimitKind, MEMBER(MaxDrawdown) MEMBER(MaxIntradayLoss) MEMBER(MaxConsecutiveLossDays)
+        MEMBER(MaxFillsPerDay))
+#undef MEMBERS
+#undef MEMBER
+
 template<class T> struct Optional : std::false_type {};
 template<class T> struct Optional<std::optional<T>> : std::true_type {};
 template<class T> struct Vector : std::false_type {};
@@ -87,13 +129,21 @@ VALUE(ExecutionTerms, x.resolved_price, x.units, x.shape, x.grid_policy)
 VALUE(TermsResolvedInput, x.price_kind, x.shared_cursor_collision, x.raw_price,
       x.default_resolved_price, x.terms)
 VALUE(AcceptedEvent, x.ordinal, x.definition, x.surface)
-VALUE(RejectedEvent, x.ordinal, x.request, x.reason, x.surface)
 VALUE(ReplacedEvent, x.ordinal, x.predecessor_definition, x.successor_definition, x.surface)
-VALUE(ReplaceRejectedEvent, x.ordinal, x.live_definition, x.attempted, x.reason, x.surface)
 VALUE(CancelledEvent, x.ordinal, x.definition, x.reason, x.cause,
       x.prior_authority, x.unexecuted, x.pending)
-VALUE(NotWorkingEvent, x.ordinal, x.target, x.attempted, x.surface)
-VALUE(InvalidHandleEvent, x.ordinal, x.target, x.attempted, x.surface)
+template<class A> void fields(A& a, RejectedEvent& x) {
+    a(x.ordinal); a.attempt(x.request); a(x.reason, x.surface);
+}
+template<class A> void fields(A& a, ReplaceRejectedEvent& x) {
+    a(x.ordinal, x.live_definition); a.attempt(x.attempted); a(x.reason, x.surface);
+}
+template<class A> void fields(A& a, NotWorkingEvent& x) {
+    a(x.ordinal, x.target); a.attempt(x.attempted); a(x.surface);
+}
+template<class A> void fields(A& a, InvalidHandleEvent& x) {
+    a(x.ordinal, x.target); a.attempt(x.attempted); a(x.surface);
+}
 VALUE(NoEffectEvent, x.ordinal, x.definition, x.remaining, x.authority, x.cursor)
 VALUE(MatchRejectedEvent, x.ordinal, x.reason, x.definition, x.remaining,
       x.authority, x.cursor, x.attempted_terms)
@@ -123,6 +173,7 @@ VALUE(NativeRiskEvent, x.ordinal, x.kind, x.limit, x.observed, x.day_ordinal, x.
 struct Save {
     jc::Writer& out;
     template<class... T> void operator()(const T&... values) { (value(values), ...); }
+    template<class T> void attempt(const T& x) { value(x); }
     template<class T> void value(const T& x) {
         if (out.status != Status::ok) return;
         if constexpr (std::is_same_v<T, bool>) {
@@ -176,7 +227,16 @@ public:
 
 template<bool Owning> struct Load {
     jc::Reader& in;
+    bool stored_refusal = false;
+    bool reading_attempt = false;
     template<class... T> void operator()(T&... values) { (value(values), ...); }
+    template<class T> void attempt(T& x) {
+        // Only an internal history read can restore the caller's refused
+        // input verbatim. A public import/decode validates even that input.
+        reading_attempt = stored_refusal;
+        value(x);
+        reading_attempt = false;
+    }
     template<std::size_t I = 0, class T> void variant(T& x, std::uint64_t index) {
         if constexpr (I < std::variant_size_v<T>) {
             if (index == I) {
@@ -190,9 +250,7 @@ template<bool Owning> struct Load {
         if constexpr (std::is_same_v<T, bool>) x = in.presence();
         else if constexpr (std::is_integral_v<T>) in.integer(x);
         else if constexpr (std::is_enum_v<T>) {
-            std::underlying_type_t<T> raw{};
-            in.integer(raw);
-            x = static_cast<T>(raw);
+            in.enumeration(x, [this](T e) { return reading_attempt || declared(e); });
         } else if constexpr (std::is_same_v<T, double>) in.real(x);
         else if constexpr (std::is_same_v<T, std::string>) in.text(x, Owning);
         else if constexpr (std::is_same_v<T, SessionKey>) {
@@ -263,12 +321,13 @@ template<bool Owning> struct Load {
 
 template<bool Owning> Status decode(const detail::ScratchByteSource& source,
                                    detail::ScratchBuffer page, CommandEvent& event,
-                                   const detail::ReportScratchIoError*& failure) noexcept {
+                                   const detail::ReportScratchIoError*& failure,
+                                   bool stored_refusal = false) noexcept {
     failure = nullptr;
     if (!page.data || !page.size) return Status::programming_error;
     try {
         jc::Reader in{source, page};
-        Load<Owning>{in}(event);
+        Load<Owning>{in, stored_refusal}(event);
         return in.finish();
     } catch (const std::bad_alloc&) {
         if constexpr (Owning) failure = &detail::scratch_out_of_memory_failure();
@@ -296,12 +355,12 @@ detail::ScratchStatus JournalRecordSource::read(std::uint64_t offset,
 JournalRecordSource encode_journal_record(const CommandEvent& event) noexcept {
     return JournalRecordSource(event);
 }
-detail::ScratchStatus decode_journal_record(const detail::ScratchByteSource& source,
-    detail::ScratchBuffer page, CommandEvent& event) {
+static Status decode_owning(const detail::ScratchByteSource& source,
+    detail::ScratchBuffer page, CommandEvent& event, bool stored_refusal) {
     try {
         CommandEvent result;
         const detail::ReportScratchIoError* failure = nullptr;
-        const auto status = decode<true>(source, page, result, failure);
+        const auto status = decode<true>(source, page, result, failure, stored_refusal);
         // Owning diagnostics can allocate. Raise their cause before a caller
         // maps programming_error to invalid storage.
         detail::rethrow_carried_scratch_failure(failure);
@@ -310,6 +369,14 @@ detail::ScratchStatus decode_journal_record(const detail::ScratchByteSource& sou
     } catch (const std::bad_alloc&) {
         throw detail::scratch_out_of_memory_failure();
     }
+}
+detail::ScratchStatus decode_journal_record(const detail::ScratchByteSource& source,
+    detail::ScratchBuffer page, CommandEvent& event) {
+    return decode_owning(source, page, event, false);
+}
+detail::ScratchStatus read_stored_journal_event(const detail::ScratchByteSource& source,
+    detail::ScratchBuffer page, CommandEvent& event) {
+    return decode_owning(source, page, event, true);
 }
 detail::ScratchStatus scan_journal_record(const detail::ScratchByteSource& source,
     detail::ScratchBuffer page, std::uint64_t& ordinal) noexcept {

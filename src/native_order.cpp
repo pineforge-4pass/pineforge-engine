@@ -1799,7 +1799,7 @@ struct WorkingRequestCore::JournalStore {
         check(detail::journal_codec::find(*codec, position, info));
         const detail::journal_codec::StoreSource source(*codec, info.handle, info.value_bytes);
         CommandEvent value;
-        check(decode_journal_record(source, {codec_page.data(), codec_page.size()}, value));
+        check(read_stored_journal_event(source, {codec_page.data(), codec_page.size()}, value));
         const auto slot = codec_next++ % codec_values.size();
         codec_values[slot] = std::move(value);
         codec_positions[slot] = position;

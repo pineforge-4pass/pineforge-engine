@@ -150,6 +150,14 @@ struct Reader {
             out = static_cast<T>(value);
         }
     }
+    template<class E, class Declared> void enumeration(E& out, Declared declared) noexcept {
+        std::underlying_type_t<E> raw{};
+        integer(raw);
+        if (status != ScratchStatus::ok) return;
+        const auto candidate = static_cast<E>(raw);
+        if (declared(candidate)) out = candidate;
+        else status = ScratchStatus::corrupt;
+    }
     void real(double& out) noexcept {
         const auto value = word();
         std::memcpy(&out, &value, sizeof value);
