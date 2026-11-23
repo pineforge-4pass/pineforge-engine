@@ -213,6 +213,7 @@ template<bool Owning, bool Folding = false> struct Load {
         else if constexpr (std::is_same_v<T, double>) in.real(value);
         else if constexpr (std::is_same_v<T, bool>) {
             const auto raw = in.word();
+            if (!good()) return;
             if (raw > 1) in.status = Status::corrupt;
             value = raw == 1;
         } else if constexpr (std::is_enum_v<T>) {
@@ -357,6 +358,7 @@ template<class A> struct Schema {
         auto count = static_cast<std::uint64_t>(rows.size());
         field(p,"size",count);
         if constexpr (A::loading) {
+            if (!a.good()) return;
             if (count > a.expected_rows - std::min(a.rows,a.expected_rows)
                 || count > rows.max_size()) { a.in.status = Status::corrupt; return; }
             if constexpr (A::owning) rows.resize(static_cast<std::size_t>(count));
@@ -377,6 +379,7 @@ template<class A> struct Schema {
         const Path p;
         auto kind = static_cast<std::uint64_t>(value.index()); field(p,"kind",kind);
         if constexpr (A::loading) {
+            if (!a.good()) return;
             switch (kind) {
             case 0: value.template emplace<0>(); break;
             case 1: value.template emplace<1>(); break;
@@ -432,6 +435,7 @@ template<bool Owning, bool Folding = false> Status decode(const detail::ScratchB
         Load<Owning,Folding> load{in};
         load.fold = fold;
         load.expected_rows = in.word();
+        if (in.status != Status::ok) return in.status;
         if (load.expected_rows > in.remaining() / 24) return Status::corrupt;
         Schema<Load<Owning,Folding>>{load}.event(event);
         if (load.rows != load.expected_rows && in.status == Status::ok) in.status = Status::corrupt;
@@ -547,6 +551,7 @@ detail::ScratchStatus fold_journal_record(const detail::ScratchByteSource& sourc
     if (!page.data || !page.size) return Status::programming_error;
     jc::Reader in{source,page};
     const auto rows = in.word();
+    if (in.status != Status::ok) return in.status;
     if (rows > in.remaining() / 24) return Status::corrupt;
     auto h = digest;
     const auto byte = [&](unsigned value) { h = (h ^ value) * 1099511628211ULL; };
@@ -555,6 +560,7 @@ detail::ScratchStatus fold_journal_record(const detail::ScratchByteSource& sourc
     };
     const auto text = [&] {
         const auto length = in.word();
+        if (in.status != Status::ok) return;
         if (length > in.remaining()) { in.status = Status::corrupt; return; }
         word(length);
         std::array<std::byte, 97> bytes{};
@@ -567,7 +573,9 @@ detail::ScratchStatus fold_journal_record(const detail::ScratchByteSource& sourc
     };
     for (std::uint64_t i = 0; i != rows && in.status == Status::ok; ++i) {
         text();
-        const auto kind = in.word(); word(kind);
+        const auto kind = in.word();
+        if (in.status != Status::ok) break;
+        word(kind);
         if (kind == 3) text();
         else if (kind < 3) {
             auto value = in.word();

@@ -209,6 +209,7 @@ template<bool Owning> struct Load {
             if (!in.presence()) { x.reset(); return; }
             if constexpr (std::is_same_v<Item, OpeningReadback>) {
                 const auto count = in.word();
+                if (in.status != Status::ok) return;
                 if (count > in.remaining() / 24) { in.status = Status::corrupt; return; }
                 if constexpr (Owning) {
                     auto created = std::make_shared<DiagnosticOpenings>();
@@ -231,6 +232,7 @@ template<bool Owning> struct Load {
             }
         } else if constexpr (Vector<T>::value) {
             const auto count = in.word();
+            if (in.status != Status::ok) return;
             using Item = typename T::value_type;
             constexpr std::uint64_t minimum =
                 std::is_same_v<Item,RequestHandle> || std::is_same_v<Item,EventId> ? 24 : 8;
@@ -247,8 +249,10 @@ template<bool Owning> struct Load {
                     value(row);
                 }
             }
-        } else if constexpr (Variant<T>::value) variant(x, in.word());
-        else fields(*this, x);
+        } else if constexpr (Variant<T>::value) {
+            const auto index = in.word();
+            if (in.status == Status::ok) variant(x, index);
+        } else fields(*this, x);
     }
 };
 
