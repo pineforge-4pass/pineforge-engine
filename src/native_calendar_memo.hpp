@@ -178,7 +178,10 @@ bool utc_calendar(const SessionCalendar& calendar, SessionDayMemo& memo);
 // a backward move that keeps the daylight-saving flag, each read back from
 // libc (native_calendar.cpp, "Certified session-day cycles"). nullopt
 // otherwise -- the zone alone decided that, and nothing was resolved -- and
-// when no session day holds `ms`.
+// when no session day holds `ms`. nullopt too for the one calendar whose
+// fixed buckets lead its origin (native_calendar.cpp, recorded_grid_lead_ms):
+// a holder's own bucket arithmetic over a certified cycle counts from the
+// origin.
 struct CycleCertificate {
     int64_t origin_ms = 0;
     int64_t next_origin_ms = 0;

@@ -104,15 +104,15 @@ inline bool tf_is_daily_or_higher(const std::string& tf) {
 /// Check if two timestamps (Unix milliseconds) fall in different calendar periods.
 bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period);
 
-/// Timezone/session-aware variants. The tz-less forms above evaluate the
-/// calendar in UTC and intraday buckets from each UTC midnight. Session symbols
-/// (equities RTH, forex) anchor HTF buckets on the exchange clock instead:
-/// daily boundaries at symbol-local midnight, intraday buckets offset by the
-/// symbol's day stamp -- the session open, except OANDA's 1800-1700 metals
-/// session whose day (and TradingView's "45"/"240" grid) rolls at the 17:00
-/// ET forex roll one hour before it opens (session_day_stamp_offset_minutes
-/// in timeframe.cpp cites the pin). With tz="UTC" and session ""/"24x7"
-/// these use the same UTC daily grid as the tz-less forms.
+/// Timezone/session-aware variants. The tz-less forms above evaluate the calendar in UTC and
+/// intraday buckets from each UTC midnight. Session symbols (equities RTH, forex) anchor HTF
+/// buckets on the exchange clock instead: daily boundaries at symbol-local midnight, intraday
+/// buckets offset by the symbol's day stamp -- the session open, except OANDA's 1800-1700
+/// metals session whose day (and TradingView's "45"/"240" grid) rolls at the 17:00 ET forex
+/// roll one hour before it opens (session_day_stamp_offset_minutes in timeframe.cpp cites the
+/// pin). One session's grid leads its stamp: "0930-1200,1300-1600" counts its buckets from
+/// 09:00 and opens the day's first at 09:30 (session_grid_lead_ms in timeframe.cpp cites it).
+/// With tz="UTC" and session ""/"24x7" these use the same UTC daily grid as the tz-less forms.
 bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period,
                       const std::string& tz, const std::string& session);
 bool tf_change(int64_t prev_ms, int64_t curr_ms, const std::string& tf,
@@ -172,8 +172,8 @@ int64_t session_period_open_ms(int64_t ms, const std::string& tz,
 /// time("60") on NYSE:F is 09:30 / 10:30 / .. / 15:30 ET, time("240") on
 /// NSE:NIFTY 09:15 / 13:15 IST, on OANDA:XAUUSD 17:00 ET + 4h*k). With
 /// tz="UTC" and session ""/"24x7" the declared origin is UTC midnight;
-/// widths dividing 24h also equal the continuous epoch grid.
-/// bucket_sec <= 0 returns `ms`. Under the calling
+/// widths dividing 24h also equal the continuous epoch grid. On "0930-1200,1300-1600" buckets
+/// count from 09:00, the first opening at 09:30. bucket_sec <= 0 returns `ms`. Under the calling
 /// thread's native daily partition for this clock (below), a session-day
 /// that opened late -- NativeDayPartition::late_opens -- starts its grid at
 /// its own open instead of the day stamp, as tf_change's intraday form does.

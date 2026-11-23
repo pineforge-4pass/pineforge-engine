@@ -2596,7 +2596,7 @@ TradingView-calibrated, and a host that supplies them inherits its rules:
   and an intraday series lays that day's grid from the stamp: NSE's Muhurat
   session of 2025-10-21 opens 13:45 IST, so its `"60"` bucket is one bar
   stamped 13:45, not 13:15 and 14:15 from the 09:15 day stamp. Every other
-  day keeps the day-stamp grid.
+  day keeps the symbol's usual intraday grid.
 - The installed **daily** bars also date the run's own `"D"` script bars when
   an intraday input aggregates into them: each stamp labels the bar holding
   the session instant it covers (the stamp inside a session, else the next

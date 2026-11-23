@@ -72,7 +72,7 @@ per chart timeframe, each row covering the charts from it up to the next row
 Passing the intrabar timeframe itself as input is refused when it does not divide the chart timeframe (2 minutes for a 15-minute chart), so pass 1-minute input to build those intrabars.
 
 Each intrabar is the symbol's regular bar of that timeframe — anchored at the
-session day's open (00:00 UTC on a 24x7 symbol, 09:15 on NSE, 09:30 on NYSE)
+session day's open (00:00 UTC on a 24x7 symbol, 09:15 on NSE, 09:30 on NYSE; on the `0930-1200,1300-1600` session counted from 09:00, with the first bar opening at 09:30)
 and cut at the session's close — and belongs to the chart bar that holds its
 **last** minute. On a 15-minute chart the 2-minute intrabar from 10:14 to 10:16
 belongs to the 10:15 bar, so a chart bar's path is its own open, the intrabars

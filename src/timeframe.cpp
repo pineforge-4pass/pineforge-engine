@@ -273,9 +273,9 @@ static int first_window_length_minutes(const std::string& session);
 static int session_length_minutes(const std::string& session);
 static int64_t floor_div_day(int64_t ms);
 
-/// Minutes from symbol-local midnight to the symbol's DAY STAMP: the instant
-/// its daily bar starts, which is where TradingView anchors the intraday HTF
-/// grid ("45", "240", ...) and where the session-day ordinal below rolls.
+/// Minutes from symbol-local midnight to the symbol's DAY STAMP: the instant its daily bar
+/// starts, which is where TradingView anchors the intraday HTF grid ("45", "240", ...) and
+/// where the session-day ordinal below rolls (one session's grid leads it: session_grid_lead_ms).
 /// For every declared session that is the session open -- 09:30 ET on NYSE
 /// RTH, 09:15 IST on NSE, 17:00 CT on CME 1700-1600, 17:00 ET on OANDA forex
 /// 1700-1700, midnight on 24x7 -- with ONE exception the engine has to know
@@ -327,8 +327,8 @@ namespace {
 
 /// The chart symbol's late day opens (NativeDayPartition::late_opens) when
 /// the calling thread's partition keys this clock; nullptr otherwise.
-const std::vector<int64_t>* chart_late_day_opens(const std::string& tz,
-                                                 const std::string& session);
+const std::vector<int64_t>* chart_late_day_opens(const std::string& tz, const std::string& session);
+int64_t session_grid_lead_ms(const std::string& session);  // a recorded lead; defined last
 
 struct IntradayBucketKey {
     int64_t session_day;
@@ -356,11 +356,11 @@ struct IntradayBucket {
 ///
 /// A declared late open owns bucket zero, including any earlier inputs in
 /// that session-day. Its end is origin + width, capped at the session end.
-/// The ONE exception to origin-anchored opens is that bucket's observed
-/// prefix: its first actual input stamp is supplied by the aggregator,
-/// never recovered from a relabeled bar or inferred here. Stamp-only
-/// readers supply their query as point context for the prefix open; that
-/// query may be a grid label and is NOT claimed to be a raw first input.
+/// The exceptions to origin-anchored opens: under a recorded lead (session_grid_lead_ms) the day's
+/// first bucket opens at the day stamp, after its grid cell; and that late-open bucket's observed
+/// prefix, whose first actual input stamp is supplied by the aggregator, never recovered from a
+/// relabeled bar or inferred here. Stamp-only readers supply their query as point context for the
+/// prefix open; that query may be a grid label and is NOT claimed to be a raw first input.
 ///
 /// EXPECTATION: engine behaviour, not a TradingView measurement. Previously
 /// a 13:30 prefix under a 13:45 late open had bounds 13:15/14:15, versus
@@ -383,7 +383,7 @@ IntradayBucket intraday_bucket(int64_t ms, int64_t bucket_sec,
     const int64_t day_end = day_start + std::min(
         kMsPerDay, static_cast<int64_t>(session_open_offset_minutes(session)
                                      - stamp_minutes + session_length_minutes(session)) * 60000);
-    int64_t origin = day_start;
+    int64_t origin = day_start - session_grid_lead_ms(session);  // a recorded lead, else 0
     if (late_opens != nullptr) {
         // Include the declared open even when the query precedes it: every
         // prefix input and every post-open member must use the same key/end.
@@ -391,7 +391,7 @@ IntradayBucket intraday_bucket(int64_t ms, int64_t bucket_sec,
         if (it != late_opens->end() && *it < day_end) origin = *it;
     }
     const int64_t ordinal = ms < origin ? 0 : (ms - origin) / bucket_ms;
-    const int64_t grid_open = origin + ordinal * bucket_ms;
+    const int64_t grid_open = std::max(origin + ordinal * bucket_ms, day_start);
     // Validate the caller's prefix-open context; do not infer a first input.
     // A query outside the retained observation's day/bucket has only its
     // own point context, just as a stamp-only caller does.
@@ -399,7 +399,7 @@ IntradayBucket intraday_bucket(int64_t ms, int64_t bucket_sec,
         && prefix_open_ms >= day_start && prefix_open_ms < origin
         && prefix_open_ms <= ms;
     const int64_t actual_open = observed_prefix ? prefix_open_ms : std::min(ms, grid_open);
-    const int64_t capped_end = std::min(grid_open + bucket_ms, day_end);
+    const int64_t capped_end = std::min(origin + (ordinal + 1) * bucket_ms, day_end);
     // The session-end cap applies to valid session members. An out-of-session
     // point whose open is past that cap is clamped to empty, not negative length.
     return {{day, ordinal}, actual_open, std::max(actual_open, capped_end)};
@@ -1049,15 +1049,15 @@ int64_t session_period_last_traded_close_ms(int64_t ms, const std::string& tz,
 }
 
 /// Exclusive close (real epoch ms) of the session WINDOW that holds `ms`,
-/// where an intraday bucket is clipped: the session-day's close
-/// (session_period_last_traded_close_ms, DAY) for a session without breaks
-/// and for the day's last window; the break that ends an earlier window
-/// otherwise -- 11:30 for a 10:45 bar of 0900-1130,1230-1500, and 15:00 for
-/// its 12:45 bar, not the 11:30 that closed its first window. A bar inside a
-/// break reads the break it follows, as a bar after the day's close reads
-/// that close.
+/// where an intraday bucket that ends at `bucket_end_ms` is clipped: the session-day's close
+/// (session_period_last_traded_close_ms, DAY) for a session without breaks and for the day's last
+/// window; the break that ends an earlier window otherwise -- 11:30 for a 10:45 bar of
+/// 0900-1130,1230-1500, and 15:00 for its 12:45 bar, not the 11:30 that closed its first window.
+/// A break the bucket trades past does not clip it: in that session's "240" 09:00 bucket, which
+/// ends at 13:00, the 10:45 bar reads 15:00 as well. A bar inside a break reads the break it
+/// follows, as a bar after the day's close reads that close.
 static int64_t session_window_close_ms(int64_t ms, const std::string& tz,
-                                       const std::string& session) {
+                                       const std::string& session, int64_t bucket_end_ms) {
     const int64_t day_close =
         session_period_last_traded_close_ms(ms, tz, session, CalendarPeriod::DAY);
     SessionDaySchedule breaks;
@@ -1066,10 +1066,10 @@ static int64_t session_window_close_ms(int64_t ms, const std::string& tz,
         session_day_open_nominal_ms(session_day_index_nominal(ms, tz, session), session);
     const int64_t at = calendar_clock_ms(ms, tz) - origin;
     for (int i = 0; i + 1 < breaks.count; ++i) {
-        if (at < static_cast<int64_t>(breaks.opens()[i + 1]) * 60000) {
+        const int64_t reopen = origin + static_cast<int64_t>(breaks.opens()[i + 1]) * 60000;
+        if (at < reopen - origin && nominal_to_real_ms(reopen, tz) >= bucket_end_ms)
             return nominal_to_real_ms(
                 origin + static_cast<int64_t>(breaks.closes()[i]) * 60000, tz);
-        }
     }
     return day_close;
 }
@@ -1299,9 +1299,9 @@ std::optional<AggregatedBar> TimeframeAggregator::next_fixed_completion(
             ? clock.observed.timestamp : cursor;
         const auto bucket = intraday_bucket(cursor, target_seconds_,
             anchor_tz_, anchor_session_, &native_late_opens_, prefix);
-        auto close = bucket.end_ms;
-        if (target_seconds_ < kSecPerDay && has_trading_session(anchor_session_))
-            close = std::min(close, session_window_close_ms(cursor, anchor_tz_, anchor_session_));
+        const bool windowed = target_seconds_ < kSecPerDay && has_trading_session(anchor_session_);
+        const auto close = !windowed ? bucket.end_ms : std::min(bucket.end_ms,
+            session_window_close_ms(cursor, anchor_tz_, anchor_session_, bucket.end_ms));
         if (close <= cursor) return std::nullopt;
         if (close > horizon_ms) {
             // Exchange early close: feed_ratio_mode's rule for a merged bucket
@@ -1457,7 +1457,7 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
                         input_bar.timestamp + input_seconds * 1000;
                     singleton_session_final =
                         next_ms >= session_window_close_ms(
-                            input_bar.timestamp, atz, asess);
+                            input_bar.timestamp, atz, asess, input_bucket.end_ms);
                     // Early close (round 8, family U): the session's last
                     // chart bar can also be the FIRST bar of the bucket it
                     // leaves open -- the 12:00 CT bar of a 12:15 CT
@@ -1543,12 +1543,12 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
             // and finalized on the 11:15 bar, while the buckets after the
             // 12:30 reopen run to their count, real end or the day's close
             // (session_window_close_ms; the day's own close for one window).
+            // A bucket trading on both sides of a break is not clipped: "240" 09:00 runs to 13:00.
             if (!complete && input_seconds > 0 && target_seconds < kSecPerDay
                 && has_trading_session(asess)) {
                 const int64_t next_ms = input_bar.timestamp + input_seconds * 1000;
-                if (next_ms >= session_window_close_ms(input_bar.timestamp, atz, asess)) {
-                    complete = true;
-                }
+                complete = next_ms >= session_window_close_ms(input_bar.timestamp, atz, asess,
+                                                              input_bucket.end_ms);
             }
             // Chart-close completion (round 8, family P): TradingView
             // finalizes an intraday HTF bucket -- and the chart timeframe's
@@ -2282,6 +2282,27 @@ bool SessionDaySchedule::parse_many(const std::string& session) {
         ++count;
     }
     return true;
+}
+
+// A recorded lead of the intraday grid ahead of the day stamp, in ms; 0 for
+// every session but one. The grid of "0930-1200,1300-1600" counts from 09:00,
+// thirty minutes before its 09:30 day stamp, and the day's first bucket opens
+// at the stamp: 60-minute bars open 09:30, 10:00, 11:00, 13:00, 14:00, 15:00
+// and 240-minute bars 09:30, 13:00, as TradingView's 60- and 240-minute charts
+// of HKEX:700 open them. Counted from the 09:30 open they opened 09:30, 10:30
+// .. 15:30 and 09:30, 13:30: one inside the lunch break, one across it.
+// Only those two widths are read; every other width that does not divide
+// thirty minutes follows the same grid by extension. The entry reads the
+// literal windows, alone or before a ":days" list, as the 1800-1700 day stamp
+// reads its own: any other spelling, and every other session with a break,
+// keeps its grid at the day stamp. native_calendar.cpp
+// (recorded_grid_lead_ms) keeps the kernel calendar's fixed buckets on the
+// same grid.
+int64_t session_grid_lead_ms(const std::string& session) {
+    static constexpr char kWindows[] = "0930-1200,1300-1600";
+    constexpr std::size_t kLength = sizeof(kWindows) - 1;
+    if (session.compare(0, kLength, kWindows) != 0) return 0;
+    return (session.size() == kLength || session[kLength] == ':') ? 30 * 60000 : 0;
 }
 
 }  // namespace
