@@ -8737,6 +8737,13 @@ if(TARGET test_map_scratch_buffered_io)
         "-Wl,--wrap=fsync" "-Wl,--wrap=posix_fadvise")
 endif()
 # --- lane issue-962 end ---
+# --- lane issue-958 begin ---
+if(UNIX)
+    target_compile_definitions(test_issue_958 PRIVATE
+        PF_ISSUE_958_PYTHON="${Python3_EXECUTABLE}"
+        PF_ISSUE_958_TEST="${CMAKE_CURRENT_SOURCE_DIR}/test_issue_958.py")
+endif()
+# --- lane issue-958 end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))

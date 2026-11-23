@@ -4,7 +4,7 @@ docker/entrypoint.sh on the selected-window path and docker/bind_compiled_invent
 The entrypoint is driven as a process (bash) inside a private tree
 that holds a stub g++, a stub run_json.py and a FAKE pineforge_codegen package on
 PYTHONPATH. The fake mimics, from the interface text only, what these rows need of
-transpile, transpile_with_request_inventory and bind_request_feed_inventory; it is
+transpile, transpile_with_request_inventory, the allowlist and bind_request_feed_inventory; it is
 not the pinned code, and it does not reproduce the pinned shape check, so these
 rows cannot show the pinned binder agrees.
 
@@ -285,6 +285,10 @@ class Box:
             directory.mkdir(parents=True)
         (package / "__init__.py").write_text(FAKE_CODEGEN_INIT, encoding="utf-8")
         (package / "errors.py").write_text(FAKE_CODEGEN_ERRORS, encoding="utf-8")
+        (package / "cpp_allowlist.py").write_text(
+            "def check_generated_cpp(text):\n"
+            f"    return [] if text.endswith({CPP_BYTES.decode()!r}) else [object()]\n",
+            encoding="utf-8")
         (package / "request_feed_inventory.py").write_text(FAKE_CODEGEN_BINDER,
                                                            encoding="utf-8")
         (self.nopkgs / "pineforge_codegen" / "__init__.py").write_text("", encoding="utf-8")
@@ -318,8 +322,7 @@ class Box:
             "REAL_RUN_JSON": str(ROOT / "docker" / "run_json.py"),
             "PINEFORGE_PREFIX": str(self.prefix),
             "PINEFORGE_IN_DIR": str(self.indir),
-            # A mounted strategy.cpp is refused unless the host vouches for it; these tests
-            # exercise the unchanged local-trust path (tests/test_entrypoint_cpp_attest.py has the gate).
+            # Attestation is tested separately; these cases use the explicit local opt-out.
             "PINEFORGE_ALLOW_UNATTESTED_CPP": "1",
         })
         env.update(extra or {})
@@ -699,7 +702,9 @@ def test_entrypoint_adds_no_deletion_beyond_its_one_exit_trap():
 def test_off_branch_reads_no_inventory_and_keeps_the_old_argv(box, kind):
     sentinel = "/nonexistent/off-branch-sentinel-inventory.json"
     put_pine(box) if kind == "pine" else put_cpp(box)
-    extra = dict(SELECTED_ENV, PINEFORGE_REQUEST_FEED_INVENTORY=sentinel, STUB_CP_FAIL="1")
+    extra = dict(SELECTED_ENV, PINEFORGE_REQUEST_FEED_INVENTORY=sentinel)
+    if kind == "pine":
+        extra["STUB_CP_FAIL"] = "1"
     del extra["PINEFORGE_REPORT_POLICY"]
     result = run_entrypoint(box, extra, xtrace=True)
     assert result.returncode == 0, result.stderr
@@ -710,12 +715,11 @@ def test_off_branch_reads_no_inventory_and_keeps_the_old_argv(box, kind):
     assert normalized(argv) == old_argv("true" if kind == "pine" else "false")
     assert not any("inventory" in name for name in box.logged("run_json.work.json"))
     if kind == "cpp":
-        # The ordinary path still compiles and reports the caller's own file, with no
-        # snapshot (a stub cp that refuses the snapshot is on PATH and never reached).
-        caller = str(box.indir / "strategy.cpp")
-        assert argv[argv.index("--generated-cpp") + 1] == caller
-        assert (box.log / "gxx.source.path").read_text(encoding="utf-8").strip() == caller
-        assert box.logged("run_json.work.json") == ["strategy.so"]
+        work = os.path.dirname(argv[argv.index("--so") + 1])
+        snapshot = os.path.join(work, "strategy.cpp")
+        assert argv[argv.index("--generated-cpp") + 1] == snapshot
+        assert (box.log / "gxx.source.path").read_text(encoding="utf-8").strip() == snapshot
+        assert sorted(box.logged("run_json.work.json")) == ["strategy.cpp", "strategy.so"]
     assert sentinel not in result.stderr
     assert not (box.log / "helper.argv.json").exists()
 
@@ -985,10 +989,11 @@ def test_an_unreadable_or_malformed_supplied_inventory_ends_the_run(box, content
 @pytest.mark.parametrize("kind", ["pine", "cpp"])
 def test_an_unknown_policy_is_forwarded_raw_and_binds_nothing(box, kind):
     put_pine(box) if kind == "pine" else put_cpp(box)
-    result = run_entrypoint(box, {"PINEFORGE_REPORT_POLICY": "selected-window/v2",
-                                  "PINEFORGE_WINDOW_START_MS": "1",
-                                  "PINEFORGE_REQUEST_FEED_INVENTORY": "/nonexistent/x.json",
-                                  "STUB_CP_FAIL": "1"})
+    extra = {"PINEFORGE_REPORT_POLICY": "selected-window/v2", "PINEFORGE_WINDOW_START_MS": "1",
+             "PINEFORGE_REQUEST_FEED_INVENTORY": "/nonexistent/x.json"}
+    if kind == "pine":
+        extra["STUB_CP_FAIL"] = "1"
+    result = run_entrypoint(box, extra)
     assert result.returncode == 0, result.stderr
     assert box.events() == (["codegen:transpile", "gxx", "run_json"] if kind == "pine"
                             else ["gxx", "run_json"])
@@ -996,7 +1001,8 @@ def test_an_unknown_policy_is_forwarded_raw_and_binds_nothing(box, kind):
     assert normalized(argv) == old_argv("true" if kind == "pine" else "false") + [
         "--report-policy", "selected-window/v2", "--window-start-ms", "1"]
     if kind == "cpp":
-        assert argv[argv.index("--generated-cpp") + 1] == str(box.indir / "strategy.cpp")
+        work = os.path.dirname(argv[argv.index("--so") + 1])
+        assert argv[argv.index("--generated-cpp") + 1] == os.path.join(work, "strategy.cpp")
 
 
 def test_selected_precompiled_cpp_is_frozen_once_and_every_consumer_uses_the_copy(box):

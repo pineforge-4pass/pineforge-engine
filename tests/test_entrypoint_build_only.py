@@ -168,6 +168,9 @@ class Box:
         (self.indir / "strategy.pine").write_text(PINE)
         (self.packages / "pineforge_codegen/__init__.py").write_text(CODEGEN)
         (self.packages / "pineforge_codegen/errors.py").write_text("class CompileError(Exception):\n    pass\n")
+        (self.packages / "pineforge_codegen/cpp_allowlist.py").write_text(
+            "def check_generated_cpp(text):\n"
+            f"    return [] if text == {CPP.decode()!r} else [object()]\n")
         (self.prefix / "bin/bind_compiled_inventory.py").write_text(BINDER)
         (self.prefix / "bin/run_json.py").write_text(
             RUNNER.format(names=ENGINE_ENVIRONMENT, report=REPORT.decode()))
