@@ -8649,6 +8649,15 @@ target_compile_definitions(test_eigen_fallback_archive_hash PRIVATE
     PINEFORGE_ISSUE959_CMAKE="${CMAKE_COMMAND}"
     PINEFORGE_ISSUE959_CMAKELISTS="${PROJECT_SOURCE_DIR}/CMakeLists.txt")
 # --- lane issue-959 end ---
+# --- lane issue-962 begin ---
+if(TARGET test_map_scratch_buffered_io)
+    target_compile_definitions(test_map_scratch_buffered_io PRIVATE
+        PINEFORGE_ISSUE_962_FEED="${PROJECT_SOURCE_DIR}/tutorial/data/btcusdt_15m_7d.csv")
+    target_link_options(test_map_scratch_buffered_io PRIVATE
+        "-Wl,--wrap=pread" "-Wl,--wrap=pwrite" "-Wl,--wrap=fdatasync"
+        "-Wl,--wrap=fsync" "-Wl,--wrap=posix_fadvise")
+endif()
+# --- lane issue-962 end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
