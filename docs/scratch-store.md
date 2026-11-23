@@ -320,6 +320,13 @@ throwing diagnostic surfaces: they raise typed `out_of_memory` before their
 callers can interpret invalid-storage status. Their nonowning validation scans
 remain nonallocating and `noexcept`.
 
+If an I/O error prevents reading a field's type tag in an otherwise valid
+admission journal record, `append_journal_record` and `decode_journal_record`
+return `io_error`. On a journal bound to a store, `Journal::events()` and
+`Journal::folded_window()` surface that read failure as an I/O error. The codec
+still reports `corrupt` for a wrong field key or a successfully read tag with
+the wrong value.
+
 ## What a consumer lane must do
 
 1. Read through `ScratchReadback` or the store's point, seek and walk calls. Do
