@@ -184,7 +184,12 @@ supplied no rate for it. Its arguments are those of the run failure of the
 same name (`function`, `reason`, `from`, `to`, `account_currency`,
 `symbol_currency` and integer `time_ms`), and its site identity is -1, below
 every `request.security` site. There is at most one warning per code and
-site in a run, so a run names the first such request. The accessor returns
+site in a run, so a run names the first such request. Generated
+`strategy.convert_to_account` and `strategy.convert_to_symbol` calls that use
+`strategy_convert_identity_or_warn` also record this code when they cannot
+read a rate. Each such call site has its own warning identity below -1.
+
+The accessor returns
 `[]` before a run and after a later
 attempt refused before admission, while live-stream warnings remain readable.
 Collection failure returns `run_warnings_unavailable` with empty arguments.
