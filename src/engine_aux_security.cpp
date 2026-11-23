@@ -16,6 +16,16 @@
 
 namespace pineforge {
 
+// Match the duration used by native subscription validation. The legacy
+// conversion uses -1 for both months and a positive D/W count past int.
+static int64_t native_feed_seconds(const std::string& tf) {
+    const int seconds = tf_to_seconds(tf);
+    if (seconds == -1 && (tf.back() == 'D' || tf.back() == 'W')) {
+        return static_cast<int64_t>(std::stoi(tf)) * (tf.back() == 'W' ? 604800 : 86400);
+    }
+    return seconds;
+}
+
 // ---- authoritative higher-timeframe feeds ---------------------------------
 //
 // The generic contract (the source-runtime extraction ruling, design §2.iv item 6 / ADR-0001):
@@ -78,16 +88,6 @@ namespace pineforge {
 // partition (TimeframeAggregator::set_native_periods), each period's trade
 // date being the session-day of its last chart bar, so the derived W / M
 // buckets group the merged day with its next trade date's week / month.
-
-// Match the duration used by native subscription validation. The legacy
-// conversion uses -1 for both months and a positive D/W count past int.
-static int64_t native_feed_seconds(const std::string& tf) {
-    const int seconds = tf_to_seconds(tf);
-    if (seconds == -1 && (tf.back() == 'D' || tf.back() == 'W')) {
-        return static_cast<int64_t>(std::stoi(tf)) * (tf.back() == 'W' ? 604800 : 86400);
-    }
-    return seconds;
-}
 
 bool BacktestEngine::set_native_security_feed(const std::string& timeframe,
                                               const Bar* bars, int n) {
