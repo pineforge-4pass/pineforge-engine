@@ -2452,8 +2452,8 @@ void PineExecutionAdapter::retire_cancelled_exits(
 
 void PineExecutionAdapter::purge_brackets_after_applied_reversal(
         const PlacementSnapshot& reversal) {
-    const bool prior_long = reversal.projection_position_side
-        == static_cast<std::int32_t>(PositionSide::LONG);
+    const auto side = static_cast<PositionSide>(reversal.projection_position_side);
+    const bool prior_long = reversal.is_long ? side == PositionSide::LONG : side != PositionSide::SHORT;
     std::vector<native_order::RequestHandle> stale;
     for (const auto& handle : live_handles_) {
         const auto found = placement_.find(handle.incarnation);
@@ -27144,9 +27144,9 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             }
         }
     }
-    if (placement_snapshot && placement_snapshot->opening
-        && placement_snapshot->reverse_to && event.closed_units > 0.0
-        && event.opened_units > 0.0) {
+    // Either direction; the closed side is where the entry was placed, or opposite its own if flat.
+    if (placement_snapshot && placement_snapshot->opening && placement_snapshot->reverse_to
+        && event.closed_units > 0.0 && (event.opened_units > 0.0 || event.opened_units < 0.0)) {
         purge_brackets_after_applied_reversal(*placement_snapshot);
     }
     // A from_entry="" exit the script placed while the reversed position was
