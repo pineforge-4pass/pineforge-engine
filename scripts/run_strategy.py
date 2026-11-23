@@ -1408,6 +1408,13 @@ def _session_calendar_metadata(env, tickerid: str | None) -> dict:
     return metadata
 
 
+def _strategy_override_text(value) -> str:
+    """Spell boolean strategy overrides as the generated setter expects."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
 def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
                       default_chart_tz: str = "", env=None) -> tuple[Path, dict]:
     """Resolve per-probe ``inputs.json`` metadata into the OHLCV path and the
@@ -3055,7 +3062,7 @@ class Strategy:
             if strategy_overrides and hasattr(self.lib, "strategy_set_override"):
                 for okey, oval in strategy_overrides.items():
                     self.lib.strategy_set_override(
-                        state, str(okey).encode(), str(oval).encode())
+                        state, str(okey).encode(), _strategy_override_text(oval).encode())
             if trace_enabled and hasattr(self.lib, "strategy_set_trace_enabled"):
                 self.lib.strategy_set_trace_enabled(state, 1)
             # ABI v4 live-runtime surface (task 6): per-script-bar
@@ -4733,10 +4740,11 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
     if run_kwargs.get("syminfo_pointvalue") is not None:
         syminfo["pointvalue"] = run_kwargs["syminfo_pointvalue"]
 
-    # Overrides as Strategy.run passes them (str), the strings run_json.py takes
-    # as given; it refuses a JSON boolean or null it would otherwise receive.
+    # Match Strategy.run's wire text. run_json.py requires string or numeric
+    # values here and passes these strings through to the generated setter.
     overrides_for_image = {
-        str(k): str(v) for k, v in (run_kwargs.get("strategy_overrides") or {}).items()
+        str(k): _strategy_override_text(v)
+        for k, v in (run_kwargs.get("strategy_overrides") or {}).items()
     }
     kw = dict(
         overrides=overrides_for_image,
@@ -5308,7 +5316,8 @@ def _main_run(args, resources) -> int:
         try:
             cpp_path = strategy_dir / "generated.cpp"
             overrides_applied = {
-                str(k): str(v) for k, v in (run_kwargs.get("strategy_overrides") or {}).items()
+                str(k): _strategy_override_text(v)
+                for k, v in (run_kwargs.get("strategy_overrides") or {}).items()
             }
             runtime_kwargs = dict(run_kwargs)
             if report.get("aux_security_source_feed_sha256"):
