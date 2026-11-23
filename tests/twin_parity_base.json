@@ -26222,287 +26222,287 @@
     "test_run_inputs_overrides": {
       "assertions": [
         {
-          "line": 80,
+          "line": 90,
           "text": "CHECK(near(p.dbl(\"len\", 0.0), 14.5))"
         },
         {
-          "line": 82,
+          "line": 92,
           "text": "CHECK(near(p.dbl(\"neg\", 0.0), -2.25))"
         },
         {
-          "line": 84,
+          "line": 94,
           "text": "CHECK(near(p.dbl(\"absent\", 7.0), 7.0))"
         },
         {
-          "line": 87,
-          "text": "CHECK(near(p.dbl(\"garbage\", 3.5), 3.5))"
-        },
-        {
-          "line": 89,
-          "text": "CHECK(near(p.dbl(\"empty\", 99.0), 99.0))"
-        },
-        {
-          "line": 96,
-          "text": "CHECK(p.integer(\"n\", 0) == 21)"
-        },
-        {
-          "line": 98,
-          "text": "CHECK(p.integer(\"neg\", 0) == -5)"
+          "line": 97,
+          "text": "CHECK(input_rejected(\"garbage\", [&] { p.dbl(\"garbage\", 3.5); }))"
         },
         {
           "line": 99,
+          "text": "CHECK(input_rejected(\"empty\", [&] { p.dbl(\"empty\", 99.0); }))"
+        },
+        {
+          "line": 106,
+          "text": "CHECK(p.integer(\"n\", 0) == 21)"
+        },
+        {
+          "line": 108,
+          "text": "CHECK(p.integer(\"neg\", 0) == -5)"
+        },
+        {
+          "line": 109,
           "text": "CHECK(p.integer(\"absent\", 42) == 42)"
         },
         {
-          "line": 102,
-          "text": "CHECK(p.integer(\"bad\", 13) == 13)"
-        },
-        {
-          "line": 104,
-          "text": "CHECK(p.integer(\"empty\", -1) == -1)"
-        },
-        {
           "line": 112,
+          "text": "CHECK(input_rejected(\"bad\", [&] { p.integer(\"bad\", 13); }))"
+        },
+        {
+          "line": 114,
+          "text": "CHECK(input_rejected(\"empty\", [&] { p.integer(\"empty\", -1); }))"
+        },
+        {
+          "line": 122,
           "text": "CHECK(p.i64(\"ts\", 0) == 1700000000000LL)"
         },
         {
-          "line": 113,
+          "line": 123,
           "text": "CHECK(p.i64(\"absent\", -9) == -9)"
         },
         {
-          "line": 115,
-          "text": "CHECK(p.i64(\"bad\", 8) == 8)"
+          "line": 126,
+          "text": "CHECK(input_rejected(\"bad\", [&] { p.i64(\"bad\", 8); }))"
         },
         {
-          "line": 123,
+          "line": 134,
           "text": "CHECK(p.boolean(\"a\", false) == true)"
         },
         {
-          "line": 125,
+          "line": 136,
           "text": "CHECK(p.boolean(\"b\", false) == true)"
         },
         {
-          "line": 127,
+          "line": 138,
           "text": "CHECK(p.boolean(\"c\", true) == false)"
         },
         {
-          "line": 129,
+          "line": 140,
           "text": "CHECK(p.boolean(\"d\", true) == false)"
         },
         {
-          "line": 131,
+          "line": 142,
           "text": "CHECK(p.boolean(\"absent\", true) == true)"
         },
         {
-          "line": 132,
+          "line": 143,
           "text": "CHECK(p.boolean(\"absent\", false) == false)"
         },
         {
-          "line": 135,
-          "text": "CHECK(p.boolean(\"weird\", true) == true)"
-        },
-        {
-          "line": 136,
-          "text": "CHECK(p.boolean(\"weird\", false) == false)"
-        },
-        {
-          "line": 143,
-          "text": "CHECK(p.str(\"mode\", \"EMA\") == \"SMA\")"
-        },
-        {
-          "line": 144,
-          "text": "CHECK(p.str(\"absent\", \"EMA\") == \"EMA\")"
+          "line": 146,
+          "text": "CHECK(input_rejected(\"weird\", [&] { p.boolean(\"weird\", true); }))"
         },
         {
           "line": 147,
+          "text": "CHECK(input_rejected(\"weird\", [&] { p.boolean(\"weird\", false); }))"
+        },
+        {
+          "line": 154,
+          "text": "CHECK(p.str(\"mode\", \"EMA\") == \"SMA\")"
+        },
+        {
+          "line": 155,
+          "text": "CHECK(p.str(\"absent\", \"EMA\") == \"EMA\")"
+        },
+        {
+          "line": 158,
           "text": "CHECK(p.str(\"blank\", \"fallback\") == \"\")"
         },
         {
-          "line": 218,
+          "line": 229,
           "text": "CHECK(s.last_error().empty())"
         },
         {
-          "line": 221,
+          "line": 232,
           "text": "CHECK(near(s.init_cap(), 250000.0))"
         },
         {
-          "line": 222,
+          "line": 233,
           "text": "CHECK(s.pyramiding() == 2)"
         },
         {
-          "line": 223,
+          "line": 234,
           "text": "CHECK(s.slippage() == 3)"
         },
         {
-          "line": 224,
+          "line": 235,
           "text": "CHECK(near(s.commission_value(), 0.5))"
         },
         {
-          "line": 225,
+          "line": 236,
           "text": "CHECK(s.commission_type() == static_cast<int>(CommissionType::PERCENT))"
         },
         {
-          "line": 226,
+          "line": 237,
           "text": "CHECK(near(s.default_qty_value(), 4.0))"
         },
         {
-          "line": 227,
+          "line": 238,
           "text": "CHECK(s.default_qty_type() == static_cast<int>(QtyType::FIXED))"
         },
         {
-          "line": 228,
+          "line": 239,
           "text": "CHECK(s.process_orders_on_close() == false)"
         },
         {
-          "line": 229,
+          "line": 240,
           "text": "CHECK(s.close_entries_rule_any() == true)"
         },
         {
-          "line": 233,
+          "line": 244,
           "text": "CHECK(near(s.signed_size(), 8.0))"
         },
         {
-          "line": 246,
+          "line": 258,
           "text": "CHECK(rep.total_trades == 2)"
         },
         {
-          "line": 249,
+          "line": 261,
           "text": "CHECK(rep.trades[i].open_at_end == 1)"
         },
         {
-          "line": 250,
+          "line": 262,
           "text": "CHECK(near(rep.trades[i].qty, 4.0))"
         },
         {
-          "line": 253,
+          "line": 265,
           "text": "CHECK(near(rep.net_profit, rows_pnl))"
         },
         {
-          "line": 254,
+          "line": 266,
           "text": "CHECK(near(s.equity(), 250000.0))"
         },
         {
-          "line": 281,
+          "line": 293,
           "text": "CHECK(s.last_error().empty())"
         },
         {
-          "line": 282,
+          "line": 294,
           "text": "CHECK(s.pyramiding() == 10)"
         },
         {
-          "line": 285,
+          "line": 297,
           "text": "CHECK(near(s.signed_size(), 5.0))"
         },
         {
-          "line": 304,
+          "line": 316,
           "text": "CHECK(s.last_error().empty())"
         },
         {
-          "line": 305,
+          "line": 317,
           "text": "CHECK(near(s.init_cap(), 1'000'000.0))"
         },
         {
-          "line": 306,
+          "line": 318,
           "text": "CHECK(s.pyramiding() == 1)"
         },
         {
-          "line": 309,
+          "line": 321,
           "text": "CHECK(near(s.signed_size(), 1.0))"
         },
         {
-          "line": 353,
+          "line": 365,
           "text": "CHECK(s.last_error().empty())"
         },
         {
-          "line": 354,
+          "line": 366,
           "text": "CHECK(s.trades() == 1)"
         },
         {
-          "line": 356,
+          "line": 368,
           "text": "CHECK(near(s.trade_entry(0), 105.0))"
         },
         {
-          "line": 357,
+          "line": 369,
           "text": "CHECK(near(s.trade_exit(0), 115.0))"
         },
         {
-          "line": 358,
+          "line": 370,
           "text": "CHECK(near(s.trade_pnl(0), 10.0))"
         },
         {
-          "line": 371,
+          "line": 383,
           "text": "CHECK(s.last_error().empty())"
         },
         {
-          "line": 372,
+          "line": 384,
           "text": "CHECK(s.trades() == 1)"
         },
         {
-          "line": 374,
+          "line": 386,
           "text": "CHECK(near(s.trade_entry(0), 110.0))"
         },
         {
-          "line": 375,
+          "line": 387,
           "text": "CHECK(near(s.trade_exit(0), 120.0))"
         },
         {
-          "line": 376,
+          "line": 388,
           "text": "CHECK(near(s.trade_pnl(0), 10.0))"
         },
         {
-          "line": 410,
+          "line": 422,
           "text": "CHECK(s.last_error().empty())"
         },
         {
-          "line": 411,
+          "line": 423,
           "text": "CHECK(s.trades() == 1)"
         },
         {
-          "line": 414,
+          "line": 426,
           "text": "CHECK(near(s.trade_pnl(0), -5.0))"
         },
         {
-          "line": 439,
+          "line": 451,
           "text": "CHECK(s.last_error().empty())"
         },
         {
-          "line": 442,
+          "line": 454,
           "text": "CHECK(rep.input_tf_seconds == 300)"
         },
         {
-          "line": 443,
+          "line": 455,
           "text": "CHECK(rep.script_tf_seconds == 300)"
         },
         {
-          "line": 445,
+          "line": 457,
           "text": "CHECK(rep.needs_aggregation == 0)"
         },
         {
-          "line": 458,
+          "line": 470,
           "text": "CHECK(s.last_error().empty())"
         },
         {
-          "line": 461,
+          "line": 473,
           "text": "CHECK(rep.input_tf_seconds == 3600)"
         },
         {
-          "line": 462,
+          "line": 474,
           "text": "CHECK(rep.script_tf_seconds == 3600)"
         },
         {
-          "line": 475,
+          "line": 487,
           "text": "CHECK(s.last_error().empty())"
         },
         {
-          "line": 478,
+          "line": 490,
           "text": "CHECK(rep.input_tf_seconds == 86400)"
         },
         {
-          "line": 479,
+          "line": 491,
           "text": "CHECK(rep.script_tf_seconds == 86400)"
         }
       ],
-      "sourceSha256": "c14e6c8b2455706926e4b080e3a85667a02261688e6d924bdf7cb31256909f3a"
+      "sourceSha256": "43f8a960b195e3c5be393783545d0a028cc3d9f7899741a231a92635b7d53301"
     },
     "test_same_bar_add_exit_coverage": {
       "assertions": [

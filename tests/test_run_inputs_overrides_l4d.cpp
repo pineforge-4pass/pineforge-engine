@@ -1,5 +1,6 @@
 // A29 CHECK-parity native-route twin. Base body copied from ab9714be;
-// rewrite only owner-private drives/reads while retaining literal checks.
+// rewrite owner-private drives/reads while retaining literal checks;
+// #918 corrects seven getter assertions in both sources and the base manifest.
 #include "l4d_native_route_guard.hpp"
 #include "oracle_fixture_config_shim.hpp"
 #define PineStrategyHost L4dPineHost
@@ -17,12 +18,9 @@
 //
 // Three concern groups, each pinning Pine-correct behaviour:
 //
-//   1. get_input_double / int / int64 / bool / string (lines 557-599):
-//      valid parse, fallback-on-garbage (the catch(...) arms on bad numeric
-//      strings), and the "true"/"1"/"false"/"0" bool grammar. These back the
-//      generated code's input.* lookups; an operator override string that
-//      cannot be parsed must silently fall back to the Pine default rather
-//      than throw across the engine.
+//   1. get_input_double / int / int64 / bool / string:
+//      valid values, defaults for missing keys, rejection of malformed
+//      numeric/boolean values, and verbatim string overrides.
 //
 //   2. The run-with-overrides overload (lines 624-669): apply a
 //      StrategyOverrides struct (initial_capital, pyramiding, slippage,
@@ -37,18 +35,20 @@
 //      detect_timeframe runs over the bar timestamps; assert the report's
 //      input_tf_seconds / script_tf_seconds match the detected median delta.
 //
-// All expected values were derived by reading src/engine_run.cpp +
-// src/engine_orders.cpp and confirmed by running this test.
+// The base manifest and registered twin record the same getter expectations.
+// The twin ledger records the seven corrections for issue #918.
 
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/run_failure.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
@@ -85,21 +85,32 @@ struct GetterProbe : public pineforge::source::PineStrategyHost {
     }
 };
 
+template <typename Read>
+bool input_rejected(const char* title, Read read) {
+    try {
+        read();
+    } catch (const std::invalid_argument& error) {
+        return classify_run_failure(error).code == RunFailureCode::setting_rejected
+            && std::string(error.what()).find(std::string("'") + title + "'") != std::string::npos;
+    }
+    return false;
+}
+
 void test_get_input_double() {
     std::printf("test_get_input_double\n");
     GetterProbe p;
-    // Valid float parses; partial trailing junk is tolerated by std::stod.
+    // Valid floats, including negative ones, parse.
     p.set_input("len", "14.5");
     CHECK(near(p.dbl("len", 0.0), 14.5));
     p.set_input("neg", "-2.25");
     CHECK(near(p.dbl("neg", 0.0), -2.25));
     // Missing key → default.
     CHECK(near(p.dbl("absent", 7.0), 7.0));
-    // Malformed numeric → catch(...) → default (NOT a throw).
+    // expectation corrected: 3.5 and 99.0 -> rejection, because the overrides are present but malformed (#918).
     p.set_input("garbage", "not-a-number");
-    CHECK(near(p.dbl("garbage", 3.5), 3.5));
+    CHECK(input_rejected("garbage", [&] { p.dbl("garbage", 3.5); }));
     p.set_input("empty", "");
-    CHECK(near(p.dbl("empty", 99.0), 99.0));
+    CHECK(input_rejected("empty", [&] { p.dbl("empty", 99.0); }));
 }
 
 void test_get_input_int() {
@@ -110,11 +121,11 @@ void test_get_input_int() {
     p.set_input("neg", "-5");
     CHECK(p.integer("neg", 0) == -5);
     CHECK(p.integer("absent", 42) == 42);
-    // std::stoi throws on a non-numeric leading char → catch(...) → default.
+    // expectation corrected: 13 and -1 -> rejection, because the overrides are present but malformed (#918).
     p.set_input("bad", "xyz");
-    CHECK(p.integer("bad", 13) == 13);
+    CHECK(input_rejected("bad", [&] { p.integer("bad", 13); }));
     p.set_input("empty", "");
-    CHECK(p.integer("empty", -1) == -1);
+    CHECK(input_rejected("empty", [&] { p.integer("empty", -1); }));
 }
 
 void test_get_input_int64() {
@@ -124,8 +135,9 @@ void test_get_input_int64() {
     p.set_input("ts", "1700000000000");
     CHECK(p.i64("ts", 0) == 1700000000000LL);
     CHECK(p.i64("absent", -9) == -9);
+    // expectation corrected: 8 -> rejection, because "abc" is not a 64-bit integer (#918).
     p.set_input("bad", "abc");
-    CHECK(p.i64("bad", 8) == 8);
+    CHECK(input_rejected("bad", [&] { p.i64("bad", 8); }));
 }
 
 void test_get_input_bool() {
@@ -143,10 +155,10 @@ void test_get_input_bool() {
     // Missing key → default (both polarities).
     CHECK(p.boolean("absent", true) == true);
     CHECK(p.boolean("absent", false) == false);
-    // Any other string is NOT recognized → default is returned unchanged.
+    // expectation corrected: true and false -> rejection, because "yes" is not a boolean override (#918).
     p.set_input("weird", "yes");
-    CHECK(p.boolean("weird", true) == true);
-    CHECK(p.boolean("weird", false) == false);
+    CHECK(input_rejected("weird", [&] { p.boolean("weird", true); }));
+    CHECK(input_rejected("weird", [&] { p.boolean("weird", false); }));
 }
 
 void test_get_input_string() {
