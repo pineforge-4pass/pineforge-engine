@@ -13,14 +13,14 @@
 // the credit, so the credit can only hold the new lot, and the fix skips that
 // debit on a flip (the `!flipped_position` guard in on_applied).
 //
-// Two flips reach that debit without the reversal purge
-// (purge_brackets_after_applied_reversal), which on_applied calls only for a
-// strategy.entry reversal whose fill opens long:
+// Two flips reach that debit. on_applied calls the reversal purge
+// (purge_brackets_after_applied_reversal) only for a strategy.entry
+// reversal:
 //   order  a strategy.order sell whose quantity crosses the long position
-//          through zero. It is not a strategy.entry reversal.
-//   entry  a strategy.entry reversal from long into short. Its fill opens
-//          short, so the purge is not called.
-// The reversal into long, which does reach the purge, is covered by
+//          through zero. It is not a strategy.entry reversal: no purge.
+//   entry  a strategy.entry reversal from long into short. It reaches the
+//          purge, and the purge's skip of the reversing id keeps its credit.
+// The reversal into long, which also reaches the purge, is covered by
 // tests/test_reversal_reused_id_purge_credit.cpp.
 //
 // Readers of the credit, driven only through the public host commands. After

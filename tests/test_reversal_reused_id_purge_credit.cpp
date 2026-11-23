@@ -11,11 +11,11 @@
 // credited, so the reversing id's cohort can only hold the new lot, and the
 // purge now skips it.
 //
-// on_applied calls the purge only when the reversal's fill opens long: the
-// call requires opened units above zero, and opening units are signed. So
-// this test opens short and reverses into long. A reversal into short, and a
-// strategy.order that crosses zero, never reach the purge; they are covered
-// by tests/test_flip_reused_id_closed_row_debit.cpp.
+// This test opens short and reverses into long. A strategy.entry reversal
+// into short reaches the purge as well, which
+// tests/test_batched_reversal_direction.cpp holds. A strategy.order that
+// crosses zero never reaches it; that flip, and the reversal into short, are
+// covered by tests/test_flip_reused_id_closed_row_debit.cpp.
 //
 // Five readers of that credit, each driven only through the public host
 // commands:
