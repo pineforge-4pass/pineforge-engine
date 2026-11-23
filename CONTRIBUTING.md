@@ -361,7 +361,12 @@ License 2.0 (the same license as the rest of the project). See
 4. **Benchmark AGPL** — optional `benchmarks/` tooling installs AGPL-covered
    PineTS. Default CI installs none of the benchmark tooling, so a minimal clone
    never pulls AGPL into the library build.
-5. **Cut the release** — dispatch `.github/workflows/release.yml` (Actions →
+5. **Prepare the changelog** — add the planned version heading below
+   `Unreleased` in [CHANGELOG.md](CHANGELOG.md) and move the entries that
+   will ship into that section. Land this through a normal PR before
+   dispatching the release. Include any changes that land before the tag;
+   leave entries for later releases under `Unreleased`.
+6. **Cut the release** — dispatch `.github/workflows/release.yml` (Actions →
    Release → Run workflow); rehearse with `dry_run` first. A dry run computes
    the version with `scripts/release_version.py`, builds, installs, verifies
    and packs every prebuilt tarball, and commits, tags, releases, uploads and

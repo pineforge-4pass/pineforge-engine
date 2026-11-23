@@ -435,17 +435,21 @@ strategy release for ordinary and selected runs. Cache counters require
 The timeframe warning covers same-symbol `request.security` sites only;
 other-symbol sites have their own exact-timeframe rules. A site whose requested
 timeframe is empty at setup is not warned. The bare `run(bars, n)` overload
-configures no security surface, so there is nothing to warn about. A native
-security feed attaches to buckets formed by the aggregator; an indivisible
-request forms none, so installing a native feed does not remove the warning.
+configures no security surface, so there is nothing to warn about. Since 1.14.0,
+the engine can use host-supplied bars for a higher fixed timeframe that is not
+a multiple of the chart timeframe. The warning still describes the requested
+timeframe's relationship to the evaluator's feed timeframe; providing native
+bars does not suppress it.
 
-The second code is `currency_conversion_rate_unavailable`: a
-`request.currency_rate` call with `ignore_invalid_currency` returned `na`
-because the host supplied no rate for it. Its `args` are those of the run
-failure of the same name: `function`, `reason`, `from`, `to`,
-`account_currency`, `symbol_currency` (strings) and `time_ms` (integer, the
-evaluated time in Unix milliseconds). A run reports it once, for the first
-such request.
+`currency_conversion_rate_unavailable` also warns when a `request.currency_rate`
+call using `ignore_invalid_currency` returns `na` because it could not read a
+rate. A run reports this once, for the first such request. The 1.14.0
+`strategy_convert_identity_or_warn` helper uses the same
+code once per generated `strategy.convert_to_account` or
+`strategy.convert_to_symbol` call site when it returns the input value because
+no rate is available. In both cases `args` are those of the run failure of the
+same name: `function`, `reason`, `from`, `to`, `account_currency`,
+`symbol_currency` (strings) and `time_ms` (integer, in Unix milliseconds).
 
 An absent getter or an empty list leaves the report byte-identical to the earlier
 shape, with no `warnings` key. Unknown codes and their argument objects are

@@ -132,13 +132,16 @@ the mark and returns -1, as do a NULL handle and a call made once
 `strategy_set_syminfo_metadata` installs through the same rule, and
 `strategy_set_account_currency_fx_series` remains the timestamped curve.
 
-The mark matters to three calls of a script. With an account currency other
-than the symbol's currency, `strategy.convert_to_account`,
-`strategy.convert_to_symbol` and `request.currency_rate` answer only from a
-supplied rate: the scalar, or the curve point in effect at the evaluated time.
-With none they stop the run with the code `currency_conversion_rate_unavailable`
-([run-failure codes](@ref run_failure_codes)); they never convert at the 1.0
-fallback. The same currency on both sides needs no rate. The ledger converts at
+The mark matters to calls that read an account-currency rate. For different
+currencies, these calls can use the scalar or the curve point in effect at the
+evaluated time. A conversion that requires a rate stops the run with
+`currency_conversion_rate_unavailable` if it cannot read one
+([run-failure codes](@ref run_failure_codes)). `request.currency_rate` with
+`ignore_invalid_currency` returns `na` and warns instead. Generated
+`strategy.convert_to_account` and `strategy.convert_to_symbol` calls that use
+`strategy_convert_identity_or_warn` return the input value; the helper warns
+once per call site when it cannot read a required rate. The same currency on
+both sides needs no rate. The ledger converts at
 the same numbers as before, so no trade, fill, size or equity value moves. The
 broker-state hash folds the mark only when a scalar was supplied: a run that
 supplies none keeps its hash values, and a run that supplies one, through
@@ -457,6 +460,13 @@ consumer to `engine_script_run_v20` and the host capability macro to
 recipes keep their names. A C++ object built against 1.10.x headers must be
 rebuilt. `tests/test_ledger_cache_epoch_layout.cpp` fails the build when the
 layout of `CacheDefaults` changes under an unchanged epoch.
+
+In 1.14.0, `PF_STREAM_ENGINE_LAYOUT_VERSION` moved from 4 to 5. Before
+creating a strategy, the 1.14.0 `pineforge-live` rejects a module that
+declares stamp 4. Rebuild such modules against the matching 1.14.0 headers.
+Version 1.13.0 changed the internal layout but kept stamp 4, so its runner
+did not catch the layout mismatch when loading a 1.12.x module. Use matching
+headers and runtime for those releases too. The C ABI remains at version 5.
 
 | Matrix role | Internal identity |
 | --- | --- |

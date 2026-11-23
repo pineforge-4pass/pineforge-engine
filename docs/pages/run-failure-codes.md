@@ -132,6 +132,11 @@ time in Unix milliseconds. `request.currency_rate` with
 same code and arguments as a run warning (#strategy_get_run_warnings). Its
 retryability and typed arguments are listed below.
 
+In 1.14.0, generated `strategy.convert_to_account` and
+`strategy.convert_to_symbol` calls can use `strategy_convert_identity_or_warn`.
+That helper returns the input value and records the same warning once per
+call site if it cannot read a rate.
+
 The 1.11.0 additions are `runtime_history_budget_exhausted` (class
 `resource`), the refusal of a dynamic runtime context that exceeds its
 explicitly configured history storage budget;
