@@ -13044,10 +13044,20 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
     // entry that is held to the end of its calculation, and
     // reconcile_deferred_exit_reservations sizes it when the entry fills,
     // from what the rounded exits ahead of it leave.
+    // A partial percentage exit placed there stays unsized the same way where
+    // that unrounded remainder has capped it off the quantity step, which its
+    // fill would keep (tests/test_issue810_later_partial_clip.cpp). One the
+    // reservation left on the step keeps its quantity: unsized, it would
+    // count as its unrounded percentage of the entry, and an exit placed after
+    // it in this calculation could be refused for want of the difference.
+    const bool full_request = !std::isfinite(requested_qty_percent)
+        || requested_qty_percent >= 100.0 - internal::kFullPercentEps;
+    const bool clipped_off_step = std::isfinite(reserved_exit_qty)
+        && quantize_percent_exit_units(reserved_exit_qty, reserved_exit_qty)
+            < reserved_exit_qty - internal::kQtyEpsilon;
     const bool sized_behind_waiting_definition = dynamic && !void_issue
         && physical.signed_units == 0.0 && std::isfinite(reserved_exit_qty)
-        && (!std::isfinite(requested_qty_percent)
-            || requested_qty_percent >= 100.0 - internal::kFullPercentEps)
+        && (full_request || clipped_off_step)
         && std::any_of(pending_relative_exits_.begin(), pending_relative_exits_.end(),
             [&](const PendingRelativeExit& value) {
                 return value.from_entry == from_entry && value.exit_id != exit_id
