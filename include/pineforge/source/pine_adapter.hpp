@@ -2242,8 +2242,9 @@ private:
         bool void_global = false;
         // A queue slot reserved for the definition; zero while it holds none,
         // and the parent's fill then ranks its legs as they are submitted. A
-        // partial percentage definition gets its slot when a later exit of the
-        // same entry is sized: it then holds a share and ranks those legs.
+        // partial percentage definition that names no quantity gets its slot
+        // when a later exit of the same entry, neither void nor made at the
+        // fill, is sized: it then holds a share and ranks those legs.
         std::uint64_t reservation_sequence = 0;
     };
 

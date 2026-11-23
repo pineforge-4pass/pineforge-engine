@@ -12609,8 +12609,6 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         (!finite_positive(limit_price) && finite_positive(profit_ticks))
         || (!finite_positive(stop_price) && finite_positive(loss_ticks));
     const bool unresolved_relative = unresolved_trail || unresolved_ticks;
-    const bool pending_relative_only = unresolved_relative
-        && !finite_non_negative(limit_price) && !finite_non_negative(stop_price);
     // A void call leaves no relative leg for the entry's fill to resolve.
     if (unresolved_relative && !void_issue) {
         PendingRelativeExit pending;
@@ -12667,7 +12665,7 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         if (finite_non_negative(limit_price) || finite_non_negative(stop_price)) {
             // Continue below and submit the known absolute sibling.
         } else {
-        if (void_issue || (pending_relative_only && void_global_issue)) return;
+        if (void_issue) return;
         PlacementSnapshot shadow;
         shadow.family = has_trail_request ? PineOrderFamily::ExitTrail
             : (finite_positive(loss_ticks) ? PineOrderFamily::ExitStop
@@ -12689,7 +12687,7 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
                               profit_ticks, loss_ticks};
         shadow.sizing = sizing_snapshot();
         pending_write(source_shadow_pending_).push_back({std::move(shadow), exit_id});
-        if (!materializing_relative_) return;
+        return;
         }
     }
     if (std::isnan(qty) && qty_percent == 100.0) {
@@ -12968,7 +12966,7 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
     // for the same pending entry, give the earlier definition its queue slot
     // before sizing that sibling. This preserves the unresolved control's
     // rank while still leaving the sibling only the remainder.
-    if (!pending_relative_only && !materializing_relative_
+    if (!materializing_relative_
         && !from_entry.empty() && !void_issue && !void_global_issue) {
         for (auto& pending : pending_relative_exits_) {
             if (pending.from_entry != from_entry || pending.reservation_sequence != 0
