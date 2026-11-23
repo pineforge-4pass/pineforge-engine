@@ -831,71 +831,176 @@
 //   TwoLegsOnlyM: digest 0x8b4283e07b576d5full -> 0x76f452189310b4e9ull
 //   LegsApart: digest 0xaef3fc2d3d2e942dull -> 0xa3070e90c57e1b4dull
 //   LegsApartM: digest 0x650d1b75fc17cdb7ull -> 0x6a968fd0abbf1ffbull
+// expectation corrected (100 of 156 rows); harvested by the generator (-DPINEFORGE_D2D_PUBLICATION_HARVEST) on a
+// cloud build of 2f39bb6c. The table above was last harvested at 1.13.0 (5a99df49). On 5c8e5a41 the same 100 rows
+// already differ from it (digest 100, source folds 7, closed trades 18); 1d50de6e ("Cancel only working exit orders
+// when a reversal's fill is applied") moves 11 of them again (digest 11, closed trades 5). Against the table above:
+// digest 100, source folds 7, closed trades 23, recorded rows 0 (the other 56 rows are byte-identical):
+//   Config01: digest 0xa6f712d00de968fdull -> 0x5cd164c7f6bab7f6ull
+//   ConfigFlags101: digest 0x1ba869cc0d36c0f9ull -> 0x7ebdae61786f437bull
+//   Config01M: digest 0x6ba06c205fe23d3eull -> 0xaa3ae6962e036080ull
+//   ConfigFlags101M: digest 0xce3849680ad3a7b3ull -> 0x034d700a2cd0bf2full
+//   Config02: digest 0x7afb9b6d8f596e5aull -> 0x6185bf7376e2bd20ull
+//   ConfigFlags102: digest 0x161f627679071741ull -> 0x8d0b9a6d3546892bull
+//   Config02M: digest 0x674ba6b7434b6324ull -> 0xa7395bd2e72d1b2cull
+//   ConfigFlags102M: digest 0xbed441a4d9cfa483ull -> 0xa408712c9045710aull
+//   Config03: digest 0xd2744bb43e12768eull -> 0xb441839034f1953full
+//   ConfigFlags103: digest 0xeb7ef359f583e6b7ull -> 0x8d7ef7f73aed9ee7ull
+//   Config03M: digest 0xad3f14259a62261bull -> 0x78a2792dd0b42a96ull
+//   ConfigFlags103M: digest 0xa63a9792c9d050a4ull -> 0x354763fa54d56a45ull
+//   ConfigFlags104: digest 0xc61d42427a9ee923ull -> 0x7fbab759a0fec0a6ull
+//   ConfigFlags104M: digest 0x802ac10be105f748ull -> 0x937347d2331c2a4dull
+//   Config05: digest 0xb7488b32e4dc8b34ull -> 0x5f3ad561bf9e3368ull
+//   ConfigFlags105: digest 0x3908d02596e246abull -> 0xb5310c345237971aull
+//   Config05M: digest 0x8b93a002cc29ca69ull -> 0xc5c50113724e0ad2ull
+//   ConfigFlags105M: digest 0xdcc8c32e606730ceull -> 0xc6cecc192f843779ull
+//   Config07: digest 0x0024b6e6530ee010ull -> 0xe3ba7c8267aa287bull; trades 48 -> 54
+//   ConfigFlags107: digest 0xa028c28dd230cc4full -> 0x3e11e833a3bf1decull; trades 22 -> 21
+//   Config07M: digest 0x54dd9d81966ad4beull -> 0x99092808f1916f13ull; trades 48 -> 54
+//   ConfigFlags107M: digest 0xd822d3bc8b3d1603ull -> 0xcbd4b87986c3362full; trades 23 -> 22
+//   Config08: digest 0x0aae3400fe7b0ec6ull -> 0x70e7f32ae14ed30full
+//   ConfigFlags108: digest 0xdb1ff9b03fa92e00ull -> 0xc32852de976cba7eull
+//   Config08M: digest 0x90958fb6b656162cull -> 0xdcce5328536da8e5ull
+//   ConfigFlags108M: digest 0xb0fdc7c72a0b8d6aull -> 0x5b880ee69d742934ull
+//   Config09: digest 0xd9af2da65ed814beull -> 0xdbc2487f73b96062ull
+//   ConfigFlags109: digest 0xc898b92c29ceacbcull -> 0x41aac79bc2dd85e9ull
+//   Config09M: digest 0xd1e36c3f2203fb1bull -> 0xf4b6edaf6f3b56e4ull
+//   ConfigFlags109M: digest 0x782f025a07bc6a9dull -> 0xfbc8c748afcdaed3ull
+//   Config10: digest 0xaaa75d4717bc5a80ull -> 0x698f5cc39e76ef2aull
+//   ConfigFlags110: digest 0x683ad671194e8164ull -> 0x81b586b504520528ull
+//   Config10M: digest 0xaacd1ea0723f9644ull -> 0xe3f8599474753a5bull
+//   ConfigFlags110M: digest 0xfbe3c3810f79a867ull -> 0xefc3d2cec331b990ull
+//   Config11: digest 0x8f84f17ca6d852a4ull -> 0xea5ee5823170590aull; trades 60 -> 63
+//   ConfigFlags111: digest 0x2dee232799502c90ull -> 0xc4899ef454e541c6ull; trades 17 -> 20
+//   Config11M: digest 0xe488304398a50ec6ull -> 0xbc3ceade9164a563ull; trades 60 -> 63
+//   ConfigFlags111M: digest 0xce246a1dab6da4bdull -> 0xa421058ee56d287eull; trades 17 -> 19
+//   Config12: digest 0x0fbab2990c9aeeb3ull -> 0x4b2aeadb4d4cbfc6ull
+//   ConfigFlags112: digest 0xe521f7a9033accbaull -> 0xc39510fa4716ca32ull
+//   Config12M: digest 0xfd0646244ccbb2f5ull -> 0xd21447d6edb95eacull
+//   ConfigFlags112M: digest 0x81ea581ad8b85608ull -> 0xcda1390d86a113a7ull
+//   Config13: digest 0xb7e7883a660840e0ull -> 0x26698ad191149612ull
+//   ConfigFlags113: digest 0xa4dd696972db475bull -> 0x2dc456611f87a733ull
+//   Config13M: digest 0xc34985948e79cedeull -> 0x19c3a71e4e9a8e1eull
+//   ConfigFlags113M: digest 0x0347c04abab68e0cull -> 0xfbef26fc96f43008ull
+//   Config14: digest 0x6c7dac16f40fcd09ull -> 0x7900ab84ac061aacull
+//   ConfigFlags114: digest 0x882089d622978d78ull -> 0x885a51b123ea20f0ull
+//   Config14M: digest 0x802c58ce7ee39a99ull -> 0xf633142793d67f5full; trades 40 -> 39
+//   ConfigFlags114M: digest 0x45679f9cdea3e267ull -> 0x3a0f8f15e30da36cull; trades 66 -> 65
+//   Config15: digest 0xe559c62310330a23ull -> 0x100d38b4071a5dc7ull
+//   Config15M: digest 0xb0c03e0353613510ull -> 0x072f8f47292c4eddull
+//   Config16: digest 0x0a451aa16915b27dull -> 0x472f38c5a8455bb3ull; trades 54 -> 51
+//   ConfigFlags116: digest 0x4eaa502e0362e394ull -> 0x0ae98aba51b53286ull
+//   Config16M: digest 0x27673be2e9db04e2ull -> 0xf67486bc9bde1ee4ull; trades 54 -> 51
+//   ConfigFlags116M: digest 0x2765e19adb95de0cull -> 0xf72c7811b608605aull
+//   Storm01: digest 0x2133afe83fc420e0ull -> 0x7b3599eb3466de12ull
+//   Storm01M: digest 0x19b1148c1ff0fdf0ull -> 0x157d8e316dbb6e29ull
+//   Storm02: digest 0x378f5458fc0fd639ull -> 0x6365738f6fe18c62ull
+//   Storm02M: digest 0xf5edc6b1fa5b6382ull -> 0x4f7032eac6782348ull
+//   Storm03: digest 0xed504d400e73a0a4ull -> 0x12c84608e26fab3aull
+//   Storm03M: digest 0xe52423d7f9d55f90ull -> 0xff848912e686b368ull
+//   Storm04: digest 0x1e75bfb6be4afbdeull -> 0x6ade0a88c1f994f3ull
+//   Storm04M: digest 0x25ad16270696bfe5ull -> 0x9e689579a504c381ull
+//   Storm05: digest 0x6f872868148f0f47ull -> 0xc06525801126f657ull
+//   Storm05M: digest 0x4dead068eccf99e6ull -> 0xd80c85a5465b5374ull
+//   Storm06: digest 0x3f645186a6e8947full -> 0x4bb2ced9fe760dafull
+//   Storm06M: digest 0x3d6b5a2e7477b130ull -> 0x97034a317bf2f2b3ull
+//   Storm07: digest 0x5e43a6b123bc51d4ull -> 0x470825e1ec1ecce8ull
+//   Storm07M: digest 0x131a3394b945a114ull -> 0x84b9bcc85dd8557cull
+//   Storm08: digest 0x714db8ac130ceec8ull -> 0xa99b505e5e86020bull; folds 81 -> 82; trades 14 -> 15
+//   Storm08M: digest 0xb39cef971cc617c9ull -> 0xeddc5fda9d345791ull; folds 81 -> 82; trades 14 -> 15
+//   Storm11: digest 0x8661b708cd4166a1ull -> 0xae3bdc0c65ca618aull
+//   Storm11M: digest 0x502545578b9da7e4ull -> 0xc63aa1ab246798aaull
+//   Storm12: digest 0x5e67296a46dd111aull -> 0x6a6c0da08933254full
+//   Storm12M: digest 0xed07912aaa8ddf68ull -> 0x3c10b26c0fe83a2bull
+//   Storm13: digest 0x267138db75da74a9ull -> 0xb197c2f55c9f641eull
+//   Storm13M: digest 0xaf056984880cf93bull -> 0x0bcce2a1e3c8d376ull
+//   Storm14: digest 0x2dc48464afea6beeull -> 0x725f582f84f6e699ull
+//   Storm14M: digest 0xe88dcd2f79ef5b1eull -> 0xcab88d8d7e252001ull
+//   Storm15: digest 0xb07f37a9108c525dull -> 0x76faa7be7036e1c6ull
+//   Storm15M: digest 0xf043bbfbace4116aull -> 0xf94819fe44238076ull
+//   Storm16: digest 0x1dd11fb900462437ull -> 0x00f409577f82f930ull; trades 18 -> 17
+//   Storm16M: digest 0x469c9b4062cdaf29ull -> 0x6e86cc47dac4bbf6ull; trades 18 -> 17
+//   Storm17: digest 0xbcf95b0093c857c7ull -> 0xc557a22917996b11ull
+//   Storm17M: digest 0x2c5efbaa6c97919bull -> 0xee468df21e91d6d9ull; folds 78 -> 77; trades 17 -> 16
+//   Storm18: digest 0xbb133afed9dd696dull -> 0x89beefbf7b5c9bbdull
+//   Storm18M: digest 0x8439ba82e664dc36ull -> 0x343d19d46f9d195full
+//   Storm19: digest 0x98c4e679bd99154bull -> 0x3af28a51da128606ull
+//   Storm19M: digest 0x5b33f7146670b301ull -> 0x3d22bda37b57ef12ull
+//   Storm20: digest 0x5e7e094544680600ull -> 0x8e3b17a5941372b0ull
+//   Storm20M: digest 0xf4a34d389d339c52ull -> 0x2b5510877074d983ull
+//   Storm21: digest 0x0d51d4ee7ba538bcull -> 0x127543fc6f41b568ull
+//   Storm21M: digest 0x609b13c67e94266eull -> 0x4e19478a776b8fffull
+//   Storm22: digest 0xd7f6e57318853d23ull -> 0x52f4f4425518a4deull; folds 76 -> 74; trades 19 -> 17
+//   Storm22M: digest 0x07dbeb800970d3acull -> 0x3ff52d71ae7098f3ull; folds 76 -> 74; trades 19 -> 17
+//   Storm23: digest 0xd583ab3e70872184ull -> 0xc5fc69d6df7ac30aull; folds 87 -> 86; trades 28 -> 27
+//   Storm23M: digest 0x6ff6580af9b84ce4ull -> 0x2c976a105b997525ull; folds 87 -> 86; trades 28 -> 27
+//   Storm24: digest 0xa28fa86075682afeull -> 0xbf117bd4f211fcdcull; trades 25 -> 24
+//   Storm24M: digest 0x7c788712939c7540ull -> 0x41e28073620f4165ull; trades 25 -> 24
 constexpr Pinned kPinned[] = {
-    {"Config01", 0xa6f712d00de968fdull, 144, 44, 144},
-    {"ConfigFlags101", 0x1ba869cc0d36c0f9ull, 145, 45, 144},
-    {"Config01M", 0x6ba06c205fe23d3eull, 144, 42, 144},
-    {"ConfigFlags101M", 0xce3849680ad3a7b3ull, 145, 45, 144},
-    {"Config02", 0x7afb9b6d8f596e5aull, 48, 10, 48},
-    {"ConfigFlags102", 0x161f627679071741ull, 144, 49, 144},
-    {"Config02M", 0x674ba6b7434b6324ull, 48, 10, 48},
-    {"ConfigFlags102M", 0xbed441a4d9cfa483ull, 144, 49, 144},
-    {"Config03", 0xd2744bb43e12768eull, 144, 55, 144},
-    {"ConfigFlags103", 0xeb7ef359f583e6b7ull, 182, 62, 144},
-    {"Config03M", 0xad3f14259a62261bull, 144, 55, 144},
-    {"ConfigFlags103M", 0xa63a9792c9d050a4ull, 182, 64, 144},
+    {"Config01", 0x5cd164c7f6bab7f6ull, 144, 44, 144},
+    {"ConfigFlags101", 0x7ebdae61786f437bull, 145, 45, 144},
+    {"Config01M", 0xaa3ae6962e036080ull, 144, 42, 144},
+    {"ConfigFlags101M", 0x034d700a2cd0bf2full, 145, 45, 144},
+    {"Config02", 0x6185bf7376e2bd20ull, 48, 10, 48},
+    {"ConfigFlags102", 0x8d0b9a6d3546892bull, 144, 49, 144},
+    {"Config02M", 0xa7395bd2e72d1b2cull, 48, 10, 48},
+    {"ConfigFlags102M", 0xa408712c9045710aull, 144, 49, 144},
+    {"Config03", 0xb441839034f1953full, 144, 55, 144},
+    {"ConfigFlags103", 0x8d7ef7f73aed9ee7ull, 182, 62, 144},
+    {"Config03M", 0x78a2792dd0b42a96ull, 144, 55, 144},
+    {"ConfigFlags103M", 0x354763fa54d56a45ull, 182, 64, 144},
     {"Config04", 0xfc21bbfbdf3ce0f2ull, 144, 21, 144},
-    {"ConfigFlags104", 0xc61d42427a9ee923ull, 48, 14, 48},
+    {"ConfigFlags104", 0x7fbab759a0fec0a6ull, 48, 14, 48},
     {"Config04M", 0x7aba10f501deebefull, 144, 21, 144},
-    {"ConfigFlags104M", 0x802ac10be105f748ull, 48, 14, 48},
-    {"Config05", 0xb7488b32e4dc8b34ull, 48, 12, 48},
-    {"ConfigFlags105", 0x3908d02596e246abull, 48, 12, 48},
-    {"Config05M", 0x8b93a002cc29ca69ull, 48, 12, 48},
-    {"ConfigFlags105M", 0xdcc8c32e606730ceull, 48, 12, 48},
+    {"ConfigFlags104M", 0x937347d2331c2a4dull, 48, 14, 48},
+    {"Config05", 0x5f3ad561bf9e3368ull, 48, 12, 48},
+    {"ConfigFlags105", 0xb5310c345237971aull, 48, 12, 48},
+    {"Config05M", 0xc5c50113724e0ad2ull, 48, 12, 48},
+    {"ConfigFlags105M", 0xc6cecc192f843779ull, 48, 12, 48},
     {"Config06", 0x97960c0287eef8bfull, 48, 5, 48},
     {"ConfigFlags106", 0x90db63b00ae335b3ull, 48, 6, 48},
     {"Config06M", 0x80906c52bd537497ull, 48, 5, 48},
     {"ConfigFlags106M", 0xe3b3b55adc0a32baull, 48, 6, 48},
-    {"Config07", 0x0024b6e6530ee010ull, 144, 48, 144},
-    {"ConfigFlags107", 0xa028c28dd230cc4full, 48, 22, 48},
-    {"Config07M", 0x54dd9d81966ad4beull, 144, 48, 144},
-    {"ConfigFlags107M", 0xd822d3bc8b3d1603ull, 48, 23, 48},
-    {"Config08", 0x0aae3400fe7b0ec6ull, 48, 12, 48},
-    {"ConfigFlags108", 0xdb1ff9b03fa92e00ull, 48, 15, 48},
-    {"Config08M", 0x90958fb6b656162cull, 48, 12, 48},
-    {"ConfigFlags108M", 0xb0fdc7c72a0b8d6aull, 48, 15, 48},
-    {"Config09", 0xd9af2da65ed814beull, 144, 66, 144},
-    {"ConfigFlags109", 0xc898b92c29ceacbcull, 144, 45, 144},
-    {"Config09M", 0xd1e36c3f2203fb1bull, 144, 66, 144},
-    {"ConfigFlags109M", 0x782f025a07bc6a9dull, 144, 45, 144},
-    {"Config10", 0xaaa75d4717bc5a80ull, 48, 17, 48},
-    {"ConfigFlags110", 0x683ad671194e8164ull, 48, 12, 48},
-    {"Config10M", 0xaacd1ea0723f9644ull, 48, 17, 48},
-    {"ConfigFlags110M", 0xfbe3c3810f79a867ull, 48, 12, 48},
-    {"Config11", 0x8f84f17ca6d852a4ull, 144, 60, 144},
-    {"ConfigFlags111", 0x2dee232799502c90ull, 48, 17, 48},
-    {"Config11M", 0xe488304398a50ec6ull, 144, 60, 144},
-    {"ConfigFlags111M", 0xce246a1dab6da4bdull, 48, 17, 48},
-    {"Config12", 0x0fbab2990c9aeeb3ull, 144, 48, 144},
-    {"ConfigFlags112", 0xe521f7a9033accbaull, 144, 19, 144},
-    {"Config12M", 0xfd0646244ccbb2f5ull, 144, 48, 144},
-    {"ConfigFlags112M", 0x81ea581ad8b85608ull, 144, 19, 144},
-    {"Config13", 0xb7e7883a660840e0ull, 48, 19, 48},
-    {"ConfigFlags113", 0xa4dd696972db475bull, 48, 19, 48},
-    {"Config13M", 0xc34985948e79cedeull, 48, 19, 48},
-    {"ConfigFlags113M", 0x0347c04abab68e0cull, 48, 19, 48},
-    {"Config14", 0x6c7dac16f40fcd09ull, 144, 40, 144},
-    {"ConfigFlags114", 0x882089d622978d78ull, 144, 66, 144},
-    {"Config14M", 0x802c58ce7ee39a99ull, 144, 40, 144},
-    {"ConfigFlags114M", 0x45679f9cdea3e267ull, 144, 66, 144},
-    {"Config15", 0xe559c62310330a23ull, 144, 48, 144},
+    {"Config07", 0xe3ba7c8267aa287bull, 144, 54, 144},
+    {"ConfigFlags107", 0x3e11e833a3bf1decull, 48, 21, 48},
+    {"Config07M", 0x99092808f1916f13ull, 144, 54, 144},
+    {"ConfigFlags107M", 0xcbd4b87986c3362full, 48, 22, 48},
+    {"Config08", 0x70e7f32ae14ed30full, 48, 12, 48},
+    {"ConfigFlags108", 0xc32852de976cba7eull, 48, 15, 48},
+    {"Config08M", 0xdcce5328536da8e5ull, 48, 12, 48},
+    {"ConfigFlags108M", 0x5b880ee69d742934ull, 48, 15, 48},
+    {"Config09", 0xdbc2487f73b96062ull, 144, 66, 144},
+    {"ConfigFlags109", 0x41aac79bc2dd85e9ull, 144, 45, 144},
+    {"Config09M", 0xf4b6edaf6f3b56e4ull, 144, 66, 144},
+    {"ConfigFlags109M", 0xfbc8c748afcdaed3ull, 144, 45, 144},
+    {"Config10", 0x698f5cc39e76ef2aull, 48, 17, 48},
+    {"ConfigFlags110", 0x81b586b504520528ull, 48, 12, 48},
+    {"Config10M", 0xe3f8599474753a5bull, 48, 17, 48},
+    {"ConfigFlags110M", 0xefc3d2cec331b990ull, 48, 12, 48},
+    {"Config11", 0xea5ee5823170590aull, 144, 63, 144},
+    {"ConfigFlags111", 0xc4899ef454e541c6ull, 48, 20, 48},
+    {"Config11M", 0xbc3ceade9164a563ull, 144, 63, 144},
+    {"ConfigFlags111M", 0xa421058ee56d287eull, 48, 19, 48},
+    {"Config12", 0x4b2aeadb4d4cbfc6ull, 144, 48, 144},
+    {"ConfigFlags112", 0xc39510fa4716ca32ull, 144, 19, 144},
+    {"Config12M", 0xd21447d6edb95eacull, 144, 48, 144},
+    {"ConfigFlags112M", 0xcda1390d86a113a7ull, 144, 19, 144},
+    {"Config13", 0x26698ad191149612ull, 48, 19, 48},
+    {"ConfigFlags113", 0x2dc456611f87a733ull, 48, 19, 48},
+    {"Config13M", 0x19c3a71e4e9a8e1eull, 48, 19, 48},
+    {"ConfigFlags113M", 0xfbef26fc96f43008ull, 48, 19, 48},
+    {"Config14", 0x7900ab84ac061aacull, 144, 40, 144},
+    {"ConfigFlags114", 0x885a51b123ea20f0ull, 144, 66, 144},
+    {"Config14M", 0xf633142793d67f5full, 144, 39, 144},
+    {"ConfigFlags114M", 0x3a0f8f15e30da36cull, 144, 65, 144},
+    {"Config15", 0x100d38b4071a5dc7ull, 144, 48, 144},
     {"ConfigFlags115", 0xc2ccc3c639558877ull, 48, 6, 48},
-    {"Config15M", 0xb0c03e0353613510ull, 144, 48, 144},
+    {"Config15M", 0x072f8f47292c4eddull, 144, 48, 144},
     {"ConfigFlags115M", 0xf05fb093f1e4c5c3ull, 48, 6, 48},
-    {"Config16", 0x0a451aa16915b27dull, 144, 54, 144},
-    {"ConfigFlags116", 0x4eaa502e0362e394ull, 48, 21, 48},
-    {"Config16M", 0x27673be2e9db04e2ull, 144, 54, 144},
-    {"ConfigFlags116M", 0x2765e19adb95de0cull, 48, 21, 48},
+    {"Config16", 0x472f38c5a8455bb3ull, 144, 51, 144},
+    {"ConfigFlags116", 0x0ae98aba51b53286ull, 48, 21, 48},
+    {"Config16M", 0xf67486bc9bde1ee4ull, 144, 51, 144},
+    {"ConfigFlags116M", 0xf72c7811b608605aull, 48, 21, 48},
     {"CloseAllThenEntry", 0x02e260ca681c8565ull, 40, 17, 40},
     {"CloseAllThenEntryM", 0x3265b286d4d80ab9ull, 40, 17, 40},
     {"Reversals", 0xecaf36b336d5c113ull, 40, 16, 40},
@@ -906,54 +1011,54 @@ constexpr Pinned kPinned[] = {
     {"CloseOrderAddsM", 0xc00405579a9256e4ull, 36, 22, 36},
     {"DelayedStops", 0xcefe9176b3b19817ull, 66, 20, 40},
     {"DelayedStopsM", 0x224bd4fd7724bba3ull, 66, 20, 40},
-    {"Storm01", 0x2133afe83fc420e0ull, 43, 13, 43},
-    {"Storm01M", 0x19b1148c1ff0fdf0ull, 43, 13, 43},
-    {"Storm02", 0x378f5458fc0fd639ull, 63, 12, 42},
-    {"Storm02M", 0xf5edc6b1fa5b6382ull, 63, 12, 42},
-    {"Storm03", 0xed504d400e73a0a4ull, 41, 17, 41},
-    {"Storm03M", 0xe52423d7f9d55f90ull, 41, 17, 41},
-    {"Storm04", 0x1e75bfb6be4afbdeull, 54, 24, 54},
-    {"Storm04M", 0x25ad16270696bfe5ull, 54, 24, 54},
-    {"Storm05", 0x6f872868148f0f47ull, 80, 17, 53},
-    {"Storm05M", 0x4dead068eccf99e6ull, 82, 18, 53},
-    {"Storm06", 0x3f645186a6e8947full, 40, 13, 40},
-    {"Storm06M", 0x3d6b5a2e7477b130ull, 40, 13, 40},
-    {"Storm07", 0x5e43a6b123bc51d4ull, 55, 13, 55},
-    {"Storm07M", 0x131a3394b945a114ull, 55, 13, 55},
-    {"Storm08", 0x714db8ac130ceec8ull, 81, 14, 58},
-    {"Storm08M", 0xb39cef971cc617c9ull, 81, 14, 58},
+    {"Storm01", 0x7b3599eb3466de12ull, 43, 13, 43},
+    {"Storm01M", 0x157d8e316dbb6e29ull, 43, 13, 43},
+    {"Storm02", 0x6365738f6fe18c62ull, 63, 12, 42},
+    {"Storm02M", 0x4f7032eac6782348ull, 63, 12, 42},
+    {"Storm03", 0x12c84608e26fab3aull, 41, 17, 41},
+    {"Storm03M", 0xff848912e686b368ull, 41, 17, 41},
+    {"Storm04", 0x6ade0a88c1f994f3ull, 54, 24, 54},
+    {"Storm04M", 0x9e689579a504c381ull, 54, 24, 54},
+    {"Storm05", 0xc06525801126f657ull, 80, 17, 53},
+    {"Storm05M", 0xd80c85a5465b5374ull, 82, 18, 53},
+    {"Storm06", 0x4bb2ced9fe760dafull, 40, 13, 40},
+    {"Storm06M", 0x97034a317bf2f2b3ull, 40, 13, 40},
+    {"Storm07", 0x470825e1ec1ecce8ull, 55, 13, 55},
+    {"Storm07M", 0x84b9bcc85dd8557cull, 55, 13, 55},
+    {"Storm08", 0xa99b505e5e86020bull, 82, 15, 58},
+    {"Storm08M", 0xeddc5fda9d345791ull, 82, 15, 58},
     {"Storm09", 0x5d21b1f48f6c7a20ull, 48, 23, 48},
     {"Storm09M", 0x96f809a423548991ull, 48, 22, 48},
     {"Storm10", 0x2338c2fa5e7546ebull, 63, 13, 57},
     {"Storm10M", 0x0c455c597be73974ull, 64, 13, 57},
-    {"Storm11", 0x8661b708cd4166a1ull, 59, 23, 59},
-    {"Storm11M", 0x502545578b9da7e4ull, 59, 23, 59},
-    {"Storm12", 0x5e67296a46dd111aull, 85, 19, 56},
-    {"Storm12M", 0xed07912aaa8ddf68ull, 85, 19, 56},
-    {"Storm13", 0x267138db75da74a9ull, 46, 25, 46},
-    {"Storm13M", 0xaf056984880cf93bull, 46, 25, 46},
-    {"Storm14", 0x2dc48464afea6beeull, 46, 17, 46},
-    {"Storm14M", 0xe88dcd2f79ef5b1eull, 46, 17, 46},
-    {"Storm15", 0xb07f37a9108c525dull, 43, 13, 43},
-    {"Storm15M", 0xf043bbfbace4116aull, 43, 13, 43},
-    {"Storm16", 0x1dd11fb900462437ull, 58, 18, 58},
-    {"Storm16M", 0x469c9b4062cdaf29ull, 58, 18, 58},
-    {"Storm17", 0xbcf95b0093c857c7ull, 83, 21, 54},
-    {"Storm17M", 0x2c5efbaa6c97919bull, 78, 17, 54},
-    {"Storm18", 0xbb133afed9dd696dull, 79, 22, 49},
-    {"Storm18M", 0x8439ba82e664dc36ull, 79, 22, 49},
-    {"Storm19", 0x98c4e679bd99154bull, 81, 20, 49},
-    {"Storm19M", 0x5b33f7146670b301ull, 82, 21, 49},
-    {"Storm20", 0x5e7e094544680600ull, 44, 11, 42},
-    {"Storm20M", 0xf4a34d389d339c52ull, 43, 10, 42},
-    {"Storm21", 0x0d51d4ee7ba538bcull, 47, 14, 47},
-    {"Storm21M", 0x609b13c67e94266eull, 47, 14, 47},
-    {"Storm22", 0xd7f6e57318853d23ull, 76, 19, 50},
-    {"Storm22M", 0x07dbeb800970d3acull, 76, 19, 50},
-    {"Storm23", 0xd583ab3e70872184ull, 87, 28, 54},
-    {"Storm23M", 0x6ff6580af9b84ce4ull, 87, 28, 54},
-    {"Storm24", 0xa28fa86075682afeull, 54, 25, 54},
-    {"Storm24M", 0x7c788712939c7540ull, 54, 25, 54},
+    {"Storm11", 0xae3bdc0c65ca618aull, 59, 23, 59},
+    {"Storm11M", 0xc63aa1ab246798aaull, 59, 23, 59},
+    {"Storm12", 0x6a6c0da08933254full, 85, 19, 56},
+    {"Storm12M", 0x3c10b26c0fe83a2bull, 85, 19, 56},
+    {"Storm13", 0xb197c2f55c9f641eull, 46, 25, 46},
+    {"Storm13M", 0x0bcce2a1e3c8d376ull, 46, 25, 46},
+    {"Storm14", 0x725f582f84f6e699ull, 46, 17, 46},
+    {"Storm14M", 0xcab88d8d7e252001ull, 46, 17, 46},
+    {"Storm15", 0x76faa7be7036e1c6ull, 43, 13, 43},
+    {"Storm15M", 0xf94819fe44238076ull, 43, 13, 43},
+    {"Storm16", 0x00f409577f82f930ull, 58, 17, 58},
+    {"Storm16M", 0x6e86cc47dac4bbf6ull, 58, 17, 58},
+    {"Storm17", 0xc557a22917996b11ull, 83, 21, 54},
+    {"Storm17M", 0xee468df21e91d6d9ull, 77, 16, 54},
+    {"Storm18", 0x89beefbf7b5c9bbdull, 79, 22, 49},
+    {"Storm18M", 0x343d19d46f9d195full, 79, 22, 49},
+    {"Storm19", 0x3af28a51da128606ull, 81, 20, 49},
+    {"Storm19M", 0x3d22bda37b57ef12ull, 82, 21, 49},
+    {"Storm20", 0x8e3b17a5941372b0ull, 44, 11, 42},
+    {"Storm20M", 0x2b5510877074d983ull, 43, 10, 42},
+    {"Storm21", 0x127543fc6f41b568ull, 47, 14, 47},
+    {"Storm21M", 0x4e19478a776b8fffull, 47, 14, 47},
+    {"Storm22", 0x52f4f4425518a4deull, 74, 17, 50},
+    {"Storm22M", 0x3ff52d71ae7098f3ull, 74, 17, 50},
+    {"Storm23", 0xc5fc69d6df7ac30aull, 86, 27, 54},
+    {"Storm23M", 0x2c976a105b997525ull, 86, 27, 54},
+    {"Storm24", 0xbf117bd4f211fcdcull, 54, 24, 54},
+    {"Storm24M", 0x41e28073620f4165ull, 54, 24, 54},
     {"Legs01", 0x9aa88b09a92abc1cull, 30, 6, 30},
     {"Legs01M", 0xb32d654e3efa737dull, 30, 6, 30},
     {"LegsStops01", 0x04620fadf87aac3eull, 30, 6, 30},
