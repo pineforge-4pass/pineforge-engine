@@ -306,7 +306,7 @@ report from an inherited descriptor instead of a file. It states what the engine
 statement the tree does not settle says so.
 
 **Which image has it.** The environment variable `PINEFORGE_REPORT_SINK_FD` is read by the release
-entrypoint only from engine 1.8.0 on (`docker/entrypoint.sh:875`).
+entrypoint only from engine 1.8.0 on (`docker/entrypoint.sh:892`).
 On a 1.7.0 image the entrypoint forwards no sink descriptor (the v1.7.0 `docker/entrypoint.sh` has no
 such line): the variable is ignored without an error and the run produces its report as it does without
 the variable. The flag
