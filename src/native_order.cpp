@@ -5,6 +5,7 @@
 #include <pineforge/detail/scratch_slab.hpp>
 #include <pineforge/detail/journal_codec.hpp>
 #include "native_journal_codec.hpp"
+#include "native_opening_membership.hpp"
 #include "run_results_errors.hpp"
 
 #include "native_issued_range_state.hpp"
@@ -2621,9 +2622,9 @@ bool WorkingRequestCore::carry_book_read_failure(std::exception_ptr failure) con
 }
 
 void WorkingRequestCore::rethrow_book_read_failure() const {
+    if (instance_ && instance_->resident_read_failure) std::rethrow_exception(instance_->resident_read_failure);
     if (book_spill_) book_spill_->check();
 }
-
 WorkingRequestCore::BookLookupReads WorkingRequestCore::book_lookup_reads() const noexcept {
     BookLookupReads reads;
     if (book_spill_) {
@@ -8880,6 +8881,21 @@ std::optional<uint64_t> WorkingRequestCore::successor_root(uint64_t incarnation)
 // base preserves absolute receipt indices and the already-folded total; RAM
 // holds only the resident tail, and a pinned journal's older keys sit in the
 // external log.
+
+RequestHandle OpeningMembership::read_external(const OpeningReadback& external, std::uint64_t i) {
+    RequestHandle handle;
+    if (with_opening_failure([&] { return external.opening_at(i, handle); }) != ReadStatus::ok)
+        detail::raise_scratch_io_error(EIO, "native opening membership read");
+    return handle;
+}
+
+void WorkingRequestCore::carry_live_read_failure(std::exception_ptr failure) const noexcept {
+    if (carry_book_read_failure(failure)) return;
+    // Frozen openings can require a backing read even on a resident row.
+    // The instance binding keeps the first failure until the core is reset.
+    if (!instance_ || !failure) std::terminate();
+    if (!instance_->resident_read_failure) instance_->resident_read_failure = std::move(failure);
+}
 
 }  // inline namespace native_order_v8
 }  // namespace pineforge::native_order
