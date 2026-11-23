@@ -329,6 +329,11 @@ empty. [Run-failure codes](@ref run_failure_codes) lists every code.
 
 ## End-to-end run
 
+For CSV feeds read by `scripts/run_strategy.py`, write `timestamp` as a
+decimal integer in Unix milliseconds, within the signed 64-bit range.
+The runner reports the file and line for fractional or exponent notation
+and keeps integer timestamps exactly, whether or not NumPy is installed.
+
 ```python
 import csv
 

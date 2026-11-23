@@ -398,12 +398,15 @@ class DailyPlanTests(unittest.TestCase):
         self.assertEqual(plan.status, "declared-not-run")
         self.assertIn("the finer feed is empty", plan.detail)
 
-    def test_float_stamps_are_the_feed_loader_s(self) -> None:
+    def test_daily_plan_refuses_non_integer_timestamps(self) -> None:
         with self.finer.open("w", encoding="utf-8") as f:
             f.write("timestamp,open,high,low,close,volume\n")
             for row in self.minutes:
                 f.write(",".join([f"{float(row[0]):.1f}"] + [str(x) for x in row[1:]]) + "\n")
-        self.assertEqual(self.plan().status, "declared")
+        # expectation corrected: declared -> row 2 refused, because #932
+        # requires decimal integer timestamps even when a float ends in .0.
+        with self.assertRaisesRegex(ValueError, r"line 2: expected a decimal integer timestamp"):
+            self.plan()
 
     def test_a_daily_chart_spelled_in_minutes_is_1d(self) -> None:
         # No script_tf: the chart's bars say 1440 minutes, the calendar's 1D.
