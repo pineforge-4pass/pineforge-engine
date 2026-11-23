@@ -2066,7 +2066,7 @@ struct WorkingRequestCore::JournalStore {
         const uint64_t seal = page_seal(page, out.data(), out.size());
         std::memcpy(spill->write.data() + out.size(), &seal, kPageSealBytes);
         pages.make_room();
-        data.write(page.offset, spill->write.data(), static_cast<std::size_t>(page.length));
+        data.append(spill->write.data(), static_cast<std::size_t>(page.length));
         pages.push(page);
         // drop_front keeps a partly occupied chunk and its original slot base;
         // the next spill starts at page_end, even when it is not aligned.
