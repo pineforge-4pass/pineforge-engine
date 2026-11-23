@@ -12632,6 +12632,7 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
             if (existing->reservation_sequence != 0)
                 reservation_sequence = existing->reservation_sequence;
             pending.reservation_sequence = reservation_sequence;
+            pending.following_stop_incarnation = existing->following_stop_incarnation;
             const auto same = [](double left, double right) {
                 return same_double_bits(left, right) || (std::isnan(left) && std::isnan(right));
             };
@@ -13863,6 +13864,24 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
             const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
                                                     replacement_key);
             if (accepted) {
+                // Remember the source request while its full percentage is still
+                // known. After reconciliation qty_percent is the allocation.
+                if (family == PineOrderFamily::ExitStop && config_.process_orders_on_close
+                    && physical.signed_units == 0.0 && !materializing_relative_
+                    && !from_entry.empty() && !void_issue && oca_name.empty() && !pending_relative_exits_.empty()
+                    && std::isnan(limit_price) && std::isnan(source_trail_offset)
+                    && whole_level_exit(limit_price, stop_price, source_trail_points,
+                                        source_trail_price, profit_ticks, loss_ticks,
+                                        qty, requested_qty_percent)) {
+                    for (auto& definition : pending_relative_exits_) {
+                        if (definition.from_entry == from_entry && definition.exit_id != exit_id && definition.oca_name.empty()
+                            && definition.reservation_sequence != 0 && std::isnan(definition.qty)
+                            && std::isfinite(definition.qty_percent)
+                            && definition.qty_percent < 100.0 - internal::kFullPercentEps) {
+                            definition.following_stop_incarnation = accepted->incarnation;
+                        }
+                    }
+                }
                 auto& family = bracket_family(family_key);
                 // Every family member was remembered before this submission,
                 // so a successor above the prior placement high-water cannot
@@ -14964,7 +14983,8 @@ void PineExecutionAdapter::release_delayed_orders(
             && (family == PineOrderFamily::ExitStop
                 || family == PineOrderFamily::ExitLimit);
         if (order.release_open_epoch <= broker_open_epoch_
-            && (!explicit_brackets_only || explicit_bracket || coof_delayed_price)) {
+            && (!explicit_brackets_only || explicit_bracket || coof_delayed_price
+                || order.release_priced_at_open)) {
             // A newer same-(id, from_entry) placement already superseded this
             // delayed leg: the owner drops same-id pending orders at replacement
             // time (ab9714be pine_strategy_commands.cpp:446), so the stale
@@ -26957,6 +26977,34 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 candidate.projection_tv_carry_qty = 0.0;
             }
         }
+        // The definition is consumed by materialization. Retain its queue rank
+        // and the exact sibling handle only for this ordinary POOC opening.
+        std::uint64_t relative_partial_rank = 0;
+        std::uint64_t following_stop = 0;
+        if (config_.process_orders_on_close && !config_.calc_on_order_fills
+            && context.coordinate.provenance == NativePriceProvenance::AfterCalculationClose
+            && std::holds_alternative<native_order::Market>(event.request().trigger)
+            && placement_snapshot->family == PineOrderFamily::Entry
+            && placement_snapshot->projection_position_side
+                == static_cast<std::int32_t>(PositionSide::FLAT)
+            && placement_snapshot->projection_created_bar == projection_bar_index(context)
+            && !finite_positive(placement_snapshot->exit_levels.limit)
+            && !finite_positive(placement_snapshot->exit_levels.stop)
+            && event.closed_units == 0.0 && finite_positive(event.opened_units)) {
+            for (const auto& definition : pending_relative_exits_) {
+                if (definition.from_entry != placement_snapshot->source_id
+                    || definition.following_stop_incarnation == 0
+                    || definition.reservation_sequence == 0 || !std::isnan(definition.qty)
+                    || !definition.oca_name.empty() || !std::isfinite(definition.qty_percent)
+                    || definition.qty_percent >= 100.0 - internal::kFullPercentEps) continue;
+                if (relative_partial_rank != 0) {
+                    following_stop = 0; // overlapping definitions keep the parent rule
+                    break;
+                }
+                relative_partial_rank = definition.reservation_sequence;
+                following_stop = definition.following_stop_incarnation;
+            }
+        }
         materialize_relative_exits(*placement_snapshot, event);
         per_entry_exits_at_entry_fill(*placement_snapshot, event);
         arm_standing_exits_for_opening(*placement_snapshot, event);
@@ -26979,45 +27027,25 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             return row.bracket_origin.incarnation != 0
                 && row.bracket_origin != event.handle();
         };
-        const bool partial_prearmed_parent = std::isfinite(
-                [&]() {
-                    double smallest = kNaN;
-                    for (const auto& handle : live_handles_) {
-                        const auto pending = placement_.find(handle.incarnation);
-                        if (pending == placement_.end()) continue;
-                        const auto& row = pending->second;
-                        if ((row.family == PineOrderFamily::ExitStop
-                             || row.family == PineOrderFamily::ExitLimit)
-                            && row.from_entry == placement_snapshot->source_id
-                            && row.projection_created_bar
-                                == placement_snapshot->projection_created_bar
-                            && !carried_origin_leg(row)
-                            && std::isfinite(row.requested_qty)) {
-                            smallest = std::isfinite(smallest)
-                                ? std::min(smallest, row.requested_qty)
-                                : row.requested_qty;
-                        }
-                    }
-                    return smallest;
-                }())
-            && [&]() {
-                for (const auto& handle : live_handles_) {
-                    const auto pending = placement_.find(handle.incarnation);
-                    if (pending == placement_.end()) continue;
-                    const auto& row = pending->second;
-                    if ((row.family == PineOrderFamily::ExitStop
-                         || row.family == PineOrderFamily::ExitLimit)
-                        && row.from_entry == placement_snapshot->source_id
-                        && row.projection_created_bar
-                            == placement_snapshot->projection_created_bar
-                        && !carried_origin_leg(row)
-                        && std::isfinite(row.requested_qty)
-                        && row.requested_qty < std::abs(event.opened_units)) {
-                        return true;
-                    }
-                }
-                return false;
-            }();
+        bool partial_prearmed_parent = false;
+        for (const auto& handle : live_handles_) {
+            const auto pending = placement_.find(handle.incarnation);
+            if (pending == placement_.end()) continue;
+            const auto& row = pending->second;
+            if ((row.family != PineOrderFamily::ExitStop && row.family != PineOrderFamily::ExitLimit)
+                || row.from_entry != placement_snapshot->source_id || carried_origin_leg(row)
+                || row.projection_created_bar != placement_snapshot->projection_created_bar
+                || !std::isfinite(row.requested_qty)
+                || !(row.requested_qty < std::abs(event.opened_units))) continue;
+            partial_prearmed_parent = true;
+            // A real prearmed partial still delays the entire bracket, even if
+            // this fill also materialized a percentage leg.
+            if (following_stop == 0 || row.bracket_origin != event.handle()
+                || exit_queue_rank(placement_, row) != relative_partial_rank) {
+                following_stop = 0;
+                break;
+            }
+        }
         const bool multiple_prearmed_parents = std::any_of(
             live_handles_.begin(), live_handles_.end(), [&](const auto& handle) {
                 if (handle == event.handle()) return false;
@@ -27091,8 +27119,13 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                     ? row.source_id + "\x1f" + row.from_entry + origin_suffix
                     : row.oca_name;
                 request.group = group_for(group_name, 1);
+                const bool release_priced_at_open = partial_prearmed_parent && !multiple_prearmed_parents
+                    && handle.incarnation == following_stop && row.family == PineOrderFamily::ExitStop
+                    && row.bracket_origin == event.handle() && !marketable_at_fill(row);
+                // A live reissue on the next calculation looks up the dynamic
+                // stop's original (id, from, family) key, as at its placement.
                 const std::string replacement_key = row.source_id + "\x1f"
-                    + row.from_entry + "\x1f"
+                    + row.from_entry + (release_priced_at_open ? "" : "\x1f")
                     + std::to_string(static_cast<int>(row.family)) + origin_suffix;
                 const auto cancelled = require_host().cancel(handle);
                 if (cancelled.status != native_order::CancelStatus::Cancelled)
@@ -27100,7 +27133,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 retire(handle);
                 delayed_market_orders_.push_back({
                     std::move(request), row, replacement_key,
-                    broker_open_epoch_ + 1U});
+                    broker_open_epoch_ + 1U, false, release_priced_at_open});
             }
         }
         if (!partial_prearmed_parent) {

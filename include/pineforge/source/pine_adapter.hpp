@@ -2165,6 +2165,8 @@ private:
         SourceId replacement_key;
         std::uint64_t release_open_epoch = 0;
         bool execute_at_open = false;
+        // Release this still-priced stop before matching the next opening.
+        bool release_priced_at_open = false;
     };
 
     // A sell-side stop that is already marketable at the open, while
@@ -2246,6 +2248,9 @@ private:
         // when a later exit of the same entry, neither void nor made at the
         // fill, is sized: it then holds a share and ranks those legs.
         std::uint64_t reservation_sequence = 0;
+        // Exact accepted stop placed behind this definition. Replacing or
+        // cancelling the stop invalidates it; this queue is local to one run.
+        std::uint64_t following_stop_incarnation = 0;
     };
 
     // One relative leg of a queued strategy.exit, spelled as the
