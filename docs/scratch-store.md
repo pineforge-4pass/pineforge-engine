@@ -306,6 +306,13 @@ well under one byte per handle ever issued even when the live set is bounded.
 transaction that is not rollback-only. `commit` reports the failing backing call's
 own status. Reads preserve backing `io_error`/`corrupt` and comparator failures.
 
+When a saved exit placement or pending order contains an invalid birth cursor
+or fill evaluation, the C++ scratch reader throws `ExitScratchError` with
+`status() == ScratchStatus::corrupt`. If the birth factory rejects a field,
+its message is retained; the run-failure code is `engine_invariant`.
+An unknown birth tag or fill details on a non-fill birth are rejected before
+the reader calls a factory.
+
 The status is a transport, not the run-failure classification. Command and
 script backings retain a prebuilt typed `out_of_memory` exception when an
 allocation fails, including an allocation while formatting an I/O or arena

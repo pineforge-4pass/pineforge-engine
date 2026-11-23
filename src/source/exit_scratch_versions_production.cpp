@@ -133,6 +133,16 @@ public:
     [[noreturn]] void invalid() const {
         exit_scratch_failure(ScratchStatus::corrupt);
     }
+    // A factory argument here came from storage. Preserve its diagnostic
+    // while giving scratch readers the same status as an unknown birth tag.
+    template<class Factory, class... Args>
+    static auto restore_birth(Factory factory, const Args&... args) {
+        try {
+            return factory(args...);
+        } catch (const std::invalid_argument& error) {
+            throw ExitScratchError(error);
+        }
+    }
     std::uint64_t remaining() const noexcept { return size_ - offset_; }
     void bytes(char* destination, std::size_t count) {
         if (count > remaining()) invalid();
@@ -450,11 +460,11 @@ template<class Archive, class T> void payload_fields(Archive& a, T& v) {
                 if (position == BirthCursorPosition::None) {
                     if (domain != BirthCursorDomain::None || index != -1 || count != 0) a.invalid();
                 } else if (position == BirthCursorPosition::Point) {
-                    cursor = BirthCursor::point(domain, index, count);
+                    cursor = a.restore_birth(BirthCursor::point, domain, index, count);
                 } else if (position == BirthCursorPosition::Segment) {
-                    cursor = BirthCursor::segment(domain, index, count);
+                    cursor = a.restore_birth(BirthCursor::segment, domain, index, count);
                 } else a.invalid();
-                v = OrderBirth::fill_evaluation(
+                v = a.restore_birth(OrderBirth::fill_evaluation,
                     bar, timestamp, cursor, price, first, last, evaluation); break;
             }
             default: a.invalid();
