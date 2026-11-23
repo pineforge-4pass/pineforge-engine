@@ -12864,12 +12864,24 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
     }
     for (const auto& parent : pending_entries_) observe_pending_parent(parent.snapshot);
     // A same-bar entry is absent from the live and pending entry lists until
-    // the batch flush. While flat it is the pending parent of a relative
-    // exit; while a position is held, only an opposite-side parked entry
-    // needs this extra basis.
+    // the batch flush. While a position is held, only an opposite-side parked
+    // entry needs this extra basis. While flat, the parked entry is the basis
+    // only when a partial percentage definition waits for that entry's fill:
+    // the exit placed beside it is then left the remainder. No other exit
+    // placed while flat is measured against the parked entry: it keeps the
+    // quantity it names, or is sized when the entry fills, as before.
+    const bool flat_beside_partial_definition = physical.signed_units == 0.0
+        && !from_entry.empty() && !pending_same_bar_commands_.empty()
+        && std::any_of(pending_relative_exits_.begin(), pending_relative_exits_.end(),
+            [&](const PendingRelativeExit& value) {
+                return value.from_entry == from_entry && std::isnan(value.qty)
+                    && std::isfinite(value.qty_percent)
+                    && value.qty_percent < 100.0 - internal::kFullPercentEps;
+            });
     for (const auto& pending : pending_same_bar_commands_) {
         if (physical.signed_units == 0.0
-            || pending.snapshot.is_long != (physical.signed_units > 0.0)) {
+                ? flat_beside_partial_definition
+                : pending.snapshot.is_long != (physical.signed_units > 0.0)) {
             observe_pending_parent(pending.snapshot);
         }
     }
