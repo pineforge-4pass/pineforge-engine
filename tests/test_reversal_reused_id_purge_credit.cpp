@@ -33,6 +33,15 @@
 // fixture facade (source_unclosed_qty_for, source_entry_slot_count), and each
 // reader's result: positions and closed-trade rows.
 //
+// How the old purge shows: close-percent, close-qty, close-basis and
+// exit-bracket detect it by their outcome too (positions and closed rows).
+// pyramiding detects it only through the credit and slot checks: before the
+// fix the third add is withdrawn by the book's lot count rather than refused
+// by the slot count, so its outcome matches. The credit and slot checks also
+// tell the two guards apart: restoring the old purge leaves a credit of 0 and
+// no slot, restoring the old debit leaves a reduced credit and keeps the
+// slot.
+//
 // Each reader runs twice. "reused-id" reverses with the id the short side
 // used ("X", then "X"). "distinct-ids" is the control: it reverses with a
 // fresh id ("Y", then "X") that never opened on the short side, so the purge
