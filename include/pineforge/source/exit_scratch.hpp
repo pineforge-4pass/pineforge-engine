@@ -108,6 +108,9 @@ struct ExitScratchContext {
 class ExitScratchError final : public coded<std::logic_error> {
 public:
     explicit ExitScratchError(ScratchStatus status);
+    explicit ExitScratchError(const std::invalid_argument& invalid_field)
+        : coded<std::logic_error>(RunFailureCode::engine_invariant, {}, invalid_field),
+          status_(ScratchStatus::corrupt) {}
     ScratchStatus status() const noexcept { return status_; }
 private:
     ScratchStatus status_;
