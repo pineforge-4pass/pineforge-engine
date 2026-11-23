@@ -1835,6 +1835,8 @@ void partial_end_records_the_calculation() {
     host.fill_report(&report);
     CHECK(report.equity_curve_len == 2);
     CHECK(report.broker_state_hash_len == 2);
+    CHECK(report.script_bars_processed == report.equity_curve_len);
+    CHECK(report.script_bars_processed == report.broker_state_hash_len);
     if (report.equity_curve_len == 2) {
         CHECK(report.equity_curve[0].time_ms == 0);
         CHECK(report.equity_curve[1].time_ms == 60000);

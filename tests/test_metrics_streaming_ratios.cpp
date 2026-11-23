@@ -1395,11 +1395,20 @@ void live_rows() {
         STREAM_CHECK(strategy_stream_fill_report(&old, &a) == 0);
         STREAM_CHECK(strategy_stream_fill_report(&next, &b) == 0);
         // finalize_elapsed_slots records the slots before the latest tick's
-        // slot (src/native_execution_consumer.cpp:11452-11485). Partial end
-        // invokes only the callback (:11400-11445), without the confirmed
-        // calculation's record_script_report_point (:9528), so adds no point.
+        // slot. A partial end then runs one more calculation, in the partial
+        // branch of finalize_observed_tick_slot, and that calculation records
+        // its point through record_script_report_point like a confirmed one.
+        // expectation corrected: this check expected no point for the partial
+        // end (confirmed_slots alone). The C header requires
+        // len == script_bars_processed on a completed KernelRecorded run
+        // (include/pineforge/pineforge.h:417 and :428, in the released
+        // header), and :1252 says the cumulative report of
+        // strategy_stream_fill_report satisfies the same invariant. The
+        // terminal partial calculation is counted in script_bars_processed,
+        // so the release was one point short; the subscription change made
+        // the report match the header.
         const auto confirmed_slots = (ticks[1].timestamp - bars[0].timestamp) / 60000;
-        STREAM_CHECK(a.equity_curve_len == confirmed_slots);
+        STREAM_CHECK(a.equity_curve_len == confirmed_slots + (partial_end ? 1 : 0));
         STREAM_CHECK(a.equity_curve_len == b.equity_curve_len);
         STREAM_CHECK(std::memcmp(&a.metrics, &b.metrics, sizeof a.metrics) == 0);
         BacktestEngine::free_report(reinterpret_cast<ReportC*>(&a));
