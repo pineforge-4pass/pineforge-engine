@@ -3,6 +3,7 @@
 #include <deque>
 #include <vector>
 #include <string>
+#include <string_view>
 #include <cstddef>
 #include <cstdint>
 #include <cmath>
@@ -41,9 +42,8 @@
 #include <pineforge/report_sequence.hpp>
 // Suppress per-strategy function declarations (strategy_create, run_backtest, etc.) whose pf_*_t parameter types conflict with the internal C++ types
 // used in codegen-emitted extern "C" blocks that include this header.
-// NOTE: this macro leaks into every TU that includes engine.hpp; include
-// pineforge.h FIRST in any TU that needs the per-strategy declarations
-// (see src/c_abi.cpp).
+// NOTE: this macro leaks into every TU that includes engine.hpp; include pineforge.h FIRST
+// in any TU that needs the per-strategy declarations (see src/c_abi.cpp).
 #define PINEFORGE_NO_STRATEGY_DECLS
 // Angle-bracket form is the installed public path (deliberate).
 #include <pineforge/pineforge.h>
@@ -531,11 +531,11 @@ public:
         if (v != v) v = std::numeric_limits<double>::quiet_NaN();
         bytes(&v, sizeof v);
     }
-
     void i(int64_t v) { bytes(&v, sizeof v); }
     void u(uint64_t v) { bytes(&v, sizeof v); }
     void b(bool v) { const unsigned char c = v ? 1 : 0; bytes(&c, 1); }
-    void s(const std::string& v) { u(v.size()); bytes(v.data(), v.size()); }
+    void s(std::string_view v) { u(v.size()); bytes(v.data(), v.size()); }
+    template <class K> auto s(const K& key) -> decltype(void(key.string())) { s(key.string()); }
 };
 // Optional frontend projection interface retained for source compatibility.
 // Broker dispatch itself is virtual on BacktestEngine and never discovers a
