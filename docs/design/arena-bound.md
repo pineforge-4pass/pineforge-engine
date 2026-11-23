@@ -444,6 +444,9 @@ Consequently `per_user_bytes` explicitly emits `openings=0`, with that
 reason in the implementation. This zero does not certify a generic C++
 host supplying `BindOpenings.external_openings`; such a host needs the
 membership/lifetime facts above before using this bound.
+If a C++ host saves such a request in exit scratch, the writer temporarily
+copies one handle per opening. Both request and pending versions restore those
+handles in the request's own vector.
 Both descriptors of a generic freeze now use `ScratchFile`: a configured
 core directory is honored, standalone freezes use TMPDIR then the common
 fallback, and an attached arena creates no private file.
