@@ -31,9 +31,17 @@ Pine exceptions; their existing predicates are evaluated in the adapter.
 Their recorded observed fill sequence is the sequence visible at policy
 selection; the separate `OrderBirth` still owns the actual callback interval.
 
+C++ callers restoring a placement or pending exit from the run's scratch
+store get an `ExitScratchError` with status `ScratchStatus::corrupt` if the
+stored bounds or evidence are invalid. Bounds require a positive cycle and
+a nonnegative first bar for each leg. Placement evidence requires a positive
+cycle, a nonnegative entry bar, direction `+1` or `-1`, and a finite cursor
+price. Bounds and evidence may each be absent.
+
 At binding, the adapter resolves the retained original decision to concrete
 bounds for the new owner. A held leg receives `owner_entry_bar + 1`; the other
-leg receives `owner_entry_bar`. The arithmetic uses a wider bar coordinate.
+leg receives `owner_entry_bar`. The first-bar fields are 64-bit; the addition
+is evaluated as an `int` before it is stored.
 The matcher never refreshes these numbers from the current position. In
 particular a surviving same-ID exit can bind a new cycle and receive another
 hold, even though its original birth-bar deadline has already passed. New

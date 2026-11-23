@@ -7,6 +7,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -48,8 +49,6 @@ PF_EXIT_PAYLOAD_MEMBER(LifecycleReplay, exit_legs::Lifecycle, last_);
 PF_EXIT_PAYLOAD_MEMBER(DefinitionIncarnation, exit_legs::Definition, incarnation_);
 PF_EXIT_PAYLOAD_MEMBER(DefinitionRevision, exit_legs::Definition, revision_);
 PF_EXIT_PAYLOAD_MEMBER(DefinitionPrices, exit_legs::Definition, value_);
-PF_EXIT_PAYLOAD_MEMBER(ActivationBounds, ExitLegActivation, bounds_);
-PF_EXIT_PAYLOAD_MEMBER(ActivationEvidence, compat::pine::ExitActivationPolicy, evidence_);
 PF_EXIT_PAYLOAD_MEMBER(ExpansionCapture, ReservationExpansion, capture_);
 PF_EXIT_PAYLOAD_MEMBER(GrowthOwner, ReservationGrowthSource, reservation_owner_);
 PF_EXIT_PAYLOAD_MEMBER(AdmissionObservation, admission::Draft, observation_);
@@ -465,11 +464,28 @@ template<class Archive, class T> void payload_fields(Archive& a, T& v) {
             }
         }
     } else if constexpr (std::is_same_v<V, ExitLegActivation>) {
-        a(member(v, ActivationBounds{}));
+        if constexpr (Archive::reading) {
+            std::optional<ExitLegActivationBounds> bounds;
+            a(bounds);
+            try {
+                if (bounds) v.bind(*bounds);
+                else v.unbind();
+            } catch (const std::invalid_argument&) {
+                a.invalid();
+            }
+        } else a(v.bounds());
     } else if constexpr (std::is_same_v<V, ExitLegActivationBounds>) {
         a(v.position_cycle, v.stop_first_bar, v.limit_first_bar);
     } else if constexpr (std::is_same_v<V, compat::pine::ExitActivationPolicy>) {
-        a(member(v, ActivationEvidence{}));
+        if constexpr (Archive::reading) {
+            std::optional<compat::pine::ExitPlacementEvidence> evidence;
+            a(evidence);
+            try {
+                v = evidence ? V(*evidence) : V{};
+            } catch (const std::invalid_argument&) {
+                a.invalid();
+            }
+        } else a(v.evidence());
     } else if constexpr (std::is_same_v<V, compat::pine::ExitPlacementEvidence>) {
         a(v.position_cycle, v.entry_bar, v.direction, v.cursor_price,
           v.stop_level, v.limit_level, v.limit_continuation);
