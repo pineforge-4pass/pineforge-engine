@@ -459,12 +459,17 @@
 // above, the brackets row 65, and only its digest (its trades, commands and rows placed are the same: its events
 // differ). Every other row is retained byte for byte. This table is the engine's own transcript, not a TradingView
 // measurement.
-// Re-harvested with PINEFORGE_V19E_HARVEST on a cloud build of 077d8158 after a reversal's fill cancels only the
-// WORKING exit orders (1d50de6e "Cancel only working exit orders when a reversal's fill is applied"; the red-first
-// test_reversal_purge_working_only fails before it and passes with it): 57 rows change against the table above
+// Re-harvested with PINEFORGE_V19E_HARVEST on a cloud build of 077d8158 after the commits since the last harvest
+// (3216b32c changes trades; 1d50de6e changes events; the red-first test_reversal_purge_working_only fails before
+// 1d50de6e and passes with it); which commit moves which row was NOT COMPARED: 57 rows change against the table above
 // (reversals 34 of 36, brackets 23 of 36, chains 0 of 36), and only their digests (their trades, commands and rows
 // placed are the same: their events differ). Every other row is retained byte for byte. This table is the engine's
 // own transcript, not a TradingView measurement.
+// Re-harvested with PINEFORGE_V19E_HARVEST on a cloud build of 1ba01da1 after the commits since the last harvest on
+// 077d8158 (4147fcf8 and 7d0cfc5b, long weekly feeds; b9a92108 and 1ba01da1, the exits of a reversal); which commit
+// moves which row was NOT COMPARED: 3 rows change against the table above (brackets seeds 1466207, 2932413 and
+// 3456058), and only their digests (their trades, commands and rows placed are the same: their events differ). Every
+// other row is retained byte for byte. This table is the engine's own transcript, not a TradingView measurement.
 constexpr std::uint64_t kTranscriptDigests[] = {
     5688969932745949967ull,  // reversals seed 104729, 113 trades, 388 commands, 427 rows placed
     323226347481757951ull,  // reversals seed 209458, 123 trades, 379 commands, 415 rows placed
@@ -515,7 +520,7 @@ constexpr std::uint64_t kTranscriptDigests[] = {
     14267841076960343901ull,  // brackets seed 1152020, 71 trades, 559 commands, 647 rows placed
     15551067836609675723ull,  // brackets seed 1256749, 65 trades, 514 commands, 421 rows placed
     14999704533833209247ull,  // brackets seed 1361478, 72 trades, 514 commands, 555 rows placed
-    5021338867373395419ull,  // brackets seed 1466207, 87 trades, 544 commands, 632 rows placed
+    18019327704225896996ull,  // brackets seed 1466207, 87 trades, 544 commands, 632 rows placed
     11406243035958813001ull,  // brackets seed 1570936, 66 trades, 475 commands, 663 rows placed
     15452857394145661698ull,  // brackets seed 1675665, 68 trades, 551 commands, 625 rows placed
     3831518412970230480ull,  // brackets seed 1780394, 79 trades, 708 commands, 660 rows placed
@@ -529,12 +534,12 @@ constexpr std::uint64_t kTranscriptDigests[] = {
     14203915585453736548ull,  // brackets seed 2618226, 69 trades, 524 commands, 573 rows placed
     6210801563266851763ull,  // brackets seed 2722955, 75 trades, 535 commands, 721 rows placed
     16917960437887754716ull,  // brackets seed 2827684, 59 trades, 552 commands, 524 rows placed
-    6379353521077245545ull,  // brackets seed 2932413, 75 trades, 529 commands, 571 rows placed
+    39206378151905991ull,  // brackets seed 2932413, 75 trades, 529 commands, 571 rows placed
     17565519113189925662ull,  // brackets seed 3037142, 58 trades, 525 commands, 567 rows placed
     12128260054918584448ull,  // brackets seed 3141871, 100 trades, 534 commands, 638 rows placed
     14548195767317138154ull,  // brackets seed 3246600, 104 trades, 645 commands, 875 rows placed
     5966889128617964079ull,  // brackets seed 3351329, 74 trades, 545 commands, 582 rows placed
-    10373359097228392164ull,  // brackets seed 3456058, 81 trades, 509 commands, 562 rows placed
+    2186109644727109599ull,  // brackets seed 3456058, 81 trades, 509 commands, 562 rows placed
     881410402495682573ull,  // brackets seed 3560787, 76 trades, 508 commands, 589 rows placed
     6442431096627642486ull,  // brackets seed 3665516, 75 trades, 563 commands, 709 rows placed
     4880364996188168172ull,  // brackets seed 3770245, 74 trades, 520 commands, 580 rows placed

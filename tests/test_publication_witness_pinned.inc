@@ -833,8 +833,9 @@
 //   LegsApartM: digest 0x650d1b75fc17cdb7ull -> 0x6a968fd0abbf1ffbull
 // expectation corrected (100 of 156 rows); harvested by the generator (-DPINEFORGE_D2D_PUBLICATION_HARVEST) on a
 // cloud build of 2f39bb6c. The table above was last harvested at 1.13.0 (5a99df49). On 5c8e5a41 the same 100 rows
-// already differ from it (digest 100, source folds 7, closed trades 18); 1d50de6e ("Cancel only working exit orders
-// when a reversal's fill is applied") moves 11 of them again (digest 11, closed trades 5). Against the table above:
+// already differ from it (digest 100, source folds 7, closed trades 18); the commits since then (3216b32c changes
+// trades; 1d50de6e changes events) move 11 of them again (digest 11, closed trades 5); which commit moves which row
+// was NOT COMPARED. Against the table above:
 // digest 100, source folds 7, closed trades 23, recorded rows 0 (the other 56 rows are byte-identical):
 //   Config01: digest 0xa6f712d00de968fdull -> 0x5cd164c7f6bab7f6ull
 //   ConfigFlags101: digest 0x1ba869cc0d36c0f9ull -> 0x7ebdae61786f437bull
@@ -936,6 +937,22 @@
 //   Storm23M: digest 0x6ff6580af9b84ce4ull -> 0x2c976a105b997525ull; folds 87 -> 86; trades 28 -> 27
 //   Storm24: digest 0xa28fa86075682afeull -> 0xbf117bd4f211fcdcull; trades 25 -> 24
 //   Storm24M: digest 0x7c788712939c7540ull -> 0x41e28073620f4165ull; trades 25 -> 24
+// expectation corrected (12 of 156 rows) after the commits since the last harvest on 2f39bb6c (4147fcf8 and 7d0cfc5b,
+// long weekly feeds; b9a92108 and 1ba01da1, the exits of a reversal); which commit moves which row was NOT COMPARED.
+// Harvested by the generator (-DPINEFORGE_D2D_PUBLICATION_HARVEST) on a cloud build of 1ba01da1. Against the table
+// above: digest 12, source folds 1, closed trades 5, recorded rows 0 (the other 144 rows are byte-identical):
+//   ConfigFlags112: digest 0xc39510fa4716ca32ull -> 0x48cbfe11283994d7ull; trades 19 -> 22
+//   ConfigFlags112M: digest 0xcda1390d86a113a7ull -> 0x4991bad3e270a026ull; trades 19 -> 22
+//   Config16: digest 0x472f38c5a8455bb3ull -> 0x6971fa8955904ce5ull; trades 51 -> 54
+//   Config16M: digest 0xf67486bc9bde1ee4ull -> 0xb0dd480f8dce4670ull; trades 51 -> 54
+//   Storm13: digest 0xb197c2f55c9f641eull -> 0x33f3b2476e29ba3aull
+//   Storm13M: digest 0x0bcce2a1e3c8d376ull -> 0x75a1d0002c8e51d4ull
+//   Storm14: digest 0x725f582f84f6e699ull -> 0xc38774796ef5981full
+//   Storm14M: digest 0xcab88d8d7e252001ull -> 0x69fd8c730980e9c2ull
+//   Storm22: digest 0x52f4f4425518a4deull -> 0x4d6720d2f834b54aull; folds 74 -> 76; trades 17 -> 18
+//   Storm22M: digest 0x3ff52d71ae7098f3ull -> 0x55344bfb1f88019cull
+//   Storm24: digest 0xbf117bd4f211fcdcull -> 0xd68f615fd5eb4191ull
+//   Storm24M: digest 0x41e28073620f4165ull -> 0xf1c381d9329dc67aull
 constexpr Pinned kPinned[] = {
     {"Config01", 0x5cd164c7f6bab7f6ull, 144, 44, 144},
     {"ConfigFlags101", 0x7ebdae61786f437bull, 145, 45, 144},
@@ -982,9 +999,9 @@ constexpr Pinned kPinned[] = {
     {"Config11M", 0xbc3ceade9164a563ull, 144, 63, 144},
     {"ConfigFlags111M", 0xa421058ee56d287eull, 48, 19, 48},
     {"Config12", 0x4b2aeadb4d4cbfc6ull, 144, 48, 144},
-    {"ConfigFlags112", 0xc39510fa4716ca32ull, 144, 19, 144},
+    {"ConfigFlags112", 0x48cbfe11283994d7ull, 144, 22, 144},
     {"Config12M", 0xd21447d6edb95eacull, 144, 48, 144},
-    {"ConfigFlags112M", 0xcda1390d86a113a7ull, 144, 19, 144},
+    {"ConfigFlags112M", 0x4991bad3e270a026ull, 144, 22, 144},
     {"Config13", 0x26698ad191149612ull, 48, 19, 48},
     {"ConfigFlags113", 0x2dc456611f87a733ull, 48, 19, 48},
     {"Config13M", 0x19c3a71e4e9a8e1eull, 48, 19, 48},
@@ -997,9 +1014,9 @@ constexpr Pinned kPinned[] = {
     {"ConfigFlags115", 0xc2ccc3c639558877ull, 48, 6, 48},
     {"Config15M", 0x072f8f47292c4eddull, 144, 48, 144},
     {"ConfigFlags115M", 0xf05fb093f1e4c5c3ull, 48, 6, 48},
-    {"Config16", 0x472f38c5a8455bb3ull, 144, 51, 144},
+    {"Config16", 0x6971fa8955904ce5ull, 144, 54, 144},
     {"ConfigFlags116", 0x0ae98aba51b53286ull, 48, 21, 48},
-    {"Config16M", 0xf67486bc9bde1ee4ull, 144, 51, 144},
+    {"Config16M", 0xb0dd480f8dce4670ull, 144, 54, 144},
     {"ConfigFlags116M", 0xf72c7811b608605aull, 48, 21, 48},
     {"CloseAllThenEntry", 0x02e260ca681c8565ull, 40, 17, 40},
     {"CloseAllThenEntryM", 0x3265b286d4d80ab9ull, 40, 17, 40},
@@ -1035,10 +1052,10 @@ constexpr Pinned kPinned[] = {
     {"Storm11M", 0xc63aa1ab246798aaull, 59, 23, 59},
     {"Storm12", 0x6a6c0da08933254full, 85, 19, 56},
     {"Storm12M", 0x3c10b26c0fe83a2bull, 85, 19, 56},
-    {"Storm13", 0xb197c2f55c9f641eull, 46, 25, 46},
-    {"Storm13M", 0x0bcce2a1e3c8d376ull, 46, 25, 46},
-    {"Storm14", 0x725f582f84f6e699ull, 46, 17, 46},
-    {"Storm14M", 0xcab88d8d7e252001ull, 46, 17, 46},
+    {"Storm13", 0x33f3b2476e29ba3aull, 46, 25, 46},
+    {"Storm13M", 0x75a1d0002c8e51d4ull, 46, 25, 46},
+    {"Storm14", 0xc38774796ef5981full, 46, 17, 46},
+    {"Storm14M", 0x69fd8c730980e9c2ull, 46, 17, 46},
     {"Storm15", 0x76faa7be7036e1c6ull, 43, 13, 43},
     {"Storm15M", 0xf94819fe44238076ull, 43, 13, 43},
     {"Storm16", 0x00f409577f82f930ull, 58, 17, 58},
@@ -1053,12 +1070,12 @@ constexpr Pinned kPinned[] = {
     {"Storm20M", 0x2b5510877074d983ull, 43, 10, 42},
     {"Storm21", 0x127543fc6f41b568ull, 47, 14, 47},
     {"Storm21M", 0x4e19478a776b8fffull, 47, 14, 47},
-    {"Storm22", 0x52f4f4425518a4deull, 74, 17, 50},
-    {"Storm22M", 0x3ff52d71ae7098f3ull, 74, 17, 50},
+    {"Storm22", 0x4d6720d2f834b54aull, 76, 18, 50},
+    {"Storm22M", 0x55344bfb1f88019cull, 74, 17, 50},
     {"Storm23", 0xc5fc69d6df7ac30aull, 86, 27, 54},
     {"Storm23M", 0x2c976a105b997525ull, 86, 27, 54},
-    {"Storm24", 0xbf117bd4f211fcdcull, 54, 24, 54},
-    {"Storm24M", 0x41e28073620f4165ull, 54, 24, 54},
+    {"Storm24", 0xd68f615fd5eb4191ull, 54, 24, 54},
+    {"Storm24M", 0xf1c381d9329dc67aull, 54, 24, 54},
     {"Legs01", 0x9aa88b09a92abc1cull, 30, 6, 30},
     {"Legs01M", 0xb32d654e3efa737dull, 30, 6, 30},
     {"LegsStops01", 0x04620fadf87aac3eull, 30, 6, 30},
