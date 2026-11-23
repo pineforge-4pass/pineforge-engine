@@ -1357,6 +1357,32 @@ struct TradeLedger::State {
         ++resident_first;
         --count;
     }
+
+    // Exact left folds at first, resident_first and end. They are derived
+    // solely from rows in global order and do not enter the broker hash.
+    PercentFold sealed_percent, before_resident_percent, total_percent;
+    size_type first_percent_replacement = std::numeric_limits<size_type>::max();
+
+    void check_percent_replacements_finished() const {
+        if (first_percent_replacement < end)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                          "trade ledger: unfinished percent fold");
+    }
+
+    PercentFold fold_percent_rows(PercentFold prefix, size_type from, size_type to) const {
+        for (auto i = from; i < to; ++i) {
+            const auto row = uncached_descriptor(i);
+            prefix.add(row.pnl, row.pnl_pct);
+        }
+        return prefix;
+    }
+
+    PercentFold percent_through(size_type stop) const {
+        if (stop == end) return total_percent;
+        if (stop >= resident_first)
+            return fold_percent_rows(before_resident_percent, resident_first, stop);
+        return fold_percent_rows(sealed_percent, first, stop);
+    }
 };
 
 TradeLedger::TradeLedger() : state_(std::make_unique<State>()) {}
@@ -1369,6 +1395,7 @@ TradeLedger::TradeLedger(const TradeLedger& other)
     : TradeLedger() {
     if (other.state_->rollback_failure)
         std::rethrow_exception(other.state_->rollback_failure);
+    other.state_->check_percent_replacements_finished();
     // The byte-policy path may exceed the legacy row setter's ceiling.
     // This fresh State copies an already validated physical allowance.
     state_->cache_rows = other.state_->cache_rows;
@@ -1393,6 +1420,8 @@ TradeLedger::TradeLedger(const TradeLedger& other)
         // intentionally retired prefix. Rebuild only the retained payload.
         state_->retiring = true;
         state_->first = state_->end = state_->resident_first = other.base();
+        state_->total_percent = state_->before_resident_percent
+            = state_->sealed_percent = other.state_->sealed_percent;
         state_->sync_cache_mode();
         state_->index_origin = State::absolute_record_offset(other.base());
     }
@@ -1724,12 +1753,23 @@ bool TradeLedger::is_long_at(size_type global) const {
 }
 
 void TradeLedger::replace(size_type global, const Trade& row) {
+    replace_deferred(global, row);
+    finish_replacements();
+}
+
+void TradeLedger::replace_deferred(size_type global, const Trade& row) {
     state_->check(global, true);
     const auto previous = state_->descriptor(global);
     const auto legacy = state_->materialized.find(global);
     Trade legacy_value{};
     if (legacy != state_->materialized.end()) legacy_value = row;
     const auto record = state_->store(global, row, &previous);
+    // Metadata edits do not change the fold. Compare percentage bits so a
+    // change between signed zeros or NaN payloads is also repaired.
+    if (std::memcmp(&previous.pnl_pct, &record.pnl_pct, sizeof(double)) != 0
+        || (previous.pnl > 0.0) != (record.pnl > 0.0)
+        || (previous.pnl < 0.0) != (record.pnl < 0.0))
+        state_->first_percent_replacement = std::min(state_->first_percent_replacement, global);
     state_->invalidate(global);
     if (state_->retiring) {
         const State::StringExtent old_texts[]{previous.entry_id, previous.entry_comment,
@@ -1746,6 +1786,26 @@ void TradeLedger::replace(size_type global, const Trade& row) {
     if (state_->cache) state_->remember(global, record, &row);
 }
 
+void TradeLedger::finish_replacements() {
+    if (state_->rollback_failure) std::rethrow_exception(state_->rollback_failure);
+    const auto changed = state_->first_percent_replacement;
+    if (changed >= state_->end) return;
+    const auto middle = state_->resident_first;
+    const auto prefix = changed < middle
+        ? state_->fold_percent_rows(state_->sealed_percent, state_->first, middle)
+        : state_->before_resident_percent;
+    state_->total_percent = state_->fold_percent_rows(prefix, middle, state_->end);
+    state_->before_resident_percent = prefix;
+    state_->first_percent_replacement = std::numeric_limits<size_type>::max();
+}
+
+const TradeLedger::PercentFold& TradeLedger::percent_fold() const {
+    if (state_->rollback_failure && state_->first != state_->end)
+        std::rethrow_exception(state_->rollback_failure);
+    state_->check_percent_replacements_finished();
+    return state_->total_percent;
+}
+
 void TradeLedger::modify(size_type global, const std::function<void(Trade&)>& edit) {
     state_->check(global, true);
     Trade row = at(global);
@@ -1755,15 +1815,21 @@ void TradeLedger::modify(size_type global, const std::function<void(Trade&)>& ed
 
 void TradeLedger::push_back(const Trade& trade) {
     state_->check_not_released();
+    state_->check_percent_replacements_finished();
     if (size() == std::numeric_limits<size_type>::max())
         throw std::length_error("trade ledger: logical end exhausted");
     // Copies and write-only runs keep a cold cache unallocated. Optional
     // cache fills follow backing publication and cannot refuse the append.
     const auto record = state_->store(size(), trade);
-    if (state_->count == kResidentRows) state_->evict();
+    if (state_->count == kResidentRows) {
+        const auto& oldest = state_->rows[state_->head];
+        state_->before_resident_percent.add(oldest.pnl, oldest.pnl_pct);
+        state_->evict();
+    }
     state_->rows[(state_->head + state_->count) % kResidentRows] = record;
     ++state_->count;
     ++state_->end;
+    state_->total_percent.add(record.pnl, record.pnl_pct);
     state_->sync_cache_mode();
     if (state_->cache) state_->remember(state_->end - 1, record, &trade);
 }
@@ -1773,17 +1839,20 @@ void TradeLedger::push_back(Trade&& trade) { push_back(static_cast<const Trade&>
 void TradeLedger::resize(size_type global_end) {
     state_->check_not_released();
     if (state_->rollback_failure) std::rethrow_exception(state_->rollback_failure);
+    state_->check_percent_replacements_finished();
     if (global_end < state_->first)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: rewind below resident window");
     state_->invalidate_cache();
     if (global_end < size()) {
+        const auto percent = state_->percent_through(global_end);
         if (state_->retiring)
             state_->release_cache_pages(global_end, size(), state_->first, global_end);
         // Re-cuts may rewind far below the descriptor window. All row bytes
         // are already external; discard the bounded descriptor cache.
         while (state_->count != 0) state_->evict();
         state_->end = state_->resident_first = global_end;
+        state_->total_percent = state_->before_resident_percent = percent;
         state_->sync_cache_mode();
         state_->materialized.erase(state_->materialized.lower_bound(global_end),
                                     state_->materialized.end());
@@ -1828,9 +1897,12 @@ const Trade& TradeLedger::materialize(size_type global) const {
 void TradeLedger::seal(size_type global_end) {
     state_->check_not_released();
     if (state_->rollback_failure) std::rethrow_exception(state_->rollback_failure);
+    state_->check_percent_replacements_finished();
     if (global_end < state_->first || global_end > size())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: seal outside resident window");
+    if (global_end == state_->first) return;
+    const auto percent = state_->percent_through(global_end);
     // The consumer has already emitted T and folded all logical identities.
     // Only an explicitly admitted sink run drops its physical history.
     state_->retire(global_end);
@@ -1839,6 +1911,8 @@ void TradeLedger::seal(size_type global_end) {
     // Physical retirement invalidates its cache and refuses erased rows.
     while (state_->count != 0 && state_->resident_first < global_end) state_->evict();
     state_->first = global_end;
+    state_->sealed_percent = percent;
+    if (state_->resident_first == global_end) state_->before_resident_percent = percent;
 }
 
 // This adapter is deliberately private until P2/R compose the engine's frozen
