@@ -8709,6 +8709,11 @@ target_compile_definitions(test_corpus_gross_trade_count PRIVATE
     PF_TEST_PYTHON="${Python3_EXECUTABLE}"
     PF_TEST_SCRIPT="${CMAKE_CURRENT_SOURCE_DIR}/test_corpus_gross_trade_count.py")
 # --- lane issue-836 end ---
+# --- lane issue-934 begin ---
+# Read the live source file from any build directory; do not copy it at configure time.
+target_compile_definitions(test_changelog_release_sections PRIVATE
+    "PINEFORGE_CHANGELOG_PATH=\"${PROJECT_SOURCE_DIR}/CHANGELOG.md\"")
+# --- lane issue-934 end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
