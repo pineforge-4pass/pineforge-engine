@@ -32271,10 +32271,37 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "lot",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: purge_brackets_after_applied_reversal ( const PlacementSnapshot & reversal , const native_order :: ExecutionAppliedEvent & fill ) #1",
+    "const auto targets_prior = [ & ] ( const PlacementSnapshot & leg ) #1",
+    "if ( ! leg . pending_bound_exit ) #1",
+    "+ + i ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "lot = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "order",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: purge_brackets_after_applied_reversal ( const PlacementSnapshot & reversal , const native_order :: ExecutionAppliedEvent & fill ) #1",
+    "const auto targets_prior = [ & ] ( const PlacementSnapshot & leg ) #1",
+    "if ( leg . pending_bound_exit || parent -> incarnation = = 0 ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "order = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "stale",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: purge_brackets_after_applied_reversal ( const PlacementSnapshot & reversal ) #1"
+    "void PineExecutionAdapter :: purge_brackets_after_applied_reversal ( const PlacementSnapshot & reversal , const native_order :: ExecutionAppliedEvent & fill ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: vector < native_order :: RequestHandle >",
@@ -32285,7 +32312,7 @@
    "symbol": "stale",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: purge_brackets_after_applied_reversal ( const PlacementSnapshot & reversal ) #1",
+    "void PineExecutionAdapter :: purge_brackets_after_applied_reversal ( const PlacementSnapshot & reversal , const native_order :: ExecutionAppliedEvent & fill ) #1",
     "for ( const auto & handle : live_handles_ ) #1"
    ],
    "cls": "grow",
@@ -40771,8 +40798,9 @@
    "symbol": "result",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: cancel_working_legs ( const detail :: ExitScratchRows < native_order :: RequestHandle > & legs ) #1",
-    "for ( const auto & handle : legs ) #1"
+    "void PineExecutionAdapter :: cancel_working_legs ( const detail :: ExitScratchRows < native_order :: RequestHandle > & legs , bool retire_ended ) #1",
+    "for ( const auto & handle : legs ) #1",
+    "if ( still_working ) #1"
    ],
    "cls": "assign",
    "spelling": "result = . . .",
