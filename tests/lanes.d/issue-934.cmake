@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_changelog_release_sections)
+pineforge_add_unit_test(test_changelog_release_sections)

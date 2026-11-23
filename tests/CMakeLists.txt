@@ -8630,6 +8630,12 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND
 endif()
 # --- lane entry-quantity-callers end ---
 
+# --- lane issue-934 begin ---
+# Read the live source file from any build directory; do not copy it at configure time.
+target_compile_definitions(test_changelog_release_sections PRIVATE
+    "PINEFORGE_CHANGELOG_PATH=\"${PROJECT_SOURCE_DIR}/CHANGELOG.md\"")
+# --- lane issue-934 end ---
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
