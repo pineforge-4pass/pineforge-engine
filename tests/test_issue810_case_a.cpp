@@ -14,8 +14,9 @@
 // The step rows place the exact row's three kinds of order in whole steps of
 // the quantity step: three steps with a 50% partial exit, whose share is one
 // and a half steps, and a four-step control.  After both exits nothing may be
-// left for the end close.  Two more rows hand the same checks an empty and a
-// stale observation, and pass only if every check fails there.
+// left for the end close. Two more rows compare a real positive with an empty
+// or stale observation; independent controls isolate bar, price, phase and
+// end-close evidence.
 // The step rows come in two forms.  Under process_orders_on_close the entry
 // is an order at once.  The live-entry rows run without it and with a
 // commission, which keeps the entry from being held: it is a working order
@@ -24,9 +25,12 @@
 #include <pineforge/source/pine_native_host.hpp>
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -42,6 +46,11 @@ constexpr double kRestPrice = 42915.71;
 // The probe's price tick, and the B pending control's profit distance in ticks.
 constexpr double kMinTick = 0.01;
 constexpr double kBProfitTicks = 100.0;
+constexpr int kCaseASignalBar = 0;
+constexpr int kBBaseSignalBar = 0;
+constexpr int kBAddSignalBar = 1;
+constexpr int kBAddCloseSignalBar = 4;
+constexpr int kBBaseCloseSignalBar = 5;
 // The held-entry rows: the entry's quantity, the partial exit's share of it in
 // percent, and that exit's profit distance in ticks.  The quantity is four
 // steps, so the share and what it leaves are different amounts.
@@ -162,6 +171,11 @@ bool step_stop_first(Mode mode) {
         || mode == Mode::LiveEntryWholeStepsStopFirst;
 }
 
+int step_end_close_bar(Mode mode) {
+    if (is_live_step_mode(mode)) return kLiveEndCloseBar;
+    return step_stop_first(mode) ? kPoocStopFirstEnd : kStepEndCloseBar;
+}
+
 struct Applied {
     std::string label;
     int bar = -1;
@@ -169,6 +183,13 @@ struct Applied {
     double closed = 0.0;
     double price = kNaN;
     double position_after = 0.0;
+    NativePathPhase phase = NativePathPhase::None;
+};
+
+struct EndClose {
+    int bar = -1;
+    int visits = 0;
+    double position = kNaN;
 };
 
 Bar bar(int index, double open, double high, double low, double close) {
@@ -199,6 +220,7 @@ public:
     }
 
     void on_source_bar(const Bar&) override {
+        last_source_bar_ = pine_bar_index();
         switch (mode_) {
             case Mode::Exact:
             case Mode::AbsoluteControl:
@@ -237,7 +259,8 @@ public:
                             static_cast<int>(context.coordinate.interval_index),
                             event.opened_units, event.closed_units,
                             event.resolved_price,
-                            physical_position().signed_units});
+                            physical_position().signed_units,
+                            context.coordinate.path_phase});
     }
 
     double trade_size(int index) const { return closed_trade_size(index); }
@@ -249,6 +272,9 @@ public:
     double trade_exit_price(int index) const { return closed_trade_exit_price(index); }
 
     const std::vector<Applied>& applied() const { return applied_; }
+    Mode mode() const { return mode_; }
+    int last_source_bar() const { return last_source_bar_; }
+    const EndClose& end_close() const { return end_close_; }
     bool b_relative_shadow_seen() const { return b_relative_shadow_seen_; }
     std::uint64_t b_relative_shadow_rank() const { return b_relative_shadow_rank_; }
     bool held_flat_at_signal() const { return held_flat_at_signal_; }
@@ -272,7 +298,7 @@ private:
     }
 
     void on_case_a_bar() {
-        if (pine_bar_index() != 0) return;
+        if (pine_bar_index() != kCaseASignalBar) return;
         strategy_entry("Long", true, kNaN, kNaN, 0.02, "case-a-entry");
         if (mode_ == Mode::Exact) {
             exit("Half", "Long", kNaN, kNaN, 50.0, kNaN, 50000.0,
@@ -302,11 +328,11 @@ private:
     }
 
     void on_case_b_market_add_bar() {
-        if (pine_bar_index() == 0) {
+        if (pine_bar_index() == kBBaseSignalBar) {
             strategy_entry("B", true, kNaN, kNaN, 0.02, "case-b-base");
             return;
         }
-        if (pine_bar_index() == 1 && physical_position().signed_units > 0.0) {
+        if (pine_bar_index() == kBAddSignalBar && physical_position().signed_units > 0.0) {
             exit("BHalf", "B", 1000.0, kNaN, 100.0, 0.01, kNaN,
                  "case-b-control-half");
             exit("BRest", "B", 2000.0, kNaN, 100.0, kNaN, kNaN,
@@ -314,9 +340,9 @@ private:
             strategy_entry("Add", true, kNaN, kNaN, 0.02, "case-b-market-add");
             return;
         }
-        if (pine_bar_index() == 4 && physical_position().signed_units > 0.0)
+        if (pine_bar_index() == kBAddCloseSignalBar && physical_position().signed_units > 0.0)
             strategy_close("Add", "case-b-add-close");
-        if (pine_bar_index() == 5 && physical_position().signed_units > 0.0)
+        if (pine_bar_index() == kBBaseCloseSignalBar && physical_position().signed_units > 0.0)
             strategy_close("B", "case-b-base-close");
     }
 
@@ -383,16 +409,18 @@ private:
                     ++rest_before_stop;
             }
         }
-        const int end_close_bar = pooc_stop ? kPoocStopFirstEnd
-            : (is_live_step_mode(mode_) ? kLiveEndCloseBar : kStepEndCloseBar);
-        if (pine_bar_index() == end_close_bar
-            && std::fabs(physical_position().signed_units) > 1e-9) {
-            strategy_close("Long", "step-end-close");
+        if (pine_bar_index() == step_end_close_bar(mode_)) {
+            // Observe the guarded action even when it has nothing to close.
+            const double position = physical_position().signed_units;
+            end_close_ = {pine_bar_index(), end_close_.visits + 1, position};
+            if (std::fabs(position) > 1e-9) strategy_close("Long", "step-end-close");
         }
     }
 
     Mode mode_;
     std::vector<Applied> applied_;
+    int last_source_bar_ = -1;
+    EndClose end_close_;
     bool b_relative_shadow_seen_ = false;
     std::uint64_t b_relative_shadow_rank_ = 0;
     bool held_flat_at_signal_ = false;
@@ -402,12 +430,23 @@ private:
     bool step_entry_order_at_signal_ = false;
 };
 
-void print_applied(const Probe& probe) {
+const char* phase_name(NativePathPhase phase) {
+    switch (phase) {
+        case NativePathPhase::None: return "none";
+        case NativePathPhase::Open: return "open";
+        case NativePathPhase::High: return "high";
+        case NativePathPhase::Low: return "low";
+        case NativePathPhase::Close: return "close";
+    }
+    return "unknown";
+}
+
+void print_applied(const Probe& probe, const char* mode) {
     for (const auto& row : probe.applied()) {
-        std::printf("APPLIED label=%s bar=%d opened=%.17g closed=%.17g price=%.17g "
-                    "position_after=%.17g\n",
-                    row.label.c_str(), row.bar, row.opened, row.closed, row.price,
-                    row.position_after);
+        std::printf("APPLIED mode=%s label=%s bar=%d opened=%.17g closed=%.17g price=%.17g "
+                    "position_after=%.17g phase=%s\n",
+                    mode, row.label.c_str(), row.bar, row.opened, row.closed, row.price,
+                    row.position_after, phase_name(row.phase));
     }
 }
 
@@ -460,39 +499,269 @@ bool check(bool condition, const char* mode, const char* name,
     return condition;
 }
 
-bool check_case_a(Probe& probe, Mode mode) {
+struct ClosedTrade {
+    std::string exit_id;
+    double size = 0.0;
+};
+
+struct Observed {
+    std::vector<Applied> applied;
+    std::vector<ClosedTrade> trades;
+    bool entry_order_at_signal = false;
+    std::optional<Mode> source;
+    std::optional<NativeLifecycleKind> lifecycle;
+    std::string error;
+    int last_source_bar = -1;
+    EndClose end_close;
+    double final_position = kNaN;
+    int half_before_stop = -1;
+    int rest_before_stop = -1;
+};
+
+Observed observe(Probe& probe) {
+    Observed seen;
+    seen.applied = probe.applied();
+    for (int index = 0; index < probe.trade_count(); ++index)
+        seen.trades.push_back({probe.trade_exit_id(index), probe.trade_size(index)});
+    seen.entry_order_at_signal = probe.step_entry_order_at_signal();
+    seen.source = probe.mode();
+    seen.lifecycle = probe.native_state().kind;
+    seen.error = probe.last_error();
+    seen.last_source_bar = probe.last_source_bar();
+    seen.end_close = probe.end_close();
+    seen.final_position = probe.physical_position().signed_units;
+    seen.half_before_stop = probe.half_before_stop;
+    seen.rest_before_stop = probe.rest_before_stop;
+    return seen;
+}
+
+struct Comparison {
+    const char* name = "";
+    bool ok = false;
+    double actual = kNaN;
+    double expected = kNaN;
+    const char* missing = nullptr;
+    std::string actual_ids{}, expected_ids{};
+    const char* reason = "value comparison";
+
+    void require(bool met, const char* why, double got, double want) {
+        if (met || missing) return;
+        ok = false;
+        missing = why;
+        actual = got;
+        expected = want;
+    }
+    void one(std::size_t count, const char* what) {
+        require(count == 1, what, static_cast<double>(count), 1.0);
+    }
+    void expect(bool met, const char* what, double got, double want) {
+        if (!ok || missing) return;
+        ok = met;
+        reason = what;
+        actual = got;
+        expected = want;
+    }
+};
+
+bool report_comparison(const Comparison& r, const char* mode,
+                       const char* input = "ROW") {
+    const char* status = r.missing ? "NOT COMPARED" : (r.ok ? "PASS" : "FAIL");
+    const char* reason = r.missing ? r.missing : r.reason;
+    std::printf("CHECK mode=%s name=%s input=%s status=%s reason=%s ",
+                mode, r.name, input, status, reason);
+    if (!r.expected_ids.empty())
+        std::printf("actual=%s expected=%s\n", r.actual_ids.c_str(), r.expected_ids.c_str());
+    else
+        std::printf("actual=%.17g expected=%.17g\n", r.actual, r.expected);
+    return r.ok && !r.missing;
+}
+
+void require_completed(Comparison& r, const Observed& seen, Mode mode) {
+    if (seen.source != mode) {
+        if (r.missing) return;
+        r.ok = false;
+        r.missing = "observation source row";
+        r.actual_ids = seen.source ? mode_name(*seen.source) : "absent";
+        r.expected_ids = mode_name(mode);
+        return;
+    }
+    if (!seen.error.empty() || seen.lifecycle != NativeLifecycleKind::Completed) {
+        if (r.missing) return;
+        r.ok = false;
+        r.missing = "incomplete run";
+        r.actual_ids = "state:" + std::to_string(seen.lifecycle
+            ? static_cast<int>(*seen.lifecycle) : -1) + ",error:" + seen.error;
+        r.expected_ids = "state:" + std::to_string(
+            static_cast<int>(NativeLifecycleKind::Completed)) + ",error:empty";
+    }
+}
+
+void require_run(Comparison& r, const Observed& seen, Mode mode, int last_bar) {
+    require_completed(r, seen, mode);
+    r.require(seen.last_source_bar == last_bar, "last source bar",
+              seen.last_source_bar, last_bar);
+}
+
+struct NamedFill {
+    const Applied* only = nullptr;
+    std::size_t count = 0;
+};
+
+NamedFill named_fill(const Observed& seen, const char* label) {
+    NamedFill result;
+    for (const auto& row : seen.applied) {
+        if (row.label != label) continue;
+        ++result.count;
+        result.only = result.count == 1 ? &row : nullptr;
+    }
+    return result;
+}
+
+enum class Field { Bar, Price, Phase };
+
+const char* field_reason(Field field) {
+    switch (field) {
+        case Field::Bar: return "fill bar";
+        case Field::Price: return "fill price";
+        case Field::Phase: return "fill phase";
+    }
+    return "unknown field";
+}
+
+struct FillRule {
+    const char* label;
+    double closed;
+    double opened;
+    const char* reached;
+    const char* bar_check;
+    int bar;
+    const char* price_check;
+    double price;
+    const char* phase_check = nullptr;
+    NativePathPhase phase = NativePathPhase::None;
+};
+
+// The expectations come from the call sites and feed, not an applied event.
+// docs/pine-adapter-kernel-notes.md:237-239 and docs/pages/pine-to-native.md:130:
+// POOC fills a market entry at its signal close; ordinary markets (including
+// the B row's two non-immediate strategy_close calls) fill at the next open.
+std::vector<FillRule> authored_fills(Mode mode, const std::vector<Bar>& bars) {
+    if (mode == Mode::BMarketAddControl) {
+        const int base = kBBaseSignalBar + 1;
+        const int add = kBAddSignalBar + 1;
+        const int close_add = kBAddCloseSignalBar + 1;
+        const int close_base = kBBaseCloseSignalBar + 1;
+        return {
+            {"B", 0.0, 0.02, "pending_entry_reached",
+             "base_entry_bar", base, "base_entry_price", bars[base].open},
+            {"Add", 0.0, 0.02, "separate_market_add_reached",
+             "separate_market_add_bar", add, "separate_market_add_price", bars[add].open},
+            {"__close__Add", 0.02, 0.0, "market_add_close_reached",
+             "market_add_close_bar", close_add, "market_add_close_price", bars[close_add].open},
+            {"__close__B", 0.02, 0.0, "base_close_reached",
+             "base_close_bar", close_base, "base_close_price", bars[close_base].open},
+        };
+    }
+    return {
+        {"Long", 0.0, 0.02, "pending_entry_reached",
+         "entry_fill_bar", kCaseASignalBar, "entry_fill_price", kEntryPrice,
+         "entry_fill_phase", NativePathPhase::Close},
+        {"Half", 0.01, 0.0, "partial_exit_reached",
+         "partial_exit_bar", 1, "partial_exit_price", kHalfPrice},
+        {"Rest", 0.01, 0.0, "remainder_exit_reached",
+         "remainder_exit_bar", 2, "remainder_exit_price", kRestPrice},
+    };
+}
+
+void require_fill_shape(Comparison& r, const NamedFill& fill, const FillRule& rule) {
+    r.one(fill.count, "named applied fill count");
+    if (!fill.only) return;
+    r.require(near(fill.only->opened, rule.opened), "named fill opened quantity",
+              fill.only->opened, rule.opened);
+    r.require(near(fill.only->closed, rule.closed), "named fill closed quantity",
+              fill.only->closed, rule.closed);
+}
+
+void compare_field(Comparison& r, const Applied& fill, const FillRule& rule,
+                   Field field, int last_bar) {
+    const char* why = field_reason(field);
+    switch (field) {
+        case Field::Bar:
+            r.require(fill.bar >= 0 && fill.bar <= last_bar, "fill bar outside observation",
+                      fill.bar, rule.bar);
+            r.expect(fill.bar == rule.bar, why, fill.bar, rule.bar);
+            return;
+        case Field::Price:
+            r.require(std::isfinite(fill.price), "fill price unavailable", fill.price, rule.price);
+            r.expect(near(fill.price, rule.price), why, fill.price, rule.price);
+            return;
+        case Field::Phase:
+            const auto actual = static_cast<int>(fill.phase);
+            const auto expected = static_cast<int>(rule.phase);
+            r.require(fill.phase >= NativePathPhase::Open && fill.phase <= NativePathPhase::Close,
+                      "fill phase unavailable", actual, expected);
+            r.expect(fill.phase == rule.phase, why, actual, expected);
+            return;
+    }
+}
+
+Comparison authored_coordinate(const Observed& seen, Mode mode, int last_bar,
+                               const FillRule& rule, Field field) {
+    const char* name = field == Field::Bar ? rule.bar_check
+        : (field == Field::Price ? rule.price_check : rule.phase_check);
+    Comparison r{name, true};
+    require_run(r, seen, mode, last_bar);
+    const auto fill = named_fill(seen, rule.label);
+    require_fill_shape(r, fill, rule);
+    if (fill.only) compare_field(r, *fill.only, rule, field, last_bar);
+    return r;
+}
+
+bool check_authored_fills(Probe& probe, const Observed& seen, Mode mode,
+                          const std::vector<Bar>& bars) {
     const char* name = mode_name(mode);
+    const int last_bar = static_cast<int>(bars.size()) - 1;
+    const auto rules = authored_fills(mode, bars);
+    const bool case_a = mode != Mode::BMarketAddControl;
     bool ok = true;
-    int half_bar = -1;
-    int rest_bar = -1;
-    const auto* entry = find_applied(probe, "Long", 0.0, 0.02);
-    const auto* half = find_applied(probe, "Half", 0.01, 0.0);
-    const auto* rest = find_applied(probe, "Rest", 0.01, 0.0);
-    ok = check(entry != nullptr, name, "pending_entry_reached") && ok;
-    ok = check(half != nullptr, name, "partial_exit_reached") && ok;
-    ok = check(rest != nullptr, name, "remainder_exit_reached") && ok;
-    if (entry) {
-        ok = check(near(entry->price, kEntryPrice), name,
-                   "entry_fill_price", entry->price, kEntryPrice) && ok;
-        ok = check(near(entry->position_after, 0.02), name,
-                   "position_after_entry", entry->position_after, 0.02) && ok;
+    for (std::size_t i = 0; i < rules.size(); ++i) {
+        const auto& rule = rules[i];
+        const auto fill = named_fill(seen, rule.label);
+        Comparison reached{rule.reached, true};
+        require_run(reached, seen, mode, last_bar);
+        reached.expect(fill.count == 1, "named applied fill count", fill.count, 1);
+        if (fill.only) {
+            reached.expect(near(fill.only->opened, rule.opened), "opened quantity",
+                           fill.only->opened, rule.opened);
+            reached.expect(near(fill.only->closed, rule.closed), "closed quantity",
+                           fill.only->closed, rule.closed);
+            if (reached.ok) {
+                reached.reason = "named fill observed";
+                reached.actual = fill.only->bar;
+                reached.expected = rule.bar;
+            }
+        }
+        ok = report_comparison(reached, name) && ok;
+        ok = report_comparison(authored_coordinate(seen, mode, last_bar, rule, Field::Bar),
+                               name) && ok;
+        ok = report_comparison(authored_coordinate(seen, mode, last_bar, rule, Field::Price),
+                               name) && ok;
+        if (rule.phase_check)
+            ok = report_comparison(authored_coordinate(seen, mode, last_bar, rule, Field::Phase),
+                                   name) && ok;
+        if (case_a) {
+            constexpr const char* positions[] = {"position_after_entry",
+                "position_after_partial_exit", "position_after_remainder_exit"};
+            constexpr double expected[] = {0.02, 0.01, 0.0};
+            Comparison position{positions[i], true};
+            require_run(position, seen, mode, last_bar);
+            require_fill_shape(position, fill, rule);
+            if (fill.only) position.expect(near(fill.only->position_after, expected[i]),
+                                            "held position", fill.only->position_after, expected[i]);
+            ok = report_comparison(position, name) && ok;
+        }
     }
-    if (half) {
-        half_bar = half->bar;
-        ok = check(near(half->price, kHalfPrice), name,
-                   "partial_exit_price", half->price, kHalfPrice) && ok;
-        ok = check(near(half->position_after, 0.01), name,
-                   "position_after_partial_exit", half->position_after, 0.01) && ok;
-    }
-    if (rest) {
-        rest_bar = rest->bar;
-        ok = check(near(rest->price, kRestPrice), name,
-                   "remainder_exit_price", rest->price, kRestPrice) && ok;
-        ok = check(near(rest->position_after, 0.0), name,
-                   "position_after_remainder_exit", rest->position_after, 0.0) && ok;
-    }
-    ok = check(half_bar == 1, name, "partial_exit_bar", half_bar, 1) && ok;
-    ok = check(rest_bar == 2, name, "remainder_exit_bar", rest_bar, 2) && ok;
+    if (!case_a) return ok;
     ok = check(probe.trade_count() == 2, name, "two_closed_trade_rows",
                probe.trade_count(), 2) && ok;
     if (probe.trade_count() == 2) {
@@ -555,24 +824,6 @@ bool check_b_pending(Probe& probe, const std::vector<Bar>& bars) {
     ok = check(near(probe.physical_position().signed_units, 0.01), name,
                "relative_pending_position_after_fill",
                probe.physical_position().signed_units, 0.01) && ok;
-    return ok;
-}
-
-bool check_b_market_add(Probe& probe) {
-    const char* name = mode_name(Mode::BMarketAddControl);
-    bool ok = true;
-    int add_bar = -1;
-    ok = check(has_applied(probe, "B", 0.0, 0.02), name,
-               "pending_entry_reached") && ok;
-    const bool add_reached = has_applied(probe, "Add", 0.0, 0.02, &add_bar);
-    ok = check(add_reached, name,
-               "separate_market_add_reached", add_bar, 2) && ok;
-    ok = check(add_bar == 2, name, "separate_market_add_bar",
-               static_cast<double>(add_bar), 2) && ok;
-    ok = check(has_applied(probe, "__close__Add", 0.02, 0.0), name,
-               "market_add_close_reached") && ok;
-    ok = check(has_applied(probe, "__close__B", 0.02, 0.0), name,
-               "base_close_reached") && ok;
     return ok;
 }
 
@@ -911,59 +1162,15 @@ std::vector<Bar> bars_for(Mode mode) {
 // placed and fills at the next bar's open (R1). Each feed specifies its own
 // crossing bars; the POOC stop-first feed observes both exits before either.
 //
-// The checks read one observation, the applied fills and the closed trades of
-// a run, and take it as a value: they can be handed an observation that is
-// empty or stale, and every one of them must fail there
-// (run_step_checks_on_empty_input, run_step_checks_on_stale_input).  No check
-// reads the position at the end of the run, where an end close has already
-// taken whatever the exits left.
-struct ClosedTrade {
-    std::string exit_id;
-    double size = 0.0;
-};
-
-struct Observed {
-    std::vector<Applied> applied;
-    std::vector<ClosedTrade> trades;
-    // Whether the entry was a working order when the exits were placed.
-    bool entry_order_at_signal = false;
-};
-
+// The applied position after the second exit, the position seen by the
+// end-close calculation, and the final physical position are separate
+// observations. An end-close fill can flatten the final position.
 struct StepCase {
     double entry_qty = 0.0;
     bool stop_first = false;
     // Under process_orders_on_close, or with a live entry and without it.
     bool on_close = true;
 };
-
-struct StepCheck {
-    const char* name = "";
-    bool ok = false;
-    double actual = kNaN;
-    double expected = kNaN;
-    const char* missing = nullptr;
-    std::string actual_ids{}, expected_ids{};
-
-    void require(bool met, const char* why, double got, double want) {
-        if (met || missing) return;
-        ok = false;
-        missing = why;
-        actual = got;
-        expected = want;
-    }
-    void one(std::size_t count, const char* what) {
-        require(count == 1, what, static_cast<double>(count), 1.0);
-    }
-};
-
-Observed observe(Probe& probe) {
-    Observed seen;
-    seen.applied = probe.applied();
-    for (int index = 0; index < probe.trade_count(); ++index)
-        seen.trades.push_back({probe.trade_exit_id(index), probe.trade_size(index)});
-    seen.entry_order_at_signal = probe.step_entry_order_at_signal();
-    return seen;
-}
 
 StepCase step_case(Mode mode) {
     return {step_entry_qty(mode), step_stop_first(mode), is_pooc_step_mode(mode)};
@@ -979,15 +1186,104 @@ int step_entry_bar(const StepCase& step) {
     return step.on_close ? kStepSignalBar : kStepSignalBar + 1;
 }
 
-std::vector<StepCheck> step_checks(const Observed& seen, const StepCase& step) {
+FillRule live_entry_rule(Mode mode) {
+    const auto step = step_case(mode);
+    return {"Long", 0.0, step.entry_qty, nullptr, nullptr,
+            step_entry_bar(step), nullptr, kStepBasePrice + kStepGap,
+            nullptr, NativePathPhase::Open};
+}
+
+Comparison live_entry_at_next_open(const Observed& seen, Mode mode) {
+    const auto rule = live_entry_rule(mode);
+    Comparison r{"live_entry_filled_at_next_open", true};
+    r.require(!seen.applied.empty(), "minimum applied-fill count", seen.applied.size(), 1);
+    require_run(r, seen, mode, step_end_close_bar(mode) + 1);
+    const auto fill = named_fill(seen, rule.label);
+    require_fill_shape(r, fill, rule);
+    r.expect(seen.entry_order_at_signal, "working entry at signal",
+             seen.entry_order_at_signal, true);
+    if (fill.only) {
+        const int last_bar = step_end_close_bar(mode) + 1;
+        // Check every field's availability even if another field disagrees.
+        for (const Field field : {Field::Bar, Field::Price, Field::Phase})
+            compare_field(r, *fill.only, rule, field, last_bar);
+    }
+    return r;
+}
+
+std::size_t closing_fill_count(const Observed& seen) {
+    std::size_t count = 0;
+    for (const auto& fill : seen.applied)
+        if (fill.closed > 0.0) ++count;
+    return count;
+}
+
+Comparison end_close_check(const Observed& seen, Mode mode) {
+    Comparison r{"nothing_left_for_end_close", true};
+    require_completed(r, seen, mode);
+    if (is_pooc_step_mode(mode) && step_stop_first(mode)) {
+        r.one(seen.half_before_stop, "working Half limit count before stop");
+        r.one(seen.rest_before_stop, "working Rest stop count before stop");
+    }
+    const auto entry = named_fill(seen, "Long");
+    const auto half = named_fill(seen, "Half");
+    const auto rest = named_fill(seen, "Rest");
+    const int end_bar = step_end_close_bar(mode);
+    r.one(entry.count, "Long fill count");
+    r.one(half.count, "Half fill count");
+    r.one(rest.count, "Rest fill count");
+    if (entry.only) {
+        r.require(entry.only->opened > 0.0, "Long opening quantity",
+                  entry.only->opened, step_entry_qty(mode));
+        r.require(near(entry.only->closed, 0.0), "Long closed units",
+                  entry.only->closed, 0.0);
+    }
+    for (const auto* exit : {half.only, rest.only}) {
+        if (exit) {
+            r.require(exit->closed > 0.0, "named exit closed units", exit->closed, kQtyStep);
+            r.require(near(exit->opened, 0.0), "named exit opened units", exit->opened, 0.0);
+            r.require(exit->bar >= 0 && exit->bar < end_bar,
+                      "named exit before end-close action", exit->bar, end_bar - 1);
+        }
+    }
+    r.one(seen.end_close.visits, "end-close action visits");
+    r.require(seen.end_close.bar == end_bar, "end-close action bar",
+              seen.end_close.bar, end_bar);
+    r.require(seen.last_source_bar == end_bar + 1, "last source bar",
+              seen.last_source_bar, end_bar + 1);
+    r.require(std::isfinite(seen.end_close.position), "end-close position unavailable",
+              seen.end_close.position, 0.0);
+    r.require(std::isfinite(seen.final_position), "final position unavailable",
+              seen.final_position, 0.0);
+    const auto closing = closing_fill_count(seen);
+    r.expect(closing == 2, "closing fill count", closing, 2);
+    r.expect(near(seen.end_close.position, 0.0), "position at end-close action",
+             seen.end_close.position, 0.0);
+    r.expect(near(seen.final_position, 0.0), "final position",
+             seen.final_position, 0.0);
+    return r;
+}
+
+void report_end_close(const Observed& seen, Mode row, const char* input) {
+    const int end_bar = step_end_close_bar(row);
+    std::printf("END_CLOSE mode=%s name=nothing_left_for_end_close input=%s "
+                "last_bar=%d expected_last_bar=%d action_bar=%d expected_action_bar=%d "
+                "visits=%d expected_visits=1 position_at_action=%.17g "
+                "expected_position_at_action=0 final_position=%.17g expected_final_position=0 "
+                "closing_fills=%zu expected_closing_fills=2\n", mode_name(row), input,
+                seen.last_source_bar, end_bar + 1, seen.end_close.bar, end_bar,
+                seen.end_close.visits, seen.end_close.position, seen.final_position,
+                closing_fill_count(seen));
+}
+
+std::vector<Comparison> step_checks(const Observed& seen, Mode mode) {
+    const auto step = step_case(mode);
     std::vector<const Applied*> entries;
     std::vector<const Applied*> partials;
     std::vector<const Applied*> fulls;
-    std::size_t closing_fills = 0;
     for (const auto& row : seen.applied) {
         if (row.opened > 0.0 && row.label == "Long") entries.push_back(&row);
         if (!(row.closed > 0.0)) continue;
-        ++closing_fills;
         if (row.label == "Half") partials.push_back(&row);
         if (row.label == "Rest") fulls.push_back(&row);
     }
@@ -1017,31 +1313,22 @@ std::vector<StepCheck> step_checks(const Observed& seen, const StepCase& step) {
     const int partial_bar = step.stop_first ? first_bar + 1 : first_bar;
     const int full_bar = step.stop_first ? first_bar : first_bar + 1;
 
-    std::vector<StepCheck> out;
-    // R1' or R1: the entry fills once, for its quantity, at the close of the
-    // bar that placed it under process_orders_on_close, and at the next bar's
-    // open without it.  Later bars open higher, so the price tells the signal
-    // close from a later open.  It does not tell one later open from another:
-    // the live-entry feed opens every bar after the first at one price.  So a
-    // live entry's fill is also read for its bar, which must be the bar after
-    // the signal bar.  A live entry must also have been a working order when
-    // the exits were placed.
-    const double entry_price = step.on_close
-        ? kStepBasePrice : kStepBasePrice + kStepGap;
-    const bool entry_form = step.on_close || seen.entry_order_at_signal;
-    const bool entry_bar_ok = step.on_close
-        || (entry != nullptr && entry->bar == step_entry_bar(step));
-    out.push_back({step.on_close ? "entry_filled_at_signal_close"
-                                 : "live_entry_filled_at_next_open",
-                   entry != nullptr && entry_form && entry_bar_ok
-                       && near(entry->price, entry_price)
-                       && near(entry->opened, step.entry_qty),
-                   entry != nullptr ? entry->opened : kNaN, step.entry_qty});
-    const auto require_events = [&](StepCheck& c) {
+    std::vector<Comparison> out;
+    const auto require_events = [&](Comparison& c) {
         c.require(!seen.applied.empty(), "minimum applied-fill count", seen.applied.size(), 1);
     };
-    require_events(out.back());
-    out.back().one(entries.size(), "Long fill count");
+    if (step.on_close) {
+        // The POOC step feed has a distinct signal-close price (R1').
+        out.push_back({"entry_filled_at_signal_close",
+                       entry != nullptr && near(entry->price, kStepBasePrice)
+                           && near(entry->opened, step.entry_qty),
+                       entry != nullptr ? entry->opened : kNaN, step.entry_qty});
+        require_events(out.back());
+        out.back().one(entries.size(), "Long fill count");
+        require_run(out.back(), seen, mode, step_end_close_bar(mode) + 1);
+    } else {
+        out.push_back(live_entry_at_next_open(seen, mode));
+    }
     // R7: each exit fills once.
     out.push_back({"partial_exit_filled_once", partial != nullptr,
                    static_cast<double>(partials.size()), 1.0});
@@ -1055,11 +1342,11 @@ std::vector<StepCheck> step_checks(const Observed& seen, const StepCase& step) {
                    entry != nullptr && partial != nullptr && floored > 0.0
                        && near(partial->closed, floored),
                    partial != nullptr ? partial->closed : kNaN, floored});
-    const auto require_partial = [&](StepCheck& c) {
+    const auto require_partial = [&](Comparison& c) {
         c.one(entries.size(), "Long fill count");
         c.one(partials.size(), "Half fill count");
     };
-    const auto require_all = [&](StepCheck& c) {
+    const auto require_all = [&](Comparison& c) {
         require_partial(c);
         c.one(fulls.size(), "Rest fill count");
     };
@@ -1090,11 +1377,7 @@ std::vector<StepCheck> step_checks(const Observed& seen, const StepCase& step) {
                        && near(second->position_after, 0.0),
                    second != nullptr ? second->position_after : kNaN, 0.0});
     require_all(out.back());
-    // R6 and R7: the end close finds nothing.  The two exits are the only
-    // fills that close anything.
-    out.push_back({"nothing_left_for_end_close", all && closing_fills == 2,
-                   static_cast<double>(closing_fills), 2.0});
-    require_all(out.back());
+    out.push_back(end_close_check(seen, mode));
     // The closed trades say the same: one row for each exit, in fill order.
     bool trades_match = all && seen.trades.size() == 2;
     if (trades_match) {
@@ -1115,138 +1398,286 @@ std::vector<StepCheck> step_checks(const Observed& seen, const StepCase& step) {
         ledger.actual_ids = seen.trades[0].exit_id + "," + seen.trades[1].exit_id;
         ledger.expected_ids = first->label + "," + second->label;
     }
+    if (!seen.applied.empty())
+        for (auto& r : out) require_completed(r, seen, mode);
     return out;
 }
 
-bool report_step_checks(const std::vector<StepCheck>& results, const char* mode) {
+bool report_step_checks(const std::vector<Comparison>& results, const char* mode,
+                        const char* input = "ROW") {
     bool ok = true;
-    for (const auto& result : results) {
-        if (result.missing) {
-            ok = false;
-            if (!result.expected_ids.empty())
-                std::printf("CHECK mode=%s name=%s status=NOT COMPARED reason=%s actual=%s expected=%s\n",
-                            mode, result.name, result.missing, result.actual_ids.c_str(),
-                            result.expected_ids.c_str());
-            else
-                std::printf("CHECK mode=%s name=%s status=NOT COMPARED reason=%s actual=%.17g expected=%.17g\n",
-                            mode, result.name, result.missing, result.actual, result.expected);
-        } else {
-            ok = check(result.ok, mode, result.name, result.actual, result.expected) && ok;
-        }
-    }
+    for (const auto& result : results) ok = report_comparison(result, mode, input) && ok;
     return ok;
 }
 
-// One run of a step row, observed and not printed.
-Observed observe_step_run(Mode mode) {
+Observed observe_run(Mode mode, const std::vector<Bar>& bars, int count) {
     Probe probe(mode);
-    const auto bars = bars_for(mode);
     probe.fixture_retain_all_events();
-    probe.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    probe.run(bars.data(), count, "1", "1");
     return observe(probe);
 }
 
-// EMPTY input: nothing was observed, no fill and no closed trade, as when no
-// order was placed or none filled.  Every check must fail on it.  A line of
-// this row passes when the named check fails.
-bool run_step_checks_on_empty_input() {
-    const char* name = mode_name(Mode::StepChecksEmptyInput);
-    bool ok = true;
-    for (const Mode row : {Mode::PoocOddStepsLimitFirst,
-                           Mode::LiveEntryOddStepsLimitFirst}) {
-        const std::string prefix = std::string(mode_name(row)) + ":";
-        const auto results = step_checks(Observed{}, step_case(row));
-        ok = check(!results.empty(), name, (prefix + "checks_were_run").c_str()) && ok;
-        for (const auto& result : results)
-            ok = check(!result.ok, name, (prefix + result.name).c_str()) && ok;
-    }
-    return ok;
+bool control_verdict(const char* selector, Mode row, const char* input,
+                     const Comparison& raw, bool attributable) {
+    std::printf("CONTROL selector=%s mode=%s name=%s input=%s status=%s\n",
+                selector, mode_name(row), raw.name, input, attributable ? "PASS" : "FAIL");
+    return attributable;
 }
 
-// STALE input: an observation that is not this row's finished run.  Two are
-// used, both taken from real runs and neither typed:
-//   - an earlier snapshot of the row's own run, cut off after the entry's
-//     fill, when no exit had filled yet;
-//   - the finished run of the other quantity, left over from another row.
-// Every check must fail on at least one of them: nothing a check says about
-// the exits may hold on the first, and the second is not this row's entry.  A
-// line of this row passes when the named check fails on one of them, and that
-// one was first verified to be the observation it is taken for.
-bool step_checks_reject_stale(const char* name, Mode row, Mode other) {
-    const StepCase own = step_case(row);
-    Observed earlier = observe_step_run(row);
-    const Observed leftover = observe_step_run(other);
-    // Keep the fills up to the first one that opened something.
-    std::size_t kept = 0;
-    for (const auto& fill : earlier.applied) {
-        ++kept;
-        if (fill.opened > 0.0) break;
-    }
-    earlier.applied.resize(kept);
-    earlier.trades.clear();
-    const std::string prefix = std::string(mode_name(row)) + ":";
-    // The earlier snapshot is the entry's fill only if its one fill opens this
-    // row's entry: the entry's quantity, on the entry's bar, closing nothing.
-    // The count alone does not say so: when no fill opens anything, the loop
-    // above keeps them all.
-    const Applied* snapshot =
-        earlier.applied.size() == 1 ? &earlier.applied.front() : nullptr;
-    const bool earlier_is_entry = snapshot != nullptr && snapshot->label == "Long"
-        && near(snapshot->opened, own.entry_qty) && !(snapshot->closed > 0.0)
-        && snapshot->bar == step_entry_bar(own);
-    bool ok = check(earlier_is_entry, name,
-                    (prefix + "earlier_snapshot_is_the_entry_fill").c_str(),
-                    static_cast<double>(earlier.applied.size()), 1.0);
-    // The leftover run is finished only if its entry and both of its exits
-    // have filled, its last fill leaves nothing held, and a trade has closed.
-    // An entry and one exit already have two fills and a closed trade.
-    bool leftover_entry = false;
-    bool leftover_partial = false;
-    bool leftover_full = false;
-    for (const auto& fill : leftover.applied) {
-        if (fill.opened > 0.0 && fill.label == "Long") leftover_entry = true;
-        if (!(fill.closed > 0.0)) continue;
-        if (fill.label == "Half") leftover_partial = true;
-        if (fill.label == "Rest") leftover_full = true;
-    }
-    const bool leftover_flat = !leftover.applied.empty()
-        && near(leftover.applied.back().position_after, 0.0);
-    const bool leftover_is_finished = leftover_entry && leftover_partial
-        && leftover_full && leftover_flat && !leftover.trades.empty();
-    ok = check(leftover_is_finished, name,
-               (prefix + "leftover_run_is_finished").c_str(),
-               static_cast<double>(leftover.applied.size())) && ok;
-    const auto on_earlier = step_checks(earlier, own);
-    const auto on_leftover = step_checks(leftover, own);
-    ok = check(!on_earlier.empty() && on_earlier.size() == on_leftover.size(), name,
-               (prefix + "checks_were_run").c_str()) && ok;
-    // A check's failure is credited only on an observation that was verified
-    // above to be the one it is taken for.
-    for (std::size_t index = 0; index < on_earlier.size() && index < on_leftover.size();
-         ++index) {
-        const bool fails_on_earlier = earlier_is_entry && !on_earlier[index].ok;
-        const bool fails_on_leftover =
-            leftover_is_finished && !on_leftover[index].ok;
-        ok = check(fails_on_earlier || fails_on_leftover, name,
-                   (prefix + on_earlier[index].name).c_str()) && ok;
-    }
-    return ok;
+bool expect_rejection(const char* selector, Mode row, const char* input,
+                      const Comparison& raw, const char* reason, bool unavailable,
+                      bool source_verified = true) {
+    report_comparison(raw, mode_name(row), input);
+    const bool rejected = unavailable
+        ? raw.missing && std::string_view(raw.missing) == reason
+        : !raw.missing && !raw.ok && std::string_view(raw.reason) == reason;
+    return control_verdict(selector, row, input, raw, source_verified && rejected);
 }
 
-// The stale-input row, for both forms of the step rows.
-bool run_step_checks_on_stale_input() {
-    const char* name = mode_name(Mode::StepChecksStaleInput);
-    bool ok = step_checks_reject_stale(name, Mode::PoocOddStepsLimitFirst,
-                                       Mode::PoocWholeStepsLimitFirst);
-    ok = step_checks_reject_stale(name, Mode::LiveEntryOddStepsLimitFirst,
-                                  Mode::LiveEntryWholeStepsLimitFirst) && ok;
-    return ok;
+void report_fill_observation(const Observed& seen, Mode row, const FillRule& rule,
+                             const char* input, int last_bar) {
+    const auto fill = named_fill(seen, rule.label);
+    std::printf("FILL_OBSERVATION mode=%s input=%s label=%s count=%zu expected_count=1 "
+                "last_bar=%d expected_last_bar=%d", mode_name(row), input, rule.label,
+                fill.count, seen.last_source_bar, last_bar);
+    if (fill.only) {
+        std::printf(" bar=%d expected_bar=%d price=%.17g expected_price=%.17g "
+                    "phase=%s expected_phase=%s opened=%.17g expected_opened=%.17g "
+                    "closed=%.17g expected_closed=%.17g", fill.only->bar, rule.bar,
+                    fill.only->price, rule.price, phase_name(fill.only->phase),
+                    rule.phase == NativePathPhase::None ? "not checked" : phase_name(rule.phase),
+                    fill.only->opened, rule.opened, fill.only->closed, rule.closed);
+    }
+    std::printf("\n");
+}
+
+bool verify_prefix(const Observed& seen, Mode mode, int last_bar, const char* input) {
+    Comparison r{"prefix_source", true, static_cast<double>(seen.last_source_bar),
+                 static_cast<double>(last_bar)};
+    require_run(r, seen, mode, last_bar);
+    return report_comparison(r, mode_name(mode), input);
+}
+
+template <typename Predicate>
+bool run_coordinate_control(const char* selector, Mode mode, const std::vector<Bar>& bars,
+                            const FillRule& rule, Field field, bool live, Predicate predicate) {
+    const int last_bar = static_cast<int>(bars.size()) - 1;
+    const Observed positive = observe_run(mode, bars, last_bar + 1);
+    report_fill_observation(positive, mode, rule, "POSITIVE", last_bar);
+    const auto raw_positive = predicate(positive);
+    const auto fill = named_fill(positive, rule.label);
+    const bool positive_ok = report_comparison(raw_positive, mode_name(mode), "POSITIVE");
+    if (!control_verdict(selector, mode, "POSITIVE", raw_positive, positive_ok && fill.only))
+        return false;
+
+    // For F3, confirm the other authored coordinates of this same fill. No
+    // quantity failure or different order can be mistaken for the target.
+    if (!live) {
+        for (const auto sibling : {Field::Bar, Field::Price, Field::Phase}) {
+            if (sibling == field || (sibling == Field::Phase && !rule.phase_check)) continue;
+            if (!report_comparison(authored_coordinate(positive, mode, last_bar, rule, sibling),
+                                   mode_name(mode), "POSITIVE_COMPANION"))
+                return control_verdict(selector, mode, "POSITIVE_COMPANION", raw_positive, false);
+        }
+    }
+
+    Observed wrong = positive;
+    const auto index = fill.only - positive.applied.data();
+    auto& changed = wrong.applied[index];
+    switch (field) {
+        case Field::Bar: changed.bar += changed.bar < last_bar ? 1 : -1; break;
+        case Field::Price: changed.price += kMinTick; break;
+        case Field::Phase:
+            changed.phase = changed.phase == NativePathPhase::Open
+                ? NativePathPhase::Close : NativePathPhase::Open;
+            break;
+    }
+    report_fill_observation(wrong, mode, rule, "NEGATIVE", last_bar);
+    if (!expect_rejection(selector, mode, "NEGATIVE", predicate(wrong),
+                          field_reason(field), false))
+        return false;
+
+    if (field == Field::Phase) {
+        Observed no_phase = positive;
+        no_phase.applied[index].phase = NativePathPhase::None;
+        if (!expect_rejection(selector, mode, "MISSING_PHASE", predicate(no_phase),
+                              "fill phase unavailable", true))
+            return false;
+    }
+
+    const Observed empty;
+    report_fill_observation(empty, mode, rule, "EMPTY", last_bar);
+    if (!expect_rejection(selector, mode, "EMPTY", predicate(empty),
+                          live ? "minimum applied-fill count" : "observation source row", true))
+        return false;
+
+    // Real prefix of this feed, missing its last bar. It may have the right
+    // fill, but it does not supply this row's completed input horizon.
+    const Observed stale = observe_run(mode, bars, last_bar);
+    const bool prefix_ok = verify_prefix(stale, mode, last_bar - 1, "STALE");
+    report_fill_observation(stale, mode, rule, "STALE", last_bar);
+    return expect_rejection(selector, mode, "STALE", predicate(stale), "last source bar",
+                            true, prefix_ok);
+}
+
+bool run_g2_control(const char* selector, bool final_position_only) {
+    const Mode row = Mode::PoocWholeStepsStopFirst;
+    const auto bars = bars_for(row);
+    const int last = static_cast<int>(bars.size()) - 1;
+    const int end = step_end_close_bar(row);
+    const Observed positive = observe_run(row, bars, last + 1);
+    report_end_close(positive, row, "POSITIVE");
+    const auto raw_positive = end_close_check(positive, row);
+    const bool positive_ok = report_comparison(raw_positive, mode_name(row), "POSITIVE");
+    if (!control_verdict(selector, row, "POSITIVE", raw_positive, positive_ok))
+        return false;
+
+    if (final_position_only) {
+        Observed nonflat = positive;
+        // Reuse observed held units from the opening, while retaining the
+        // action, both named exits, count and horizon of the real positive.
+        nonflat.final_position = named_fill(positive, "Long").only->opened;
+        report_end_close(nonflat, row, "NEGATIVE");
+        if (!expect_rejection(selector, row, "NEGATIVE", end_close_check(nonflat, row),
+                              "final position", false))
+            return false;
+    }
+
+    const Observed empty;
+    report_end_close(empty, row, "EMPTY");
+    if (!expect_rejection(selector, row, "EMPTY", end_close_check(empty, row),
+                          "observation source row", true))
+        return false;
+
+    // The corrected A6 feed has applied both named exits before this prefix
+    // stops. Credit staleness only if its observation agrees with the real
+    // positive about the fills and is already flat.
+    const Observed stale = observe_run(row, bars, end);
+    const bool prefix_ok = verify_prefix(stale, row, end - 1, "STALE");
+    Comparison snapshot{"two_exits_before_end_close", true};
+    snapshot.expect(stale.half_before_stop == 1, "working Half limit count",
+                    stale.half_before_stop, 1);
+    snapshot.expect(stale.rest_before_stop == 1, "working Rest stop count",
+                    stale.rest_before_stop, 1);
+    snapshot.expect(closing_fill_count(stale) == 2, "closing fill count",
+                    closing_fill_count(stale), 2);
+    snapshot.expect(near(stale.final_position, positive.final_position), "prefix final position",
+                    stale.final_position, positive.final_position);
+    snapshot.expect(stale.end_close.visits == 0, "end-close action visits",
+                    stale.end_close.visits, 0);
+    for (const char* label : {"Long", "Half", "Rest"}) {
+        const auto before = named_fill(stale, label);
+        const auto after = named_fill(positive, label);
+        Comparison identity{label, true};
+        identity.one(before.count, "prefix named fill count");
+        if (before.only && after.only) {
+            identity.expect(before.only->bar == after.only->bar, "prefix fill bar",
+                            before.only->bar, after.only->bar);
+            identity.expect(near(before.only->opened, after.only->opened), "prefix opened units",
+                            before.only->opened, after.only->opened);
+            identity.expect(near(before.only->closed, after.only->closed), "prefix closed units",
+                            before.only->closed, after.only->closed);
+            identity.expect(near(before.only->price, after.only->price), "prefix price",
+                            before.only->price, after.only->price);
+        }
+        if (!report_comparison(identity, mode_name(row), "STALE")) snapshot.ok = false;
+    }
+    const bool snapshot_ok = report_comparison(snapshot, mode_name(row), "STALE");
+    report_end_close(stale, row, "STALE");
+    return expect_rejection(selector, row, "STALE", end_close_check(stale, row),
+                            "end-close action visits", true, prefix_ok && snapshot_ok);
+}
+
+bool retained_step_control(const char* selector, Mode row, Mode other, bool stale) {
+    const auto bars = bars_for(row);
+    const int last = static_cast<int>(bars.size()) - 1;
+    const Observed positive = observe_run(row, bars, last + 1);
+    const auto real = step_checks(positive, row);
+    report_end_close(positive, row, "POSITIVE");
+    const bool real_ok = report_step_checks(real, mode_name(row), "POSITIVE");
+    Comparison source{"checks_were_run", true};
+    require_run(source, positive, row, last);
+    source.expect(!real.empty(), "comparison count", real.size(), 1);
+    const bool source_ok = report_comparison(source, mode_name(row), "POSITIVE");
+    if (!control_verdict(selector, row, "POSITIVE", source, real_ok && source_ok)) {
+        for (const auto& result : real)
+            std::printf("CONTROL selector=%s mode=%s name=%s input=%s status=SKIP "
+                        "reason=own positive did not pass\n",
+                        selector, mode_name(row), result.name, stale ? "STALE" : "EMPTY");
+        return false;
+    }
+
+    Observed input;
+    bool input_ok = true;
+    if (stale) {
+        const int first = step_entry_bar(step_case(row));
+        input = observe_run(row, bars, first + 1);
+        const auto entry = named_fill(input, "Long");
+        const auto reference = named_fill(positive, "Long");
+        Comparison earlier{"earlier_snapshot_is_the_entry_fill", true};
+        require_run(earlier, input, row, first);
+        earlier.one(input.applied.size(), "prefix applied-fill count");
+        earlier.one(entry.count, "Long fill count");
+        earlier.expect(input.trades.empty(), "prefix trade count", input.trades.size(), 0);
+        if (entry.only && reference.only) {
+            earlier.expect(entry.only->bar == first, "entry bar", entry.only->bar, first);
+            earlier.expect(near(entry.only->opened, reference.only->opened), "entry opened units",
+                           entry.only->opened, reference.only->opened);
+            earlier.expect(near(entry.only->closed, reference.only->closed), "entry closed units",
+                           entry.only->closed, reference.only->closed);
+            earlier.expect(near(entry.only->price, reference.only->price), "entry price",
+                           entry.only->price, reference.only->price);
+        }
+        input_ok = report_comparison(earlier, mode_name(row), "STALE");
+        if (!input_ok) return control_verdict(selector, row, "STALE", earlier, false);
+        const auto other_bars = bars_for(other);
+        const int other_last = static_cast<int>(other_bars.size()) - 1;
+        const Observed leftover = observe_run(other, other_bars, other_last + 1);
+        auto finished = end_close_check(leftover, other);
+        finished.name = "leftover_run_is_finished";
+        finished.expect(leftover.trades.size() == 2, "closed-trade count",
+                        leftover.trades.size(), 2);
+        if (!report_comparison(finished, mode_name(other), "STALE_OTHER"))
+            return control_verdict(selector, row, "STALE_OTHER", finished, false);
+        // Retain the other-row entry challenge, but do not credit it as
+        // evidence about the right row's earlier snapshot.
+        const auto wrong_row = step_checks(leftover, row);
+        if (wrong_row.empty()) return control_verdict(selector, row, "STALE_OTHER", source, false);
+        if (!expect_rejection(selector, row, "STALE_OTHER", wrong_row.front(),
+                              "observation source row", true)) return false;
+    }
+    const char* kind = stale ? "STALE" : "EMPTY";
+    const auto raw = step_checks(input, row);
+    report_end_close(input, row, kind);
+    if (raw.empty() || raw.size() != real.size())
+        return control_verdict(selector, row, kind, source, false);
+    for (std::size_t i = 0; i < raw.size(); ++i) {
+        const auto& result = raw[i];
+        report_comparison(result, mode_name(row), kind);
+        const bool rejected = std::string_view(result.name) == real[i].name && !result.ok;
+        if (!control_verdict(selector, row, kind, result, input_ok && rejected)) return false;
+    }
+    return true;
+}
+
+bool run_retained_step_controls(Mode mode) {
+    const char* selector = mode_name(mode);
+    const bool stale = mode == Mode::StepChecksStaleInput;
+    if (!retained_step_control(selector, Mode::PoocOddStepsLimitFirst,
+                               Mode::PoocWholeStepsLimitFirst, stale)) {
+        std::printf("CONTROL selector=%s mode=%s input=%s status=SKIP "
+                    "reason=previous control failed\n", selector,
+                    mode_name(Mode::LiveEntryOddStepsLimitFirst), stale ? "STALE" : "EMPTY");
+        return false;
+    }
+    return retained_step_control(selector, Mode::LiveEntryOddStepsLimitFirst,
+                                 Mode::LiveEntryWholeStepsLimitFirst, stale);
 }
 
 bool run_mode(Mode mode) {
     const char* name = mode_name(mode);
-    if (mode == Mode::StepChecksEmptyInput) return run_step_checks_on_empty_input();
-    if (mode == Mode::StepChecksStaleInput) return run_step_checks_on_stale_input();
+    if (mode == Mode::StepChecksEmptyInput || mode == Mode::StepChecksStaleInput)
+        return run_retained_step_controls(mode);
     Probe probe(mode);
     const auto bars = bars_for(mode);
     probe.fixture_retain_all_events();
@@ -1254,7 +1685,7 @@ bool run_mode(Mode mode) {
     std::printf("EXECUTION mode=%s status=%s last_error=%s\n", name,
                 probe.last_error().empty() ? "completed" : "failed",
                 probe.last_error().c_str());
-    print_applied(probe);
+    print_applied(probe, name);
     for (int index = 0; index < probe.trade_count(); ++index) {
         std::printf("TRADE mode=%s index=%d entry=%s exit=%s qty=%.17g "
                     "entry_price=%.17g exit_price=%.17g\n",
@@ -1269,7 +1700,7 @@ bool run_mode(Mode mode) {
                 static_cast<unsigned long long>(probe.broker_state_hash()));
     if (is_step_mode(mode) && (!probe.last_error().empty()
             || probe.native_state().kind != NativeLifecycleKind::Completed)) {
-        const auto results = step_checks(Observed{}, step_case(mode));
+        const auto results = step_checks(Observed{}, mode);
         for (const auto& r : results)
             std::printf("CHECK mode=%s name=%s status=NOT COMPARED reason=incomplete run "
                         "actual=state:%d,error:%s expected=state:%d,error:empty\n", name, r.name,
@@ -1277,14 +1708,15 @@ bool run_mode(Mode mode) {
                         static_cast<int>(NativeLifecycleKind::Completed));
         return false;
     }
+    if (mode == Mode::Exact || mode == Mode::AbsoluteControl || mode == Mode::BMarketAddControl)
+        return check_authored_fills(probe, observe(probe), mode, bars);
     if (!probe.last_error().empty()) return false;
-    if (mode == Mode::Exact || mode == Mode::AbsoluteControl)
-        return check_case_a(probe, mode);
     if (mode == Mode::BPendingEntryControl) return check_b_pending(probe, bars);
     if (mode == Mode::HeldEntryStopFirst || mode == Mode::HeldEntryLimitFirst)
         return check_held_entry(probe, mode, bars);
     if (is_step_mode(mode)) {
-        const auto results = step_checks(observe(probe), step_case(mode));
+        const auto seen = observe(probe);
+        const auto results = step_checks(seen, mode);
         if (is_pooc_step_mode(mode) && step_stop_first(mode)) {
             const bool ready = probe.stop_book_seen();
             std::printf("CHECK mode=%s name=both_exits_working_before_stop status=%s "
@@ -1301,12 +1733,13 @@ bool run_mode(Mode mode) {
                 return false;
             }
         }
+        report_end_close(seen, mode, "ROW");
         return report_step_checks(results, name);
     }
-    return check_b_market_add(probe);
+    return false;
 }
 
-bool parse_mode(const std::string& value, Mode& out) {
+bool parse_mode(std::string_view value, Mode& out) {
     if (value == "exact") out = Mode::Exact;
     else if (value == "a_absolute_control") out = Mode::AbsoluteControl;
     else if (value == "b_pending_entry_control") out = Mode::BPendingEntryControl;
@@ -1332,14 +1765,46 @@ bool parse_mode(const std::string& value, Mode& out) {
     return true;
 }
 
+std::optional<bool> run_guard_control(const char* selector) {
+    std::string_view value(selector);
+    if (value == "g2_end_close_stale") return run_g2_control(selector, false);
+    if (value == "g2_end_close_final_position") return run_g2_control(selector, true);
+    if (value.substr(0, 3) == "g3_" || value.substr(0, 3) == "g4_") {
+        Mode row;
+        if (!parse_mode(value.substr(3), row) || !is_live_step_mode(row)) return std::nullopt;
+        const auto field = value[1] == '3' ? Field::Bar : Field::Phase;
+        const auto rule = live_entry_rule(row);
+        return run_coordinate_control(selector, row, bars_for(row), rule, field, true,
+            [row](const Observed& seen) { return live_entry_at_next_open(seen, row); });
+    }
+    for (const Mode row : {Mode::Exact, Mode::AbsoluteControl, Mode::BMarketAddControl}) {
+        const std::string prefix = std::string("f3_") + mode_name(row) + "_";
+        if (value.substr(0, prefix.size()) != std::string_view(prefix)) continue;
+        const auto bars = bars_for(row);
+        const int last = static_cast<int>(bars.size()) - 1;
+        const auto check_name = value.substr(prefix.size());
+        for (const auto& rule : authored_fills(row, bars)) {
+            Field field;
+            if (check_name == rule.bar_check) field = Field::Bar;
+            else if (check_name == rule.price_check) field = Field::Price;
+            else if (rule.phase_check && check_name == rule.phase_check) field = Field::Phase;
+            else continue;
+            return run_coordinate_control(selector, row, bars, rule, field, false,
+                [&](const Observed& seen) { return authored_coordinate(seen, row, last, rule, field); });
+        }
+    }
+    return std::nullopt;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     if (argc > 2) return 2;
     if (argc == 2) {
         Mode mode;
-        if (!parse_mode(argv[1], mode)) return 2;
-        return run_mode(mode) ? 0 : 1;
+        if (parse_mode(argv[1], mode)) return run_mode(mode) ? 0 : 1;
+        const auto control = run_guard_control(argv[1]);
+        return control ? (*control ? 0 : 1) : 2;
     }
     bool ok = true;
     for (const Mode mode : {Mode::Exact, Mode::AbsoluteControl,
