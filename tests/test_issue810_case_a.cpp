@@ -11,6 +11,11 @@
 // Observations come from native applied events and closed trades.  The B
 // pending control and the held-entry rows also read the pending rows of their
 // signal bar, and the final position.
+// The step rows place the exact row's three kinds of order in whole steps of
+// the quantity step: three steps with a 50% partial exit, whose share is one
+// and a half steps, and a four-step control.  After both exits nothing may be
+// left for the end close.  Two more rows hand the same checks an empty and a
+// stale observation, and pass only if every check fails there.
 
 #include <pineforge/source/pine_native_host.hpp>
 
@@ -41,6 +46,22 @@ constexpr double kHeldProfitTicks = 50000.0;
 // How far past a level the bar that reaches it travels, so that a fill booked
 // at the bar's extreme is told from a fill booked at the level.
 constexpr double kHeldOvershoot = 10.0;
+// The quantity step of every row: the smallest quantity an order can trade.
+constexpr double kQtyStep = 0.01;
+// The step rows, in synthetic prices.  The entry is three steps of kQtyStep,
+// or four in the control; the partial exit is 50% with a tick profit and the
+// full exit a price stop.  Bars after the first open kStepGap higher, and the
+// bar that reaches a level travels kStepOvershoot past it.
+constexpr double kStepOddEntryQty = 0.03;
+constexpr double kStepWholeEntryQty = 0.04;
+constexpr double kStepPartialPercent = 50.0;
+constexpr double kStepProfitTicks = 100.0;
+constexpr double kStepBasePrice = 100.0;
+constexpr double kStepStopPrice = 99.0;
+constexpr double kStepGap = 0.25;
+constexpr double kStepOvershoot = 0.5;
+// The bar on which a step row's script makes its end close.
+constexpr int kStepEndCloseBar = 3;
 
 enum class Mode {
     Exact,
@@ -49,6 +70,12 @@ enum class Mode {
     BMarketAddControl,
     HeldEntryStopFirst,
     HeldEntryLimitFirst,
+    PoocOddStepsLimitFirst,
+    PoocOddStepsStopFirst,
+    PoocWholeStepsLimitFirst,
+    PoocWholeStepsStopFirst,
+    StepChecksEmptyInput,
+    StepChecksStaleInput,
 };
 
 const char* mode_name(Mode mode) {
@@ -59,8 +86,33 @@ const char* mode_name(Mode mode) {
         case Mode::BMarketAddControl: return "b_market_add_control";
         case Mode::HeldEntryStopFirst: return "held_entry_stop_first";
         case Mode::HeldEntryLimitFirst: return "held_entry_limit_first";
+        case Mode::PoocOddStepsLimitFirst: return "pooc_odd_steps_limit_first";
+        case Mode::PoocOddStepsStopFirst: return "pooc_odd_steps_stop_first";
+        case Mode::PoocWholeStepsLimitFirst: return "pooc_whole_steps_limit_first";
+        case Mode::PoocWholeStepsStopFirst: return "pooc_whole_steps_stop_first";
+        case Mode::StepChecksEmptyInput: return "step_checks_empty_input";
+        case Mode::StepChecksStaleInput: return "step_checks_stale_input";
     }
     return "unknown";
+}
+
+// The four step rows that run the engine.
+bool is_step_mode(Mode mode) {
+    return mode == Mode::PoocOddStepsLimitFirst
+        || mode == Mode::PoocOddStepsStopFirst
+        || mode == Mode::PoocWholeStepsLimitFirst
+        || mode == Mode::PoocWholeStepsStopFirst;
+}
+
+double step_entry_qty(Mode mode) {
+    const bool whole = mode == Mode::PoocWholeStepsLimitFirst
+        || mode == Mode::PoocWholeStepsStopFirst;
+    return whole ? kStepWholeEntryQty : kStepOddEntryQty;
+}
+
+bool step_stop_first(Mode mode) {
+    return mode == Mode::PoocOddStepsStopFirst
+        || mode == Mode::PoocWholeStepsStopFirst;
 }
 
 struct Applied {
@@ -88,13 +140,14 @@ public:
         config.slippage = 0;
         config.pyramiding = mode == Mode::BMarketAddControl ? 2 : 1;
         config.process_orders_on_close =
-            mode == Mode::Exact || mode == Mode::AbsoluteControl;
+            mode == Mode::Exact || mode == Mode::AbsoluteControl
+            || is_step_mode(mode);
         configure_pine_strategy(config);
         set_syminfo_session("24x7");
         set_syminfo_timezone("Etc/UTC");
         set_syminfo_mintick(kMinTick);
         set_syminfo_pointvalue(1.0);
-        set_syminfo_metadata("qty_step", 0.01);
+        set_syminfo_metadata("qty_step", kQtyStep);
     }
 
     void on_source_bar(const Bar&) override {
@@ -112,6 +165,15 @@ public:
             case Mode::HeldEntryStopFirst:
             case Mode::HeldEntryLimitFirst:
                 on_held_entry_bar();
+                return;
+            case Mode::PoocOddStepsLimitFirst:
+            case Mode::PoocOddStepsStopFirst:
+            case Mode::PoocWholeStepsLimitFirst:
+            case Mode::PoocWholeStepsStopFirst:
+                on_step_bar();
+                return;
+            case Mode::StepChecksEmptyInput:
+            case Mode::StepChecksStaleInput:
                 return;
         }
     }
@@ -223,6 +285,26 @@ private:
             }
             if (snapshot.source_id == "Rest" && snapshot.from_entry == "Long")
                 held_full_exit_placed_ = true;
+        }
+    }
+
+    // The exact row's three calls in quantity steps, then an end close as a
+    // script makes it on a last bar.  It is called only while something is
+    // still held, so whatever the two exits leave shows up as a third closing
+    // fill.  Rounding noise far below a step is not a holding.
+    void on_step_bar() {
+        if (pine_bar_index() == 0) {
+            strategy_entry("Long", true, kNaN, kNaN, step_entry_qty(mode_),
+                           "step-entry");
+            exit("Half", "Long", kNaN, kNaN, kStepPartialPercent, kNaN,
+                 kStepProfitTicks, "step-tick-partial");
+            exit("Rest", "Long", kNaN, kStepStopPrice, 100.0, kNaN, kNaN,
+                 "step-price-rest");
+            return;
+        }
+        if (pine_bar_index() == kStepEndCloseBar
+            && std::fabs(physical_position().signed_units) > 1e-9) {
+            strategy_close("Long", "step-end-close");
         }
     }
 
@@ -431,12 +513,12 @@ bool check_b_market_add(Probe& probe) {
 //         fill yet, and the next bar's modeled open is the fill.
 //       - src/source/pine_adapter.cpp:3135-3136: without
 //         process_orders_on_close an order executes at the next eligible
-//         point; :20065-20067: its quote is the next open.
+//         point; :20089-20091: its quote is the next open.
 //   R2  A level given in ticks is the entry's fill price moved by that many
 //       ticks.
 //       - docs/pages/pine-to-native.md:343-345: at the parent's fill the
 //         level becomes the fill plus the offset, in ticks.
-//       - src/source/pine_adapter.cpp:15558-15564
+//       - src/source/pine_adapter.cpp:15582-15588
 //         (materialize_relative_exits): the limit is the entry's fill price
 //         plus the profit ticks, on the tick grid.
 //   R3  A limit that a crossing reaches fills at its level, and a sell stop
@@ -445,8 +527,8 @@ bool check_b_market_add(Probe& probe) {
 //         limit's level, and a crossing books the level itself.
 //       - docs/pine-adapter-kernel-notes.md:238: a stop is quoted at
 //         min(open, stop) for a sell.
-//       - src/source/pine_adapter.cpp:20066: max/min(open, stop) for a stop;
-//         :21842-21843: a touched level fills at its level.  The adapter
+//       - src/source/pine_adapter.cpp:20090: max/min(open, stop) for a stop;
+//         :21866-21867: a touched level fills at its level.  The adapter
 //         leaves a limit's price to the kernel's matcher.
 //   R4  Exits reserve the entry's quantity in the order they were placed,
 //       and a later full exit is left what the earlier ones have not
@@ -475,11 +557,11 @@ bool check_b_market_add(Probe& probe) {
 //         reservation when a live owner is bound.
 //       - CHANGELOG.md:29 (unreleased, #810): the partial exit is sized from
 //         the quantity the entry actually opens.
-//       - src/source/pine_adapter.cpp:15545-15557
+//       - src/source/pine_adapter.cpp:15569-15581
 //         (materialize_relative_exits): the partial exit's quantity is its
 //         percentage of what the entry opened; :6321-6327
 //         (reconcile_deferred_exit_reservations): each exit's units are
-//         written on its order rows; :17360-17375 (resolve_source_terms): a
+//         written on its order rows; :17384-17399 (resolve_source_terms): a
 //         fixed reservation executes as written.
 //   R6  A closing order closes no more than is held and never opens a
 //       position.
@@ -491,7 +573,7 @@ bool check_b_market_add(Probe& probe) {
 //   R7  An order that has filled is not filled again.
 //       - docs/pages/fill-model.md:176: a retired object is not dispatched
 //         again.
-//       - src/source/pine_adapter.cpp:26683-26685 (on_applied): an exit that
+//       - src/source/pine_adapter.cpp:26707-26709 (on_applied): an exit that
 //         has filled on an opening does not fill again on that opening.
 bool check_held_entry(Probe& probe, Mode mode, const std::vector<Bar>& bars) {
     const char* name = mode_name(mode);
@@ -656,6 +738,28 @@ std::vector<Bar> bars_for(Mode mode) {
             bar(4, kEntryPrice, above, below, kEntryPrice),
         };
     }
+    if (is_step_mode(mode)) {
+        // Bar 0 places the three orders and closes at the base price, where
+        // the entry fills.  Later bars open a little higher, so that price
+        // tells a fill at the signal close from one at the next open.  One
+        // bar reaches each exit level and travels past it; bar 3 is the end
+        // close's bar.
+        static_assert(kStepEndCloseBar == 3, "bar 3 is the end close's bar");
+        const double base = kStepBasePrice;
+        const double later = base + kStepGap;
+        const double above = base + kStepProfitTicks * kMinTick + kStepOvershoot;
+        const double below = kStepStopPrice - kStepOvershoot;
+        const bool stop_first = step_stop_first(mode);
+        return {
+            bar(0, base, base, base, base),
+            stop_first ? bar(1, later, later, below, later)
+                       : bar(1, later, above, later, later),
+            stop_first ? bar(2, later, above, later, later)
+                       : bar(2, later, later, below, later),
+            bar(3, later, later, later, later),
+            bar(4, later, later, later, later),
+        };
+    }
     return {
         bar(0, 100.0, 100.0, 100.0, 100.0),
         bar(1, 100.0, 100.0, 100.0, 100.0),
@@ -667,8 +771,226 @@ std::vector<Bar> bars_for(Mode mode) {
     };
 }
 
+// The step rows.  The exact row's three kinds of order under
+// process_orders_on_close, in whole steps of the quantity step.  The rules are
+// R2 to R7 of check_held_entry, and two more:
+//
+//   R1' Under process_orders_on_close a market order fills at the close of
+//       the bar that placed it: docs/pine-adapter-kernel-notes.md:239.
+//   R8  On a quantity step a share below the whole is floored onto the step:
+//       docs/pages/pine-to-native.md:291 says it of a fractional close, and
+//       src/source/pine_adapter.cpp:5857-5873 applies it to a percentage exit.
+//
+// A 50% partial exit of three steps has a share of one and a half steps.  By
+// R8 it closes one, and by R4 and R5 the full exit closes what that leaves,
+// two, so after both exits nothing is held (R6).  The script then makes an
+// end close, which must find nothing to take.
+//
+// The checks read one observation, the applied fills and the closed trades of
+// a run, and take it as a value: they can be handed an observation that is
+// empty or stale, and every one of them must fail there
+// (run_step_checks_on_empty_input, run_step_checks_on_stale_input).  No check
+// reads the position at the end of the run, where an end close has already
+// taken whatever the exits left.
+struct ClosedTrade {
+    std::string exit_id;
+    double size = 0.0;
+};
+
+struct Observed {
+    std::vector<Applied> applied;
+    std::vector<ClosedTrade> trades;
+};
+
+struct StepCase {
+    double entry_qty = 0.0;
+    bool stop_first = false;
+};
+
+struct StepCheck {
+    const char* name = "";
+    bool ok = false;
+    double actual = kNaN;
+    double expected = kNaN;
+};
+
+Observed observe(Probe& probe) {
+    Observed seen;
+    seen.applied = probe.applied();
+    for (int index = 0; index < probe.trade_count(); ++index)
+        seen.trades.push_back({probe.trade_exit_id(index), probe.trade_size(index)});
+    return seen;
+}
+
+StepCase step_case(Mode mode) {
+    return {step_entry_qty(mode), step_stop_first(mode)};
+}
+
+std::vector<StepCheck> step_checks(const Observed& seen, const StepCase& step) {
+    std::vector<const Applied*> entries;
+    std::vector<const Applied*> partials;
+    std::vector<const Applied*> fulls;
+    std::size_t closing_fills = 0;
+    for (const auto& row : seen.applied) {
+        if (row.opened > 0.0 && row.label == "Long") entries.push_back(&row);
+        if (!(row.closed > 0.0)) continue;
+        ++closing_fills;
+        if (row.label == "Half") partials.push_back(&row);
+        if (row.label == "Rest") fulls.push_back(&row);
+    }
+    // A fill is read only when it is the one fill of its order.  With none,
+    // or with a second one, every check that needs it fails; none is skipped.
+    const Applied* entry = entries.size() == 1 ? entries.front() : nullptr;
+    const Applied* partial = partials.size() == 1 ? partials.front() : nullptr;
+    const Applied* full = fulls.size() == 1 ? fulls.front() : nullptr;
+    const bool all = entry != nullptr && partial != nullptr && full != nullptr;
+    // The two exits in the order they filled.
+    const Applied* first = nullptr;
+    const Applied* second = nullptr;
+    if (partial != nullptr && full != nullptr) {
+        first = partial < full ? partial : full;
+        second = partial < full ? full : partial;
+    }
+    const double share = entry != nullptr
+        ? entry->opened * kStepPartialPercent / 100.0 : kNaN;
+    const double floored = entry != nullptr
+        ? std::floor(share / kQtyStep + 1e-9) * kQtyStep : kNaN;      // R8
+    const double level = entry != nullptr
+        ? entry->price + kStepProfitTicks * kMinTick : kNaN;           // R2
+    const double rest = entry != nullptr && partial != nullptr
+        ? entry->opened - partial->closed : kNaN;                      // R4
+    const int partial_bar = step.stop_first ? 2 : 1;
+    const int full_bar = step.stop_first ? 1 : 2;
+
+    std::vector<StepCheck> out;
+    // R1': the entry fills once, for its quantity, at the close of the bar
+    // that placed it.  Later bars open higher, so the price tells that close
+    // from the next bar's open.
+    out.push_back({"entry_filled_at_signal_close",
+                   entry != nullptr && near(entry->price, kStepBasePrice)
+                       && near(entry->opened, step.entry_qty),
+                   entry != nullptr ? entry->opened : kNaN, step.entry_qty});
+    // R7: each exit fills once.
+    out.push_back({"partial_exit_filled_once", partial != nullptr,
+                   static_cast<double>(partials.size()), 1.0});
+    out.push_back({"full_exit_filled_once", full != nullptr,
+                   static_cast<double>(fulls.size()), 1.0});
+    // R5 and R8: the partial exit closes its share of what the entry opened,
+    // floored onto the quantity step, and that is more than nothing.
+    out.push_back({"partial_exit_floored_to_step",
+                   entry != nullptr && partial != nullptr && floored > 0.0
+                       && near(partial->closed, floored),
+                   partial != nullptr ? partial->closed : kNaN, floored});
+    // R2 and R3: it fills at the entry's fill price moved by its ticks, on
+    // the bar that reaches that level.
+    out.push_back({"partial_exit_at_its_level",
+                   entry != nullptr && partial != nullptr
+                       && partial->bar == partial_bar && near(partial->price, level),
+                   partial != nullptr ? partial->price : kNaN, level});
+    // R3: the full exit fills at its stop, on the bar that reaches it.
+    out.push_back({"full_exit_at_its_stop",
+                   full != nullptr && full->bar == full_bar
+                       && near(full->price, kStepStopPrice),
+                   full != nullptr ? full->price : kNaN, kStepStopPrice});
+    // R4 and R5: the full exit closes exactly what the partial exit's own
+    // fill leaves of the entry.
+    out.push_back({"full_exit_takes_what_partial_leaves",
+                   all && near(full->closed, rest),
+                   full != nullptr ? full->closed : kNaN, rest});
+    // R6: after the second of the two exits nothing is held.  The position is
+    // the one that exit's own fill reports.
+    out.push_back({"flat_after_both_exits",
+                   all && near(first->position_after, entry->opened - first->closed)
+                       && near(second->position_after, 0.0),
+                   second != nullptr ? second->position_after : kNaN, 0.0});
+    // R6 and R7: the end close finds nothing.  The two exits are the only
+    // fills that close anything.
+    out.push_back({"nothing_left_for_end_close", all && closing_fills == 2,
+                   static_cast<double>(closing_fills), 2.0});
+    // The closed trades say the same: one row for each exit, in fill order.
+    bool trades_match = all && seen.trades.size() == 2;
+    if (trades_match) {
+        trades_match = seen.trades[0].exit_id == first->label
+            && near(seen.trades[0].size, first->closed)
+            && seen.trades[1].exit_id == second->label
+            && near(seen.trades[1].size, second->closed);
+    }
+    out.push_back({"closed_trades_are_the_two_exits", trades_match,
+                   static_cast<double>(seen.trades.size()), 2.0});
+    return out;
+}
+
+bool report_step_checks(const std::vector<StepCheck>& results, const char* mode) {
+    bool ok = true;
+    for (const auto& result : results)
+        ok = check(result.ok, mode, result.name, result.actual, result.expected) && ok;
+    return ok;
+}
+
+// One run of a step row, observed and not printed.
+Observed observe_step_run(Mode mode) {
+    Probe probe(mode);
+    const auto bars = bars_for(mode);
+    probe.fixture_retain_all_events();
+    probe.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    return observe(probe);
+}
+
+// EMPTY input: nothing was observed, no fill and no closed trade, as when no
+// order was placed or none filled.  Every check must fail on it.  A line of
+// this row passes when the named check fails.
+bool run_step_checks_on_empty_input() {
+    const char* name = mode_name(Mode::StepChecksEmptyInput);
+    const StepCase odd = step_case(Mode::PoocOddStepsLimitFirst);
+    const auto results = step_checks(Observed{}, odd);
+    bool ok = check(!results.empty(), name, "checks_were_run");
+    for (const auto& result : results) ok = check(!result.ok, name, result.name) && ok;
+    return ok;
+}
+
+// STALE input: an observation that is not this row's finished run.  Two are
+// used, both taken from real runs and neither typed:
+//   - an earlier snapshot of the row's own run, cut off after the entry's
+//     fill, when no exit had filled yet;
+//   - the finished run of the other quantity, left over from another row.
+// Every check must fail on at least one of them: nothing a check says about
+// the exits may hold on the first, and the second is not this row's entry.  A
+// line of this row passes when the named check fails on one of them.
+bool run_step_checks_on_stale_input() {
+    const char* name = mode_name(Mode::StepChecksStaleInput);
+    const StepCase odd = step_case(Mode::PoocOddStepsLimitFirst);
+    Observed earlier = observe_step_run(Mode::PoocOddStepsLimitFirst);
+    const Observed leftover = observe_step_run(Mode::PoocWholeStepsLimitFirst);
+    // Keep the fills up to the first one that opened something.
+    std::size_t kept = 0;
+    for (const auto& fill : earlier.applied) {
+        ++kept;
+        if (fill.opened > 0.0) break;
+    }
+    earlier.applied.resize(kept);
+    earlier.trades.clear();
+    bool ok = check(earlier.applied.size() == 1, name,
+                    "earlier_snapshot_is_the_entry_fill",
+                    static_cast<double>(earlier.applied.size()), 1.0);
+    ok = check(leftover.applied.size() > 1 && !leftover.trades.empty(), name,
+               "leftover_run_is_finished",
+               static_cast<double>(leftover.applied.size())) && ok;
+    const auto on_earlier = step_checks(earlier, odd);
+    const auto on_leftover = step_checks(leftover, odd);
+    ok = check(!on_earlier.empty() && on_earlier.size() == on_leftover.size(), name,
+               "checks_were_run") && ok;
+    for (std::size_t index = 0; index < on_earlier.size() && index < on_leftover.size();
+         ++index) {
+        ok = check(!on_earlier[index].ok || !on_leftover[index].ok, name,
+                   on_earlier[index].name) && ok;
+    }
+    return ok;
+}
+
 bool run_mode(Mode mode) {
     const char* name = mode_name(mode);
+    if (mode == Mode::StepChecksEmptyInput) return run_step_checks_on_empty_input();
+    if (mode == Mode::StepChecksStaleInput) return run_step_checks_on_stale_input();
     Probe probe(mode);
     const auto bars = bars_for(mode);
     probe.fixture_retain_all_events();
@@ -695,6 +1017,8 @@ bool run_mode(Mode mode) {
     if (mode == Mode::BPendingEntryControl) return check_b_pending(probe, bars);
     if (mode == Mode::HeldEntryStopFirst || mode == Mode::HeldEntryLimitFirst)
         return check_held_entry(probe, mode, bars);
+    if (is_step_mode(mode))
+        return report_step_checks(step_checks(observe(probe), step_case(mode)), name);
     return check_b_market_add(probe);
 }
 
@@ -705,6 +1029,13 @@ bool parse_mode(const std::string& value, Mode& out) {
     else if (value == "b_market_add_control") out = Mode::BMarketAddControl;
     else if (value == "held_entry_stop_first") out = Mode::HeldEntryStopFirst;
     else if (value == "held_entry_limit_first") out = Mode::HeldEntryLimitFirst;
+    else if (value == "pooc_odd_steps_limit_first") out = Mode::PoocOddStepsLimitFirst;
+    else if (value == "pooc_odd_steps_stop_first") out = Mode::PoocOddStepsStopFirst;
+    else if (value == "pooc_whole_steps_limit_first")
+        out = Mode::PoocWholeStepsLimitFirst;
+    else if (value == "pooc_whole_steps_stop_first") out = Mode::PoocWholeStepsStopFirst;
+    else if (value == "step_checks_empty_input") out = Mode::StepChecksEmptyInput;
+    else if (value == "step_checks_stale_input") out = Mode::StepChecksStaleInput;
     else return false;
     return true;
 }
@@ -721,7 +1052,11 @@ int main(int argc, char** argv) {
     bool ok = true;
     for (const Mode mode : {Mode::Exact, Mode::AbsoluteControl,
                             Mode::BPendingEntryControl, Mode::BMarketAddControl,
-                            Mode::HeldEntryStopFirst, Mode::HeldEntryLimitFirst}) {
+                            Mode::HeldEntryStopFirst, Mode::HeldEntryLimitFirst,
+                            Mode::PoocOddStepsLimitFirst, Mode::PoocOddStepsStopFirst,
+                            Mode::PoocWholeStepsLimitFirst,
+                            Mode::PoocWholeStepsStopFirst,
+                            Mode::StepChecksEmptyInput, Mode::StepChecksStaleInput}) {
         ok = run_mode(mode) && ok;
     }
     return ok ? 0 : 1;
