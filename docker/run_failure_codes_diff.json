@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "716fa77785ced515d1ed4da68f5b0a4b26126b77d910daaa302b48d7a84db346"
+    "catalogSha256": "5b52b97d388f156b939457eff9c815174619798f2c8a376de6029fe6f3e9d82b"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -16,7 +16,26 @@
   },
   "metadataChanges": [],
   "added": [],
-  "changed": [],
+  "changed": [
+    {
+      "code": "pine_map_capacity_exceeded",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "english",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "Error on bar {bar_index}: A map cannot have more than {maxSize} key-value pairs. The current size is {currSize}."
+          ],
+          "after": [
+            "Error on bar {bar_index}: A map cannot have more than {maxSize} key-value pairs. The current size is {currSize}.",
+            "Error before the first bar: A map cannot have more than {maxSize} key-value pairs. The current size is {currSize}."
+          ]
+        }
+      ]
+    }
+  ],
   "removed": [],
   "deprecated": []
 }

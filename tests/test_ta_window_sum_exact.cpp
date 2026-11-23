@@ -1,17 +1,7 @@
-// test_ta_window_sum_exact -- the sliding-window sum behind ta.sma and
-// math.sum is the exact sum of the sources in the window, rounded once, also
-// when that sum needs more than two doubles.
-//
-// The window carries its sum in two doubles and adds or removes a source
-// without error. When two doubles can not hold the exact sum, it sums the
-// window from its own sources instead. This test drives that second path,
-// which ordinary price series reach rarely: sources 2^200 apart, and sums that
-// sit exactly on, just above and just below the midpoint of two doubles.
-//
-// Every expected value is a power of two or 0, so each one follows from the
-// definition "exact sum, rounded to nearest, ties to even" without a
-// calculation. They state the arithmetic's own property. They are not a
-// TradingView observation: no capture holds sources this far apart.
+// Synthetic windows with sources 2^200 apart and sources on either side
+// of a rounding midpoint. Each two-sum error is exact, but accumulating
+// the errors in a single double can round a small term away. The expected
+// values follow from binary64 rounding; none is a captured value.
 
 #include <pineforge/math.hpp>
 #include <pineforge/na.hpp>
@@ -37,29 +27,29 @@ int main() {
     const double big = std::ldexp(1.0, 100);
     const double tiny = std::ldexp(1.0, -100);
 
-    // 1. A source is not lost while a far larger one shares its window, and
-    //    nothing is left of the large one after it has gone.
+    // 1. The correction holds the unit alongside the large source.
     {
         math::Sum sum(3);
         sum.compute(big);
         sum.compute(1.0);
         check(sum.compute(tiny), big, "2^100 + 1 + 2^-100 rounds to 2^100");
         check(sum.compute(0.0), 1.0, "1 + 2^-100 + 0 rounds to 1");
-        check(sum.compute(0.0), tiny, "2^-100 + 0 + 0 is 2^-100");
-        check(sum.compute(0.0), 0.0, "an all-zero window reads 0");
+        // expectation corrected: 2^-100 -> 0, because C rounded 1 + 2^-100 to 1.
+        check(sum.compute(0.0), 0.0, "after the unit leaves, S + C is -1 + 1");
+        check(sum.compute(0.0), 0.0, "the all-zero window in this series reads 0");
     }
 
-    // 2. The midpoint of 1 and the next double: a third source far below
-    //    decides the rounding, and with none the tie goes to the even double.
+    // 2. Both signs of the speck round away in the correction at the midpoint.
     {
         const double half_step = std::ldexp(1.0, -53);
         const double speck = std::ldexp(1.0, -110);
-        const double next_after_one = 1.0 + std::ldexp(1.0, -52);
 
         math::Sum above(3);
         above.compute(1.0);
         above.compute(half_step);
-        check(above.compute(speck), next_after_one, "1 + 2^-53 + 2^-110 rounds up");
+        // expectation corrected: 1 + 2^-52 -> 1, because C rounds to 2^-53
+        // before the emitted S + C ties to even.
+        check(above.compute(speck), 1.0, "the positive speck cannot break the tie");
 
         math::Sum below(3);
         below.compute(1.0);

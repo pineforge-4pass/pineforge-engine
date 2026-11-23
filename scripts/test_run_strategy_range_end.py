@@ -48,7 +48,9 @@ import contextlib
 import csv
 import io
 import json
+import os
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -287,6 +289,54 @@ class CalendarProvenanceTests(unittest.TestCase):
                     self.assertEqual(doc["source"]["channel"], "ws-report-v1")
                     self.assertEqual(doc["sessions"],
                                      [[_utc_ms(2025, 4, 1), _utc_ms(2025, 4, 2)]])
+
+
+class CalendarExportTests(unittest.TestCase):
+    def test_refused_calendar_leaves_destination_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tape = root / "tape"
+            tape.mkdir()
+            (tape / "metrics.json").write_bytes(b'{"symbol":"NASDAQ:AAPL","interval":"15"}\n')
+            (tape / "strategy.pine").write_bytes(b"// Calendar probe\n")
+            csv_path = tape / "tv_trades.csv"
+            out = root / "calendar.json"
+            exporter = Path(__file__).resolve().with_name("symbol_calendar.py")
+            command = [sys.executable, "-B", str(exporter), str(tape), str(out)]
+
+            header = b"Signal\n"
+            prefix = b"d|250101-0930|250101-0930~250101-1600|250102-0930~"
+            csv_path.write_bytes(header + prefix + b"250102-1600\n")
+            accepted = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            self.assertEqual(accepted.stdout, "NASDAQ:AAPL: 2 session days\n")
+            expected = (
+                b'{"schema":"pineforge-symbol-calendar/v1","symbol":"NASDAQ:AAPL",'
+                b'"source":{"tape":"tape","interval":"15","channel":null,"returnedRange":null,'
+                b'"tvTradesSha256":"769d2daffb53b4af2ca05f899b349c80b31e7dfa9420c8cdec805d9de5e12646",'
+                b'"pineSha256":"961312ab4d4a941c7ea3382b07732b654e3c987a003f65f36653db3e461fc871"},'
+                b'"sessions":[[1735723800000,1735747200000],[1735810200000,1735833600000]]}'
+                + os.linesep.encode("ascii")
+            )
+            self.assertEqual(out.read_bytes(), expected)
+
+            for signal, error in (
+                (prefix + b"250102-0930\n", "session day 1 is out of order"),
+                (b"", "the calendar holds no session day"),
+            ):
+                csv_path.write_bytes(header + signal)
+                for before in (expected, None):
+                    with self.subTest(error=error, destination_exists=before is not None):
+                        if before is None:
+                            out.unlink(missing_ok=True)
+                        else:
+                            out.write_bytes(before)
+                        refused = subprocess.run(command, capture_output=True, text=True)
+                        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+                        self.assertIn(error, refused.stderr)
+                        self.assertEqual(
+                            out.read_bytes() if out.exists() else None, before, refused.stderr
+                        )
 
 
 class LoadTvRangeEndTests(unittest.TestCase):

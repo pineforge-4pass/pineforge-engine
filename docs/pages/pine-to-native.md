@@ -135,7 +135,7 @@ rather than defaulted.
 | `calc_on_every_tick` | `NativeCalculationTrigger` native_run_spec.hpp:94 | `calculation` native_c_api.h:2334 | `native_calc_on_fills_strategy.cpp` | `EveryModeledPoint` additionally recalculates at every modeled point of the delivered path and at every observed print. In a stream, `on_native_tick` native_host.hpp:898 is one call per accepted realtime print whatever the trigger is. |
 | `margin_long` | `NativeMarginModel::initial_long` native_run_spec.hpp:241 | `margin_initial_long` native_c_api.h:2344 | `native_margin_strategy.cpp` | A fraction, not a percent. `0.0` is the maintenance-only spelling for that side: the kernel enforces no opening requirement there and the host owns opening admission. |
 | `margin_short` | `NativeMarginModel::initial_short` native_run_spec.hpp:242 | `margin_initial_short` native_c_api.h:2348 | `native_margin_strategy.cpp` | Per side, unlike the one-scalar `initial_margin_fraction` native_run_spec.hpp:666 the model replaces. `maintenance_long` native_run_spec.hpp:243 / `maintenance_short` native_run_spec.hpp:244 add the liquidation half Pine has no word for. |
-| `close_entries_rule` | none — a native close names the lots it closes | — | `native_selected_strategy.cpp` | Pine picks FIFO or ANY for the whole script. A native reduce is explicit instead: `BindOpening` native_order.hpp:467 closes one opening's lots, `BindOpenings` native_order.hpp:513 a chosen set, a bare `Reduce` native_order.hpp:242 the book in FIFO order. The adapter keeps the run-level rule (`close_entries_rule` pine_adapter.hpp:106). |
+| `close_entries_rule` | none — a native close names the lots it closes | — | `native_selected_strategy.cpp` | Pine picks FIFO or ANY for the whole script. A native reduce is explicit instead: `BindOpening` native_order.hpp:467 closes one opening's lots, `BindOpenings` native_order.hpp:513 a chosen set, a bare `Reduce` native_order.hpp:242 the book in FIFO order. The adapter keeps the run-level rule (`close_entries_rule` pine_adapter.hpp:92-106). |
 | `backtest_fill_limits_assumption` | none — a generic limit fills when the level is reached | — | `tests/test_native_order_core.cpp` | TradingView's assumption is "the price must exceed the limit by *n* ticks". The generic knob beside it is `Limit::fill_through` native_order.hpp:261, which makes a limit market-if-touched; the *n*-tick assumption itself is a TradingView rule and stays in the adapter. |
 | `use_bar_magnifier` | `IntrabarPath` native_run_spec.hpp:378 | `intrabar_kind` native_c_api.h:2387 | `tests/test_native_calc_timing.cpp` | The host owns the lower bars, as `lower_tf` native_run_spec.hpp:394 or `synthesized` native_run_spec.hpp:408. The C magnifier arguments of `run_backtest_full` pineforge.h:615 configure a *compiled Pine strategy*, never a native host; its lower bars are TradingView's own intrabars, built from the finer feed at TradingView's table's timeframe (2 minutes on a 15-minute chart) and owned by the chart bar holding their last minute (`tradingview_magnifier_bars` magnifier_intrabars.hpp:46, @ref magnifier_intrabars). |
 | `fill_orders_on_standard_ohlc` | none — the kernel matches the bars you feed it | — | — | TradingView's switch exists because a Heikin-Ashi chart's candles are not the traded prices. A native host feeds the standard OHLC it wants matched, and derives any transformed series itself. |
@@ -707,7 +707,7 @@ it, so a valid length gives that class's values. The adapters do not touch
 
 ### Series-length SMA source adapter {#pine_to_native_series_sma}
 
-`pineforge::source::SeriesSma` (include/pineforge/source/pine_ta_length.hpp:519)
+`pineforge::source::SeriesSma` (include/pineforge/source/pine_ta_length.hpp:520)
 provides an SMA with a length supplied on every evaluation in the Pine source
 adapter. Keep one instance per written call site and evaluation context. Its
 public signatures are below. This is an unwired library primitive: codegen
@@ -728,7 +728,7 @@ existing `ta_number` overloads (include/pineforge/source/pine_ta_length.hpp:68)
 for `double`, `int` and `std::int64_t`, so integer `na` sentinels reach the
 adapter as a double NaN.
 
-`compute` (src/source/pine_ta_length.cpp:506) makes one logical update per call,
+`compute` (src/source/pine_ta_length.cpp:528) makes one logical update per call,
 starting at the site's first execution. A non-`na` source appends one retained
 observation; an `na` source contributes no sample. Each call uses its current
 length to select the last N non-`na` observations and returns `na` while fewer
@@ -739,7 +739,7 @@ access to the retained observations, capped at the last
 keep the same instance and ring; equal source values on successive calls remain
 distinct observations.
 
-`checked_length` (src/source/pine_ta_length.cpp:469) validates before either
+`checked_length` (src/source/pine_ta_length.cpp:471) validates before either
 entry point records or replaces an update. Finite fractional lengths truncate
 toward zero. A nonpositive truncated length throws the family's
 `length_not_positive` error for `sma`; `na` and other nonfinite lengths throw
@@ -748,7 +748,7 @@ above 15001 throws the family's `max_bars_back_exceeded` error with
 `pine_runtime_limit`. Invalid calls leave the logical checkpoint unchanged.
 For a valid length, warm-up returns `na` until N non-`na` samples are retained.
 
-`recompute` (src/source/pine_ta_length.cpp:527) replaces the most recent logical
+`recompute` (src/source/pine_ta_length.cpp:549) replaces the most recent logical
 update from its pre-update ring head/count, including the oldest value evicted
 by a full-ring push. Replacing a value with `na` restores that evicted value;
 replacing `na` with a value inserts one observation, evicting the oldest if
@@ -757,9 +757,12 @@ On an unused instance it creates the first logical update. Copy construction
 and assignment preserve the ring, head/count, saved eviction and replacement
 state, with storage detached before mutation.
 
-`mean` (src/source/pine_ta_length.cpp:487) sums the selected window afresh from
-oldest to newest with Neumaier compensated double arithmetic, then divides
-by N. The finite TradingView clock/source-`na`
+`mean` (src/source/pine_ta_length.cpp:489) sums the selected window afresh.
+For finite sources without intermediate overflow, it rounds the exact sum
+once, then divides by N. When its window is full, fixed SMA subtracts the
+oldest source before adding the incoming source. It accumulates each step's
+rounding error in a separate double and divides the total plus correction by N.
+The two paths can round differently. The finite TradingView clock/source-`na`
 packet supports the non-`na` sample membership correction; its complete prefix
 through bar 16 is embedded in `tv_clock_na_prefix`
 (tests/test_series_sma.cpp:241). This evidence does not qualify runtime
@@ -769,25 +772,17 @@ transport, infinity, overflow and signed zero remain unqualified. Sparse-call
 routing, repeated calls of the same site within a bar, same-bar re-execution
 after multiple calls and requested-context clocks require separate
 qualification. These ordinary C++ API rules do not establish Pine overload
-admission or TradingView parity for those contexts. The 1.13.0 variable-length
-path temporarily uses Neumaier arithmetic.
-Constant-length calls must retain existing `ta::SMA` and its window arithmetic
-(the exact sum of the window, rounded once; until November 2026 a sliding
-Kahan sum with compensated addends); this unwired primitive does not establish
-that future codegen route. Alignment of the variable-length arithmetic with
-fixed SMA remains planned after 1.13.0. The ordinary unit target's full
-1441-row feed comparison at N=20 exercises the variable adapter, measures
-numeric differences and maximum ULP distance against real fixed `ta::SMA`,
-and reports the first and maximum rows with times and hex values. That
-measurement is neither exact-alignment nor generated constant-script coverage;
-its metrics require actual execution.
+admission or TradingView parity for those contexts. Constant-length calls
+continue to use `ta::SMA`. The unit test covers a cancellation where only the
+series-length path retains a tiny addend. Its separate 1441-row feed comparison at N=20 reports
+difference counts and maximum ULP distance against fixed `ta::SMA`.
 
 Storage is one ring of at most 15001 non-`na` observations plus a scalar
 rollback checkpoint; it does not grow with bars or requested N.
-`ensure_capacity` (src/source/pine_ta_length.cpp:479) lazily creates that fixed
-ring. The cache policy controls residency, and selecting a window takes O(N)
-work. `observe_owned_storage`
-(include/pineforge/source/pine_ta_length.hpp:525) reports owned history through
+`ensure_capacity` (src/source/pine_ta_length.cpp:481) lazily creates that fixed
+ring. The cache policy controls residency, and summation uses bounded local
+scratch and takes O(N) work. `observe_owned_storage`
+(include/pineforge/source/pine_ta_length.hpp:526) reports owned history through
 the existing storage accounting. Allocation, capacity and scratch I/O failures
 propagate. Ring/checkpoint fields are published after required writes
 succeed, including restoration of an evicted oldest value.

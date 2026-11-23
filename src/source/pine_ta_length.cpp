@@ -9,6 +9,8 @@
 #include <pineforge/na.hpp>
 #include <pineforge/run_failure.hpp>
 
+#include "window_sum_expansion.hpp"
+
 #include <algorithm>
 #include <climits>
 #include <cmath>
@@ -22,20 +24,16 @@ namespace source {
 
 namespace {
 
-// "Error on bar N: " as TradingView prefixes a runtime error, when an
-// evaluation context names the bar.
-std::string bar_prefix() {
-    const ta::BarContext& ctx = ta::bar_context();
-    if (!ctx.installed) return std::string();
-    return "Error on bar " + std::to_string(ctx.bar_index) + ": ";
-}
-
+// Use the run-failure prefix for both evaluated calls and validation before
+// an evaluation context exists.
 [[noreturn]] void length_not_positive(long long value, const char* function,
                                       const char* argument) {
     throw coded<std::runtime_error>(
         RunFailureCode::pine_invalid_argument,
-        {{"function", function}, {"argument", argument}, {"rule", "must_be_positive"}},
-        bar_prefix() + "Invalid value of the '" + argument +
+        {{"function", function},
+         {"argument", argument},
+         {"rule", "must_be_positive"}},
+        run_error_bar_prefix() + "Invalid value of the '" + argument +
             "' argument (" + std::to_string(value) + ") in the '" +
             function + "' function. It must be > 0.");
 }
@@ -43,8 +41,10 @@ std::string bar_prefix() {
 [[noreturn]] void length_na(const char* function, const char* argument) {
     throw coded<std::runtime_error>(
         RunFailureCode::pine_invalid_argument,
-        {{"function", function}, {"argument", argument}, {"rule", "must_not_be_na"}},
-        bar_prefix() + "Invalid value of the '" + argument +
+        {{"function", function},
+         {"argument", argument},
+         {"rule", "must_not_be_na"}},
+        run_error_bar_prefix() + "Invalid value of the '" + argument +
             "' argument in the '" + function +
             "' function. It must not be na");
 }
@@ -53,7 +53,7 @@ std::string bar_prefix() {
     throw coded<std::runtime_error>(
         RunFailureCode::pine_runtime_limit,
         {{"limit", "max_bars_back"}, {"max", SeriesWindowExtreme::kMaxBarsBack}},
-        bar_prefix() +
+        run_error_bar_prefix() +
         "The script attempts to reference historical data that is too far from "
         "the current bar (" + std::to_string(length - 1) +
         " bars back). The historical buffer's limit is " +
@@ -80,8 +80,10 @@ bool length_value(double value, long long& out) {
     }
     throw coded<std::runtime_error>(
         RunFailureCode::pine_invalid_argument,
-        {{"function", "supertrend"}, {"argument", "factor"}, {"rule", "must_be_positive"}},
-        bar_prefix() + "Invalid value of the 'factor' argument (" + text +
+        {{"function", "supertrend"},
+         {"argument", "factor"},
+         {"rule", "must_be_positive"}},
+        run_error_bar_prefix() + "Invalid value of the 'factor' argument (" + text +
             ") in the 'supertrend' function. It must be > 0.");
 }
 
@@ -487,11 +489,31 @@ void SeriesSma::ensure_capacity() {
 double SeriesSma::mean(std::size_t length) const {
     if (length > count_) return na<double>();
 
+    double partials[::pineforge::detail::kWindowSumPartialCapacity];
+    std::size_t parts = 0;
+    const auto partial = [&partials](std::size_t i) -> double& { return partials[i]; };
+    const auto first = (head_ + kCapacity - length) % kCapacity;
+    const auto source = [this, first](std::size_t i) {
+        return history_.read((first + i) % kCapacity);
+    };
+    std::size_t i = 0;
+    for (; i != length; ++i) {
+        const double value = source(i);
+        if (is_na(value)) return na<double>();
+        if (!::pineforge::detail::expand_window_sum(value, parts, partial)) break;
+    }
+    if (i == length) {
+        const double sum = ::pineforge::detail::round_window_sum(parts, partial).sum;
+        // The fixed SMA starts its sum at positive zero.
+        return (sum + 0.0) / static_cast<double>(length);
+    }
+
+    // Preserve the previous series result for nonfinite sources or an
+    // intermediate overflow, outside the qualified window arithmetic.
     double sum = 0.0;
     double correction = 0.0;
-    const auto first = (head_ + kCapacity - length) % kCapacity;
     for (std::size_t i = 0; i != length; ++i) {
-        const double value = history_.read((first + i) % kCapacity);
+        const double value = source(i);
         if (is_na(value)) return na<double>();
         const double next = sum + value;
         if (std::fabs(sum) >= std::fabs(value))

@@ -2764,7 +2764,8 @@ private:
     void retire_cancelled_exits(
         const SourceId* id,
         const std::vector<std::pair<std::uint64_t, std::uint64_t>>& cancelled);
-    void purge_brackets_after_applied_reversal(const PlacementSnapshot&);
+    void purge_brackets_after_applied_reversal(
+        const PlacementSnapshot&, const native_order::ExecutionAppliedEvent&);
     void revive_brackets_after_margin(
         const native_order::ExecutionAppliedEvent&, const NativeDecisionContext&);
     int projected_pending_size() const noexcept;
@@ -2817,7 +2818,7 @@ private:
                                     const native_order::ExecutionAppliedEvent& event);
     void end_per_entry_exit(std::size_t index);
     void cancel_working_legs(
-        const detail::ExitScratchRows<native_order::RequestHandle>& legs);
+        const detail::ExitScratchRows<native_order::RequestHandle>& legs, bool retire_ended = false);
     void order_per_entry_point_ties();
     void record_market_review(admission::Checkpoint, int,
                               const std::vector<native_order::RequestHandle>&);

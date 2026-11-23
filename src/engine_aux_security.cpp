@@ -16,6 +16,16 @@
 
 namespace pineforge {
 
+// Match the duration used by native subscription validation. The legacy
+// conversion uses -1 for both months and a positive D/W count past int.
+static int64_t native_feed_seconds(const std::string& tf) {
+    const int seconds = tf_to_seconds(tf);
+    if (seconds == -1 && (tf.back() == 'D' || tf.back() == 'W')) {
+        return static_cast<int64_t>(std::stoi(tf)) * (tf.back() == 'W' ? 604800 : 86400);
+    }
+    return seconds;
+}
+
 // ---- authoritative higher-timeframe feeds ---------------------------------
 //
 // The generic contract (the source-runtime extraction ruling, design §2.iv item 6 / ADR-0001):
@@ -82,9 +92,9 @@ namespace pineforge {
 bool BacktestEngine::set_native_security_feed(const std::string& timeframe,
                                               const Bar* bars, int n) {
     guard_native_mutation("set_native_security_feed");
-    int seconds = 0;
+    int64_t seconds = 0;
     try {
-        seconds = tf_to_seconds(timeframe);
+        seconds = native_feed_seconds(timeframe);
     } catch (...) {
         seconds = 0;
     }
@@ -264,9 +274,9 @@ void BacktestEngine::prepare_native_security_feeds(const Bar* input_bars,
         if (!state.aggregator.is_active()) {
             continue;
         }
-        int requested_seconds = 0;
+        int64_t requested_seconds = 0;
         try {
-            requested_seconds = tf_to_seconds(state.tf);
+            requested_seconds = native_feed_seconds(state.tf);
         } catch (...) {
             requested_seconds = 0;
         }

@@ -114,8 +114,28 @@ Csv read_csv(const std::string& relative) {
     return rows;
 }
 
-std::vector<Bar> read_feed() {
-    const auto rows = read_csv("feed/bars.csv");
+struct Bounds {
+    std::int64_t run_start, window_start, capture_end;
+    std::int64_t terminal() const { return capture_end - kStep; }
+};
+
+Bounds read_bounds() {
+    const auto rows = read_csv("tailh/bounds.csv");
+    require(rows.front() == std::vector<std::string>(
+                {"run_start_ms", "window_start_ms", "capture_end_ms"}),
+            "unexpected bounds header");
+    require(rows.size() == 2 && rows[1].size() == 3, "expected one row of three bounds");
+    const Bounds b{integer(rows[1][0]), integer(rows[1][1]), integer(rows[1][2])};
+    require(b.run_start > 0 && b.run_start % kStep == 0 && b.run_start <= b.window_start,
+            "run start must be on the 15m grid at or before the order window");
+    require(b.window_start % kStep == 0 && b.capture_end > b.window_start
+                && b.terminal() - b.window_start == static_cast<std::int64_t>(2 * kExits) * kStep,
+            "expected seven days of orders followed by the terminal fill bar");
+    return b;
+}
+
+std::vector<Bar> read_feed(const Bounds& bounds) {
+    const auto rows = read_csv("tailh/bars.csv");
     require(rows.front() == std::vector<std::string>(
                 {"timestamp", "open", "high", "low", "close", "volume"}),
             "unexpected feed header");
@@ -128,14 +148,20 @@ std::vector<Bar> read_feed() {
         b.open = number(f[1]); b.high = number(f[2]); b.low = number(f[3]);
         b.close = number(f[4]); b.volume = number(f[5]);
         require(b.timestamp > 0 && b.timestamp % kStep == 0
-                    && (bars.empty() || b.timestamp == bars.back().timestamp + kStep),
+                    && (bars.empty() || b.timestamp - bars.back().timestamp == kStep),
                 "feed must advance on the 15m grid");
         require(b.low > 0 && b.low <= b.open && b.open <= b.high
                     && b.low <= b.close && b.close <= b.high && b.volume >= 0,
                 "invalid feed OHLCV");
         bars.push_back(b);
     }
-    require(bars.size() == 2 * kExits, "expected 672 feed bars");
+    require(!bars.empty(), "empty tailh feed");
+    require(bars.front().timestamp == bounds.run_start, "feed must start at the trade run start");
+    require(bars.back().timestamp < bounds.capture_end && bars.back().timestamp == bounds.terminal(),
+            "feed must end on the terminal fill bar");
+    const auto warmup = (bounds.window_start - bounds.run_start) / kStep;
+    require(bars.size() == static_cast<std::uint64_t>(warmup) + 2 * kExits + 1,
+            "expected all warm-up, order window and terminal fill bars");
     return bars;
 }
 
@@ -193,7 +219,7 @@ struct TapeExit {
     bool entry_seen = false, exit_seen = false;
 };
 
-std::map<std::int64_t, TapeExit> read_tape() {
+std::map<std::int64_t, TapeExit> read_tape(const Bounds& bounds) {
     const auto rows = read_csv("tailh/tv_trades.csv");
     const auto& header = rows.front();
     require(header.size() == 17 && header[0] == "Trade number" && header[1] == "Type"
@@ -228,13 +254,18 @@ std::map<std::int64_t, TapeExit> read_tape() {
     }
     std::map<std::int64_t, TapeExit> exits;
     std::int64_t next = 1;
+    auto previous_exit = bounds.window_start;
     for (const auto& pair : pairs) {
         const auto& t = pair.second;
         require(pair.first == next++ && t.entry_seen && t.exit_seen
                     && t.exit_ms == t.entry_ms + kStep, "unpaired tape trade");
+        require(t.entry_ms == previous_exit + kStep && t.exit_ms <= bounds.terminal(),
+                "tape fills do not follow the order window");
         require(exits.emplace(t.exit_ms, t).second, "duplicate tape exit time");
+        previous_exit = t.exit_ms;
     }
     require(exits.size() == kExits, "expected 336 tape exits");
+    require(previous_exit == bounds.terminal(), "expected the last tape exit on the terminal bar");
     return exits;
 }
 
@@ -247,12 +278,13 @@ std::string spelled(double value) {
 }
 
 class TailHost final : public source::PineStrategyHost {
+    const Bounds bounds_;
 public:
     ta::EMA ema{12};
     double previous = na<double>();
     std::map<std::int64_t, Texts> exits;
     std::size_t entries = 0;
-    explicit TailHost(std::int64_t origin) {
+    explicit TailHost(const Bounds& bounds) : bounds_(bounds) {
         attach_pine_execution_adapter();
         set_syminfo_session("24x7");
         set_syminfo_timezone("UTC");
@@ -266,20 +298,22 @@ public:
         config.pyramiding = 1;
         configure_pine_strategy(config);
         // S1 sets neither of the raw warmup keys.
-        set_syminfo_metadata("series_origin_ms", static_cast<double>(origin));
+        set_syminfo_metadata("series_origin_ms", static_cast<double>(bounds_.run_start));
     }
     void on_source_bar(const Bar& bar) override {
         const double current = ema.compute(bar.close);
+        const bool in_window = bounds_.window_start <= bar.timestamp
+                            && bar.timestamp < bounds_.terminal();
         const auto minute = bar.timestamp / kMinute % 60;
-        if (minute == 0 || minute == 30) {
+        if (in_window && (minute == 0 || minute == 30)) {
             strategy_entry("L", true, na<double>(), na<double>(), 1.0);
             ++entries;
         }
-        if (minute == 15 || minute == 45) {
+        if (in_window && (minute == 15 || minute == 45)) {
             CHECK(signed_position_size() == 1.0);
             const Texts text{spelled(current), spelled(previous)};
-            // Market orders fill on the next open. Join the close evaluation
-            // to that tape fill time, including the terminal close evaluation.
+            // Join the close to the next open. The last close is submitted
+            // inside the order window and fills on the terminal bar.
             CHECK(exits.emplace(bar.timestamp + kStep, text).second);
             strategy_close("L", text.first + "|" + text.second);
         }
@@ -288,18 +322,27 @@ public:
 };
 
 void run_s1() {
-    const auto bars = read_feed();
-    const auto tape = read_tape();
-    TailHost host(bars.front().timestamp);
+    const auto bounds = read_bounds();
+    const auto bars = read_feed(bounds);
+    const auto tape = read_tape(bounds);
+    TailHost host(bounds);
     host.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false);
-    CHECK(host.last_error().empty());
+    require(host.last_error().empty(), "engine run failed: " + host.last_error());
     CHECK(host.entries == kExits);
     CHECK(host.exits.size() == kExits);
+    const auto closed = host.closed_trade_count();
+    CHECK(closed == kExits);
     std::size_t joined = 0, equal = 0, different = 0, finite_na = 0;
     std::size_t tape_only = 0, engine_only = 0;
     std::string first;
     for (const auto& pair : tape) {
         const auto& t = pair.second;
+        // The scheduled key alone cannot prove the next open actually filled the close.
+        const auto i = static_cast<std::size_t>(t.index - 1);
+        if (i < closed) {
+            const auto trade = host.closed_trade(i);
+            CHECK(trade.entry_time == t.entry_ms && trade.exit_time == t.exit_ms);
+        }
         const auto got = host.exits.find(pair.first);
         if (got == host.exits.end()) {
             ++tape_only;
@@ -340,7 +383,7 @@ int main() {
         run_s1();
     } catch (const std::exception& error) {
         ++tests_failed;
-        std::printf("FAIL [S1] joined=unavailable equal=unavailable different=unavailable "
+        std::printf("FAIL [S1] NOT COMPARED: joined=unavailable equal=unavailable different=unavailable "
                     "finite-vs-na=unavailable tape-only=unavailable engine-only=unavailable\n"
                     "  first differing exit: unavailable; %s\n", error.what());
     }

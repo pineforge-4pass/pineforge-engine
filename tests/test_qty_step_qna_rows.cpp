@@ -1,5 +1,5 @@
 // CR-726: qty=na percent sizing against private TradingView signal rows
-// for the next release. Fixture sha256 prefix: af2f37103f3b.
+// for the next release. Fixture sha256 prefix: 8c125a7b6b30.
 // Receipt values are read at run time; no tape values are embedded here.
 
 #include <array>
@@ -365,9 +365,9 @@ int default_sizing(const std::vector<SignalRow>& rows) {
     }
     char population[128];
     std::snprintf(population, sizeof population,
-                  "receipt population: rows=%d expected=59 placed=%d expected=32 declined=%d expected=27",
+                  "receipt population: rows=%d expected=48 placed=%d expected=35 declined=%d expected=13",
                   placed.total + declined.total, placed.total, declined.total);
-    group.check(rows.size() == 59 && placed.total == 32 && declined.total == 27, population);
+    group.check(rows.size() == 48 && placed.total == 35 && declined.total == 13, population);
     placed.finish();
     declined.finish();
     return group.finish();

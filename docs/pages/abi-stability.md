@@ -119,7 +119,7 @@ destruction. NULL is returned only for a NULL handle. Collection failure reads
 `[{"args":{},"code":"run_warnings_unavailable"}]`, never an empty array.
 Warnings do not change values, trades, execution status, failure accessors or
 state hashes. The accessor adds no C struct and changes neither existing C
-layouts nor installed host class layouts; ABI 5 and stream layout 4 stay fixed.
+layouts nor installed host class layouts; ABI 5 and stream layout 5 stay fixed.
 
 `strategy_set_account_currency_fx_scalar(s, rate)` is an additive runtime
 setter; feature-probe the symbol in older modules. It installs the host's
@@ -144,7 +144,7 @@ broker-state hash folds the mark only when a scalar was supplied: a run that
 supplies none keeps its hash values, and a run that supplies one, through
 either setter, hashes differently from 1.12.0. The setter adds no C struct and
 changes neither existing C layouts nor the size of an installed host class;
-ABI 5 and stream layout 4 stay fixed.
+ABI 5 and stream layout 5 stay fixed.
 
 ## Symbol inventory
 

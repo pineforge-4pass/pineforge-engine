@@ -765,7 +765,9 @@ Drawing objects are data in `drawing.hpp` (see the summary table); the runtime h
 
 `tf_to_seconds(tf)` covers minute strings (`"1"`, `"5"`, `"60"`, `"240"`, …),
 day strings (`"D"`, `"1D"` → 86400), and week strings (`"W"`, `"1W"` →
-604800). Month (`"M"`, `"1M"`) returns `-1` to flag calendar mode.
+604800). Month (`"M"`, `"1M"`) and positive day or week counts whose seconds
+exceed `int` return `-1` to flag calendar mode. This flag is not a feed key:
+`"3551W"` and `"M"` can supply different prices.
 `tf_multiplier`, `tf_is_intraday / _daily / _weekly / _monthly / _seconds`
 are inline string predicates.
 
@@ -777,7 +779,7 @@ boundary detection.
 
 - `> 1` for ratio aggregation,
 - `1` for same TF,
-- `-1` for calendar aggregation (month),
+- `-1` for calendar aggregation (including week and day counts past the seconds limit),
 - `-2` when the target TF is finer than the input.
 
 `detect_timeframe(bars, n, max_samples=100)` infers a TV-style TF string

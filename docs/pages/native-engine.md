@@ -1506,7 +1506,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:19464-19497`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:19530-19570`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
@@ -2464,8 +2464,9 @@ identified by its own index — in `NativeTimeframeBarContext::subscription` and
 in `native_series_bar(index)`. Two `"60"` series over a 15-minute input
 deliver the same buckets twice, once per index, in declaration order. The one
 thing same-period instances cannot each own is a different
-`authoritative_bars` feed: the feed store is keyed by the period's duration,
-so declaring two conflicting feeds for one period is refused
+`authoritative_bars` feed. The store compares day and week durations in full:
+`3551W` and `M` can each supply their own prices. Two conflicting feeds for
+the same period are refused
 (`DuplicateSubscriptionTimeframe`), while declaring the same bars twice — or
 leaving one, or both, empty — is accepted.
 
@@ -2476,7 +2477,7 @@ with `input_tf` exactly as `script_tf` does. Named refusals:
 | --- | --- |
 | `InvalidSubscriptionTimeframe` | unparseable literal, or a pairing `script_tf` would not accept |
 | `SubscriptionFinerThanInput` | strictly finer than `input_tf` — a lower-timeframe array is a different contract and is not promoted |
-| `DuplicateSubscriptionTimeframe` | two series of the same period declaring **different** `authoritative_bars` (the feed store is keyed by duration, and every monthly literal is one period, so they cannot each own one) |
+| `DuplicateSubscriptionTimeframe` | two series declaring **different** `authoritative_bars` for the same duration, or for two monthly literals (which share one feed slot) |
 | `UnorderedSubscriptionBars` | `authoritative_bars` not strictly increasing in time |
 | `SubscriptionWithoutTimeframe` | declared together with `timeframe_undetected` |
 | `SubscriptionWithoutAuxiliaryFeed` | a series whose `source` is `AuxiliaryFeed` in a spec that declares no feed |
@@ -3110,7 +3111,7 @@ and not a way to register a series: registration is
 `NativeRunSpec::subscriptions` or `declare_timeframe_subscriptions`. In-run the
 setter is a source mutation and **throws**, latching `Failed`
 (`UnsupportedSource`) through `guard_native_mutation`
-(`engine_aux_security.cpp:84`, `guard_native_mutation` `engine_consumer.cpp:62`).
+(`engine_aux_security.cpp:94`, `guard_native_mutation` `engine_consumer.cpp:62`).
 
 ## Batch OHLCV vs ticks vs quiet
 

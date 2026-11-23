@@ -276,7 +276,7 @@ public:
     }
 };
 
-// expectation corrected (R5 lane PAR-CASHFEE): 20.0 -> 19.79, and the row's
+// expectation corrected (cash-fee sizing tapes): 20.0 -> 19.79, and the row's
 // name with it (was cash_entry_fee_is_not_subtracted_from_percent_sizing_equity).
 // TradingView sizes a percent-of-equity default quantity under a cash commission
 // from strategy.equity, the open entries' cash fees charged, less the fee its

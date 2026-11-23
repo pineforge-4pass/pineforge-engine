@@ -22,22 +22,22 @@ std::string detect_timeframe(const Bar* bars, int n, int max_samples) {
     if (n < 2) return "1";
 
     int count = std::min(n - 1, max_samples);
-    std::vector<int64_t> deltas;
+    std::vector<uint64_t> deltas;
     deltas.reserve(count);
 
     for (int i = 0; i < count; ++i) {
-        int64_t d = bars[i + 1].timestamp - bars[i].timestamp;
-        if (d > 0) deltas.push_back(d);
+        const int64_t earlier = bars[i].timestamp;
+        const int64_t later = bars[i + 1].timestamp;
+        if (later <= earlier) continue;
+        // Unsigned subtraction gives the exact positive gap even across zero.
+        deltas.push_back(static_cast<uint64_t>(later) - static_cast<uint64_t>(earlier));
     }
 
     if (deltas.empty()) return "1";
 
-    // Compute median delta
+    // The upper median in whole seconds fits in int64_t even for the widest gap.
     std::sort(deltas.begin(), deltas.end());
-    int64_t median_ms = deltas[deltas.size() / 2];
-
-    // Convert to seconds
-    int64_t secs = median_ms / 1000;
+    const int64_t secs = static_cast<int64_t>(deltas[deltas.size() / 2] / 1000);
 
     // Map to nearest standard TF (TradingView format)
     // Standard TFs in seconds: 1m=60, 3m=180, 5m=300, 15m=900, 30m=1800,
@@ -92,6 +92,20 @@ int timeframe_count(const std::string& text) {
     }
 }
 
+// `count` units of `unit_seconds` each, multiplied in 64 bits. Seconds that
+// do not fit this legacy int API get the refusal of a count that does not.
+int timeframe_seconds(int count, int unit_seconds, const std::string& tf) {
+    const int64_t seconds = static_cast<int64_t>(count) * unit_seconds;
+    if (seconds < std::numeric_limits<int>::min()
+        || seconds > std::numeric_limits<int>::max()) {
+        throw coded<std::out_of_range>(
+            RunFailureCode::pine_invalid_argument,
+            {{"argument", "timeframe"}, {"rule", "unparseable"}},
+            "timeframe '" + tf + "': seconds out of int range");
+    }
+    return static_cast<int>(seconds);
+}
+
 }  // namespace
 
 int tf_to_seconds(const std::string& tf) {
@@ -112,14 +126,16 @@ int tf_to_seconds(const std::string& tf) {
         // like M. Its parsed day count still drives the generated partition;
         // this is not a limit on the number of dates a bucket can hold.
         if (n > std::numeric_limits<int>::max() / 86400) return -1;
-        return n * 86400;
+        return timeframe_seconds(n, 86400, tf);
     }
 
     if (last == 'W') {
         // "W" or "1W" etc.
         if (tf.size() == 1) return 604800;
         int n = timeframe_count(tf.substr(0, tf.size() - 1));
-        return n * 604800;
+        // Calendar-only past the int too, as a day count is above.
+        if (n > std::numeric_limits<int>::max() / 604800) return -1;
+        return timeframe_seconds(n, 604800, tf);
     }
 
     if (last == 'S') {
@@ -131,20 +147,22 @@ int tf_to_seconds(const std::string& tf) {
         return n;
     }
 
-    // All-numeric: minutes
+    // All-numeric: minutes. They have no calendar meaning to fall back on.
     int minutes = timeframe_count(tf);
-    return minutes * 60;
+    return timeframe_seconds(minutes, 60, tf);
 }
 
 int tf_ratio(const std::string& input_tf, const std::string& target_tf) {
     int input_s = tf_to_seconds(input_tf);
     int target_s = tf_to_seconds(target_tf);
 
-    // Calendar-only durations include a day count too large for the legacy
-    // seconds API. Equal day literals still pass their input bars through.
+    // Calendar-only durations include a day or week count too large for the
+    // legacy seconds API (-1). Equal day literals, and equal calendar-only
+    // week literals, still pass their input bars through.
     if (target_s < 0) {
-        if (input_tf == target_tf
-            && calendar_period_for(target_tf) == CalendarPeriod::DAY) return 1;
+        const CalendarPeriod period = calendar_period_for(target_tf);
+        if (input_tf == target_tf && (period == CalendarPeriod::DAY
+                || (period == CalendarPeriod::WEEK && target_s == -1))) return 1;
         return -1;
     }
 
@@ -1177,6 +1195,8 @@ TimeframeAggregator::TimeframeAggregator(const std::string& target_tf,
         // that also have calendar semantics like daily from intraday).
         mode_ = Mode::CALENDAR;
         cal_period_ = target_period;
+        if (cal_period_ == CalendarPeriod::WEEK && target_tf.size() > 1)
+            ratio_ = std::max(1, timeframe_count(target_tf));
     } else {
         // Both are ratio-based TFs. Compute ratio.
         int r = tf_ratio(input_tf, target_tf);
@@ -1326,6 +1346,22 @@ std::optional<AggregatedBar> TimeframeAggregator::next_fixed_completion(
 // above; the duplication is local and trivial (3-5 lines each).
 
 namespace {
+
+// Session-day bounds of an nW bucket. Week zero starts on the trading
+// date Monday 1969-12-29, including for sessions that open the prior day.
+struct WeekGroup {
+    int64_t first_day;
+    int64_t next_day;
+};
+
+WeekGroup week_group(int64_t ms, const std::string& tz, const std::string& session,
+                     int weeks) {
+    const int64_t day = session_day_index(ms, tz, session);
+    const int64_t width = static_cast<int64_t>(weeks) * 7;
+    const int64_t offset = day + session_trading_date_shift_days(session) + 3;
+    const int64_t first = day - (offset % width + width) % width;
+    return {first, first + width};
+}
 
 struct FeedState {
     Bar& current_bar;
@@ -1603,7 +1639,7 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
                                   int64_t next_input_ms,
                                   int64_t calling_close_ms,
                                   const native_calendar::NativeInterval* interval = nullptr,
-                                  int64_t input_close_ms = 0) {
+                                  int64_t input_close_ms = 0, int weeks = 1) {
     AggregatedBar result;
     const bool pf_tr = security_trace_enabled();
     if (pf_tr) {
@@ -1624,18 +1660,15 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
         const int64_t instant = session_covered_instant_ms(stamp, atz, asess);
         return interval->open_ms <= instant && instant < interval->next_period_open_ms;
     };
-    // Use the explicit target interval when supplied, the installed native
-    // partition otherwise, and the legacy single-period calendar last.
+    // Prefer an explicit target interval. Otherwise the aggregator compares
+    // the installed stamp groups or the requested nominal calendar period.
     const bool boundary = s.sub_bar_count > 0 && (interval
         ? !in_interval(s.observed_first_ms)
-        : native_periods
-            ? s.agg->period_changes(s.current_bar.timestamp, input_bar.timestamp)
-            : crosses_boundary(s.current_bar.timestamp, input_bar.timestamp,
-                               cal_period, atz, asess));
+        : s.agg->period_changes(s.current_bar.timestamp, input_bar.timestamp));
     if (s.sub_bar_count == 0) {
         // Very first bar
         feed_reset_current(s, input_bar);
-        if (!interval) {
+        if (!interval && weeks == 1) {
             result.bar = s.current_bar;
             result.is_complete = false;
             result.sub_bar_count = s.sub_bar_count;
@@ -1645,7 +1678,7 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
     } else if (boundary) {
         if (s.current_emitted_complete) {
             feed_reset_current(s, input_bar);
-            if (!interval) {
+            if (!interval && weeks == 1) {
                 result.bar = s.current_bar;
                 result.is_complete = false;
                 result.sub_bar_count = s.sub_bar_count;
@@ -1704,6 +1737,14 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
         result.sub_bar_count = s.sub_bar_count;
         return result;
     }
+    const auto nominal_close = [&] {
+        int64_t instant = input_bar.timestamp;
+        if (weeks > 1) {
+            const auto group = week_group(instant, atz, asess, weeks);
+            instant = session_day_stamp_real_ms(group.next_day - 7, atz, asess);
+        }
+        return session_period_last_traded_close_ms(instant, atz, asess, cal_period);
+    };
     bool complete = false;
     if (interval) {
         // A calendar-only input supplies its own natural close. It completes
@@ -1718,6 +1759,10 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
         // 12:00 CT pause or split it from the 17:00 reopen, where TradingView
         // keeps one daily bar (lab tv esd pin, 2026-09-05).
         complete = s.agg->period_changes(input_bar.timestamp, next_input_ms);
+    } else if (weeks > 1) {
+        // Only the final week's close can seal this group. With an installed
+        // partition and a known successor, its stamps have precedence above.
+        complete = input_seconds > 0 && input_bar.timestamp + input_seconds * 1000 >= nominal_close();
     } else if (input_seconds > 0) {
         const std::string& atz = s.anchor_tz ? *s.anchor_tz : anchor_utc();
         const std::string& asess = s.anchor_session ? *s.anchor_session : empty_session();
@@ -1808,12 +1853,9 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
         // bar is the chart bar, whose own end the nominal rules above
         // already tested) the bucket waits, bit-identical to before.
         if (interval ? !in_interval(next_input_ms)
-                     : crosses_boundary(input_bar.timestamp, next_input_ms,
-                                        cal_period, atz, asess)) {
+                     : s.agg->period_changes(input_bar.timestamp, next_input_ms)) {
             complete = early_close_completes
-                || calling_close_ms >= (interval ? interval->last_traded_close_ms
-                    : session_period_last_traded_close_ms(
-                          input_bar.timestamp, atz, asess, cal_period));
+                || calling_close_ms >= (interval ? interval->last_traded_close_ms : nominal_close());
         }
     }
     if (!complete && native_periods && cal_period == CalendarPeriod::DAY
@@ -1898,7 +1940,7 @@ AggregatedBar TimeframeAggregator::feed(const Bar& input_bar,
                                    calling_close_ms);
         case Mode::CALENDAR:
             return feed_calendar_mode(input_bar, s, cal_period_, input_seconds_,
-                                      next_input_ms, calling_close_ms);
+                                      next_input_ms, calling_close_ms, nullptr, 0, ratio_);
     }
 
     // Unreachable
@@ -2001,11 +2043,16 @@ void TimeframeAggregator::set_native_periods(std::vector<int64_t> stamps,
     // nominal period share the group's first stamp as their open; DAY
     // groups are the stamps themselves.
     int64_t prev_period = 0;
+    const bool multiweek = cal_period_ == CalendarPeriod::WEEK && ratio_ > 1;
     for (std::size_t k = 0; k < stamps.size(); ++k) {
         int64_t open = stamps[k];
-        if (cal_period_ != CalendarPeriod::DAY) {
-            const int64_t period = session_period_open_ms(
-                trade_instants[k], anchor_tz_, anchor_session_, cal_period_);
+        // For nW, an exact feed already supplies the group opens; daily
+        // bars instead belong to the n-week group of their trade date.
+        if (cal_period_ != CalendarPeriod::DAY
+            && (!multiweek || feed_period == CalendarPeriod::DAY)) {
+            const int64_t period = multiweek
+                ? week_group(trade_instants[k], anchor_tz_, anchor_session_, ratio_).first_day
+                : session_period_open_ms(trade_instants[k], anchor_tz_, anchor_session_, cal_period_);
             if (k > 0 && period == prev_period) open = native_group_open_.back();
             prev_period = period;
         }
@@ -2013,9 +2060,11 @@ void TimeframeAggregator::set_native_periods(std::vector<int64_t> stamps,
     }
     // The last native bar reaches at least its nominal period; a later
     // input bar has no stamp to prove more and keeps the nominal calendar.
-    native_last_bound_ = session_period_close_ms(
-        stamps.back(), anchor_tz_, anchor_session_,
-        feed_period == CalendarPeriod::NONE ? cal_period_ : feed_period);
+    const auto unit = feed_period == CalendarPeriod::NONE ? cal_period_ : feed_period;
+    native_last_bound_ = multiweek && unit == CalendarPeriod::WEEK
+        ? session_day_stamp_real_ms(week_group(stamps.back(), anchor_tz_, anchor_session_,
+                                               ratio_).next_day, anchor_tz_, anchor_session_)
+        : session_period_close_ms(stamps.back(), anchor_tz_, anchor_session_, unit);
     native_stamps_ = std::move(stamps);
 }
 
@@ -2083,7 +2132,8 @@ bool TimeframeAggregator::period_changes(int64_t prev_ms, int64_t curr_ms) const
                                &native_late_opens_, curr_ms).key;
     }
     if (mode_ != Mode::CALENDAR) return false;
-    if (native_stamps_.empty() && !native_source_) {
+    if (native_stamps_.empty() && !native_source_
+        && !(cal_period_ == CalendarPeriod::WEEK && ratio_ > 1)) {
         return crosses_boundary(prev_ms, curr_ms, cal_period_, anchor_tz_,
                                 anchor_session_);
     }
@@ -2100,6 +2150,10 @@ int64_t TimeframeAggregator::bucket_open_ms(int64_t ms) const {
             if (native_source_ && native_source_period(ms, generated)) return generated;
             const int k = native_index(ms);
             if (k >= 0) return native_group_open_[static_cast<std::size_t>(k)];
+            if (cal_period_ == CalendarPeriod::WEEK && ratio_ > 1)
+                return session_day_stamp_real_ms(
+                    week_group(ms, anchor_tz_, anchor_session_, ratio_).first_day,
+                    anchor_tz_, anchor_session_);
             return session_period_open_ms(ms, anchor_tz_, anchor_session_,
                                           cal_period_);
         }

@@ -343,8 +343,9 @@ bool report_checkpoint_boundary(std::uint64_t cursor, std::uint64_t interval) {
 // The largest text parse_json accepts. A checkpoint payload above it is still
 // written (no reader may assume a cap), but no reader can parse it back.
 constexpr std::uint64_t max_json_frame_bytes = 1024 * 1024;
-// Up to this cursor a checkpoint is folded as a tree, as it always was. Above
-// it the fold spools its arrays, so its memory does not grow with the cursor.
+// Up to this cursor a checkpoint is folded as a tree, as it always was, unless
+// the run streams large checkpoints (--native-event-retention window). Above it
+// the fold spools its arrays, so its memory does not grow with the cursor.
 constexpr std::uint64_t max_tree_fold_cursor = 512;
 
 void apply_report_snapshot(SpooledReportDocument& document, const std::string& bytes) {
@@ -418,7 +419,10 @@ PreparedCheckpoint prepare_report_checkpoint(sqlite3* database, std::uint64_t cu
 
     PreparedCheckpoint prepared;
     std::string payload, payload_hash;
-    if (cursor <= max_tree_fold_cursor) {
+    // A run that streams large checkpoints never builds the tree: its payload
+    // may exceed the JSON frame at any cursor, and the tree would hold all of it
+    // (and its serialized copy) in memory. The fold below writes the same bytes.
+    if (cursor <= max_tree_fold_cursor && !stream_large) {
         Json document;
         try {
             document = read_report_document(database, cursor, true, true, nullptr);

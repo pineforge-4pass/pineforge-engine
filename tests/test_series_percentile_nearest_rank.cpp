@@ -202,17 +202,20 @@ void errors() {
         [&] { (void)actual.compute(1.0, na<double>(), 50.0); },
         RunFailureCode::pine_invalid_argument,
         "na length is refused",
-        "Invalid value of the 'length' argument (0) in the 'percentile_nearest_rank' function. It must be > 0.");
+        "Error before the first bar: Invalid value of the 'length' argument (0) "
+        "in the 'percentile_nearest_rank' function. It must be > 0.");
     expect_failure(
         [&] { (void)actual.compute(1.0, 0.0, 50.0); },
         RunFailureCode::pine_invalid_argument,
         "zero length is refused",
-        "Invalid value of the 'length' argument (0) in the 'percentile_nearest_rank' function. It must be > 0.");
+        "Error before the first bar: Invalid value of the 'length' argument (0) "
+        "in the 'percentile_nearest_rank' function. It must be > 0.");
     expect_failure(
         [&] { (void)actual.compute(1.0, -3.0, 50.0); },
         RunFailureCode::pine_invalid_argument,
         "negative length is refused",
-        "Invalid value of the 'length' argument (-3) in the 'percentile_nearest_rank' function. It must be > 0.");
+        "Error before the first bar: Invalid value of the 'length' argument (-3) "
+        "in the 'percentile_nearest_rank' function. It must be > 0.");
 
     require(is_na(actual.compute(1.0, 15001.0, 50.0)),
             "a 15001-value window does not exceed the historical limit");
@@ -220,7 +223,8 @@ void errors() {
         [&] { (void)actual.compute(1.0, 15002.0, 50.0); },
         RunFailureCode::pine_runtime_limit,
         "a 15002-value window is refused",
-        "The script attempts to reference historical data that is too far from the current bar (15001 bars back). The historical buffer's limit is 15000 bars.");
+        "Error before the first bar: The script attempts to reference historical data that is "
+        "too far from the current bar (15001 bars back). The historical buffer's limit is 15000 bars.");
 }
 
 void recompute_replaces_last_append() {

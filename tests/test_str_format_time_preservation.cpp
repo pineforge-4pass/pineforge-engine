@@ -3,6 +3,8 @@
 #include <clocale>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <ctime>
 #include <cstdio>
 #include <exception>
 #include <string>
@@ -41,11 +43,13 @@ constexpr FormatTimeCase cases[] = {
 #if defined(__GLIBC__)
     // glibc's UTC %z spelling has not been established on macOS here.
     {"raw_percent_z", 1706746029000LL, "%z", "UTC", "+0000", 5},
-    // glibc's GMT conversion normalizes TZ to UTC for %Z and mktime-based %s.
+    // glibc's GMT conversion normalizes TZ to UTC for %Z.
     // These spellings and the C-locale %c layout are unproved on macOS here.
     {"raw_percent_Z", 1706746029000LL, "%Z", "GMT", "UTC", 3},
     {"raw_percent_c", 1706746029000LL, "%c", "UTC", "Thu Feb  1 00:07:09 2024", 24},
     {"raw_percent_s", 1706746029000LL, "%s", "GMT", "1706746029", 10},
+    // `%s` is the Unix second, independent of the process timezone.
+    {"raw_percent_s_utc_ambient_zone", 1706746029000LL, "%s", "UTC", "1706746029", 10},
 #endif
     {"raw_percent_escape", 1706746029000LL, "%%", "UTC", "%", 1},
 #if defined(__GLIBC__)
@@ -167,12 +171,26 @@ int main() {
         std::fprintf(stderr, "FAIL: C time locale unavailable\n");
         return 1;
     }
+    const char* const previous_tz = std::getenv("TZ");
+    const bool had_previous_tz = previous_tz != nullptr;
+    const std::string previous_tz_value = previous_tz == nullptr ? "" : previous_tz;
+    if (::setenv("TZ", "America/New_York", 1) != 0) {
+        std::fprintf(stderr, "FAIL: cannot set process timezone\n");
+        return 1;
+    }
+    ::tzset();
     int failed = 0;
     for (const auto& test_case : cases) {
         if (!check_format_time(test_case)) {
             ++failed;
         }
     }
+    if (had_previous_tz) {
+        ::setenv("TZ", previous_tz_value.c_str(), 1);
+    } else {
+        ::unsetenv("TZ");
+    }
+    ::tzset();
     std::printf("%zu cases, %d failed\n", sizeof(cases) / sizeof(cases[0]), failed);
     return failed == 0 ? 0 : 1;
 }

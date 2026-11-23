@@ -4,14 +4,9 @@
  * src/ta_moving_averages.cpp that were left un-exercised by test_ta.cpp /
  * test_ta_indicators_extras.cpp / test_ta_rma_warmup.cpp.
  *
- * Targeted uncovered lines in src/ta_moving_averages.cpp:
- *   28-29    RMA::compute      na(src) -> na guard
- *   104-105  SMA::compute      periodic exact-sum recompute (bar_count & 255 == 0)
- *   145-146  WMA::compute      na(src) -> na guard
- *   183-184  HMA::compute      na(src) -> na guard
- *   213-217  VWMA::compute     while(size > length) pop_front sv/v eviction
- *   306-310  SMA::recompute    na(src) guard + empty-buffer dispatch to compute
- *   354-355  HMA::recompute    na inner-WMA result -> na guard
+ * RMA, WMA and HMA skip missing inputs. Fixed SMA handles the seed boundary
+ * and rolls across the 256th observation. VWMA evicts old source/volume
+ * pairs, and HMA returns na while an inner WMA is still warming up.
  *
  * NDEBUG-PROOF: this test never uses bare assert(). It uses a returning
  * CHECK macro that increments a failure counter; main() returns nonzero if
@@ -83,29 +78,21 @@ static void test_rma_na_input_guard() {
 }
 
 // --------------------------------------------------------------------
-// SMA::compute periodic exact-sum self-correction (lines 104-105).
+// SMA::compute across the old 256-observation re-sum boundary.
 // --------------------------------------------------------------------
-// The branch `if ((bar_count & 255) == 0) running_sum = recalculate_exact_sum();`
-// only fires once bar_count is a non-zero multiple of 256 AND past the warmup
-// window. Feed >256 bars to a period-3 SMA so bar_count reaches 256.
-//
-// The recompute does not change the mathematical result (it re-derives the
-// exact window sum), so the value at bar 256 must equal the mean of the last
-// three inputs. We pin that value to confirm the self-correction path leaves
-// the result correct rather than corrupting running_sum.
-static void test_sma_periodic_exact_sum_recompute() {
-    std::printf("test_sma_periodic_exact_sum_recompute\n");
+// These small integer windows are exact throughout the running update.
+static void test_sma_at_256_observations() {
+    std::printf("test_sma_at_256_observations\n");
 
     ta::SMA sma(3);
     auto src = [](int i) -> double { return 1.0 + (double)(i % 50); };
 
     double v256 = na<double>();
     double v257 = na<double>();
-    // bar_count == i+1. We need bar_count to reach 256 -> i == 255, and 257.
     for (int i = 0; i < 260; ++i) {
         double out = sma.compute(src(i));
-        if (i == 255) v256 = out;   // bar_count 256 -> recalc branch fires
-        if (i == 256) v257 = out;   // bar_count 257 -> ordinary path
+        if (i == 255) v256 = out;
+        if (i == 256) v257 = out;
         if (i >= 2) {
             CHECK(!is_na(out));     // warmup over after 3 bars
         }
@@ -204,21 +191,19 @@ static void test_vwma_window_eviction() {
 }
 
 // --------------------------------------------------------------------
-// SMA::recompute na-input guard + empty-buffer dispatch (lines 306-310).
+// SMA::recompute on the seed bar and on an empty instance.
 // --------------------------------------------------------------------
 static void test_sma_recompute_guards() {
     std::printf("test_sma_recompute_guards\n");
 
-    // (lines 306-307) na input to recompute returns na directly.
+    // Removing the third observation rewinds this instance to warm-up.
     ta::SMA sma(3);
     sma.compute(10.0);
     sma.compute(20.0);
     sma.compute(30.0);  // warmed up; value would be 20.0
     CHECK(is_na(sma.recompute(na<double>())));
 
-    // (lines 308-310) empty-buffer recompute must dispatch to compute(). A
-    // brand-new SMA with no compute history: recompute behaves exactly like
-    // the first compute -> still in warmup -> na.
+    // With no compute history, recompute supplies the first observation.
     ta::SMA fresh(3);
     CHECK(is_na(fresh.recompute(7.0)));
     // The dispatched compute() did push 7.0, so continuing to warm up works.
@@ -427,7 +412,7 @@ int main(int argc, char** argv) {
     if (!row.empty() && row != "controls") return tests_failed == 0 ? 0 : 1;
 
     test_rma_na_input_guard();
-    test_sma_periodic_exact_sum_recompute();
+    test_sma_at_256_observations();
     test_wma_na_input_guard();
     test_hma_na_guards();
     test_vwma_window_eviction();

@@ -507,10 +507,29 @@ void timezone_system_error_host_rows() {
         {"chart_day_key", &ZonedHost::read_chart_day, 101},
         {"chart_time", &ZonedHost::read_chart_hour, 20},
     };
+    const auto real = libc_setenv();
+    CHECK(real != nullptr);
+    if (real == nullptr) return;
+    const char* const found = std::getenv("TZ");
+    const bool had_zone = found != nullptr;
+    const std::string original = had_zone ? found : "";
+    const auto restore = [&] {
+        setenv_failure = 0;
+        setenv_failed = false;
+        const int restored = had_zone ? real("TZ", original.c_str(), 1) : ::unsetenv("TZ");
+        CHECK(restored == 0);
+        ::tzset();
+        return restored == 0;
+    };
     for (const auto& row : rows) {
-        {
-            pineforge::tz_util::ScopedTimezone previous("UTC+9");
+        // Force a zone change even when the caller already uses the chart zone.
+        const int seeded = real("TZ", "UTC-9", 1);
+        CHECK(seeded == 0);
+        if (seeded != 0) {
+            restore();
+            return;
         }
+        ::tzset();
         setenv_failed = false;
         setenv_failure = EINVAL;
         bool escaped = false;
@@ -524,12 +543,21 @@ void timezone_system_error_host_rows() {
         } catch (const std::exception& error) {
             std::fprintf(stderr, "%s threw the wrong exception: %s\n", row.name, error.what());
             CHECK(false);
+        } catch (...) {
+            std::fprintf(stderr, "%s threw a non-standard exception\n", row.name);
+            CHECK(false);
         }
         setenv_failure = 0;
         CHECK(setenv_failed && escaped);
         std::printf("timezone_system_error_host_rows: %s, setenv fired=%d, escaped=%d\n",
                     row.name, int(setenv_failed), int(escaped));
-        CHECK((host.*row.read)(first_bar) == row.expected);
+        try {
+            CHECK((host.*row.read)(first_bar) == row.expected);
+        } catch (...) {
+            restore();
+            throw;
+        }
+        if (!restore()) return;
     }
 }
 #endif

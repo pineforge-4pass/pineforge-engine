@@ -20,8 +20,8 @@ enum class EmaSeeding : unsigned char {
     // The default, and byte-identical to every EMA before the option existed.
     FirstValue = 0,
     // na until ``length`` finite inputs have accumulated, then their simple
-    // average, then the ordinary recursion: an SMA-seeded EMA, warming up the
-    // way ``RMA`` and ``SMA`` already do (na for the whole warm-up window).
+    // average (the exact sum rounded once, then divided by length), then the
+    // ordinary recursion.
     SimpleAverage = 1,
 };
 
@@ -183,9 +183,9 @@ class RMA {
     double output_val;
     int length;
     int bar_count;
-    // The first `length` valid sources, summed the way ta.sma sums its window:
-    // the seed is their exact sum, rounded once, over length. Nothing enters it
-    // after the seed.
+    // The first `length` valid sources, summed like a fixed SMA. Its emitted
+    // sum divided by length seeds the recursion. Nothing enters the window
+    // after that bar.
     KahanWindowSum seed_window_;
     // Whether the bar computed last entered the window; restore() takes it out.
     bool seed_pushed_ = false;
@@ -259,9 +259,9 @@ public:
 // --- SMA ---
 
 class SMA {
+    // The window also owns the warm-up count, so replacing a source can
+    // move the current bar across the seed boundary in either direction.
     KahanWindowSum window_;
-    int length;
-    int bar_count;
 
 public:
     explicit SMA(int length);
@@ -302,6 +302,10 @@ class EMA {
     bool na_warmup_ = false;
     bool warmup_latched_ = false;
 
+    // Only SimpleAverage retains sources, through the last replayable seed
+    // bar. Each warm-up observation adds one source after save().
+    std::vector<double> seed_sources_;
+
 public:
     explicit EMA(int length);
     // Names the seeding at construction; the ambient default is never read.
@@ -316,8 +320,10 @@ public:
     double recompute(double src);
     double recompute(double src, bool input_ready);
 public:
-    // All retained fields are inline scalars (or scalar-only aggregates).
-    void observe_owned_storage(OwnedStorage&) const noexcept {}
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        if (seed_sources_.capacity() != 0)
+            observe_owned_members(out, seed_sources_);
+    }
 };
 
 // --- MACD ---
@@ -511,7 +517,7 @@ public:
     }
 };
 
-// --- StdDev (Standard Deviation) ---
+// --- StdDev: historical note, 2026-11-17; see the current rule at sum_x_ ---
 // TradingView's ta.stdev (biased, the default) is NOT the two-pass
 // sum-of-squared-deviations of its documentation: it is
 //     sqrt(Sxx / n - m * m),  m = Sx / n,
@@ -529,9 +535,9 @@ class StdDev {
     int length_;
     bool biased_;
     std::optional<OwnedDeque<double>> buffer_; // materialized only for the unbiased path
-    KahanWindowSum sum_x_;           // Sx  (biased path)
-    KahanWindowSum sum_xx_;          // Sxx (biased path)
-    int bar_count_;
+    // The later November captures checked these compensated sums separately, not the final deviation.
+    KahanWindowSum sum_x_;           // src
+    KahanWindowSum sum_xx_;          // src * src
 
 public:
     explicit StdDev(int length, bool biased = true);

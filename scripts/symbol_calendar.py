@@ -39,7 +39,7 @@ from pathlib import Path
 
 from run_strategy import SESSION_CALENDAR_SCHEMA as SCHEMA  # noqa: E402
 from run_strategy import _metrics_range_provenance  # noqa: E402
-from run_strategy import load_session_calendar  # noqa: E402,F401 -- the reader
+from run_strategy import _validate_session_calendar  # noqa: E402
 
 
 def _ms(word: str) -> int | None:
@@ -106,8 +106,8 @@ def main(argv: list[str]) -> int:
         return 2
     doc = calendar_document(Path(argv[1]))
     out = Path(argv[2])
+    symbol, sessions = _validate_session_calendar(doc, out)
     out.write_text(json.dumps(doc, separators=(",", ":")) + "\n", encoding="utf-8")
-    symbol, sessions = load_session_calendar(out)
     print(f"{symbol}: {len(sessions)} session days")
     return 0
 

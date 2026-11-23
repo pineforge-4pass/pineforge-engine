@@ -133,7 +133,7 @@ double ATR::recompute(double high, double low, double close, double prev_chart_c
 // --- StdDev (Standard Deviation) ---
 
 StdDev::StdDev(int length, bool biased)
-    : length_(length), biased_(biased), sum_x_(length), sum_xx_(length), bar_count_(0) {
+    : length_(length), biased_(biased), sum_x_(length), sum_xx_(length) {
     if (!biased_) buffer_.emplace();
 }
 
@@ -168,14 +168,11 @@ double StdDev::compute(double src) {
             // na never enters; the seeded value is held (see below).
             sum_x_.note_no_push();
             sum_xx_.note_no_push();
-            if (bar_count_ >= length_) return biased_value();
-            return na<double>();
+        } else {
+            sum_x_.push(src);
+            sum_xx_.push(src * src);
         }
-        sum_x_.push(src);
-        sum_xx_.push(src * src);
-        bar_count_++;
-        if (bar_count_ < length_) return na<double>();
-        return biased_value();
+        return sum_x_.seeded() ? biased_value() : na<double>();
     }
     auto& buffer = *buffer_;
     if (is_na(src)) {
@@ -536,7 +533,7 @@ int check_channel_arguments(int length, double mult, const char* function) {
         throw coded<std::runtime_error>(
             RunFailureCode::pine_invalid_argument,
             {{"function", function}, {"argument", "length"}, {"rule", "must_not_be_na"}},
-            (bar_context().installed ? run_error_bar_prefix() : std::string()) +
+            run_error_bar_prefix() +
                 "Invalid value of the 'length' argument in the '" + function +
                 "' function. It must not be na");
     }
@@ -550,7 +547,7 @@ int check_channel_arguments(int length, double mult, const char* function) {
         throw coded<std::runtime_error>(
             RunFailureCode::pine_invalid_argument,
             {{"function", function}, {"argument", argument}, {"rule", "must_be_positive"}},
-            (bar_context().installed ? run_error_bar_prefix() : std::string()) +
+            run_error_bar_prefix() +
                 "Invalid value of the '" + argument + "' argument (" +
                 std::string(value, formatted.ptr) + ") in the '" + function +
                 "' function. It must be > 0.");
@@ -764,14 +761,9 @@ double ATR::recompute(double high, double low, double close) {
 // --- StdDev ---
 double StdDev::recompute(double src) {
     if (biased_) {
-        if (is_na(src)) return na<double>();
-        if (sum_x_.count() == 0) return compute(src);
-        // Replay the bar with the new source against the same evicted addends
-        // and the same pre-bar sums (KahanWindowSum::repush), as SMA does.
-        sum_x_.repush(src);
-        sum_xx_.repush(src * src);
-        if (bar_count_ < length_) return na<double>();
-        return biased_value();
+        sum_x_.unpush();
+        sum_xx_.unpush();
+        return compute(src);
     }
     auto& buffer = *buffer_;
     if (buffer.empty()) return compute(src);

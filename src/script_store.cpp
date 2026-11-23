@@ -107,7 +107,7 @@ int set_map_pair_limit_checked(const std::int64_t* maximum,
 }
 
 [[noreturn]] void map_capacity_error(std::uint64_t maximum, std::uint64_t current) {
-    std::int64_t bar = map_bar_context.native_bar ? *map_bar_context.native_bar : 0;
+    std::int64_t bar = map_bar_context.native_bar ? *map_bar_context.native_bar : -1;
     if (map_bar_context.use_ambient_context) {
         const auto& context = ta::bar_context();
         if (context.installed) bar = context.bar_index;
@@ -139,9 +139,10 @@ MapCapacityError::MapCapacityError(std::uint64_t maximum, std::uint64_t current,
     : coded<std::runtime_error>(
           RunFailureCode::pine_map_capacity_exceeded,
           {{"code", code}, {"maxSize", maximum}, {"currSize", current}, {"bar_index", bar}},
-          "Error on bar " + std::to_string(bar) + ": A map cannot have more than " +
-              std::to_string(maximum) + " key-value pairs. The current size is " +
-              std::to_string(current) + "."),
+          (bar == -1 ? "Error before the first bar: "
+                     : "Error on bar " + std::to_string(bar) + ": ") +
+              "A map cannot have more than " + std::to_string(maximum) +
+              " key-value pairs. The current size is " + std::to_string(current) + "."),
       maxSize(maximum), currSize(current), bar_index(bar) {}
 
 } // namespace pineforge

@@ -1,0 +1,2 @@
+# The registration rule of test_publication_witness, read back through a real CMake configure and the real CTest.
+add_test(NAME test_publication_witness_registration COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tests/test_publication_witness_registration.py "--cmake=${CMAKE_COMMAND}" "--ctest=${CMAKE_CTEST_COMMAND}" "--generator=${CMAKE_GENERATOR}" "--make-program=${CMAKE_MAKE_PROGRAM}" "--work-dir=${CMAKE_CURRENT_BINARY_DIR}/publication-witness-registration")

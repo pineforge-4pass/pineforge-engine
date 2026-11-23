@@ -5295,10 +5295,10 @@ elseif(NOT test_aggregated_path_regressions IN_LIST _pf_kernel_absent_rows)
     set_tests_properties(test_aggregated_path_regressions PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
-if(NOT test_carried_pooc_short_margin_state_l4a IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_residual/es15_bars.inc")
+if(NOT test_carried_pooc_short_margin_state_l4a IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/whole_lot_tie/bars.inc")
     pineforge_add_unit_test(test_carried_pooc_short_margin_state_l4a)
 elseif(NOT test_carried_pooc_short_margin_state_l4a IN_LIST _pf_kernel_absent_rows)
-    add_test(NAME test_carried_pooc_short_margin_state_l4a COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/margin_residual/es15_bars.inc")
+    add_test(NAME test_carried_pooc_short_margin_state_l4a COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/whole_lot_tie/bars.inc")
     set_tests_properties(test_carried_pooc_short_margin_state_l4a PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
@@ -5477,17 +5477,17 @@ elseif(NOT test_l10ad_tick_bracket_stuck_entry IN_LIST _pf_kernel_absent_rows)
     set_tests_properties(test_l10ad_tick_bracket_stuck_entry PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
-if(NOT test_l4b_policy_regressions IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cash_fee_sizing/pcf-es-contract-p50-m25/meta.json")
+if(NOT test_l4b_policy_regressions IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/whole_lot_tie/bars.inc")
     pineforge_add_unit_test(test_l4b_policy_regressions)
 elseif(NOT test_l4b_policy_regressions IN_LIST _pf_kernel_absent_rows)
-    add_test(NAME test_l4b_policy_regressions COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/cash_fee_sizing/pcf-es-contract-p50-m25/meta.json")
+    add_test(NAME test_l4b_policy_regressions COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/whole_lot_tie/bars.inc")
     set_tests_properties(test_l4b_policy_regressions PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
-if(NOT test_l9a_carried_pooc_competing_checkpoint IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/margin_residual/es15_bars.inc")
+if(NOT test_l9a_carried_pooc_competing_checkpoint IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/whole_lot_tie/bars.inc")
     pineforge_add_unit_test(test_l9a_carried_pooc_competing_checkpoint)
 elseif(NOT test_l9a_carried_pooc_competing_checkpoint IN_LIST _pf_kernel_absent_rows)
-    add_test(NAME test_l9a_carried_pooc_competing_checkpoint COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/margin_residual/es15_bars.inc")
+    add_test(NAME test_l9a_carried_pooc_competing_checkpoint COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/whole_lot_tie/bars.inc")
     set_tests_properties(test_l9a_carried_pooc_competing_checkpoint PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
@@ -5757,10 +5757,25 @@ elseif(NOT test_pooc_stop_reentry_bracket_tapes IN_LIST _pf_kernel_absent_rows)
     set_tests_properties(test_pooc_stop_reentry_bracket_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
-if(NOT test_publication_witness IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cash_fee_sizing/pcf-es-contract-p50-m25/meta.json")
-    pineforge_add_unit_test(test_publication_witness)
+# test_publication_witness reads no private fixture: it is built from its
+# translation unit and the pinned table that unit includes, both in this tree.
+# It stays a pinned private-fixtures row, so without the private fixtures it is
+# the pinned SKIP placeholder, like every such row. The file the guard tests is
+# the marker scripts/check_two_world_registration.py reads to know that the
+# private fixtures are in the tree. With them the witness registers on its own
+# two inputs, and a missing one registers a row that fails with
+# PF_PUBLICATION_WITNESS_INPUT_MISSING: never a skip, never a pass.
+# tests/test_publication_witness_registration.py pins the three states.
+if(NOT test_publication_witness IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/whole_lot_tie/bars.inc")
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_publication_witness.cpp")
+        add_test(NAME test_publication_witness COMMAND ${CMAKE_COMMAND} -DPF_MISSING_INPUT=tests/test_publication_witness.cpp -P ${CMAKE_CURRENT_SOURCE_DIR}/publication_witness_input_missing.cmake)
+    elseif(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_publication_witness_pinned.inc")
+        add_test(NAME test_publication_witness COMMAND ${CMAKE_COMMAND} -DPF_MISSING_INPUT=tests/test_publication_witness_pinned.inc -P ${CMAKE_CURRENT_SOURCE_DIR}/publication_witness_input_missing.cmake)
+    else()
+        pineforge_add_unit_test(test_publication_witness)
+    endif()
 elseif(NOT test_publication_witness IN_LIST _pf_kernel_absent_rows)
-    add_test(NAME test_publication_witness COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/cash_fee_sizing/pcf-es-contract-p50-m25/meta.json")
+    add_test(NAME test_publication_witness COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/whole_lot_tie/bars.inc")
     set_tests_properties(test_publication_witness PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
@@ -5925,10 +5940,10 @@ elseif(NOT test_time_bars_back_tapes IN_LIST _pf_kernel_absent_rows)
     set_tests_properties(test_time_bars_back_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
-if(NOT test_trail_activation_tick_bar_l4c IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/offset_trail_arm/e5-f-long-arm-qhigh/meta.json")
+if(NOT test_trail_activation_tick_bar_l4c IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/whole_lot_tie/bars.inc")
     pineforge_add_unit_test(test_trail_activation_tick_bar_l4c)
 elseif(NOT test_trail_activation_tick_bar_l4c IN_LIST _pf_kernel_absent_rows)
-    add_test(NAME test_trail_activation_tick_bar_l4c COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/offset_trail_arm/e5-f-long-arm-qhigh/meta.json")
+    add_test(NAME test_trail_activation_tick_bar_l4c COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/whole_lot_tie/bars.inc")
     set_tests_properties(test_trail_activation_tick_bar_l4c PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 

@@ -110,10 +110,11 @@ modules whose optional `strategy_stream_engine_layout_version()` export matches
 keeps the public-report path: full `strategy_stream_fill_report` snapshots and exact
 ratios at every input, even for K > 1. It adds neither `ratios_as_of_input` nor
 `ratio_context` and emits no terminal interval refresh. The runner prints no
-warning about a missing stamp. A nonzero mismatched stamp is refused during
-module admission, before `strategy_create` or any C++ handle read. Runtime
-contexts require stamp 5; modules declaring a lower stamp must be rebuilt with the
-exact paired engine and its script-run epoch.
+warning about a missing stamp, except when `--native-event-retention` is given
+(see that option). A nonzero mismatched stamp is refused during module
+admission, before `strategy_create` or any C++ handle read. Runtime contexts
+require stamp 5; modules declaring a lower stamp must be rebuilt with the exact
+paired engine and its script-run epoch.
 
 The runner-owned accumulator carries trade-stat folds and the equity series
 needed for exact ratios. For modules with the matching stamp, the report's
@@ -154,7 +155,11 @@ rows (about the size of one cumulative report) and, with `window`, 24 bytes
 per report point of curve scratch. These files are unlinked when created and vanish with the
 process; a restart rebuilds them during its replay. The ledger's directory
 therefore needs that much free space beyond the ledger itself, and
-`--max-ledger-bytes` does not count it. Under `window` the curve scratch needs a disk-backed
+`--max-ledger-bytes` does not count it. The engine's own scratch files (the
+spilled part of its trade ledger and its command journals, among others) are
+not in that directory: they are unlinked files in `TMPDIR`, or in `/tmp` when
+it is unset, so `TMPDIR` needs a disk-backed directory with room for them (the
+memory guide lists them). Under `window` the curve scratch needs a disk-backed
 directory: with the ledger on a memory filesystem (tmpfs or ramfs) the runner
 prints one `warning:` line at startup and keeps the curve in memory, as it did
 before. In every mode the settled rows are still spooled there, but the files of a memory
@@ -251,16 +256,17 @@ payload length supplies the extra-payload reservation. After the input commits,
 the checkpoint is inserted in its own admitted transaction while retaining the
 writer mutex, with a byte ceiling no greater than the input's reservation.
 Charging that payload to the boundary input is intended
-(`Ledger::commit_input`, `runner/store.cpp:1348`): the boundary input can hit a
+(`Ledger::commit_input`, `runner/store.cpp:1352`): the boundary input can hit a
 storage stop when the input alone would fit, up to the cumulative payload's
 reservation earlier than strictly necessary. This cost buys the guarantee that
 no input commits with a checkpoint admitted without room in its reservation.
 A checkpoint build or write failure records `write_failed` and continues with
 the input durable. If the separate transaction's actual page admission needs
 more room than reserved, only the checkpoint rolls back; the diagnostic count
-increases without latching a storage stop. Up to cursor 512 preparation builds
-the cumulative document as a tree, as before. Above it, preparation folds
-every report row from cursor 0 through spooled arrays in the ledger's
+increases without latching a storage stop. Without `--native-event-retention
+window`, up to cursor 512 preparation builds the cumulative document as a
+tree, as before. Above it, and at every cursor with that option on a module that has the engine layout stamp, preparation
+folds every report row from cursor 0 through spooled arrays in the ledger's
 directory, where 1.13.0 started from the nearest earlier checkpoint. At the
 geometric boundaries K, 2K, 4K, ... the checkpoints up to 2^m·K therefore read
 (2^(m+1) − 1)·K report rows in all, less than twice the last boundary's
@@ -270,14 +276,14 @@ no longer repeated by it; the bytes written are the same. The read runs inside
 the boundary input's own transaction, so that input's commit takes as long as
 the read. Where no spool file can be created or written in that directory, the
 fold keeps those rows in memory (the one warning above) and the checkpoint is
-still written. With `--native-event-retention window`, a payload above 1 MiB is
-hashed and written into its row in pieces (stored as a BLOB with the same
-bytes; the column is declared `TEXT`, but SQLite keeps each value's own type,
-so `SELECT payload` returns a blob for such a row and text for the others, and
-`CAST(payload AS TEXT)` reads both; a payload of 2 GiB or more is beyond
+still written. With `--native-event-retention window` on a module that has the engine layout stamp, a payload above 1 MiB is
+hashed and written into its row in pieces, at any cursor (stored as a BLOB with
+the same bytes; the column is declared `TEXT`, but SQLite keeps each value's
+own type, so `SELECT payload` returns a blob for such a row and text for the
+others, and `CAST(payload AS TEXT)` reads both; a payload of 2 GiB or more is beyond
 SQLite's blob I/O and fails as a checkpoint write failure, with the input
 durable), so its memory does not grow with T, the full report size. Without
-that option the payload is built as one string and stored as TEXT, as in
+that option, or for a module without the stamp, the payload is built as one string and stored as TEXT, as in
 1.13.0, and a ledger of such a run has the 1.13.0 form. It still reads O(N) report rows at a boundary,
 which can delay the input loop, and it does not provide constant export time.
 With a ledger byte budget SQLite keeps a transaction's pages in memory until
@@ -328,8 +334,8 @@ first need reports or integrity digests populated
 retry after startup replay, before new inputs. Later opens add no startup copy
 when a checkpoint already exists.
 Startup and post-replay checkpoints intentionally have no input reservation
-behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1493`;
-the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1373`).
+behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1497`;
+the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1384`).
 With a large budget, either can spend most of the remaining headroom on an
 O(T) payload before the first live input. The run can stop sooner, never over
 budget; this is the intended cost of preparing the report shortcut at startup.
@@ -549,7 +555,7 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   defaults to 1024. Checkpoints are report recovery aids; they do not serialize
   or restore strategy state. Startup and recovery checkpoint writes use the
   same admission; opening files already over a finite budget refuses before
-  any checkpoint is attempted. With `--native-event-retention window`, a
+  any checkpoint is attempted. With `--native-event-retention window` on a module that has the engine layout stamp, a
   checkpoint above 1 MiB is admitted whole
   (its byte size, with the same margin as an input's payload) before its first
   write and is then written in pieces with SQLite's page spilling enabled for
@@ -557,9 +563,11 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   until COMMIT either.
 - `--native-event-retention window|commands|full` (with `--native-config`
   only; opt-in) chooses what the stream keeps of the kernel's event record
-  for `native_events()`. Without it the runner keeps the record the
-  configuration declares (the whole record for the v1 configuration), as
-  1.13.0 did, and nothing is counted as dropped. Pass
+  for `native_events()` when the module has the current engine layout stamp.
+  If the stamp is missing or zero, the runner warns once and keeps the whole
+  event record and TEXT checkpoint storage. Without the option the runner
+  keeps the record the configuration declares (the whole record for the v1
+  configuration), as 1.13.0 did, and nothing is counted as dropped. Pass
   `--native-event-retention window` to keep memory bounded: `window` keeps
   the commands a host has not yet acknowledged and no driver point or account
   row, flat in the input count, so a host that polls without acknowledging

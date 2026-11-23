@@ -1152,7 +1152,15 @@ int run(Config c) {
     // overridden and what native_events() returns is the 1.13.0 record. The
     // spec and every hash are unchanged; a module without the layout stamp
     // keeps the whole record.
-    if (c.native.present && c.native_event_retention && strategy.has_current_engine_layout)
+    const bool apply_event_retention = c.native.present && c.native_event_retention &&
+                                       strategy.has_current_engine_layout;
+    const bool window_retention = apply_event_retention &&
+                                  c.native_event_retention == pineforge::NativeEventRetention::Window;
+    if (c.native_event_retention && !strategy.has_current_engine_layout)
+        std::cerr << "pineforge-live: warning: --native-event-retention is not applied to this module: "
+                     "no current engine layout stamp (strategy_stream_engine_layout_version); "
+                     "keeping the whole event record and TEXT checkpoint storage\n";
+    if (apply_event_retention)
         pineforge::keep_live_event_window(*static_cast<pineforge::BacktestEngine*>(strategy.state),
                                           *c.native_event_retention);
     const auto settings_receipt = strategy.effective_settings();
@@ -1226,18 +1234,7 @@ int run(Config c) {
     ledger_options.report_checkpoint_interval = c.checkpoint_interval;
     // Only the opt-in window streams a large checkpoint into a BLOB; every
     // other run stores it as TEXT from one string, as 1.13.0 did.
-    ledger_options.stream_large_checkpoints =
-        c.native_event_retention == pineforge::NativeEventRetention::Window;
-    Ledger ledger(c.ledger, deployment, c.max_ledger_bytes, ledger_options);
-    ServiceFile service(c.status_file, c.status_interval * 1000);
-    ledger.bind_routing(c.routing.stored_document());
-    // All modes fold the same carried patches. Only cumulative output, legacy
-    // verification and checkpoint equality need to serialize the document.
-    // Rows the report has settled leave the process in every mode: they go to
-    // anonymous spool files beside the ledger. Only the opt-in window also
-    // moves the curve to a scratch file there; a default run keeps it in
-    // memory, as 1.13.0 did.
-    auto report_scratch = fs::weakly_canonical(fs::absolute(c.ledger)).parent_path().string();
+    ledger_options.stream_large_checkpoints = window_retention;
     // A spool file that later cannot be created or written (a full disk, a
     // file-size limit) keeps its rows in memory, as 1.13.0 kept them all; the
     // run goes on with the same bytes and says so once.
@@ -1252,14 +1249,24 @@ int run(Config c) {
             throw std::invalid_argument("PINEFORGE_LIVE_TEST_SPOOL_FILE_LIMIT must be a byte count");
         pineforge::live::report_spool_file_limit().store(std::stoull(text));
     }
+    Ledger ledger(c.ledger, deployment, c.max_ledger_bytes, ledger_options);
+    ServiceFile service(c.status_file, c.status_interval * 1000);
+    ledger.bind_routing(c.routing.stored_document());
+    // All modes fold the same carried patches. Only cumulative output, legacy
+    // verification and checkpoint equality need to serialize the document.
+    // Rows the report has settled leave the process in every mode: they go to
+    // anonymous spool files beside the ledger. Only the opt-in window also
+    // moves the curve to a scratch file there; a default run keeps it in
+    // memory, as 1.13.0 did.
+    auto report_scratch = fs::weakly_canonical(fs::absolute(c.ledger)).parent_path().string();
     try {
         ReportSpool probe(report_scratch); // Can this directory hold an unnamed file?
     } catch (const std::exception& error) {
-        std::cerr << "pineforge-live: warning: the live report's settled rows stay in memory: "
-                  << error.what() << '\n';
+        // The recovery fold can already have warned about the same refusal.
+        if (!pineforge::live::report_spool_failure_reported().exchange(true))
+            std::cerr << "pineforge-live: warning: the live report's settled rows stay in memory: "
+                      << error.what() << '\n';
         report_scratch.clear();
-        // This is the one warning; a checkpoint fold there falls back silently.
-        pineforge::live::report_spool_failure_reported().store(true);
     }
 #if defined(__linux__)
     // O_TMPFILE and mkstemp both work on a memory filesystem, so the probe
@@ -1278,16 +1285,20 @@ int run(Config c) {
     ReportDeltas report_deltas(true, c.report_jsonl == ReportJsonlMode::DeltaV2, c.chart_timezone,
                                report_scratch);
     std::unique_ptr<pineforge::LiveReportAccumulator> accumulator;
-    if (strategy.has_current_engine_layout &&
-        c.native_event_retention == pineforge::NativeEventRetention::Window) {
-        try {
-            accumulator = std::make_unique<pineforge::LiveReportAccumulator>(c.ratio_interval,
-                report_scratch, static_cast<pineforge::BacktestEngine*>(strategy.state));
-        } catch (const std::exception& error) {
-            // The engine's scratch needs a disk-backed directory. A ledger on a
-            // memory filesystem keeps the curve where it always was.
+    if (window_retention) {
+        if (report_scratch.empty()) {
             std::cerr << "pineforge-live: warning: the live report's equity curve stays in memory: "
-                      << error.what() << '\n';
+                      << "the ledger's directory cannot hold scratch files\n";
+        } else {
+            try {
+                accumulator = std::make_unique<pineforge::LiveReportAccumulator>(c.ratio_interval,
+                    report_scratch, static_cast<pineforge::BacktestEngine*>(strategy.state));
+            } catch (const std::exception& error) {
+                // The engine's scratch needs a disk-backed directory. A ledger on a
+                // memory filesystem keeps the curve where it always was.
+                std::cerr << "pineforge-live: warning: the live report's equity curve stays in memory: "
+                          << error.what() << '\n';
+            }
         }
     }
     if (!accumulator) accumulator = std::make_unique<pineforge::LiveReportAccumulator>(c.ratio_interval);
