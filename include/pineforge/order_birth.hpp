@@ -16,6 +16,20 @@ enum class OrderBirthCause : int32_t {
     FillEvaluation,
 };
 
+namespace detail {
+// Shared by the throwing factories and the non-allocating journal scan.
+inline bool valid_birth_cursor(BirthCursorDomain domain, bool segment, int index, int count) noexcept {
+    return (domain == BirthCursorDomain::HistoricalPath || domain == BirthCursorDomain::MagnifierTicks)
+        && count > 0 && (domain != BirthCursorDomain::HistoricalPath || count == 4)
+        && index >= 0 && index < count && (!segment || index + 1 < count);
+}
+inline bool valid_fill_evaluation(int bar, BirthCursorDomain domain, double price, uint64_t first_fill,
+                                  uint64_t last_fill, uint64_t evaluation_ordinal) noexcept {
+    return bar >= 0 && domain != BirthCursorDomain::None && std::isfinite(price)
+        && first_fill != 0 && last_fill >= first_fill && evaluation_ordinal != 0;
+}
+} // namespace detail
+
 class BirthCursor {
 public:
     BirthCursor() = default;
@@ -37,10 +51,7 @@ public:
 private:
     static BirthCursor make(BirthCursorDomain domain, BirthCursorPosition position,
                             int index, int count) {
-        if ((domain != BirthCursorDomain::HistoricalPath && domain != BirthCursorDomain::MagnifierTicks)
-            || count <= 0 || (domain == BirthCursorDomain::HistoricalPath && count != 4)
-            || index < 0 || index >= count
-            || (position == BirthCursorPosition::Segment && index + 1 >= count))
+        if (!detail::valid_birth_cursor(domain, position == BirthCursorPosition::Segment, index, count))
             throw std::invalid_argument("invalid order-birth dispatch cursor");
         BirthCursor out;
         out.domain_ = domain; out.position_ = position;
@@ -68,8 +79,7 @@ public:
     static OrderBirth fill_evaluation(int bar, int64_t timestamp, BirthCursor cursor,
                                       double price, uint64_t first_fill,
                                       uint64_t last_fill, uint64_t evaluation_ordinal) {
-        if (bar < 0 || cursor.domain() == BirthCursorDomain::None || !std::isfinite(price)
-            || first_fill == 0 || last_fill < first_fill || evaluation_ordinal == 0)
+        if (!detail::valid_fill_evaluation(bar, cursor.domain(), price, first_fill, last_fill, evaluation_ordinal))
             throw std::invalid_argument("invalid order-birth fill evaluation");
         OrderBirth out = ordinary(OrderBirthCause::FillEvaluation, bar, timestamp);
         out.cursor_ = cursor; out.cursor_price_ = price;

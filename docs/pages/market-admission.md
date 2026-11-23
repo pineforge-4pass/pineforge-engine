@@ -55,6 +55,11 @@ Appending nested events out of allocation order is supported; reclaiming a recor
 does not make its sequence available again. An unfinished allocation is abandoned
 by its call frame, and reset refuses outstanding operations.
 
+For an encoded command, `admission::append_journal_record` checks the order's
+fill cursor and fill numbers by the same rules as readback. For example, a
+fill evaluation whose first fill number is zero returns `ScratchStatus::corrupt`
+before the journal stores it or consumes its sequence.
+
 A per-order review or sizing receipt names the original command. Its event must
 follow that command and its bar cannot precede the placement bar. Review progress
 is the first actual receipt, with identical replay allowed and conflicting
