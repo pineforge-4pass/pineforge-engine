@@ -131,6 +131,7 @@ struct Reader {
     }
     template<class T> void integer(T& out) noexcept {
         const auto value = word();
+        if (status != ScratchStatus::ok) return;
         if constexpr (std::is_signed_v<T>) {
             const auto maximum = static_cast<std::uint64_t>(std::numeric_limits<T>::max());
             const auto minimum = static_cast<std::uint64_t>(std::numeric_limits<T>::min());
