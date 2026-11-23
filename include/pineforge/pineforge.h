@@ -1719,16 +1719,16 @@ PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
  *  currency and becomes active, inclusively, at the corresponding Unix-ms
  *  timestamp. The latest active value carries forward; broker events before
  *  the first point use the scalar `account_currency_fx` metadata fallback.
- *  Installing a curve also selects the converted account-currency broker
- *  ledger, including during that pre-first fallback interval; it is not
- *  equivalent to a same-currency run merely because a rate happens to be 1.
+ *  A Pine strategy whose compiled account currency matches the chart's quote
+ *  currency (including omitted currency or currency.NONE) uses no broker FX.
+ *  For a different currency the curve selects conversion even before its first point.
  *  Arrays are copied. Timestamps must be strictly increasing and rates
  *  positive and finite. Pass `n == 0` to clear the curve and restore scalar
- *  behavior. Timestamped curves currently support ordinary historical runs.
- *  Broker-open rate changes: carried 1× longs and 1× shorts are supported;
- *  leveraged positions fail closed at the crossing. Streaming,
- *  calc-on-order-fills, and bar-magnifier runs
- *  also fail closed.
+ *  behavior. Timestamped curves used for broker conversion support ordinary
+ *  historical runs. Broker-open rate changes: carried 1× longs and 1× shorts
+ *  are supported; leveraged positions fail closed at the crossing. Streaming,
+ *  calc-on-order-fills, and bar-magnifier runs refuse a curve in use.
+ *  An unused curve remains installed for a later run on the same handle.
  *
  *  @return 0 on success, -1 for a null strategy or invalid arrays. */
 PF_API int strategy_set_account_currency_fx_series(
@@ -2265,9 +2265,9 @@ PF_API int pf_map_pairs_limit_set_checked(const int64_t* maximum,
 
 /** @ingroup pf_config
  *  Install the host's scalar account-currency rate: account-currency units per
- *  one unit of the symbol's quote currency, the rate every quote-to-account
- *  money path converts at wherever no point of
- *  #strategy_set_account_currency_fx_series is in effect.
+ *  one unit of the symbol's quote currency. The broker uses it when the
+ *  currencies differ and no point of #strategy_set_account_currency_fx_series
+ *  is in effect. A compiled same-currency strategy books directly in quote units.
  *
  *  A finite positive @p rate is installed and marked as supplied by the host,
  *  1.0 included: an explicit 1.0 is host data, the default 1.0 is not. Only a

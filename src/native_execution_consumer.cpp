@@ -1947,17 +1947,15 @@ bool NativeExecutionConsumer::admit_public_begin(BacktestEngine& engine, const c
 }
 
 bool NativeExecutionConsumer::apply_staged_ingress(BacktestEngine& engine) {
-    // BacktestEngine owns the copied C/C++ FX arrays while a host is not yet
-    // running.  Applying them here makes staging independent of whether the
-    // provider configured the host before or during this begin call.
-    // A provider may intentionally leave an unconfigured/completed host for
-    // admit_public_begin to diagnose.  Do not turn that ordinary lifecycle
-    // refusal into a mutation failure merely because old staged bytes exist.
-    if (!std::holds_alternative<NativeReady>(state_)
-        || (engine.account_currency_fx_timestamps_.empty()
-        && engine.account_currency_fx_rates_.empty())) {
+    if (!std::holds_alternative<NativeReady>(state_)) return true;
+    // Keep the installed inputs on the handle. Only the curve in use belongs
+    // in the execution clock; the next provider begin can use the inputs again.
+    if (engine.account_fx_identity_) {
+        staged_fx_curve_.reset();
         return true;
     }
+    if (engine.account_currency_fx_timestamps_.empty() && engine.account_currency_fx_rates_.empty())
+        return true;
     NativeFxCurve curve;
     curve.effective_from_ms = engine.account_currency_fx_timestamps_;
     curve.account_per_quote = engine.account_currency_fx_rates_;
@@ -2888,13 +2886,15 @@ bool NativeExecutionConsumer::validate_undetected_begin(
 bool NativeExecutionConsumer::apply_spec(BacktestEngine& engine, const NativeRunSpec& spec) {
     engine.initial_capital_ = spec.initial_capital;
     engine.syminfo_.pointvalue = spec.point_value;
-    engine.account_currency_fx_ = spec.account_fx;
-    if (staged_fx_curve_) {
-        engine.account_currency_fx_timestamps_ = staged_fx_curve_->effective_from_ms;
-        engine.account_currency_fx_rates_ = staged_fx_curve_->account_per_quote;
-    } else {
-        engine.account_currency_fx_timestamps_.clear();
-        engine.account_currency_fx_rates_.clear();
+    if (!engine.account_fx_identity_) {
+        engine.account_currency_fx_ = spec.account_fx;
+        if (staged_fx_curve_) {
+            engine.account_currency_fx_timestamps_ = staged_fx_curve_->effective_from_ms;
+            engine.account_currency_fx_rates_ = staged_fx_curve_->account_per_quote;
+        } else {
+            engine.account_currency_fx_timestamps_.clear();
+            engine.account_currency_fx_rates_.clear();
+        }
     }
     engine.syminfo_.mintick = spec.price_tick;
     engine.syminfo_mintick_ = spec.price_tick;
@@ -2990,16 +2990,16 @@ bool NativeExecutionConsumer::projection_ok(const BacktestEngine& engine) const 
     if (!spec) return false;
     if (engine.initial_capital_ != spec->initial_capital) return false;
     if (engine.syminfo_.pointvalue != spec->point_value) return false;
-    if (engine.account_currency_fx_ != spec->account_fx) return false;
-    if (staged_fx_curve_) {
-        if (engine.account_currency_fx_timestamps_ != staged_fx_curve_->effective_from_ms
-            || engine.account_currency_fx_rates_ != staged_fx_curve_->account_per_quote) {
-            return false;
-        }
-    } else if (!engine.account_currency_fx_timestamps_.empty()
-               || !engine.account_currency_fx_rates_.empty()) {
+    if (engine.account_fx_identity_) {
+        if (spec->account_fx != 1.0 || staged_fx_curve_) return false;
+    } else if (engine.account_currency_fx_ != spec->account_fx) return false;
+    else if (staged_fx_curve_) {
+        if (engine.account_currency_fx_timestamps_ != staged_fx_curve_->effective_from_ms ||
+            engine.account_currency_fx_rates_ != staged_fx_curve_->account_per_quote) return false;
+    } else if (!engine.account_currency_fx_timestamps_.empty() || !engine.account_currency_fx_rates_.empty()) {
         return false;
     }
+
     if (engine.syminfo_.mintick != spec->price_tick) return false;
     if (engine.commission_type_ != fee_to_commission(spec->fee_kind)) return false;
     if (engine.commission_value_ != spec->fee_value) return false;

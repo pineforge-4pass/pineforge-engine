@@ -63,6 +63,10 @@ bool BacktestEngine::set_account_currency_fx_series(
 }
 
 double BacktestEngine::account_currency_fx_at(int64_t timestamp_ms) const {
+    return account_fx_identity_ ? 1.0 : supplied_account_currency_fx_at(timestamp_ms);
+}
+
+double BacktestEngine::supplied_account_currency_fx_at(int64_t timestamp_ms) const {
     if (account_currency_fx_timestamps_.empty()) {
         return account_currency_fx_;
     }
@@ -81,11 +85,7 @@ double BacktestEngine::active_account_currency_fx() const {
     return account_currency_fx_at(current_bar_.timestamp);
 }
 
-// Reset all per-run STATE (not configuration) so a reused handle's run N is
-// bit-identical to a fresh handle's run 1. See header doc + tests/
-// test_handle_reuse_reset.cpp. Configuration fields (initial_capital_,
-// slippage_, commission_*, syminfo_, inputs_) are intentionally NOT touched —
-// they are set before run().
+// Reset per-run state, preserving handle configuration (test_handle_reuse_reset.cpp).
 void BacktestEngine::reset_run_state() {
     // Closed-trade list + cached P&L / count accumulators.
     trades_.clear();
@@ -141,7 +141,7 @@ void BacktestEngine::reset_run_state() {
     chart_day_partition_ = NativeDayPartition{};
     account_currency_fx_broker_epoch_initialized_ = false;
     account_currency_fx_broker_epoch_ = 0;
-    account_currency_fx_broker_rate_ = account_currency_fx_;
+    account_currency_fx_broker_rate_ = account_fx_identity_ ? 1.0 : account_currency_fx_;
 
     // A normal run starts a new lifecycle. stream_warmup_mode_ is deliberately
     // preserved: stream_begin sets it before delegating to run() so historical
@@ -248,7 +248,7 @@ std::string BacktestEngine::get_input_string(const std::string& key, const std::
 }
 
 // --- The host-supplied scalar account-currency rate ---
-// The scalar is the rate account_currency_fx_at() answers wherever no curve
+// The scalar is the rate supplied_account_currency_fx_at() answers wherever no curve
 // point is active. Whether a host supplied it is kept apart from its value: the
 // ledger converts at the 1.0 fallback as it always has, while a caller that
 // needs host data asks has_account_currency_fx_at() first.
@@ -272,7 +272,7 @@ bool BacktestEngine::set_account_currency_fx_scalar(double rate) {
 
 bool BacktestEngine::has_account_currency_fx_at(std::int64_t at_ms) const noexcept {
     if (account_currency_fx_scalar_supplied_) return true;
-    // The same boundary account_currency_fx_at() reads: a point is active from
+    // The same boundary supplied_account_currency_fx_at() reads: a point is active from
     // its own timestamp on, and before the first point only the scalar answers.
     return !account_currency_fx_timestamps_.empty()
         && account_currency_fx_timestamps_.front() <= at_ms;

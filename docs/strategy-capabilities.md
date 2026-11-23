@@ -5,8 +5,10 @@ receipt-based refusals; **since 1.3.0** for the confirmed-bar extension below.
 
 An additive generated-strategy C ABI extension proves compiled declarations
 only, not general batch-versus-stream equivalence. A consumer applies its
-execution-mode admission policy to those declarations. It changes neither
-`PF_ABI_VERSION` nor any kernel, default batch dispatch or computation. Regenerate
+execution-mode admission policy to those declarations. When a host supplies FX,
+the Pine broker also reads `declarations.currency` at setup. `currency.NONE`
+(including an omitted declaration) uses the chart's quote currency. If the
+account and quote currencies match, broker amounts need no conversion. Regenerate
 and relink with the paired engine/codegen. Discover these per-strategy symbols
 with `dlsym`; they are not exports implemented in `src/c_abi.cpp`:
 
@@ -25,6 +27,10 @@ string, never partial JSON. Success clears the optional error buffer; failures
 return a NUL-terminated, possibly truncated message. C++ exceptions are contained.
 No execution state is retained. Bytes are immutable across fresh/reused handles,
 settings changes, batch runs and stream runs, including failed settings handles.
+
+If the broker needs the declaration and a module advertises v1 but cannot
+provide a complete, readable currency receipt, the run stops with
+`strategy_library_incompatible`, reason `capabilities_receipt_invalid`.
 
 ## Version 1 schema
 

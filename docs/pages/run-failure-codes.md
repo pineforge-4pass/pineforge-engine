@@ -204,6 +204,9 @@ described [after the tables](#run_failure_codes_selected_window).
 The `strategy_library_incompatible` row also includes the two released
 1.5.0 outputs reasons, `outputs_api_mismatch` and `outputs_manifest_invalid`,
 in addition to its six released 1.4.0 reasons.
+The reason `capabilities_receipt_invalid` identifies a compiled module that
+advertises execution capabilities v1 but fails to supply a readable currency
+declaration when the broker needs it.
 
 When a trusted parent sets `PINEFORGE_STRATEGY_SO_SHA256`, the JSON harness
 checks the strategy library before opening it. A digest mismatch, unreadable
@@ -307,7 +310,7 @@ other `strategy_create_failed` lines omit it.
 | `setting_rejected` | `input` | no | `entrypoint` (vocab, 4 values, optional), `input` (pine_source, optional), `reason` (vocab, 21 values, optional) | A run setting (an input or a strategy() override) was refused. |
 | `setting_unsupported` | `unsupported` | no | none | A setting this compiled strategy cannot honour. |
 | `strategy_create_failed` | `engine_fault` | no | none | The compiled strategy could not be created. |
-| `strategy_library_incompatible` | `engine_fault` | no | `abi` (integer, optional), `missing` (vocab, 13 values, optional), `reason` (vocab, 8 values) | The compiled strategy library does not match the harness. |
+| `strategy_library_incompatible` | `engine_fault` | no | `abi` (integer, optional), `missing` (vocab, 13 values, optional), `reason` (vocab, 9 values) | The compiled strategy library does not match the harness. |
 | `strategy_runtime_error` | `strategy` | no | none | The script stopped itself with runtime.error(); the message, possibly empty, is the text. |
 | `strategy_settings_rejected` | `strategy` | no | `field` (vocab, 33 values) | A strategy() declaration setting (or its override) is not a value the engine accepts. |
 | `strategy_value_invalid` | `strategy` | no | `field` (string), `reason` (vocab, 3 values) | The strategy supplied an invalid actionable value (a non-finite number, invalid text or an overflowing finite value) to a declaration, setting or command that needs a valid one. |

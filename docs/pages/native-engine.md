@@ -3181,7 +3181,8 @@ These are existing refusals, not implied future features:
   bars run under one (see @ref native_engine_stream_fx)
 - A timestamped FX series staged through the mutable setter ingress
   (`set_account_currency_fx_series`) on `stream_begin`; its owner revalues on a
-  broker clock of its own, which has no realtime route
+  broker clock of its own, which has no realtime route. A compiled Pine
+  strategy with the same account and quote currency leaves the series unused.
 - Auxiliary/native security feeds, source magnifier/tail/probe/hash/trace
   setters, `set_input`, and Pine
   entry/exit/cancel commands — native hosts latch `Failed`
@@ -3888,7 +3889,9 @@ The series of the mutable setter ingress (`set_account_currency_fx_series`,
 the source providers' route) keeps its `stream_begin` refusal
 (`"timestamped account-currency FX is not supported by streaming"`): that
 series belongs to an owner that revalues on a broker-open clock of its own,
-which has no realtime route.
+which has no realtime route. This refusal applies when the series is used for
+conversion. A compiled Pine strategy whose account uses the chart's quote
+currency starts with no broker curve even if the host has supplied one.
 
 ### Examples and the export macro {#native_engine_examples}
 

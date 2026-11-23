@@ -172,7 +172,7 @@
 
 | Identifier | Kind | Status | Backing | Notes |
 |---|---|---|---|---|
-| `strategy.account_currency` | var | ✅ Runtime | `syminfo_.currency` on `BacktestEngine` | |
+| `strategy.account_currency` | var | ✅ Runtime | Declared account currency; `syminfo_.currency` when omitted or `currency.NONE` | |
 | `strategy.avg_losing_trade` | var | ✅ Runtime | `avg_losing_trade()` | |
 | `strategy.avg_losing_trade_percent` | var | ✅ Runtime | `avg_losing_trade_percent()` | |
 | `strategy.avg_trade` | var | ✅ Runtime | `avg_trade()` | |
