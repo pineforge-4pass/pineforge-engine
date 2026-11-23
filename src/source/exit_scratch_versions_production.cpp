@@ -16,8 +16,8 @@
 namespace pineforge::source::detail {
 namespace {
 
-// The tree has no exit payload codec. This local schema writes logical fields,
-// never object images, padding, SessionKey pointers or shared_ptr control blocks.
+// This positional schema writes logical fields, never object images, padding,
+// SessionKey pointers or shared_ptr control blocks.
 // All scalars are LE64, doubles preserve their bits, and variable values have
 // lengths/tags. Output borrows the caller only during put; input constructs the
 // returned value using a fixed byte window. Neither is retained by the provider.
@@ -562,6 +562,27 @@ template<class... T> std::uint64_t put_version(CommandScratchStore& store,
     return version;
 }
 
+template<class... T> std::uint64_t put_request_version(CommandScratchStore& store,
+        std::uint64_t scope, std::uint64_t kind, const native_order::Request& request,
+        const T&... rest) {
+    const auto* owner = std::get_if<native_order::BindOpenings>(&request.owner);
+    if (!owner || !owner->external_openings)
+        return put_version(store, scope, kind, request, rest...);
+
+    // put's byte source may not read its own store. Snapshot the external
+    // handles before put; the positional codec already round-trips inline ones.
+    const auto count = owner->external_openings->count();
+    if (!owner->openings.empty() || count > owner->openings.max_size())
+        exit_scratch_failure(ScratchStatus::programming_error);
+    auto saved = request;
+    auto& binding = std::get<native_order::BindOpenings>(saved.owner);
+    binding.openings.resize(static_cast<std::size_t>(count));
+    for (std::uint64_t i = 0; i < count; ++i)
+        exit_scratch_check(owner->external_openings->opening_at(i, binding.openings[i]));
+    binding.external_openings.reset();
+    return put_version(store, scope, kind, saved, rest...);
+}
+
 } // namespace
 
 std::uint64_t ExitScratchVersionsProduction::placement(
@@ -580,7 +601,7 @@ PlacementSnapshot ExitScratchVersionsProduction::placement(std::uint64_t version
 std::uint64_t ExitScratchVersionsProduction::request(
         std::uint64_t scope, const native_order::Request& value) {
     check_teardown_failure();
-    return put_version(store_, scope, request_kind, value);
+    return put_request_version(store_, scope, request_kind, value);
 }
 
 native_order::Request ExitScratchVersionsProduction::request(std::uint64_t version) const {
@@ -594,7 +615,7 @@ std::uint64_t ExitScratchVersionsProduction::pending(std::uint64_t scope,
         const native_order::Request& request, const PlacementSnapshot& placement,
         const std::string& key) {
     check_teardown_failure();
-    return put_version(store_, scope, pending_kind, request, placement, key);
+    return put_request_version(store_, scope, pending_kind, request, placement, key);
 }
 
 void ExitScratchVersionsProduction::pending(std::uint64_t version,
