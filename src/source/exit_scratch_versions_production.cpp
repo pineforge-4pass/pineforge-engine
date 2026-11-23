@@ -542,9 +542,14 @@ template<class Archive, class T> void payload_fields(Archive& a, T& v) {
         a(v.sequence, v.cause_fill, v.bar, v.target_command);
     } else if constexpr (std::is_same_v<V, exit_legs::Lifecycle>) {
         a(member(v, LifecycleTarget{}), member(v, LifecycleRevision{}),
-          member(v, LifecycleDefinition{}), member(v, LifecycleGenerations{}),
-          member(v, LifecycleRetirements{}), member(v, LifecycleSuspension{}),
-          member(v, LifecycleReplay{}));
+          member(v, LifecycleDefinition{}));
+        if constexpr (Archive::reading) {
+            const auto target = v.target();
+            if (target.owner < 0 || target.incarnation != v.current_definition().incarnation())
+                a.invalid();
+        }
+        a(member(v, LifecycleGenerations{}), member(v, LifecycleRetirements{}),
+          member(v, LifecycleSuspension{}), member(v, LifecycleReplay{}));
     } else if constexpr (std::is_same_v<V, exit_legs::Definition>) {
         a(member(v, DefinitionIncarnation{}), member(v, DefinitionRevision{}),
           member(v, DefinitionPrices{}));
