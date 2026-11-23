@@ -4617,6 +4617,19 @@ void WorkingRequestCore::visit_group_recipients(
     });
 }
 
+static void require_command_surface(CommandSurface surface) {
+    if (surface != CommandSurface::General && surface != CommandSurface::MarketOnly) {
+        throw std::invalid_argument("invalid native command surface");
+    }
+}
+
+static void require_request_origin(RequestOrigin origin) {
+    if (origin != RequestOrigin::Host && origin != RequestOrigin::KernelLiquidation
+        && origin != RequestOrigin::KernelRisk) {
+        throw std::invalid_argument("invalid native request origin");
+    }
+}
+
 PreparedSubmit WorkingRequestCore::prepare_submit(const Request& request,
                                                   const CommandContext& context,
                                                   uint64_t& next_order_incarnation,
@@ -4624,6 +4637,8 @@ PreparedSubmit WorkingRequestCore::prepare_submit(const Request& request,
                                                   RequestOrigin origin) {
     require_identity(identity_);
     require_distinct_counters(next_order_incarnation, next_timeline_ordinal);
+    require_command_surface(context.surface);
+    require_request_origin(origin);
     Request staged = request;
     MutationPlan plan = begin_plan();
     auto reason = validate_request(staged, context, std::nullopt);
@@ -4670,6 +4685,7 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
                                                     ReplaceOptions options) {
     require_identity(identity_);
     require_distinct_counters(next_order_incarnation, next_timeline_ordinal);
+    require_command_surface(context.surface);
     RequestHandle staged_target = target;
     Request staged = request;
     std::size_t live_index = 0;
@@ -4892,6 +4908,8 @@ CommandInstalled<SubmitResult> WorkingRequestCore::apply_submit(
         RequestOrigin origin) {
     require_identity(identity_);
     require_distinct_counters(next_order_incarnation, next_timeline_ordinal);
+    require_command_surface(context.surface);
+    require_request_origin(origin);
     Request staged = request;
     begin_direct();
     auto reason = validate_request(staged, context, std::nullopt);
@@ -4943,6 +4961,7 @@ CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace_as(
         ReplaceOptions options) {
     require_identity(identity_);
     require_distinct_counters(next_order_incarnation, next_timeline_ordinal);
+    require_command_surface(context.surface);
     RequestHandle staged_target = target;
     Request staged = request;
     std::size_t live_index = 0;
@@ -6154,7 +6173,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_margin_call(
         return PreparationError{CoreFailure::InvalidProposal, event.applied,
                                 event.definition ? event.definition->handle : RequestHandle{}};
     }
-    if (event.definition->origin == RequestOrigin::Host) {
+    if (event.definition->origin != RequestOrigin::KernelLiquidation) {
         return PreparationError{CoreFailure::InvalidProposal, event.applied,
                                 event.definition->handle};
     }
@@ -6230,7 +6249,7 @@ Preparation<Installed> WorkingRequestCore::apply_margin_call(
         return PreparationError{CoreFailure::InvalidProposal, event.applied,
                                 event.definition ? event.definition->handle : RequestHandle{}};
     }
-    if (event.definition->origin == RequestOrigin::Host) {
+    if (event.definition->origin != RequestOrigin::KernelLiquidation) {
         return PreparationError{CoreFailure::InvalidProposal, event.applied,
                                 event.definition->handle};
     }
