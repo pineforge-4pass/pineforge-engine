@@ -1,6 +1,5 @@
 #include <pineforge/detail/script_store.hpp>
 #include <pineforge/detail/scratch_file.hpp>
-#include <pineforge/series.hpp>
 #include <pineforge/checked_settings.hpp>
 #include <pineforge/map_capacity.hpp>
 #include <pineforge/ta.hpp>
@@ -17,15 +16,11 @@ namespace {
 thread_local std::uint64_t map_pair_default = 0;
 thread_local MapBarContext map_bar_context{};
 
-// The existing scratch file owns medium selection, I/O charging and disk
-// cache policy. This adapter adds only a page extent, not a second page cache
-// or a logical capacity policy. Explicit run owners supply their own backing.
+// Script pages are working state for one run. Leave disk I/O buffered so
+// repeated map operations can reuse pages in the OS cache.
 class ScriptScratchBacking final : public ScratchBacking {
 public:
-    explicit ScriptScratchBacking(const ScratchIoPolicy& policy)
-        : ScratchBacking(selected_kind(), 4096) {
-        file_.bound_cache();
-        file_.set_scratch_io_policy(policy);
+    ScriptScratchBacking() : ScratchBacking(selected_kind(), 4096) {
         file_.open("pineforge-script-state");
     }
     std::uint64_t page_count() const noexcept override { return extent_; }
@@ -84,9 +79,7 @@ private:
 } // namespace
 
 std::unique_ptr<ScratchBacking> make_script_scratch_backing() {
-    // map.new() fallback owners are created inside the same evaluation scope
-    // as numeric windows. Capture once, before opening this backing.
-    return std::make_unique<ScriptScratchBacking>(window_cache_capacity().scratch_io_policy);
+    return std::make_unique<ScriptScratchBacking>();
 }
 
 std::uint64_t map_pair_limit() noexcept { return map_pair_default; }
