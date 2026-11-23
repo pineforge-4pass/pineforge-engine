@@ -8690,6 +8690,11 @@ if(TARGET test_issue810_case_a)
         COMMAND test_issue810_case_a f3_b_market_add_control_base_close_price)
 endif()
 # --- lane issue-810-case-a end ---
+# --- lane issue-836 begin ---
+target_compile_definitions(test_corpus_gross_trade_count PRIVATE
+    PF_TEST_PYTHON="${Python3_EXECUTABLE}"
+    PF_TEST_SCRIPT="${CMAKE_CURRENT_SOURCE_DIR}/test_corpus_gross_trade_count.py")
+# --- lane issue-836 end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
