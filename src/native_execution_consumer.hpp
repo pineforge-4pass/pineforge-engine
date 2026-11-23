@@ -921,7 +921,7 @@ private:
     // such a Reduce as it stands (the representable-quantity refusal change).
     static bool scope_boundary_units(const BacktestEngine& engine,
                                      const native_order::Request& request,
-                                     double units, bool or_whole_scope) noexcept;
+                                     double units, bool or_whole_scope);
     // What an off-grid Reduce{ExplicitUnits} (admitted at submit as a FIFO
     // boundary of its scope) settles at this candidate still closes whole lots:
     // it is on the grid, a boundary of the scope as it stands, or at least the
@@ -930,7 +930,7 @@ private:
     bool grid_boundary_holds(const BacktestEngine& engine,
                              const native_order::LiveRequest& live,
                              const native_order::MatchCursor& cursor) const;
-    double sibling_claimed_units(const native_order::LiveRequest& live) const noexcept;
+    double sibling_claimed_units(const native_order::LiveRequest& live) const;
     // L3b placement-time sizing. sizing_point_price answers the price a Sized
     // request's basis converts at when it is accepted; placement_scope_units
     // measures the exposure a ScopeBasis::AtAcceptance fraction freezes; and
@@ -1612,8 +1612,8 @@ private:
                           std::vector<native_order::RequestHandle>& handles) const;
     void read_openings_into(const BacktestEngine& engine,
                             const std::vector<native_order::RequestHandle>& handles,
-                            int64_t cycle,
-                            std::vector<native_order::OpeningObservation>& out) const;
+                            int64_t cycle, std::vector<native_order::OpeningObservation>& out,
+                            const native_order::OpeningReadback* frozen = nullptr) const;
     std::optional<native_order::Side> scratch_cohort_side(
         const BacktestEngine& engine, const native_order::LiveRequest& live);
     bool scratch_request_is_buy(const BacktestEngine& engine,
@@ -1623,9 +1623,10 @@ private:
     void clear_cohort_target_cache() noexcept;
     void retarget_cohort_target_cache(const native_order::RequestHandle& predecessor,
                                       const native_order::RequestHandle& successor) noexcept;
+    class CommandOpeningObservations;
     native_order::CommandContext make_command_context(
-            const BacktestEngine& engine, const native_order::Request& request,
-            native_order::CommandSurface surface) const;
+            const BacktestEngine&, const native_order::Request&, native_order::CommandSurface,
+            CommandOpeningObservations&) const;
     void refresh_target_scalars(const BacktestEngine& engine,
                                 native_order::TargetObservation& target) const noexcept;
     std::optional<native_order::Side> cohort_side(

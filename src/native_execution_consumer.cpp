@@ -18,6 +18,7 @@
 #include "command_scratch_production.hpp"
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cmath>
 #include <cassert> // assert
 #include <cstddef>
@@ -706,11 +707,21 @@ const native_order::ScopeFraction* scope_fraction_intent(
     return reduce ? std::get_if<native_order::ScopeFraction>(&reduce->size) : nullptr;
 }
 
+// Only installed membership is read here. A failed read cannot stand in for
+// a different opening, or for an opening that is no longer live.
+native_order::RequestHandle frozen_opening_at(const native_order::OpeningReadback& roster,
+                                              std::uint64_t index) {
+    native_order::RequestHandle handle;
+    if (roster.opening_at(index, handle) != detail::ScratchStatus::ok)
+        throw detail::ReportScratchIoError(EIO, "native opening readback");
+    return handle;
+}
+
 // Two reduces share a scope when their authorities name the same physical
 // target. The keys are opaque request/cohort handles and position cycles,
 // never source identifiers. An unbound book close already names the book.
 bool same_reduction_scope(const native_order::Authority& left,
-                          const native_order::Authority& right) noexcept {
+                          const native_order::Authority& right) {
     const auto book = [](const native_order::Authority& value) {
         return std::holds_alternative<native_order::UnboundBookClose>(value)
             || std::holds_alternative<native_order::BookClose>(value);
@@ -729,7 +740,19 @@ bool same_reduction_scope(const native_order::Authority& left,
     }
     if (const auto* a = std::get_if<native_order::OpeningsClose>(&left)) {
         const auto& b = std::get<native_order::OpeningsClose>(right);
-        return a->cycle == b.cycle && a->openings == b.openings;
+        if (a->cycle != b.cycle) return false;
+        if (!a->external_openings && !b.external_openings) return a->openings == b.openings;
+        const auto count = native_order::opening_count(a->openings, a->external_openings.get());
+        if (count != native_order::opening_count(b.openings, b.external_openings.get())) return false;
+        // The core canonicalizes both spellings before installing the authority.
+        const auto member = [](const native_order::OpeningsClose& close, std::uint64_t i) {
+            return close.external_openings ? frozen_opening_at(*close.external_openings, i)
+                                           : close.openings[static_cast<std::size_t>(i)];
+        };
+        for (std::uint64_t i = 0; i != count; ++i) {
+            if (member(*a, i) != member(b, i)) return false;
+        }
+        return true;
     }
     if (const auto* a = std::get_if<native_order::CohortClose>(&left)) {
         return a->cohort == std::get<native_order::CohortClose>(right).cohort;
@@ -3881,7 +3904,8 @@ void NativeExecutionConsumer::read_target_into(
     if (const auto* opening = std::get_if<native_order::OpeningClose>(&live->authority)) {
         out.opening = read_opening(engine, opening->opening, opening->cycle);
     } else if (const auto* openings = std::get_if<native_order::OpeningsClose>(&live->authority)) {
-        read_openings_into(engine, openings->openings, openings->cycle, out.openings);
+        read_openings_into(engine, openings->openings, openings->cycle, out.openings,
+                           openings->external_openings.get());
     } else if (const auto* cohort = std::get_if<native_order::CohortClose>(&live->authority)) {
         const auto cohort_handle = cohort->cohort; const auto* position = std::get_if<native_order::PositionNonflat>(&out.current_position);
         if (!position || read_indexed_cohort_target(engine, cohort_handle, *position, out.openings)) return;
@@ -3904,7 +3928,8 @@ void NativeExecutionConsumer::read_target_into(
                                        }),
                            out.openings.end());
     } else if (const auto* bind = std::get_if<native_order::BindOpenings>(&live->request().owner)) {
-        read_openings_into(engine, bind->openings, bind->cycle, out.openings);
+        read_openings_into(engine, bind->openings, bind->cycle, out.openings,
+                           bind->external_openings.get());
     } else if (const auto* bind = std::get_if<native_order::BindOpening>(&live->request().owner)) {
         out.opening = read_opening(engine, bind->opening, bind->cycle);
     }
@@ -3995,9 +4020,35 @@ bool NativeExecutionConsumer::request_is_buy(
     return requests_.working_is_buy(live);
 }
 
+// The command core may reread a member while validating and freezing the
+// selection. This view belongs to that submit/replace call, including nested
+// calls; it never becomes part of the accepted definition or a match target.
+class NativeExecutionConsumer::CommandOpeningObservations final
+        : public native_order::OpeningObservationReadback {
+public:
+    CommandOpeningObservations(const NativeExecutionConsumer& consumer, const BacktestEngine& engine,
+                               const native_order::Request& request)
+        : consumer_(consumer), engine_(engine),
+          bind_(std::get_if<native_order::BindOpenings>(&request.owner)) {}
+
+    std::uint64_t count() const noexcept override { return bind_->external_openings->count(); }
+    detail::ScratchStatus observation_at(std::uint64_t i, native_order::OpeningObservation& out)
+            const noexcept override {
+        native_order::RequestHandle handle;
+        const auto status = bind_->external_openings->opening_at(i, handle);
+        if (status == detail::ScratchStatus::ok)
+            out = consumer_.read_opening(engine_, handle, bind_->cycle);
+        return status;
+    }
+private:
+    const NativeExecutionConsumer& consumer_;
+    const BacktestEngine& engine_;
+    const native_order::BindOpenings* bind_;
+};
+
 native_order::CommandContext NativeExecutionConsumer::make_command_context(
         const BacktestEngine& engine, const native_order::Request& request,
-        native_order::CommandSurface surface) const {
+        native_order::CommandSurface surface, CommandOpeningObservations& external) const {
     native_order::CommandContext ctx;
     // A request submitted by the generic pre-open provider is born at this
     // open rather than at the prior decision floor.  Its one-point delivery
@@ -4075,7 +4126,8 @@ native_order::CommandContext NativeExecutionConsumer::make_command_context(
     if (const auto* bind = std::get_if<native_order::BindOpening>(&request.owner)) {
         ctx.opening = read_opening(engine, bind->opening, bind->cycle);
     } else if (const auto* bind = std::get_if<native_order::BindOpenings>(&request.owner)) {
-        ctx.openings = read_openings(engine, bind->openings, bind->cycle);
+        if (bind->external_openings) ctx.external_openings = &external;
+        else ctx.openings = read_openings(engine, bind->openings, bind->cycle);
     }
     return ctx;
 }
@@ -5722,8 +5774,24 @@ std::vector<native_order::OpeningObservation> NativeExecutionConsumer::read_open
 // a merge buffer on every call; a long one keeps std::stable_sort.
 void NativeExecutionConsumer::read_openings_into(
         const BacktestEngine& engine, const std::vector<native_order::RequestHandle>& handles,
-        int64_t cycle, std::vector<native_order::OpeningObservation>& out) const {
+        int64_t cycle, std::vector<native_order::OpeningObservation>& out,
+        const native_order::OpeningReadback* frozen) const {
     out.clear();
+    if (frozen) {
+        const auto count = frozen->count();
+        if (count > out.max_size()) throw std::length_error("native opening observations too large");
+        out.reserve(static_cast<std::size_t>(count));
+        // The freeze already sorted the handles. Keep one owned observation
+        // per member so prepare and the post-settlement refresh see the same set.
+        for (std::uint64_t i = 0; i != count; ++i) {
+            native_order::OpeningObservation row;
+            row.queried_opening = frozen_opening_at(*frozen, i);
+            row.queried_cycle = cycle;
+            out.push_back(std::move(row));
+        }
+        refresh_openings(engine, out);
+        return;
+    }
     out.reserve(handles.size());
     for (const auto& handle : handles) {
         native_order::OpeningObservation row;
@@ -6009,32 +6077,19 @@ NativeExecutionConsumer::ResolvedCandidate NativeExecutionConsumer::inspect_cand
 }
 
 double NativeExecutionConsumer::sibling_claimed_units(
-        const native_order::LiveRequest& live) const noexcept {
+        const native_order::LiveRequest& live) const {
     double claimed = 0.0;
-    // A row outside the heap is read back for the walk, and that read can
-    // fail; this fold cannot throw. The core carries the failure and the next
-    // read of the book throws it again -- resolve_sized_units, the caller,
-    // reads it at once -- and the claim answered meanwhile is NaN, which no
-    // caller sizes from.
-    try {
-        // `live` may itself be a spilled row's copy that the book's small
-        // ring of recent reads lets go while the walk reads the rows after
-        // it, so what the walk compares is copied first.
-        const native_order::RequestHandle handle = live.handle();
-        const native_order::Authority authority = live.authority;
-        for (const auto& other : requests_.live()) {
-            if (other.handle() == handle) continue;
-            if (!same_reduction_scope(authority, other.authority)) continue;
-            const auto* units = std::get_if<native_order::RemainingUnits>(&other.remaining);
-            if (!units || !std::isfinite(units->q) || units->q <= 0.0) continue;
-            claimed += units->q;
-            if (!std::isfinite(claimed)) return std::numeric_limits<double>::quiet_NaN();
-        }
-    } catch (...) {
-        // A book that never spilled reads nothing back: nothing else here
-        // throws, and what would is left to noexcept as before.
-        if (!requests_.carry_book_read_failure(std::current_exception())) std::terminate();
-        return std::numeric_limits<double>::quiet_NaN();
+    // A spilled row can leave the book's ring during this walk. Keep what
+    // we compare, and let either a row or a frozen membership read fail the candidate.
+    const native_order::RequestHandle handle = live.handle();
+    const native_order::Authority authority = live.authority;
+    for (const auto& other : requests_.live()) {
+        if (other.handle() == handle) continue;
+        const auto* units = std::get_if<native_order::RemainingUnits>(&other.remaining);
+        if (!units || !std::isfinite(units->q) || units->q <= 0.0) continue;
+        if (!same_reduction_scope(authority, other.authority)) continue;
+        claimed += units->q;
+        if (!std::isfinite(claimed)) return std::numeric_limits<double>::quiet_NaN();
     }
     return claimed;
 }
@@ -6066,6 +6121,20 @@ double NativeExecutionConsumer::sizing_point_price(
     return grid_fill_basis(spec, slipped, buy, /*limit_governed=*/false);
 }
 
+// A placement-time readback need not be sorted yet. The core checks the run,
+// uniqueness and every member's liveness before it accepts this measurement.
+// An unreadable member cannot establish a sizing or grid boundary.
+static std::optional<bool> external_selects_lot(const native_order::OpeningReadback& openings,
+                                                std::uint64_t incarnation) {
+    const auto count = openings.count();
+    for (std::uint64_t i = 0; i != count; ++i) {
+        native_order::RequestHandle handle;
+        if (openings.opening_at(i, handle) != detail::ScratchStatus::ok) return std::nullopt;
+        if (handle.incarnation == incarnation) return true;
+    }
+    return false;
+}
+
 // The exposure a ScopeBasis::AtAcceptance fraction freezes. It mirrors the
 // scope build_terms_facts measures at the candidate, derived from the owner
 // the request declares because acceptance has not bound an authority yet.
@@ -6092,7 +6161,16 @@ std::optional<double> NativeExecutionConsumer::placement_scope_units(
             if (lot.entry_incarnation == bind->opening.incarnation) units += lot.qty;
         }
     } else if (const auto* bind = std::get_if<native_order::BindOpenings>(&request.owner)) {
-        units = sum_incarnations(read_openings(engine, bind->openings, bind->cycle));
+        if (bind->external_openings) {
+            if (bind->cycle != engine.position_cycle_seq_) return 0.0;
+            for (const auto& lot : engine.pyramid_entries_) {
+                const auto selected = external_selects_lot(*bind->external_openings, lot.entry_incarnation);
+                if (!selected) return std::nullopt;
+                if (*selected) units += lot.qty;
+            }
+        } else {
+            units = sum_incarnations(read_openings(engine, bind->openings, bind->cycle));
+        }
     } else if (const auto* bind = std::get_if<native_order::BindCohort>(&request.owner)) {
         const auto position = read_position(engine);
         const auto* nonflat = std::get_if<native_order::PositionNonflat>(&position);
@@ -6159,7 +6237,7 @@ bool NativeExecutionConsumer::grid_boundary_holds(const BacktestEngine& engine,
 
 bool NativeExecutionConsumer::scope_boundary_units(const BacktestEngine& engine,
                                                    const native_order::Request& request,
-                                                   double units, bool or_whole_scope) noexcept {
+                                                   double units, bool or_whole_scope) {
     const auto* one = std::get_if<native_order::BindOpening>(&request.owner);
     const auto* many = std::get_if<native_order::BindOpenings>(&request.owner);
     if (!one && !many && !std::holds_alternative<native_order::Independent>(request.owner)) {
@@ -6173,7 +6251,14 @@ bool NativeExecutionConsumer::scope_boundary_units(const BacktestEngine& engine,
     for (const auto& lot : engine.pyramid_entries_) {
         const std::uint64_t incarnation = lot.entry_incarnation;
         if (one && incarnation != one->opening.incarnation) continue;
-        if (many && std::none_of(many->openings.begin(), many->openings.end(),
+        if (many && many->external_openings) {
+            const auto selected = external_selects_lot(*many->external_openings, incarnation);
+            if (!selected) {
+                if (or_whole_scope) throw detail::ReportScratchIoError(EIO, "native opening readback");
+                return false;
+            }
+            if (!*selected) continue;
+        } else if (many && std::none_of(many->openings.begin(), many->openings.end(),
                                  [&](const native_order::RequestHandle& opening) {
                                      return opening.incarnation == incarnation;
                                  })) {
@@ -6223,8 +6308,6 @@ std::optional<double> NativeExecutionConsumer::resolve_sized_units(
     }
     if (fraction->claim == native_order::ScopeClaim::NetOfSiblings) {
         scope -= sibling_claimed_units(live);
-        // A failed read of the book inside that noexcept walk is thrown here.
-        requests_.rethrow_book_read_failure();
     }
     if (!std::isfinite(scope) || scope <= 0.0) return std::nullopt;
     // units = scope * fraction, one binary64 multiplication. A percent-spelled
@@ -12428,11 +12511,11 @@ native_order::SubmitResult NativeExecutionConsumer::submit_with_surface(
     if (!commands_allowed()) {
         throw std::runtime_error("native submit refused outside allowed phase");
     }
-    native_order::CommandContext ctx;
     native_order::PreparedSubmit prepared;
     native_order::CommandInstalled<native_order::SubmitResult> ok;
     try {
-        ctx = make_command_context(engine, request, surface);
+        CommandOpeningObservations external(*this, engine, request);
+        const auto ctx = make_command_context(engine, request, surface, external);
         if (direct_mutation_) {
             ok = requests_.apply_submit(
                 request, ctx, engine.next_order_incarnation_, next_timeline_ordinal_);
@@ -12481,11 +12564,11 @@ native_order::ReplaceResult NativeExecutionConsumer::replace_with_surface(
     if (!commands_allowed()) {
         throw std::runtime_error("native replace refused outside allowed phase");
     }
-    native_order::CommandContext ctx;
     native_order::PreparedReplace prepared;
     native_order::CommandInstalled<native_order::ReplaceResult> ok;
     try {
-        ctx = make_command_context(engine, request, surface);
+        CommandOpeningObservations external(*this, engine, request);
+        const auto ctx = make_command_context(engine, request, surface, external);
         if (direct_mutation_) {
             ok = requests_.apply_replace(
                 target, request, ctx, engine.next_order_incarnation_, next_timeline_ordinal_,
