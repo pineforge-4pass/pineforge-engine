@@ -7883,6 +7883,50 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
         "PF_ISSUE_956_TEST=\"${CMAKE_CURRENT_SOURCE_DIR}/test_run_json_strategy_digest.py\"")
 endif()
 # --- lane issue-956 end ---
+# --- lane native-chart-grid begin ---
+add_executable(native_chart_grid_probe test_native_chart_grid.cpp)
+target_link_libraries(native_chart_grid_probe PRIVATE pineforge)
+target_compile_options(native_chart_grid_probe PRIVATE -ffp-contract=off)
+if(PINEFORGE_CHART_GRID_BUILD_ID)
+    target_compile_definitions(native_chart_grid_probe PRIVATE "PF_GRID_BUILD=${PINEFORGE_CHART_GRID_BUILD_ID}")
+endif()
+add_test(NAME test_native_chart_grid_batch COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/native_chart_grid_e2e.py --route batch --probe $<TARGET_FILE:native_chart_grid_probe>)
+add_test(NAME test_native_chart_grid_api_bars COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/native_chart_grid_e2e.py --route api-bars --probe $<TARGET_FILE:native_chart_grid_probe>)
+add_test(NAME test_native_chart_grid_api_ticks COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/native_chart_grid_e2e.py --route api-ticks --probe $<TARGET_FILE:native_chart_grid_probe>)
+if(PINEFORGE_BUILD_LIVE_RUNNER AND UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(native_chart_grid_observer MODULE test_native_chart_grid.cpp)
+    target_link_libraries(native_chart_grid_observer PRIVATE pineforge)
+    target_compile_options(native_chart_grid_observer PRIVATE -fvisibility=hidden -ffp-contract=off)
+    target_compile_definitions(native_chart_grid_observer PRIVATE PF_GRID_NATIVE_MODULE)
+    if(PINEFORGE_CHART_GRID_BUILD_ID)
+        target_compile_definitions(native_chart_grid_observer PRIVATE "PF_GRID_BUILD=${PINEFORGE_CHART_GRID_BUILD_ID}")
+    endif()
+    add_test(NAME test_native_chart_grid_cli_bars COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/native_chart_grid_e2e.py --route cli-bars
+        --runner $<TARGET_FILE:pineforge-live> --native $<TARGET_FILE:native_chart_grid_observer>)
+    add_test(NAME test_native_chart_grid_cli_ticks COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/native_chart_grid_e2e.py --route cli-ticks
+        --runner $<TARGET_FILE:pineforge-live> --native $<TARGET_FILE:native_chart_grid_observer>)
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        add_library(pine_chart_grid_observer MODULE test_native_chart_grid.cpp)
+        target_link_libraries(pine_chart_grid_observer PRIVATE pineforge)
+        target_compile_options(pine_chart_grid_observer PRIVATE -fvisibility=hidden -ffp-contract=off)
+        target_compile_definitions(pine_chart_grid_observer PRIVATE PF_GRID_PINE_MODULE)
+        if(PINEFORGE_CHART_GRID_BUILD_ID)
+            target_compile_definitions(pine_chart_grid_observer PRIVATE "PF_GRID_BUILD=${PINEFORGE_CHART_GRID_BUILD_ID}")
+        endif()
+        add_test(NAME test_pine_chart_grid_cli_ticks COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/native_chart_grid_e2e.py --route pine-ticks
+            --runner $<TARGET_FILE:pineforge-live> --pine $<TARGET_FILE:pine_chart_grid_observer>)
+        add_test(NAME test_pine_chart_grid_cli_bars_refusal COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/native_chart_grid_e2e.py --route pine-bars-refusal
+            --runner $<TARGET_FILE:pineforge-live> --pine $<TARGET_FILE:pine_chart_grid_observer>)
+    endif()
+endif()
+# --- lane native-chart-grid end ---
 
 # --- lane scratch-directory-resolution-and-fallback begin ---
 # Scratch resolution: only these opted-in existing targets need the interposer's linkage.
