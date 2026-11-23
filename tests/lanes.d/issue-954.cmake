@@ -1,0 +1,5 @@
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_same_currency_broker_fx test_currency_receipt_failure)
+    pineforge_add_unit_test(test_same_currency_broker_fx)
+    pineforge_add_unit_test(test_currency_receipt_failure)
+endif()
