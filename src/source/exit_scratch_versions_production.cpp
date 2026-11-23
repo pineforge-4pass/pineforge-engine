@@ -357,42 +357,49 @@ template<class Archive, class T> void payload_fields(Archive& a, T& v) {
         a(v.cause, v.state, v.close_claim_release, v.source_incarnation, v.source_sequence,
           v.target_incarnation, v.target_owner, v.target_revision,
           v.close_claim_consumed, v.close_claim_retired);
-    } else if constexpr (std::is_same_v<V, BirthCursor>) {
-        auto domain = v.domain();
-        auto position = v.position();
-        auto index = v.index();
-        auto count = v.count();
-        a(domain, position, index, count);
-        if constexpr (Archive::reading) {
-            if (position == BirthCursorPosition::None) {
-                if (domain != BirthCursorDomain::None || index != -1 || count != 0) a.invalid();
-                v = {};
-            } else if (position == BirthCursorPosition::Point) {
-                v = BirthCursor::point(domain, index, count);
-            } else if (position == BirthCursorPosition::Segment) {
-                v = BirthCursor::segment(domain, index, count);
-            } else a.invalid();
-        }
     } else if constexpr (std::is_same_v<V, OrderBirth>) {
         auto cause = v.cause();
         auto bar = v.bar();
         auto timestamp = v.timestamp();
-        auto cursor = v.cursor();
+        auto domain = v.cursor().domain();
+        auto position = v.cursor().position();
+        auto index = v.cursor().index();
+        auto count = v.cursor().count();
         auto price = v.cursor_price();
         auto first = v.first_fill();
         auto last = v.last_fill();
         auto evaluation = v.evaluation_ordinal();
-        a(cause, bar, timestamp, cursor, price, first, last, evaluation);
+        a(cause, bar, timestamp, domain, position, index, count, price, first, last, evaluation);
         if constexpr (Archive::reading) {
+            if (cause != OrderBirthCause::FillEvaluation) {
+                // A non-fill factory discards these fields. Check the exact bytes it would write.
+                const OrderBirth empty;
+                const auto empty_price = empty.cursor_price();
+                if (domain != empty.cursor().domain() || position != empty.cursor().position()
+                    || index != empty.cursor().index() || count != empty.cursor().count()
+                    || std::memcmp(&price, &empty_price, sizeof(price)) != 0
+                    || first != 0 || last != 0 || evaluation != 0
+                    || (cause == OrderBirthCause::Unattributed
+                        && (bar != empty.bar() || timestamp != empty.timestamp()))) a.invalid();
+            }
             switch (cause) {
             case OrderBirthCause::Unattributed: v = {}; break;
             case OrderBirthCause::DirectCommand:
                 v = OrderBirth::direct_command(bar, timestamp); break;
             case OrderBirthCause::ChartEvaluation:
                 v = OrderBirth::chart_evaluation(bar, timestamp); break;
-            case OrderBirthCause::FillEvaluation:
+            case OrderBirthCause::FillEvaluation: {
+                BirthCursor cursor;
+                if (position == BirthCursorPosition::None) {
+                    if (domain != BirthCursorDomain::None || index != -1 || count != 0) a.invalid();
+                } else if (position == BirthCursorPosition::Point) {
+                    cursor = BirthCursor::point(domain, index, count);
+                } else if (position == BirthCursorPosition::Segment) {
+                    cursor = BirthCursor::segment(domain, index, count);
+                } else a.invalid();
                 v = OrderBirth::fill_evaluation(
                     bar, timestamp, cursor, price, first, last, evaluation); break;
+            }
             default: a.invalid();
             }
         }

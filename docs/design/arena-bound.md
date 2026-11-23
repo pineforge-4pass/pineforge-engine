@@ -437,7 +437,7 @@ and its authority. Duplicate input and failed reads publish no new owner.
 The certified **stock-source EngineRecorded** profile excludes external
 `OpeningReadback` owners: the source paths cited in the table build vectors.
 `ExitScratchVersionsProduction::freeze_openings`
-(`src/source/exit_scratch_versions_production.cpp:605`) likewise builds an owned
+(`src/source/exit_scratch_versions_production.cpp:612`) likewise builds an owned
 vector rather than an external readback, as does the C-ABI translator's
 `BindOpenings` (`src/native_c_host.cpp:2356`).
 Consequently `per_user_bytes` explicitly emits `openings=0`, with that
