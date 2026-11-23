@@ -2451,9 +2451,52 @@ void PineExecutionAdapter::retire_cancelled_exits(
 }
 
 void PineExecutionAdapter::purge_brackets_after_applied_reversal(
-        const PlacementSnapshot& reversal) {
-    const auto side = static_cast<PositionSide>(reversal.projection_position_side);
-    const bool prior_long = reversal.is_long ? side == PositionSide::LONG : side != PositionSide::SHORT;
+        const PlacementSnapshot& reversal, const native_order::ExecutionAppliedEvent& fill) {
+    const bool prior_long = fill.opened_units < 0.0;
+    auto& host = require_host();
+    const auto targets_prior = [&](const PlacementSnapshot& leg) {
+        if (leg.from_entry.empty() || leg.void_issue) return false;
+        const auto cohort = cohorts_by_id_.find(leg.from_entry);
+        if (cohort == cohorts_by_id_.end()
+            || !cohort_opened_on_side(cohort->second, prior_long)) {
+            return false;
+        }
+
+        // An accepted opening cannot belong to the new side if the ID only
+        // ever opened on the old side. Require a binding: an unbound leg
+        // waiting for a staged order can share an ID with a retired opening.
+        const auto* parent = &leg.bracket_origin;
+        const bool held_in_closed_cycle = !leg.pending_bound_exit
+            && cohort->second.cycle == fill.cycle_before;
+        if ((parent->incarnation != 0 || held_in_closed_cycle)
+            && !cohort_opened_on_side(cohort->second, !prior_long)) return true;
+        if (!leg.pending_bound_exit) {
+            if (*parent == fill.handle()) return false;
+            // The opening that filled no longer needs to be working. For a
+            // whole exit without a handle, its closed lot takes precedence
+            // over a different order now resting under that ID.
+            for (std::size_t i = 0; i < fill.closed_trade_count; ++i) {
+                const auto lot = host.closed_trade(fill.first_trade_index + i);
+                const bool owns_lot = parent->incarnation != 0
+                    ? lot.entry_incarnation == parent->incarnation : lot.entry_id == leg.from_entry;
+                if (owns_lot) return lot.is_long == prior_long;
+            }
+        }
+        // Only an exit waiting for the ID follows its order through replacement.
+        if (leg.pending_bound_exit || parent->incarnation == 0) {
+            const auto order = live_by_source_key_.find(checked_live_key(leg.from_entry));
+            // With no pending parent, a whole exit of the old cycle ends
+            // even when another ID supplied the last lot the fill closed.
+            if (order == live_by_source_key_.end()) {
+                return held_in_closed_cycle;
+            }
+            parent = &order->second;
+        }
+        if (*parent == fill.handle() || !host.native_working_request(*parent)) return false;
+        const auto placed = placement_.find(parent->incarnation);
+        return placed != placement_.end() && placed->second.opening
+            && placed->second.source_id == leg.from_entry && placed->second.is_long == prior_long;
+    };
     std::vector<native_order::RequestHandle> stale;
     for (const auto& handle : live_handles_) {
         const auto found = placement_.find(handle.incarnation);
@@ -2464,15 +2507,10 @@ void PineExecutionAdapter::purge_brackets_after_applied_reversal(
             || candidate.family == PineOrderFamily::ExitTrail;
         const bool stale_margin = candidate.family == PineOrderFamily::Margin
             && candidate.projection_position_side == reversal.projection_position_side;
-        bool targets_prior = false;
-        if (const auto cohort = cohorts_by_id_.find(candidate.from_entry);
-            cohort != cohorts_by_id_.end()) {
-            targets_prior = cohort_opened_on_side(cohort->second, prior_long);
-        }
-        if ((exit && targets_prior) || stale_margin) stale.push_back(handle);
+        if ((exit && targets_prior(candidate)) || stale_margin) stale.push_back(handle);
     }
     for (const auto& handle : stale) {  // a cancel of an ended request would journal NotWorking
-        if (require_host().native_working_request(handle)) (void)require_host().cancel(handle);
+        if (host.native_working_request(handle)) (void)host.cancel(handle);
         retire(handle);
     }
     const auto held = cohorts_by_id_.held_rows();
@@ -25031,11 +25069,10 @@ detail::ExitScratchRows<native_order::RequestHandle> PineExecutionAdapter::per_e
     return legs;
 }
 
-// Cancels and retires those of `legs` still working. One the kernel already
-// ended (an OCA sibling of a fill) waits for its terminal receipt, and a
-// cancel of it would record a NotWorking event.
+// Only a working leg needs a cancel. An ended OCA sibling waits for its
+// terminal receipt; a reversal retires all selected legs at the fill.
 void PineExecutionAdapter::cancel_working_legs(
-        const detail::ExitScratchRows<native_order::RequestHandle>& legs) {
+        const detail::ExitScratchRows<native_order::RequestHandle>& legs, bool retire_ended) {
     if (legs.empty()) return;
     detail::ExitScratchIndex working(legs.context());
     detail::exit_scratch_working(legs.context(), require_host(),
@@ -25046,9 +25083,11 @@ void PineExecutionAdapter::cancel_working_legs(
     for (const auto& handle : legs) {
         const bool still_working =
             working.find(handle.incarnation) != detail::ExitScratchIndex::absent;
-        if (!still_working) continue;
-        const auto result = require_host().cancel(handle);
-        if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
+        if (still_working) {
+            const auto result = require_host().cancel(handle);
+            if (!retire_ended && result.status != native_order::CancelStatus::Cancelled) continue;
+        } else if (!retire_ended) continue;
+        retire(handle);
     }
 }
 
@@ -27144,10 +27183,10 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             }
         }
     }
-    // Either direction; the closed side is where the entry was placed, or opposite its own if flat.
+    // A reversal closed the side opposite the units its fill actually opened.
     if (placement_snapshot && placement_snapshot->opening && placement_snapshot->reverse_to
         && event.closed_units > 0.0 && (event.opened_units > 0.0 || event.opened_units < 0.0)) {
-        purge_brackets_after_applied_reversal(*placement_snapshot);
+        purge_brackets_after_applied_reversal(*placement_snapshot, event);
     }
     // A from_entry="" exit the script placed while the reversed position was
     // open belongs to that position, as every exit a flattening close
@@ -27155,9 +27194,8 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     // applies it to the side the reversal opens, on its entry bar or later,
     // in either direction (lane TVDEF-DROPS, tests/fixtures/tvdef_drops R3).
     // The kernel binds such a close to the book it first evaluates against;
-    // one evaluated before this fill was already cancelled with that book
-    // and waits for its terminal receipt: a cancel of it would record a
-    // NotWorking event, so only a leg still working is cancelled here.
+    // one evaluated before this fill was already cancelled with that book.
+    // Retire it from the projection now; only a working leg needs a cancel.
     if (placement_snapshot && placement_snapshot->opening
         && placement_snapshot->reverse_to && event.closed_units > 0.0
         && event.opened_units != 0.0) {
@@ -27178,7 +27216,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 reversed_global_exits.push_back(handle);
             }
         }
-        cancel_working_legs(reversed_global_exits);
+        cancel_working_legs(reversed_global_exits, /*retire_ended=*/true);
         // The same exit may already wait off the book: a leg this fill found
         // marketable beside a second parent of the bar was parked for the next
         // open, its request cancelled (lane W3-ENG-EXIT-ALLOC, tape
