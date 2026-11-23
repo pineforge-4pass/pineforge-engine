@@ -8642,6 +8642,13 @@ endif()
 target_compile_definitions(test_changelog_release_sections PRIVATE
     "PINEFORGE_CHANGELOG_PATH=\"${PROJECT_SOURCE_DIR}/CHANGELOG.md\"")
 # --- lane issue-934 end ---
+# --- lane issue-959 begin ---
+target_compile_definitions(test_eigen_fallback_archive_hash PRIVATE
+    PINEFORGE_ISSUE959_PYTHON="${Python3_EXECUTABLE}"
+    PINEFORGE_ISSUE959_SCRIPT="${CMAKE_CURRENT_SOURCE_DIR}/test_eigen_fallback_archive_hash.py"
+    PINEFORGE_ISSUE959_CMAKE="${CMAKE_COMMAND}"
+    PINEFORGE_ISSUE959_CMAKELISTS="${PROJECT_SOURCE_DIR}/CMakeLists.txt")
+# --- lane issue-959 end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
