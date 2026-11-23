@@ -652,9 +652,9 @@ protected:
     // host data: has_account_currency_fx_at() answers false for them, so the
     // source layer's currency conversions refuse instead of converting at a
     // rate nobody supplied. Configuration: it survives reruns, and nothing
-    // derives it from a rate's value. Declared beside the flag above, in bytes
-    // that were padding, so no other member moves.
+    // derives it from a rate's value. Both flags below occupy former padding.
     bool account_currency_fx_scalar_supplied_ = false;
+    bool account_fx_identity_ = false;  // Run uses quote units; keep the supplied FX for reuse.
     std::size_t account_currency_fx_broker_epoch_ = 0;
     double account_currency_fx_broker_rate_ = 1.0;
 
@@ -2004,10 +2004,10 @@ protected:
     void reset_run_state();
     double account_currency_fx_at(int64_t timestamp_ms) const;
     double active_account_currency_fx() const;
-    // The one scalar installer, behind set_account_currency_fx_scalar and the
-    // "account_currency_fx" metadata key. A finite positive rate becomes the
-    // scalar and marks it supplied; any other value restores the 1.0 fallback
-    // and clears the mark. Returns whether the rate was installed.
+    // The host's rate independently of the broker's units for this run.
+    double supplied_account_currency_fx_at(int64_t timestamp_ms) const;
+    // Both scalar setters mark valid rates supplied; invalid rates clear the
+    // mark, restore the 1.0 fallback and return false.
     bool install_account_currency_fx_scalar(double rate) noexcept;
 
     // Native HTF feed routing (engine_aux_security.cpp): per-state label maps
@@ -2183,8 +2183,8 @@ public:
                                         const double* rates, int n);
 
     // Install the host's scalar account-currency FX rate: account-currency
-    // units per one unit of the symbol's quote currency, the rate every
-    // quote->account money path converts at wherever no curve point is active.
+    // units per one unit of the symbol's quote currency. When conversion is
+    // needed this rate applies wherever no curve point is active.
     // A finite positive rate is installed and marked as supplied by the host,
     // 1.0 included: an explicit 1.0 is host data, the default 1.0 is not.
     // Any other value restores the 1.0 fallback, clears the mark and returns
@@ -2192,7 +2192,7 @@ public:
     // a stream's warmup has begun. The "account_currency_fx" key of
     // set_syminfo_metadata installs through the same rule.
     bool set_account_currency_fx_scalar(double rate);
-    // Whether the host supplied the rate account_currency_fx_at(at_ms)
+    // Whether the host supplied the rate supplied_account_currency_fx_at(at_ms)
     // answers: an explicit scalar, or a curve point effective at or before
     // at_ms. False where only the 1.0 fallback would answer, which includes
     // every instant before a curve's first point when no scalar was supplied.

@@ -12,6 +12,7 @@
 #include "../native_execution_consumer.hpp"
 #include "../canonical_json.hpp"
 #include "../scratch_table_binders.hpp"
+#include "pine_account_currency.hpp"
 #include "pine_host_reads.hpp"
 #include "pine_intent_state.hpp"
 #include "pine_quiet_bar.hpp"
@@ -46,7 +47,7 @@ namespace pineforge {
 using namespace source;
 
 namespace {
-
+bool currency_code_valid(const std::string& code) noexcept;
 ::pineforge::detail::ScratchStoreConfig command_scratch_config(
         std::size_t page_size, ::pineforge::detail::ScratchKeyOrder order) noexcept {
     return {2, page_size, 1, 1, order,
@@ -536,9 +537,11 @@ StagedConfiguration source::PineStrategyHost::staged_configuration() const {
     staged.syminfo.mintick = syminfo_mintick_;
     staged.inputs = inputs_;
     staged.chart_timezone = chart_timezone_;
-    staged.account_fx = account_currency_fx_;
-    staged.account_fx_effective_from_ms = account_currency_fx_timestamps_;
-    staged.account_fx_per_quote = account_currency_fx_rates_;
+    if (!account_fx_identity_) {
+        staged.account_fx = account_currency_fx_;
+        staged.account_fx_effective_from_ms = account_currency_fx_timestamps_;
+        staged.account_fx_per_quote = account_currency_fx_rates_;
+    }
     if (std::isfinite(qty_step_) && qty_step_ > 0.0) staged.quantity_grid = qty_step_;
     staged.instrument_feeds.reserve(symbol_feeds_.size());
     for (std::size_t i = 0; i < symbol_feeds_.size(); ++i) {
@@ -556,13 +559,10 @@ StagedConfiguration source::PineStrategyHost::staged_configuration() const {
 }
 
 void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args) {
-    // Idle abort requests are consumed by the public begin entry even when
-    // input validation refuses before a run starts.  Crucially, validation
-    // runs before any provider-owned state is changed.
+    // Consume an idle abort even on refusal; validate before changing provider state.
     abort_requested_.store(false, std::memory_order_relaxed);
     validate_source_begin_bars(args);
-    // Admission owns a reentrant begin's refusal. Keep the running caller
-    // span and source state intact until the outer public call unwinds.
+    // Admission refuses reentry; preserve the outer call's source state.
     if (native_state().kind == NativeLifecycleKind::Running) return;
     if (args.syminfo) {
         syminfo_ = *args.syminfo;
@@ -571,15 +571,12 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
             qty_step_ = syminfo_.qty_step;
     }
     if (args.inputs) inputs_ = *args.inputs;
-
     if (args.is_stream && native_security_feed_enabled()) {
         throw coded<std::runtime_error>(
             RunFailureCode::run_mode_unsupported, {{"feature", "stream_native_security_feed"}},
             "native request.security feed supports historical runs only");
     }
-    // Lane XSYM-D: another symbol's feeds and the recorded request series are
-    // installed whole before a run and have no realtime ingress, exactly as
-    // the native feed above.
+    // Other symbols' feeds and recorded series have no realtime ingress either.
     if (args.is_stream && (!symbol_feeds_.empty() || !recorded_series_.empty())) {
         throw coded<std::runtime_error>(
             RunFailureCode::run_mode_unsupported, {{"feature", "stream_symbol_feeds"}},
@@ -625,6 +622,9 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
         const auto* overrides = static_cast<const StrategyOverrides*>(args.overrides_opaque);
         effective = apply_overrides(effective, *overrides);
     }
+    account_fx_identity_ = (account_currency_fx_ != 1.0 || !account_currency_fx_rates_.empty())
+        && currency_code_valid(syminfo_.currency)
+        && detail::compiled_account_uses_quote(*this, syminfo_.currency);
     const StagedConfiguration staged = staged_configuration();
     if (!staged.account_fx_effective_from_ms.empty() && effective.calc_on_order_fills)
         throw coded<std::logic_error>(
@@ -4616,7 +4616,7 @@ source::PineStrategyHost::CurrencyConversion source::PineStrategyHost::currency_
     // Host data only: an explicit scalar, or a curve point in effect at at_ms.
     // The ledger's 1.0 fallback answers neither question.
     if (!has_account_currency_fx_at(at_ms)) return no_answer(kCurrencyRateUnavailable);
-    conversion.account_per_symbol = account_currency_fx_at(at_ms);
+    conversion.account_per_symbol = supplied_account_currency_fx_at(at_ms);
     return conversion;
 }
 
