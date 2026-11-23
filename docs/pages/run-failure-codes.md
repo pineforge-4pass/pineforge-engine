@@ -172,6 +172,11 @@ The 1.7.0 additions are `report_mode_unsupported`, `report_sink_failed`,
 `scratch_io_failed`. Their classes, retryability and typed arguments are
 listed below.
 
+If a path sink fails while writing or syncing its trailer, the engine reports
+`report_sink_failed` with reason `sink_io` and tries to remove the trailer.
+If truncation also fails, a trailer may still be readable. A valid sink
+requires a successful run and a completed receipt.
+
 For `scratch_capacity_exceeded`, `resource=cohort_ids_total` identifies the
 bounded cohort table's historical distinct-ID count or aggregate ID-byte
 budget (`U/B_U`, default 65,536 IDs / 4,194,304 bytes).

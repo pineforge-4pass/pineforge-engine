@@ -652,6 +652,7 @@ void LineWriter::abandon() {
 Trailer LineWriter::write_trailer() {
     auto& state = *state_;
     if (state.phase == State::Phase::complete) return state.trailer;
+    off_t record_end = -1;
     try {
         state.require_writing();
         state.flush();
@@ -668,11 +669,22 @@ Trailer LineWriter::write_trailer() {
             line.append('"'); line.append(tags[i]); line.append("\":"); integer(line, counts[i]);
         }
         line.append("},\"sha256\":\""); line.append(digest); line.append("\"}");
+        if (!state.borrowed) record_end = state.offset + static_cast<off_t>(state.used);
         state.line(false); state.flush(); state.synchronize();
         std::memcpy(state.trailer.sha256_hex, digest.c_str(), digest.size() + 1);
         state.phase = State::Phase::complete;
         return state.trailer;
-    } catch (...) { state.fail(); throw; }
+    } catch (...) {
+        // The trailer may already be readable even though sync failed.
+        // Restore the whole-record prefix without masking the original error.
+        if (record_end >= 0) {
+            int status;
+            do { status = ::ftruncate(state.descriptor, record_end); }
+            while (status < 0 && errno == EINTR);
+        }
+        state.fail();
+        throw;
+    }
 }
 
 void LineWriter::write_o(std::int64_t row, std::int64_t open_ms, std::int64_t close_ms,
