@@ -206,7 +206,12 @@ template<bool Owning> struct Load {
             } else x.reset();
         } else if constexpr (Shared<T>::value) {
             using Item = std::remove_const_t<typename T::element_type>;
-            if (!in.presence()) { x.reset(); return; }
+            if (!in.presence()) {
+                if constexpr (std::is_same_v<T, DefinitionRef>) {
+                    if (in.status == Status::ok) in.status = Status::corrupt;
+                } else x.reset();
+                return;
+            }
             if constexpr (std::is_same_v<Item, OpeningReadback>) {
                 const auto count = in.word();
                 if (in.status != Status::ok) return;
