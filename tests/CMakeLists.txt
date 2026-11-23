@@ -1329,6 +1329,7 @@ list(APPEND TEST_SOURCES test_native_tick_volume)
 # live deferred group-adjustment chain pinning the window. Source-free, so it
 # also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_journal_window)
+list(APPEND TEST_SOURCES test_native_history_at_failure_orders)
 # R5 V19-B: what a run keeps of its event record (NativeRunSpec::
 # event_retention) and the host acknowledgement that closes a polling host's
 # window. Source-free, so it also runs in the kernel-only profile.
