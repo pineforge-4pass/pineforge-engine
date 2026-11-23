@@ -16,6 +16,10 @@
 // and a half steps, and a four-step control.  After both exits nothing may be
 // left for the end close.  Two more rows hand the same checks an empty and a
 // stale observation, and pass only if every check fails there.
+// The step rows come in two forms.  Under process_orders_on_close the entry
+// is an order at once.  The live-entry rows run without it and with a
+// commission, which keeps the entry from being held: it is a working order
+// when the exits are placed, and fills at the next bar's open.
 
 #include <pineforge/source/pine_native_host.hpp>
 
@@ -62,6 +66,11 @@ constexpr double kStepGap = 0.25;
 constexpr double kStepOvershoot = 0.5;
 // The bar on which a step row's script makes its end close.
 constexpr int kStepEndCloseBar = 3;
+// The live-entry step rows: a commission in percent, the one setting that
+// keeps their entry from being held, and the bar of their end close.  Their
+// entry fills one bar later than under process_orders_on_close.
+constexpr double kStepCommissionPercent = 0.1;
+constexpr int kLiveEndCloseBar = 4;
 
 enum class Mode {
     Exact,
@@ -74,6 +83,10 @@ enum class Mode {
     PoocOddStepsStopFirst,
     PoocWholeStepsLimitFirst,
     PoocWholeStepsStopFirst,
+    LiveEntryOddStepsLimitFirst,
+    LiveEntryOddStepsStopFirst,
+    LiveEntryWholeStepsLimitFirst,
+    LiveEntryWholeStepsStopFirst,
     StepChecksEmptyInput,
     StepChecksStaleInput,
 };
@@ -90,29 +103,57 @@ const char* mode_name(Mode mode) {
         case Mode::PoocOddStepsStopFirst: return "pooc_odd_steps_stop_first";
         case Mode::PoocWholeStepsLimitFirst: return "pooc_whole_steps_limit_first";
         case Mode::PoocWholeStepsStopFirst: return "pooc_whole_steps_stop_first";
+        case Mode::LiveEntryOddStepsLimitFirst:
+            return "live_entry_odd_steps_limit_first";
+        case Mode::LiveEntryOddStepsStopFirst:
+            return "live_entry_odd_steps_stop_first";
+        case Mode::LiveEntryWholeStepsLimitFirst:
+            return "live_entry_whole_steps_limit_first";
+        case Mode::LiveEntryWholeStepsStopFirst:
+            return "live_entry_whole_steps_stop_first";
         case Mode::StepChecksEmptyInput: return "step_checks_empty_input";
         case Mode::StepChecksStaleInput: return "step_checks_stale_input";
     }
     return "unknown";
 }
 
-// The four step rows that run the engine.
-bool is_step_mode(Mode mode) {
+// The step rows that run the engine, in their two forms.  Under
+// process_orders_on_close the entry is an order at once.  In the live-entry
+// rows a commission keeps it from being held to the end of its calculation:
+// src/source/pine_adapter.cpp:3760-3763 holds a market entry only when the
+// commission is zero, and the other two held scopes need a pyramiding of two
+// or more (:3765-3771, :8449-8457; :8477-8482 is where the three meet).
+bool is_pooc_step_mode(Mode mode) {
     return mode == Mode::PoocOddStepsLimitFirst
         || mode == Mode::PoocOddStepsStopFirst
         || mode == Mode::PoocWholeStepsLimitFirst
         || mode == Mode::PoocWholeStepsStopFirst;
 }
 
+bool is_live_step_mode(Mode mode) {
+    return mode == Mode::LiveEntryOddStepsLimitFirst
+        || mode == Mode::LiveEntryOddStepsStopFirst
+        || mode == Mode::LiveEntryWholeStepsLimitFirst
+        || mode == Mode::LiveEntryWholeStepsStopFirst;
+}
+
+bool is_step_mode(Mode mode) {
+    return is_pooc_step_mode(mode) || is_live_step_mode(mode);
+}
+
 double step_entry_qty(Mode mode) {
     const bool whole = mode == Mode::PoocWholeStepsLimitFirst
-        || mode == Mode::PoocWholeStepsStopFirst;
+        || mode == Mode::PoocWholeStepsStopFirst
+        || mode == Mode::LiveEntryWholeStepsLimitFirst
+        || mode == Mode::LiveEntryWholeStepsStopFirst;
     return whole ? kStepWholeEntryQty : kStepOddEntryQty;
 }
 
 bool step_stop_first(Mode mode) {
     return mode == Mode::PoocOddStepsStopFirst
-        || mode == Mode::PoocWholeStepsStopFirst;
+        || mode == Mode::PoocWholeStepsStopFirst
+        || mode == Mode::LiveEntryOddStepsStopFirst
+        || mode == Mode::LiveEntryWholeStepsStopFirst;
 }
 
 struct Applied {
@@ -136,12 +177,13 @@ public:
         config.initial_capital = 10'000.0;
         config.default_qty_type = static_cast<int>(QtyType::FIXED);
         config.default_qty_value = 0.02;
-        config.commission_value = 0.0;
+        config.commission_value =
+            is_live_step_mode(mode) ? kStepCommissionPercent : 0.0;
         config.slippage = 0;
         config.pyramiding = mode == Mode::BMarketAddControl ? 2 : 1;
         config.process_orders_on_close =
             mode == Mode::Exact || mode == Mode::AbsoluteControl
-            || is_step_mode(mode);
+            || is_pooc_step_mode(mode);
         configure_pine_strategy(config);
         set_syminfo_session("24x7");
         set_syminfo_timezone("Etc/UTC");
@@ -170,6 +212,10 @@ public:
             case Mode::PoocOddStepsStopFirst:
             case Mode::PoocWholeStepsLimitFirst:
             case Mode::PoocWholeStepsStopFirst:
+            case Mode::LiveEntryOddStepsLimitFirst:
+            case Mode::LiveEntryOddStepsStopFirst:
+            case Mode::LiveEntryWholeStepsLimitFirst:
+            case Mode::LiveEntryWholeStepsStopFirst:
                 on_step_bar();
                 return;
             case Mode::StepChecksEmptyInput:
@@ -203,6 +249,7 @@ public:
     bool held_entry_staged() const { return held_entry_staged_; }
     bool held_partial_staged() const { return held_partial_staged_; }
     bool held_full_exit_placed() const { return held_full_exit_placed_; }
+    bool step_entry_order_at_signal() const { return step_entry_order_at_signal_; }
 
 private:
     void exit(const char* id, const char* from, double limit, double stop,
@@ -300,9 +347,22 @@ private:
                  kStepProfitTicks, "step-tick-partial");
             exit("Rest", "Long", kNaN, kStepStopPrice, 100.0, kNaN, kNaN,
                  "step-price-rest");
+            // In a live-entry row the entry must be a working order here, not
+            // one held to the end of the calculation: the fixture lists a
+            // working order unstaged.
+            if (is_live_step_mode(mode_)) {
+                for (const auto& row : adapter_.fixture_pending_snapshots()) {
+                    if (row.snapshot.source_id == "Long" && row.snapshot.opening
+                        && !row.staged) {
+                        step_entry_order_at_signal_ = true;
+                    }
+                }
+            }
             return;
         }
-        if (pine_bar_index() == kStepEndCloseBar
+        const int end_close_bar =
+            is_live_step_mode(mode_) ? kLiveEndCloseBar : kStepEndCloseBar;
+        if (pine_bar_index() == end_close_bar
             && std::fabs(physical_position().signed_units) > 1e-9) {
             strategy_close("Long", "step-end-close");
         }
@@ -316,6 +376,7 @@ private:
     bool held_entry_staged_ = false;
     bool held_partial_staged_ = false;
     bool held_full_exit_placed_ = false;
+    bool step_entry_order_at_signal_ = false;
 };
 
 void print_applied(const Probe& probe) {
@@ -738,6 +799,28 @@ std::vector<Bar> bars_for(Mode mode) {
             bar(4, kEntryPrice, above, below, kEntryPrice),
         };
     }
+    if (is_live_step_mode(mode)) {
+        // Without process_orders_on_close the entry fills at bar 1's open,
+        // which is higher than bar 0's close.  Bar 1 does nothing else.
+        // Bars 2 and 3 each reach one exit level and travel past it.  Bar 4
+        // is the end close's bar, and bar 5 is where that close would fill.
+        static_assert(kLiveEndCloseBar == 4, "bar 4 is the end close's bar");
+        const double base = kStepBasePrice;
+        const double later = base + kStepGap;
+        const double above = later + kStepProfitTicks * kMinTick + kStepOvershoot;
+        const double below = kStepStopPrice - kStepOvershoot;
+        const bool stop_first = step_stop_first(mode);
+        return {
+            bar(0, base, base, base, base),
+            bar(1, later, later, later, later),
+            stop_first ? bar(2, later, later, below, later)
+                       : bar(2, later, above, later, later),
+            stop_first ? bar(3, later, above, later, later)
+                       : bar(3, later, later, below, later),
+            bar(4, later, later, later, later),
+            bar(5, later, later, later, later),
+        };
+    }
     if (is_step_mode(mode)) {
         // Bar 0 places the three orders and closes at the base price, where
         // the entry fills.  Later bars open a little higher, so that price
@@ -786,6 +869,11 @@ std::vector<Bar> bars_for(Mode mode) {
 // two, so after both exits nothing is held (R6).  The script then makes an
 // end close, which must find nothing to take.
 //
+// The live-entry rows place the same orders without process_orders_on_close
+// and with a commission.  Their entry is a working order when the exits are
+// placed and fills at the next bar's open (R1), so every later fill is one
+// bar later.
+//
 // The checks read one observation, the applied fills and the closed trades of
 // a run, and take it as a value: they can be handed an observation that is
 // empty or stale, and every one of them must fail there
@@ -800,11 +888,15 @@ struct ClosedTrade {
 struct Observed {
     std::vector<Applied> applied;
     std::vector<ClosedTrade> trades;
+    // Whether the entry was a working order when the exits were placed.
+    bool entry_order_at_signal = false;
 };
 
 struct StepCase {
     double entry_qty = 0.0;
     bool stop_first = false;
+    // Under process_orders_on_close, or with a live entry and without it.
+    bool on_close = true;
 };
 
 struct StepCheck {
@@ -819,11 +911,12 @@ Observed observe(Probe& probe) {
     seen.applied = probe.applied();
     for (int index = 0; index < probe.trade_count(); ++index)
         seen.trades.push_back({probe.trade_exit_id(index), probe.trade_size(index)});
+    seen.entry_order_at_signal = probe.step_entry_order_at_signal();
     return seen;
 }
 
 StepCase step_case(Mode mode) {
-    return {step_entry_qty(mode), step_stop_first(mode)};
+    return {step_entry_qty(mode), step_stop_first(mode), is_pooc_step_mode(mode)};
 }
 
 std::vector<StepCheck> step_checks(const Observed& seen, const StepCase& step) {
@@ -859,15 +952,23 @@ std::vector<StepCheck> step_checks(const Observed& seen, const StepCase& step) {
         ? entry->price + kStepProfitTicks * kMinTick : kNaN;           // R2
     const double rest = entry != nullptr && partial != nullptr
         ? entry->opened - partial->closed : kNaN;                      // R4
-    const int partial_bar = step.stop_first ? 2 : 1;
-    const int full_bar = step.stop_first ? 1 : 2;
+    // The first exit level is reached one bar after the entry's fill.
+    const int first_bar = step.on_close ? 1 : 2;
+    const int partial_bar = step.stop_first ? first_bar + 1 : first_bar;
+    const int full_bar = step.stop_first ? first_bar : first_bar + 1;
 
     std::vector<StepCheck> out;
-    // R1': the entry fills once, for its quantity, at the close of the bar
-    // that placed it.  Later bars open higher, so the price tells that close
-    // from the next bar's open.
-    out.push_back({"entry_filled_at_signal_close",
-                   entry != nullptr && near(entry->price, kStepBasePrice)
+    // R1' or R1: the entry fills once, for its quantity, at the close of the
+    // bar that placed it under process_orders_on_close, and at the next bar's
+    // open without it.  Later bars open higher, so the price tells the two
+    // apart.  A live entry must also have been a working order when the
+    // exits were placed.
+    const double entry_price = step.on_close
+        ? kStepBasePrice : kStepBasePrice + kStepGap;
+    const bool entry_form = step.on_close || seen.entry_order_at_signal;
+    out.push_back({step.on_close ? "entry_filled_at_signal_close"
+                                 : "live_entry_filled_at_next_open",
+                   entry != nullptr && entry_form && near(entry->price, entry_price)
                        && near(entry->opened, step.entry_qty),
                    entry != nullptr ? entry->opened : kNaN, step.entry_qty});
     // R7: each exit fills once.
@@ -941,10 +1042,15 @@ Observed observe_step_run(Mode mode) {
 // this row passes when the named check fails.
 bool run_step_checks_on_empty_input() {
     const char* name = mode_name(Mode::StepChecksEmptyInput);
-    const StepCase odd = step_case(Mode::PoocOddStepsLimitFirst);
-    const auto results = step_checks(Observed{}, odd);
-    bool ok = check(!results.empty(), name, "checks_were_run");
-    for (const auto& result : results) ok = check(!result.ok, name, result.name) && ok;
+    bool ok = true;
+    for (const Mode row : {Mode::PoocOddStepsLimitFirst,
+                           Mode::LiveEntryOddStepsLimitFirst}) {
+        const std::string prefix = std::string(mode_name(row)) + ":";
+        const auto results = step_checks(Observed{}, step_case(row));
+        ok = check(!results.empty(), name, (prefix + "checks_were_run").c_str()) && ok;
+        for (const auto& result : results)
+            ok = check(!result.ok, name, (prefix + result.name).c_str()) && ok;
+    }
     return ok;
 }
 
@@ -956,11 +1062,10 @@ bool run_step_checks_on_empty_input() {
 // Every check must fail on at least one of them: nothing a check says about
 // the exits may hold on the first, and the second is not this row's entry.  A
 // line of this row passes when the named check fails on one of them.
-bool run_step_checks_on_stale_input() {
-    const char* name = mode_name(Mode::StepChecksStaleInput);
-    const StepCase odd = step_case(Mode::PoocOddStepsLimitFirst);
-    Observed earlier = observe_step_run(Mode::PoocOddStepsLimitFirst);
-    const Observed leftover = observe_step_run(Mode::PoocWholeStepsLimitFirst);
+bool step_checks_reject_stale(const char* name, Mode row, Mode other) {
+    const StepCase own = step_case(row);
+    Observed earlier = observe_step_run(row);
+    const Observed leftover = observe_step_run(other);
     // Keep the fills up to the first one that opened something.
     std::size_t kept = 0;
     for (const auto& fill : earlier.applied) {
@@ -969,21 +1074,32 @@ bool run_step_checks_on_stale_input() {
     }
     earlier.applied.resize(kept);
     earlier.trades.clear();
+    const std::string prefix = std::string(mode_name(row)) + ":";
     bool ok = check(earlier.applied.size() == 1, name,
-                    "earlier_snapshot_is_the_entry_fill",
+                    (prefix + "earlier_snapshot_is_the_entry_fill").c_str(),
                     static_cast<double>(earlier.applied.size()), 1.0);
     ok = check(leftover.applied.size() > 1 && !leftover.trades.empty(), name,
-               "leftover_run_is_finished",
+               (prefix + "leftover_run_is_finished").c_str(),
                static_cast<double>(leftover.applied.size())) && ok;
-    const auto on_earlier = step_checks(earlier, odd);
-    const auto on_leftover = step_checks(leftover, odd);
+    const auto on_earlier = step_checks(earlier, own);
+    const auto on_leftover = step_checks(leftover, own);
     ok = check(!on_earlier.empty() && on_earlier.size() == on_leftover.size(), name,
-               "checks_were_run") && ok;
+               (prefix + "checks_were_run").c_str()) && ok;
     for (std::size_t index = 0; index < on_earlier.size() && index < on_leftover.size();
          ++index) {
         ok = check(!on_earlier[index].ok || !on_leftover[index].ok, name,
-                   on_earlier[index].name) && ok;
+                   (prefix + on_earlier[index].name).c_str()) && ok;
     }
+    return ok;
+}
+
+// The stale-input row, for both forms of the step rows.
+bool run_step_checks_on_stale_input() {
+    const char* name = mode_name(Mode::StepChecksStaleInput);
+    bool ok = step_checks_reject_stale(name, Mode::PoocOddStepsLimitFirst,
+                                       Mode::PoocWholeStepsLimitFirst);
+    ok = step_checks_reject_stale(name, Mode::LiveEntryOddStepsLimitFirst,
+                                  Mode::LiveEntryWholeStepsLimitFirst) && ok;
     return ok;
 }
 
@@ -1034,6 +1150,14 @@ bool parse_mode(const std::string& value, Mode& out) {
     else if (value == "pooc_whole_steps_limit_first")
         out = Mode::PoocWholeStepsLimitFirst;
     else if (value == "pooc_whole_steps_stop_first") out = Mode::PoocWholeStepsStopFirst;
+    else if (value == "live_entry_odd_steps_limit_first")
+        out = Mode::LiveEntryOddStepsLimitFirst;
+    else if (value == "live_entry_odd_steps_stop_first")
+        out = Mode::LiveEntryOddStepsStopFirst;
+    else if (value == "live_entry_whole_steps_limit_first")
+        out = Mode::LiveEntryWholeStepsLimitFirst;
+    else if (value == "live_entry_whole_steps_stop_first")
+        out = Mode::LiveEntryWholeStepsStopFirst;
     else if (value == "step_checks_empty_input") out = Mode::StepChecksEmptyInput;
     else if (value == "step_checks_stale_input") out = Mode::StepChecksStaleInput;
     else return false;
@@ -1056,6 +1180,10 @@ int main(int argc, char** argv) {
                             Mode::PoocOddStepsLimitFirst, Mode::PoocOddStepsStopFirst,
                             Mode::PoocWholeStepsLimitFirst,
                             Mode::PoocWholeStepsStopFirst,
+                            Mode::LiveEntryOddStepsLimitFirst,
+                            Mode::LiveEntryOddStepsStopFirst,
+                            Mode::LiveEntryWholeStepsLimitFirst,
+                            Mode::LiveEntryWholeStepsStopFirst,
                             Mode::StepChecksEmptyInput, Mode::StepChecksStaleInput}) {
         ok = run_mode(mode) && ok;
     }
