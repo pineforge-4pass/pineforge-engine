@@ -13004,25 +13004,6 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
     const bool reservation_ok = compute_exit_reservation(exit_id, from_entry, qty, qty_percent,
         live_reservation_basis, percentage_basis, reserved_exit_qty, reservation_sequence,
         whole_position_percent);
-    if (pending_relative_only && !materializing_relative_) {
-        if (!reservation_ok || !(reserved_exit_qty > internal::kQtyEpsilon)) {
-            const auto pending_exit = std::find_if(
-                pending_relative_exits_.begin(), pending_relative_exits_.end(),
-                [&](const PendingRelativeExit& value) {
-                    return value.exit_id == exit_id && value.from_entry == from_entry;
-                });
-            if (pending_exit != pending_relative_exits_.end())
-                pending_relative_exits_.erase(pending_exit);
-            pending_write(source_shadow_pending_).erase(
-                std::remove_if(source_shadow_pending_.begin(), source_shadow_pending_.end(),
-                    [&](const SourceShadowPending& row) {
-                        return row.snapshot.source_id == exit_id
-                            && row.snapshot.from_entry == from_entry;
-                    }),
-                source_shadow_pending_.end());
-        }
-        return;
-    }
     if (!reservation_ok) {
         if (only_opening) return;
         // clear_existing_exit_order ran before sizing on the legacy route:
