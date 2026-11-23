@@ -225,9 +225,29 @@ public:
     }
 };
 
+// Compare the wire text without allocating or interning a key from the record.
+void match_session_key(jc::Reader& in, const SessionKey& expected) noexcept {
+    const auto length = in.word();
+    if (in.status != Status::ok) return;
+    if (length != expected.size()) { in.status = Status::corrupt; return; }
+    std::array<char, 256> chunk;
+    for (std::size_t at = 0; at < expected.size();) {
+        const auto count = std::min(chunk.size(), expected.size() - at);
+        in.bytes(chunk.data(), count);
+        if (in.status != Status::ok) return;
+        if (std::memcmp(chunk.data(), expected.data() + at, count) != 0) {
+            in.status = Status::corrupt;
+            return;
+        }
+        at += count;
+    }
+}
+
 template<bool Owning> struct Load {
     jc::Reader& in;
-    bool stored_refusal = false;
+    const RunIdentity* expected_run;
+    bool stored_refusal;
+    const SessionKey* definition_key = nullptr;
     bool reading_attempt = false;
     template<class... T> void operator()(T&... values) { (value(values), ...); }
     template<class T> void attempt(T& x) {
@@ -254,6 +274,12 @@ template<bool Owning> struct Load {
         } else if constexpr (std::is_same_v<T, double>) in.real(x);
         else if constexpr (std::is_same_v<T, std::string>) in.text(x, Owning);
         else if constexpr (std::is_same_v<T, SessionKey>) {
+            if constexpr (!Owning) {
+                if (&x == definition_key) {
+                    match_session_key(in, expected_run->session_key);
+                    return;
+                }
+            }
             std::string text;
             in.text(text, Owning);
             if constexpr (Owning) if (in.status == Status::ok) x = text;
@@ -315,6 +341,14 @@ template<bool Owning> struct Load {
         } else if constexpr (Variant<T>::value) {
             const auto index = in.word();
             if (in.status == Status::ok) variant(x, index);
+        } else if constexpr (!Owning && std::is_same_v<T, RequestDefinition>) {
+            // Mark exactly this field for comparison while walking the same wire
+            // schema as the encoder. Other handles, including root, are references.
+            auto definition = *this;
+            definition.definition_key = &x.handle.run.session_key;
+            fields(definition, x);
+            if (in.status == Status::ok && x.handle.run.run_number != expected_run->run_number)
+                in.status = Status::corrupt;
         } else fields(*this, x);
     }
 };
@@ -322,12 +356,12 @@ template<bool Owning> struct Load {
 template<bool Owning> Status decode(const detail::ScratchByteSource& source,
                                    detail::ScratchBuffer page, CommandEvent& event,
                                    const detail::ReportScratchIoError*& failure,
-                                   bool stored_refusal = false) noexcept {
+                                   const RunIdentity* expected_run, bool stored_refusal) noexcept {
     failure = nullptr;
     if (!page.data || !page.size) return Status::programming_error;
     try {
         jc::Reader in{source, page};
-        Load<Owning>{in, stored_refusal}(event);
+        Load<Owning>{in, expected_run, stored_refusal}(event);
         return in.finish();
     } catch (const std::bad_alloc&) {
         if constexpr (Owning) failure = &detail::scratch_out_of_memory_failure();
@@ -360,7 +394,7 @@ static Status decode_owning(const detail::ScratchByteSource& source,
     try {
         CommandEvent result;
         const detail::ReportScratchIoError* failure = nullptr;
-        const auto status = decode<true>(source, page, result, failure, stored_refusal);
+        const auto status = decode<true>(source, page, result, failure, nullptr, stored_refusal);
         // Owning diagnostics can allocate. Raise their cause before a caller
         // maps programming_error to invalid storage.
         detail::rethrow_carried_scratch_failure(failure);
@@ -379,10 +413,10 @@ detail::ScratchStatus read_stored_journal_event(const detail::ScratchByteSource&
     return decode_owning(source, page, event, true);
 }
 detail::ScratchStatus scan_journal_record(const detail::ScratchByteSource& source,
-    detail::ScratchBuffer page, std::uint64_t& ordinal) noexcept {
+    detail::ScratchBuffer page, const RunIdentity& run, std::uint64_t& ordinal) noexcept {
     CommandEvent result;
     const detail::ReportScratchIoError* failure = nullptr;
-    const auto status = decode<false>(source, page, result, failure);
+    const auto status = decode<false>(source, page, result, failure, &run, false);
     if (status == Status::ok)
         ordinal = std::visit([](const auto& event) { return event.ordinal; }, result);
     return status;

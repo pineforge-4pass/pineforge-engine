@@ -125,6 +125,14 @@ The bound `CommandScratchStore` codec instead uses its configured workspace.
 Its owning diagnostic decoder throws typed `out_of_memory` on allocation
 failure; the nonowning validation scan retains its `noexcept` status contract.
 
+A raw native journal append (`append_journal_record`, `src/native_order.cpp:2210`)
+checks each request definition's own session key and run number against the
+destination. A replacement must match in both definition slots. The check
+applies to the caller's input and to the bytes staged for commit. A mismatch
+returns `ScratchStatus::corrupt` without adding the event or advancing the
+last ordinal. An event may still name a foreign handle as its target or in a
+definition's `predecessor` or `root` link.
+
 For the short waiting-child parent-terminal fixture (short ids), the book's 4,096-row
 cap and the journal's 2,048-event cap give a per-engine definition plateau of
 1,890,980 bytes (about 1.9 MB) on GNU 13.4 x86-64; it moves with definition size and is
