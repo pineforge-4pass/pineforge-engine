@@ -103,6 +103,23 @@ Mount points (provide exactly one of `strategy.pine` / `strategy.cpp`):
 | `strategy.cpp`   | `/in/strategy.cpp`    | back-compat | Pre-transpiled PineForge translation unit (used only if no `.pine`). Refused unless `PINEFORGE_STRATEGY_CPP_SHA256` holds the sha256 of exactly these bytes, or `PINEFORGE_ALLOW_UNATTESTED_CPP=1` (local trust only; a hosted caller must never set it) |
 | `ohlcv.csv`      | `/in/ohlcv.csv`       | yes      | `timestamp,open,high,low,close,volume` |
 
+### Check the compiled strategy before loading
+
+A trusted parent can set `PINEFORGE_STRATEGY_SO_SHA256` in the engine
+process's environment to the expected SHA-256 of `strategy.so`, as 64
+hexadecimal digits. `run_json.py` checks it before opening the library,
+including for a `--capabilities-json` probe. A mismatch or unreadable,
+empty or nonregular file returns `strategy_library_incompatible` with
+`reason: load_failed`. An empty or malformed digest returns
+`run_request_invalid` with `option: arguments`. Omit the variable to use the
+usual loader and ABI checks.
+
+For a two-phase run, supply the expected digest from the trusted wrapper
+when launching phase 2. Keep the library and its path stable through the
+load, for example with the read-only work directory described below. The
+digest check covers the strategy file; process isolation remains the primary
+boundary.
+
 ### Two-phase run
 
 Set `PINEFORGE_BUILD_ONLY` to exactly `1` or `true` and
