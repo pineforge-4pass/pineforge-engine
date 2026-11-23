@@ -1,5 +1,6 @@
 // A strategy.entry reversal sends a cancel only for the exit orders that are
-// still working, whichever side it opens.
+// still working, whichever side it opens, and takes every one of them off the
+// adapter's own book.
 //
 // When a reversal's fill is applied, the adapter takes the exit orders of the
 // side that fill closed off its book in purge_brackets_after_applied_reversal
@@ -19,7 +20,8 @@
 // order, fill or trade did.
 // The adapter now sends the cancel only for an order the kernel still lists
 // as working, and drops every such order from its own book as before. This
-// test holds the journal of a reversal to that rule in both directions.
+// test holds a reversal to both halves of that rule, in both directions: what
+// it writes to the journal, and what it leaves on the adapter's own book.
 //
 // One script, driven only through the public host commands:
 //   Bar 0: strategy.entry "X" on the side the reversal will close.
@@ -43,17 +45,31 @@
 // first: every side is flipped and every price is reflected about 100. The
 // bars reflect onto themselves.
 //
-// What the test reads. The journal is read through the public event reader
-// NativeStrategyHost::native_events (include/pineforge/native_host.hpp:1371),
-// whose rows are NativeMarketEvent (the same file, :390). The host is asked
-// before the run to keep the whole journal readable after it, with
-// PineStrategyHost::fixture_retain_all_events
-// (include/pineforge/source/pine_strategy_host.hpp:742). The event types are
-// those of include/pineforge/native_order.hpp: ExecutionAppliedEvent,
-// CancelledEvent with its CancelReason, and NotWorkingEvent. The adapter's
-// receipt cursor has no public reader, so the test reads the journal the
-// cursor follows. The closed rows and the position are read as a strategy
-// reads them.
+// What the test reads.
+//   The journal, through the public event reader
+//   NativeStrategyHost::native_events (include/pineforge/native_host.hpp:1371),
+//   whose rows are NativeMarketEvent (the same file, :390). The host is asked
+//   before the run to keep the whole journal readable after it, with
+//   PineStrategyHost::fixture_retain_all_events
+//   (include/pineforge/source/pine_strategy_host.hpp:742). The event types
+//   are those of include/pineforge/native_order.hpp: ExecutionAppliedEvent,
+//   CancelledEvent with its CancelReason, and NotWorkingEvent. The adapter's
+//   receipt cursor has no public reader, so the test reads the journal the
+//   cursor follows.
+//   The adapter's own book, through the host's pending-order projection:
+//   PineStrategyHost::pending_intent_view
+//   (include/pineforge/source/pine_strategy_host.hpp:563) and its size and
+//   copy_v1 (include/pineforge/source/pine_adapter.hpp:1684, :1690). The
+//   projection is built from the adapter's list of live orders
+//   (PineExecutionAdapter::projected_raw_pending_at), not from the kernel's
+//   working requests. The two differ for an order the kernel has ended and
+//   the adapter has not dropped: the adapter learns of such an end only when
+//   it next reads its receipts, at a bar's open or before a calculation. So
+//   the projection is read where that difference can still be seen: when the
+//   reversal's own fill notification ends, in the host's applied-event
+//   observer, PineStrategyHost::on_native_applied_event (the same header,
+//   :752), which runs after the adapter has settled the fill.
+//   The closed rows and the position, as a strategy reads them.
 //
 // Hand derivation. `s` is +1 in "into-long" and -1 in "into-short". Bars: O
 // 100, H 102, L 98, C 100. A market order placed on bar i fills at the open
@@ -62,6 +78,8 @@
 //   Bar 2: the bracket is placed on that lot. Its limit is s * 3 below 100
 //   and its stop s * 3 above, at 97 and 103: outside every bar, so neither
 //   leg is reached on any bar, in either scenario.
+//   Bar 4: the bracket has rested since bar 2, so the adapter's book holds it
+//   when this bar is calculated.
 //   Bar 5: the opposite strategy.entry reverses (docs/pages/pine-to-native.md,
 //   the strategy.entry row): it trades 10 + 30 = 40, closes the first lot
 //   whole and leaves s * 30. That is the run's only fill that closes units,
@@ -78,15 +96,24 @@
 //   After the reversal's fill nothing rests and the script calls nothing, so
 //   the journal's command events above that fill are the two ends of the
 //   bracket and nothing else: 2.
+//   The reversal takes the bracket off the adapter's book whoever ended it:
+//   one notification is for a fill that closed units, and when it ends the
+//   adapter's book holds no order with the bracket's id, in every run.
 //
 // How the old cancel shows, in the "kernel-ended" runs of both directions: two
 // NotWorkingEvents, one for each leg the kernel had already ended, and four
 // command events above the reversal's fill where two are expected. The
 // "still-working" runs do not show it.
 //
+// How a reversal that drops only the orders it cancels shows, in the
+// "kernel-ended" runs of both directions: the journal is as expected, but the
+// adapter's book still holds the bracket when the reversal's fill
+// notification ends. The "still-working" runs do not show it.
+//
 // tests/test_reversal_purge_direction.cpp holds the book, the position and the
 // closed rows of the same two scenarios bar by bar; this test holds what the
-// reversal writes to the journal.
+// reversal writes to the journal and what it leaves on the adapter's book
+// inside its own fill notification.
 #include <pineforge/bar.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
@@ -179,6 +206,8 @@ public:
         if (i == last_bar_) return;
         last_bar_ = i;
         last_position = live_position_size();
+        // Read before this bar's own commands: the bracket of bar 2 rests.
+        if (i == 4) bracket_rested = bracket_on_adapter_book();
         const double s = into_long ? 1.0 : -1.0;
         if (i == 0) strategy_entry(kEntryId, !into_long, kNaN, kNaN, kFirstQty);
         // The first lot is on the side the reversal closes: its profit limit
@@ -193,8 +222,32 @@ public:
 
     const bool into_long;
     double last_position = 0.0;  // the position the last bar's calculation found
+    bool bracket_rested = false;  // the adapter's book held the bracket at bar 4
+    int closing_notifications = 0;  // notifications of a fill that closed units
+    bool bracket_left_on_book = false;  // the adapter's book at the end of the last one
+
+protected:
+    // Runs once for each fill, when its notification ends: the adapter has
+    // settled the fill, and has not read a receipt since.
+    void on_native_applied_event(const native_order::ExecutionAppliedEvent& event,
+                                 const NativeDecisionContext&) override {
+        if (!(event.closed_units > 0.0)) return;
+        ++closing_notifications;
+        bracket_left_on_book = bracket_on_adapter_book();
+    }
 
 private:
+    // Whether the host's pending-order projection holds an order with the
+    // bracket's id: the adapter's own book, whatever the kernel still lists.
+    bool bracket_on_adapter_book() const {
+        const auto& view = pending_intent_view();
+        for (int i = 0; i < view.size(); ++i) {
+            pf_pending_order_v1_t row{};
+            if (view.copy_v1(i, &row) == 0 && std::string(row.id) == kBracketId) return true;
+        }
+        return false;
+    }
+
     int last_bar_ = -1;
 };
 
@@ -282,6 +335,15 @@ void verify(const ReversalHost& host, Legs legs, Checks& checks) {
     // and nothing else.
     checks.count(static_cast<long long>(journal.after_reversal), 2,
                  "command events after the reversal's fill");
+
+    // The adapter's own book. The bracket rests when bar 4 is calculated, and
+    // the reversal takes it off: when that fill's notification ends, no
+    // order with the bracket's id is left there, whoever ended its legs.
+    checks.require(host.bracket_rested, "the bracket is on the adapter's book at bar 4");
+    checks.count(host.closing_notifications, 1, "notifications of a fill that closed units");
+    checks.require(!host.bracket_left_on_book,
+                   "the bracket is off the adapter's book when the reversal's fill"
+                   " notification ends");
 }
 
 std::vector<Bar> bars_of(double range) {
