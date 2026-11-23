@@ -53,6 +53,21 @@ its sources, depend on addresses or consult mutable external state. The order
 id in `ScratchKeyOrder` is a nonzero schema version: reopening under another id
 is refused.
 
+The native order and market admission journals reject an imported record with
+an undeclared enum value, even when the number fits its field. Both
+`append_journal_record` (`src/native_order.cpp:2210`, `src/source/market_admission.cpp:182`)
+and `decode_journal_record` (`src/native_journal_codec.cpp:373`, `src/source/admission_journal_codec.cpp:587`)
+return `ScratchStatus::corrupt`. The native ordinal or the outstanding admission
+sequence remains available for a valid retry.
+
+`fold_journal_record` (`src/source/admission_journal_codec.cpp:646`) checks the
+admission fields before updating the digest. `fold_validated_journal_record`
+(`src/source/admission_journal_codec.cpp:641`) also checks enum values in records
+at or below the window frontier. A failed fold publishes neither a digest nor
+a summary. When `submit` rejects a native request, the core's own history keeps
+the attempted input even after cache eviction. Importing that rejection as a
+record checks the attempted input just like any other import.
+
 A handle is a 64-bit nonzero number. The first record of a created store gets
 1, each further new record the next number, an upsert keeps its number, and an
 erased number is never issued again. Handles survive page eviction, commit and
