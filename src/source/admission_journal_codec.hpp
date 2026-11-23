@@ -9,6 +9,19 @@ struct JournalRecordSummary {
     int rejected_bar = -1;
     bool rejected = false;
 };
+// Only the command and placement bar are needed to check a per-order receipt.
+// Command zero denotes the absence of an origin in the streaming reader.
+template<class Receipt>
+inline bool matches_origin(std::uint64_t command, int placement_bar, const Receipt& receipt) noexcept {
+    return receipt.target_command == command && receipt.sequence > command && receipt.bar >= placement_bar;
+}
+inline bool known_checkpoint(Checkpoint checkpoint) noexcept {
+    return checkpoint == Checkpoint::DefaultGross ||
+        checkpoint == Checkpoint::ExplicitPair || checkpoint == Checkpoint::TerminalGross;
+}
+inline bool has_fill_cause(const SizingRevision& receipt) noexcept {
+    return receipt.cause_fill != 0;
+}
 inline bool rejected_command(Outcome outcome) noexcept {
     switch (outcome) {
     case Outcome::RejectedIntradayCap: case Outcome::RejectedFrozenMarketCap:

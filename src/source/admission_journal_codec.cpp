@@ -323,14 +323,24 @@ template<class A> struct Schema {
         field(p,"bar",x.bar); field(p,"target_command",x.target_command);
     }
     void draft(const Path& p, Draft& x) {
+        // Each book row has its own origin; a sibling or the enclosing event
+        // cannot supply it. The non-owning paths need no shared observation.
+        std::uint64_t command = 0;
+        int placement_bar = -1;
         bool present = bool(x.observation());
         field(p,"observation_present",present);
         if (present) {
             if constexpr (A::loading) {
                 CommandObservation value;
                 observation(p.child("observation"),value);
-                if constexpr (A::owning)
-                    if (a.good()) x.bind(std::make_shared<const CommandObservation>(std::move(value)));
+                if (!a.good()) return;
+                if constexpr (A::owning) {
+                    x.bind(std::make_shared<const CommandObservation>(std::move(value)));
+                } else {
+                    command = value.command;
+                    placement_bar = value.bar;
+                    if (!command) { a.in.status = Status::corrupt; return; }
+                }
             } else observation(p.child("observation"),const_cast<CommandObservation&>(*x.observation()));
         }
         present = x.review().has_value(); field(p,"review_present",present);
@@ -338,14 +348,27 @@ template<class A> struct Schema {
             ReviewReceipt value;
             if constexpr (!A::loading) value = *x.review();
             receipt(p.child("review"),value);
-            if constexpr (A::loading && A::owning) if (a.good()) x.reviewed(value);
+            if constexpr (A::loading) {
+                if (!a.good()) return;
+                if constexpr (A::owning) x.reviewed(value);
+                else if (!command || !matches_origin(command, placement_bar, value) ||
+                         !known_checkpoint(value.checkpoint)) {
+                    a.in.status = Status::corrupt;
+                    return;
+                }
+            }
         }
         present = x.sizing_revision().has_value(); field(p,"sizing_revision_present",present);
         if (present) {
             SizingRevision value;
             if constexpr (!A::loading) value = *x.sizing_revision();
             receipt(p.child("sizing_revision"),value);
-            if constexpr (A::loading && A::owning) if (a.good()) x.sizing_revised(value);
+            if constexpr (A::loading) {
+                if (!a.good()) return;
+                if constexpr (A::owning) x.sizing_revised(value);
+                else if (!command || !matches_origin(command, placement_bar, value) || !has_fill_cause(value))
+                    a.in.status = Status::corrupt;
+            }
         }
     }
     void book(const Path& p, BookObservation& x) {

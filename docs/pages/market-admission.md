@@ -67,6 +67,12 @@ replacement refused. Sizing revisions similarly preserve the causal order of
 their events, bars and committed fill causes. A batch review can issue a receipt
 only for an original draft captured by that review.
 
+With a codec bound, the journal checks each book row's draft before storing the
+event. A present observation must have a nonzero command number. A review
+requires a known checkpoint, and a sizing revision requires a nonzero fill
+cause. A draft with no observation is valid only if it has neither receipt.
+Refusing an invalid draft leaves the event's sequence available for a retry.
+
 ## Reflection and retention
 
 The pending-order C mirror preserves its prior prefix and appends actual

@@ -21,14 +21,10 @@ bool same(const SizingRevision& a, const SizingRevision& b) {
     return a.sequence == b.sequence && a.cause_fill == b.cause_fill &&
         a.bar == b.bar && a.target_command == b.target_command;
 }
-bool known_checkpoint(Checkpoint checkpoint) {
-    return checkpoint == Checkpoint::DefaultGross ||
-        checkpoint == Checkpoint::ExplicitPair || checkpoint == Checkpoint::TerminalGross;
-}
+template<class Receipt>
 void require_origin(const std::shared_ptr<const CommandObservation>& origin,
-                    uint64_t target, uint64_t event, int bar) {
-    if (!origin || target != origin->command || event <= origin->command ||
-        bar < origin->bar)
+                    const Receipt& receipt) {
+    if (!origin || !matches_origin(origin->command, origin->bar, receipt))
         throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
                                            "admission receipt requires its exact earlier command");
 }
@@ -40,7 +36,7 @@ void Draft::bind(std::shared_ptr<const CommandObservation> observation) {
     observation_=std::move(observation);
 }
 void Draft::reviewed(ReviewReceipt receipt) {
-    require_origin(observation_, receipt.target_command, receipt.sequence, receipt.bar);
+    require_origin(observation_, receipt);
     if (!known_checkpoint(receipt.checkpoint))
         throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
                                            "review requires a known checkpoint");
@@ -52,8 +48,8 @@ void Draft::reviewed(ReviewReceipt receipt) {
     review_ = receipt;
 }
 void Draft::sizing_revised(SizingRevision receipt) {
-    require_origin(observation_, receipt.target_command, receipt.sequence, receipt.bar);
-    if (receipt.cause_fill == 0)
+    require_origin(observation_, receipt);
+    if (!has_fill_cause(receipt))
         throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
                                            "sizing revision requires committed cause");
     if (sizing_revision_) {
@@ -652,7 +648,7 @@ ReviewReceipt ReviewCapture::receipt_for(const Draft& draft) const {
                                            "draft does not belong to this admission review");
     auto receipt = event_.receipt;
     receipt.target_command = origin->command;
-    require_origin(origin, receipt.target_command, receipt.sequence, receipt.bar);
+    require_origin(origin, receipt);
     return receipt;
 }
 
