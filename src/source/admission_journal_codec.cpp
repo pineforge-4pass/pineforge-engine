@@ -265,10 +265,14 @@ template<class A> struct Schema {
                 if constexpr (A::owning) value = OrderBirth::chart_evaluation(bar,timestamp);
                 break;
             case OrderBirthCause::FillEvaluation: {
+                const bool segment = position != BirthCursorPosition::Point;
                 if constexpr (A::owning) {
-                    const auto cursor = position == BirthCursorPosition::Point
-                        ? BirthCursor::point(domain,index,count) : BirthCursor::segment(domain,index,count);
+                    const auto cursor = segment ? BirthCursor::segment(domain,index,count)
+                                                : BirthCursor::point(domain,index,count);
                     value = OrderBirth::fill_evaluation(bar,timestamp,cursor,price,first,last,ordinal);
+                } else if (a.good() && (!detail::valid_birth_cursor(domain,segment,index,count)
+                           || !detail::valid_fill_evaluation(bar,domain,price,first,last,ordinal))) {
+                    a.in.status = Status::corrupt;
                 }
                 break;
             }
