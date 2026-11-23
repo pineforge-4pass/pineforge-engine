@@ -1,5 +1,5 @@
-// test_ta_sma_exact_order -- ta.sma is the exact sum of its window, rounded
-// once (re-pinned 2026-11-17).
+// test_ta_sma_exact_order -- pulse, plateau and rotation observations for
+// fixed SMA. These cases exercise the November compensated sum.
 //
 // History, kept because the assertions below were written against it.
 // Round 6 pinned "ta.sma is a function of its window", an exact-order re-sum
@@ -12,15 +12,15 @@
 // tests/test_ta_sma_window_residual.cpp) pinned where that residue came from:
 // a Kahan-compensated RUNNING sum whose ring subtracted the compensated addend
 // n bars later. The captures of 2026-11-16 and 2026-11-17 read the window's
-// own sum again, on the same series: nothing of a value that has left the
-// window is left in it (window_sum.hpp). Each assertion that changed cites
+// own sum again on the measured bars: the earlier residue is absent there.
+// This does not establish an exact sum for every input. Each changed pin cites
 // its capture where it stands.
 //
 // So the invariants below are the ones the newest captures support:
 //   1. the emitted value is a deterministic function of the series (two
-//      instances fed the same history agree bit-for-bit), and a prefix that
-//      has left the window leaves nothing behind;
-//   2. an all-zero window after a pulse reads 0;
+//      instances fed the same history agree bit-for-bit), and the measured
+//      prefix leaves nothing behind in the selected window;
+//   2. the all-zero windows after this pulse read 0;
 //   3. the rotation-tie shape after a settled plateau is an exact tie (in
 //      September TradingView's own value on a live series depended on the
 //      state carried into the plateau -- one round-6 tape has
@@ -42,7 +42,7 @@ static int tests_failed = 0;
 static bool exact_eq(double a, double b) {
     if (is_na(a) && is_na(b)) return true;
     if (is_na(a) || is_na(b)) return false;
-    return a == b;  // bit-exact: ULP tolerance would hide the residue entirely
+    return a == b && std::signbit(a) == std::signbit(b);
 }
 
 #define CHECK_EXACT(actual, expected, tag) do {                               \
@@ -62,8 +62,8 @@ static bool exact_eq(double a, double b) {
 } while (0)
 
 // ---------------------------------------------------------------------------
-// 1. Deterministic in the series; a prefix that has left the window leaves
-//    nothing behind.
+// 1. Deterministic in the series; the selected prefix leaves no residue on
+//    this observation.
 // ---------------------------------------------------------------------------
 static void test_series_is_the_state() {
     // Two instances, identical histories -> bitwise-equal output throughout.
@@ -72,7 +72,7 @@ static void test_series_is_the_state() {
     for (double v : series) {
         CHECK_EXACT(a.compute(v), b.compute(v), "SMA(3): identical histories agree bit-for-bit");
     }
-    // The same final window after a different prefix reads the same value.
+    // The same three values in a different order read the same value here.
     // (Until the capture of 2026-11-17 this line was pinned the other way: the
     // round-7 pulse tape for n = 3 read (0.2 + 2^-55) / 3 on its bar 40, a
     // residue of block 0 riding into block 1's pulse.)
@@ -116,7 +116,7 @@ static void test_zero_window_carries_residue() {
     sma.compute(0.3);
     std::vector<double> z;
     for (int i = 0; i < 38; ++i) z.push_back(sma.compute(0.0));   // bars 2..39
-    // bar 2: (0.1 + 0.3 + 0) with the zero addend folding c: 0.4 - 2^-54 -> /3
+    // Both rules round to the captured SMA on bar 2.
     CHECK_EXACT(z[0], 0.13333333333333333, "bar 2");
     // expectation corrected on bars 3, 5 and 6..39 below, because TradingView's
     // sliding-window sum changed between two captures of this series (it is bars

@@ -13466,7 +13466,7 @@
     "class KahanWindowSum #1"
    ],
    "cls": "decl",
-   "spelling": "std :: vector < Entry >",
+   "spelling": "std :: vector < double >",
    "ordinal": 1
   },
   {
@@ -48804,7 +48804,7 @@
     "void KahanWindowSum :: ensure_room ( ) #1"
    ],
    "cls": "decl",
-   "spelling": "std :: vector < Entry >",
+   "spelling": "std :: vector < double >",
    "ordinal": 1
   },
   {
@@ -49102,7 +49102,7 @@
    "scope": [
     "namespace pineforge #1",
     "namespace ta #1",
-    "StdDev :: StdDev ( int length , bool biased ) : length_ ( length ) , biased_ ( biased ) , sum_x_ ( length ) , sum_xx_ ( length ) , bar_count_ ( 0 ) #1"
+    "StdDev :: StdDev ( int length , bool biased ) : length_ ( length ) , biased_ ( biased ) , sum_x_ ( length ) , sum_xx_ ( length ) #1"
    ],
    "cls": "grow",
    "spelling": "buffer_ . emplace ( . . . )",

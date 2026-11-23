@@ -308,8 +308,12 @@ void precision_and_order() {
         series_mean = variable.compute(value, 5);
         fixed_mean = fixed.compute(value);
     }
-    assert(fixed_mean == tiny / 5.0);
-    assert(series_mean == fixed_mean);
+    // expectation corrected: tiny / 5 -> 0 for fixed SMA, because adding
+    // tiny to its unit correction rounds back to 1 before the cancellation.
+    assert(fixed_mean == 0.0);
+    // expectation corrected: fixed_mean -> tiny / 5, because the series-length
+    // adapter still sums this window exactly, independently of fixed SMA.
+    assert(series_mean == tiny / 5.0);
 }
 
 void retained_history_and_storage() {

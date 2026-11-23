@@ -759,7 +759,10 @@ state, with storage detached before mutation.
 
 `mean` (src/source/pine_ta_length.cpp:489) sums the selected window afresh.
 For finite sources without intermediate overflow, it rounds the exact sum
-once, as fixed SMA does, then divides by N. The finite TradingView clock/source-`na`
+once, then divides by N. When its window is full, fixed SMA subtracts the
+oldest source before adding the incoming source. It accumulates each step's
+rounding error in a separate double and divides the total plus correction by N.
+The two paths can round differently. The finite TradingView clock/source-`na`
 packet supports the non-`na` sample membership correction; its complete prefix
 through bar 16 is embedded in `tv_clock_na_prefix`
 (tests/test_series_sma.cpp:241). This evidence does not qualify runtime
@@ -770,8 +773,8 @@ routing, repeated calls of the same site within a bar, same-bar re-execution
 after multiple calls and requested-context clocks require separate
 qualification. These ordinary C++ API rules do not establish Pine overload
 admission or TradingView parity for those contexts. Constant-length calls
-continue to use `ta::SMA`. The unit test covers a cancellation where the two
-paths used to disagree. Its separate 1441-row feed comparison at N=20 reports
+continue to use `ta::SMA`. The unit test covers a cancellation where only the
+series-length path retains a tiny addend. Its separate 1441-row feed comparison at N=20 reports
 difference counts and maximum ULP distance against fixed `ta::SMA`.
 
 Storage is one ring of at most 15001 non-`na` observations plus a scalar

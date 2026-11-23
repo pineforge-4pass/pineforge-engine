@@ -1,5 +1,5 @@
-// test_ta_rma_exact_seed -- ta.rma seeds with the exact-sum average, as
-// TradingView does; the recursion after the seed is unchanged.
+// test_ta_rma_exact_seed -- the first fixed SMA seeds ta.rma. On these
+// captured closes, that seed also equals the exact-sum average.
 //
 // TradingView's own doubles, read for ta.rma(close, 3) on BINANCE:ETHUSDT.P
 // 15m over 40 bars from 2026-03-23 09:00 UTC (the close of each bar and the

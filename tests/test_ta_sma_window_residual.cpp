@@ -31,8 +31,8 @@
 //
 // The list below is what the round-7 tapes of 2026-09-05 pinned. TradingView's
 // captures of November 2026 contradict it wherever a value that had left the
-// window still counted: today an all-zero window reads 0 and a window reads
-// the exact sum of what is in it, rounded once (window_sum.hpp). The tables
+// window still counted: these all-zero pulse windows read 0 with the November
+// compensated running sum (window_sum.hpp). The tables
 // and the named events below carry the newest capture where one exists, each
 // with its citation; this list is kept as the record of September.
 //
@@ -3156,6 +3156,8 @@ static long long encode_pulse(double s, const std::vector<double>& xs, int bar, 
 }
 
 static void replay_pulse(const char* tag, int n, int P, int zero_ph, const Obs* obs, std::size_t count) {
+    CHECK_TRUE(count > 0, tag);
+    if (count == 0) return;
     const int last = obs[count - 1].bar;
     std::vector<double> xs((std::size_t)last + 1);
     for (int t = 0; t <= last; ++t) xs[(std::size_t)t] = pulse_x(t, P);
@@ -3185,10 +3187,13 @@ static void replay_pulse(const char* tag, int n, int P, int zero_ph, const Obs* 
         }
     }
     std::printf("  %s: %d observations replayed, %d mismatches\n", tag, checked, mismatches);
+    CHECK_TRUE(next == count, tag);
     CHECK_TRUE(mismatches == 0, tag);
 }
 
 static void replay_ident_c(const char* tag, int n, int P, const Obs* obs, std::size_t count) {
+    CHECK_TRUE(count > 0, tag);
+    if (count == 0) return;
     const int last = obs[count - 1].bar;
     ta::SMA sma(n);
     double manual = 0.0;
@@ -3214,6 +3219,7 @@ static void replay_ident_c(const char* tag, int n, int P, const Obs* obs, std::s
         }
     }
     std::printf("  %s: %d observations replayed, %d mismatches\n", tag, checked, mismatches);
+    CHECK_TRUE(next == count, tag);
     CHECK_TRUE(mismatches == 0, tag);
 }
 
