@@ -76,6 +76,32 @@ def verify_input_guards():
         raise SystemExit(f"FAIL: {label} input guard: expected NOT COMPARED; got {got!r}")
 
 
+def require_numpy_rejection(path, read, label):
+    # CMake registers this row only if its interpreter runs
+    # `-B -c "import numpy"` successfully at configure time.
+    try:
+        import numpy
+    except ImportError:
+        raise SystemExit("NOT COMPARED: NumPy is required for the NumPy CSV timestamp test") from None
+
+    loadtxt = numpy.loadtxt
+    rejected = False
+
+    def observed_loadtxt(*args, **kwargs):
+        nonlocal rejected
+        try:
+            return loadtxt(*args, **kwargs)
+        except (ValueError, OverflowError):
+            rejected = True
+            raise
+
+    # The reader replays malformed data with csv for the physical line number.
+    with patch.object(numpy, "loadtxt", observed_loadtxt):
+        require_rejection(path, read, label, FRACTION, issue=True)
+    if not rejected:
+        raise SystemExit("NOT COMPARED: NumPy did not reject the fractional chart timestamp")
+
+
 def exercise(path, mode):
     readers = {
         f"chart/{mode}": lambda: stamp_list(runner._load_bars(path)),
@@ -84,7 +110,10 @@ def exercise(path, mode):
     }
     verify_repro(path.read_text(encoding="utf-8"))
     for label, read in readers.items():
-        require_rejection(path, read, label, FRACTION, issue=label == "chart/numpy")
+        if label == "chart/numpy":
+            require_numpy_rejection(path, read, label)
+        else:
+            require_rejection(path, read, label, FRACTION)
     for cell in ("1.700000000060e12", "1700000000060.0", "9223372036854775808", ""):
         path.write_text(HEADER + FIRST + "\n" + cell + SUFFIX, encoding="utf-8")
         for label, read in readers.items():
@@ -109,23 +138,22 @@ def exercise(path, mode):
 
 
 def main():
-    verify_input_guards()
+    if sys.argv[1:] not in (["stdlib"], ["numpy"]):
+        raise SystemExit("usage: test_issue_932_csv_timestamps.py {stdlib|numpy}")
+    mode = sys.argv[1]
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "bars.csv"
         path.write_text(REPRO, encoding="utf-8")
-        # NumPy is optional in the runner and is not installed by hosted CI.
-        # The stdlib path is a real comparison, including when it runs alone.
-        try:
-            __import__("numpy")
-        except ImportError:
-            print("NOT COMPARED: expected NumPy for the issue path; got no NumPy")
+        if mode == "stdlib":
+            from test_csv_timestamp_numpy_required import test_numpy_required
+            test_numpy_required()
+            verify_input_guards()
+            with patch.dict(sys.modules, {"numpy": None}):
+                exercise(path, mode)
         else:
-            exercise(path, "numpy")
-            print("PASS #932 (NumPy): invalid CSV timestamps refused by line; integer milliseconds exact")
-            path.write_text(REPRO, encoding="utf-8")
-        with patch.dict(sys.modules, {"numpy": None}):
-            exercise(path, "stdlib")
-        print("PASS #932 (stdlib): invalid CSV timestamps refused by line; integer milliseconds exact")
+            exercise(path, mode)
+        print(f"PASS #932 ({'NumPy' if mode == 'numpy' else mode}): "
+              "invalid CSV timestamps refused by line; integer milliseconds exact")
 
 
 if __name__ == "__main__":

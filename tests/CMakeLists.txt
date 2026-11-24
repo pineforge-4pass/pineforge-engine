@@ -1932,7 +1932,7 @@ list(APPEND TEST_SOURCES
 )
 
 find_package(Threads REQUIRED)
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
+# The parent selects Python3_EXECUTABLE before probing optional Python test dependencies.
 
 # === Kernel-only registration =========================================
 # With PINEFORGE_BUILD_SOURCE_LAYER=OFF libpineforge.a holds the kernel

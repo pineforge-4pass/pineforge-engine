@@ -1,3 +1,6 @@
-# One row for the ctypes runner's CSV timestamp contract.
-list(APPEND TEST_SOURCES test_issue_932_csv_timestamps)
-pineforge_add_unit_test(test_issue_932_csv_timestamps)
+add_test(NAME test_issue_932_csv_timestamps_stdlib
+    COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/test_issue_932_csv_timestamps.py" stdlib)
+if(_pf_numpy_import STREQUAL "0")
+    add_test(NAME test_issue_932_csv_timestamps_numpy
+        COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/test_issue_932_csv_timestamps.py" numpy)
+endif()

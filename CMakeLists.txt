@@ -442,6 +442,12 @@ endif()
 # === Tests =============================================================
 if(PINEFORGE_BUILD_TESTS)
     enable_testing()
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    execute_process(COMMAND "${Python3_EXECUTABLE}" -B -c "import numpy"
+        RESULT_VARIABLE _pf_numpy_import OUTPUT_QUIET ERROR_QUIET)
+    if(NOT _pf_numpy_import STREQUAL "0")
+        message(STATUS "NOT COMPARED: configured Python cannot import NumPy; NumPy CSV timestamp test not registered")
+    endif()
     add_subdirectory(tests)
 
     # L0 bar-identity lane, row 1 (spec §10.1): aggregates a 1m OHLCV CSV to
