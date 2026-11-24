@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- When market entries with different IDs follow a named close on one bar, an entry that would exceed the pyramiding limit is refused once the entry before it has filled (#993).
 - After `strategy.close_all()`, a market entry for the other side and repeated named closes on one bar, the entry opens its own size instead of a reversal's (#993).
 - `strategy_pending_order_fill_qty` now plans a `strategy.order` that faces an opposite position against what the market closes placed before it on the same bar will leave. It reports the quantity and `close_only` of the fill after a partial or full close, after a close of one entry by name under `close_entries_rule = "ANY"`, and for an order with the default or a frozen cash size (#910, #924).
 - With the bar magnifier and `calc_on_order_fills`, a second close of the same id that is called in a fill recalculation now fills at the next intrabar open instead of being lost.

@@ -18821,6 +18821,15 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         if (beside && source.deferred_cohort && !std::isfinite(source.requested_qty))
             return NativePrecommitVerdict::AdmitWithHostMargin;
         if (config_.pyramiding == 0 && !beside) return NativePrecommitVerdict::Refuse;
+        // Market entries staged behind a close all saw the old position.
+        // Once one has opened the other side, the next is an add to that
+        // book. Only an entry that actually filled has taken its slot.
+        if (source.frozen_market_instruction && source.close_first_entry
+            && config_.pyramiding > 0
+            && open_ledger_records().value_or(physical_now.lot_count)
+                >= static_cast<std::size_t>(config_.pyramiding)) {
+            return NativePrecommitVerdict::Refuse;
+        }
     }
     // ab9714be pine_fills.cpp:5551-5554,5564-5664: the high-level MARKET
     // affordability gate never owned RAW strategy.order.  A36 places host
