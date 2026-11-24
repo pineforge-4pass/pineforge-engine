@@ -387,10 +387,12 @@ public:
     /// Thursday 15:45 bar before a holiday Friday, the 15:45 CT bar closing
     /// an overnight CME session-day (lab tv wm-security-buckets tapes,
     /// 2026-09-05). CALENDAR mode therefore also completes the running
-    /// bucket when the next input bar opens a new period. RATIO and
-    /// PASSTHROUGH ignore the hint, and so do ""/"24x7" sessions (a data
-    /// hole before a 24x7 midnight is not an early close), so every caller
-    /// passing 0 and every session-less feed stay bit-identical. The rule
+    /// bucket when the next input bar opens a new period. A fixed intraday
+    /// bucket can also close early on the last input of a session-day, and at
+    /// a session break if it ends at or before the reopen or its known
+    /// successor is at or beyond its end; otherwise it can still take input
+    /// after the break. PASSTHROUGH ignores the successor. 0 is unknown on
+    /// either side of the Unix epoch. The exchange early-close rule
     /// applies where TradingView's session template knows the early close
     /// -- exchange calendars; set_early_close_completes(false) switches a
     /// symbol whose template does not (OANDA's cfd / forex streams) back to
@@ -403,9 +405,10 @@ public:
     /// the chart bar this input bar belongs to -- the input bar's own end
     /// on a single-feed run, the native D/W/M chart bar's session close on
     /// the split-feed path, where a finer auxiliary slice advances
-    /// request.security. Read only by the OTC rule
-    /// (set_early_close_completes(false)): TradingView surfaces a D/W/M
-    /// value on the chart bar whose time_close reaches the period's
+    /// request.security. A fixed bucket can close on its last input when
+    /// this close reaches the bucket end and the successor leaves the bucket.
+    /// For the OTC rule (set_early_close_completes(false)), TradingView
+    /// surfaces a D/W/M value on the chart bar whose time_close reaches the period's
     /// nominal close, and the daily bar of an early-close day keeps its
     /// nominal time_close -- on the OANDA:XAUUSD 1D chart a Friday
     /// daily bar whose feed ends early still closes at 17:00 ET, so
