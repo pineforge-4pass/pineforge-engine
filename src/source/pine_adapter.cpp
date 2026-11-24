@@ -11578,7 +11578,10 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
             }
         }
     }
+    // A market close waiting for the next intrabar open already has its
+    // execution point. A chart extreme may be behind that opening.
     if (coof_recalc_active_ && !coof_first_open_ && !immediately
+        && !coof_close_next_sub_bar
         && !finite_positive(coof_close_fill)
         && coof_script_bar_valid_
         && std::holds_alternative<native_order::Market>(request.trigger)) {
