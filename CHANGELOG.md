@@ -16,7 +16,7 @@ version number follows semantic versioning over the surfaces the
 - The ABI receipt check names unusable CTest commands and malformed receipt arguments. It reports which inputs are present; only CTest results establish which rows executed.
 - The design inventory follows kernel registration branches, checks primary rows and executable aliases, and states when no CTest listing was compared.
 - The private-fixture check inspects each discovered Python module, applies skip properties only to the tests they name, and reports when there are no Python programs to compare.
-- With pyramiding above one and the first-in-first-out close rule, an entry whose own named tick bracket filled no longer counts against the pyramiding limit in a run that declares no quantity step, as in a run that declares one.
+- With pyramiding above one and the first-in-first-out close rule, a run that declares no quantity step now counts open entries as a run with a declared step does: an entry whose own exit or close filled frees its slot even when an older trade was closed instead (#694).
 - A cash or equity entry now keeps its place beside two fixed entries at the close. At the next open, a budget entry gets its margin check even when an opposite fixed entry is waiting at the same price.
 - Replacing a resting entry sized in cash or percent of equity no longer reports its amount as contracts taken from the close ledger.
 - Preflight accepts a private-fixture skip only from the native-version guard, on a complete line naming one of its missing inputs.
@@ -58,9 +58,9 @@ version number follows semantic versioning over the surfaces the
 - `ta.rci` now evaluates its denominator in double precision, avoiding integer overflow from length 1291. Shorter lengths are unchanged. Computing a group’s average rank now also avoids integer overflow from length 1073741825.
 - When a C++ host makes a global exit leg wait for another order, a Pine entry reversal now cancels the leg even if it is hidden. If cancelling its parent already ended the leg, the reversal no longer records an extra `NotWorking` event.
 - A buy stop accepted while flat that later reverses a short now removes the short’s pending margin call. The same rule applies when a sell reverses a long.
-- A market entry now arms both legs of a `strategy.exit` that mixes prices and ticks at its fill.
-- With pyramiding, a full named tick bracket on chart bars now measures `profit` and `loss` from each entry’s fill price when no other exit reserves its units. FIFO can still book the close against an older trade.
-- A historical `lookahead_on` request can opt into the day's final close from its first hourly bar.
+- A market entry now arms both legs of a `strategy.exit` that mixes prices and ticks at its fill (#694).
+- With pyramiding, a full named tick bracket on chart bars now measures `profit` and `loss` from each entry’s fill price when no other exit reserves its units. FIFO can still book the close against an older trade (#694).
+- A historical `lookahead_on` request can opt into the day's final close from its first bar; a request that does not opt in keeps the running close (#694).
 - A fixed entry requested while already flat now retires the prior position’s brackets and margin calls if its fill closes that position and opens the opposite side.
 - Before the Unix epoch, a four-hour bar on `0900-1130,1230-1530` now includes the 12:30–12:59 inputs and completes at 13:00 when the next input is unknown. The fixed completion clock follows the same rule.
 - Before the Unix epoch, a supplied chart close can now complete a sparse intraday bar or an OTC calendar bar on its last input. A zero chart close still means unknown.
