@@ -24131,15 +24131,21 @@ void PineExecutionAdapter::apply_terminal_explicit_market_policy(
         const auto found = placement_.find(handle.incarnation);
         if (found == placement_.end()) continue;
         const auto& row = found->second;
-        if (!row.opening || row.family != PineOrderFamily::Entry
+        if (!row.opening || (row.family != PineOrderFamily::Entry
+                             && row.family != PineOrderFamily::Order)
             || row.projection_created_bar != projection_bar_index(context)
-            || !has_requested_units(row) || !(row.requested_qty > 0.0)
             || finite_positive(row.exit_levels.limit)
-            || finite_positive(row.exit_levels.stop)
+            || finite_positive(row.exit_levels.stop)) {
+            continue;
+        }
+        // Rewriting only a subset would move it ahead of the bar's other
+        // market openings.
+        if (row.family != PineOrderFamily::Entry
+            || !has_requested_units(row) || !(row.requested_qty > 0.0)
             || !row.oca_name.empty() || row.oca_type != 0
             || row.birth.from_fill() || row.birth.at_terminal_fill()
             || compat::pine::historical_cascade_reach(row.birth_reach)) {
-            continue;
+            return;
         }
         // The source sequence of the oldest row the predecessor chain
         // reaches, fixed when the row was remembered (its older rows may
@@ -30353,10 +30359,13 @@ double PineExecutionAdapter::pending_opposite_market_units(
 bool PineExecutionAdapter::same_point_pair_fill_follows(
         const PlacementSnapshot& filled, const native_order::RequestHandle& filled_handle,
         double price) const {
-    if (!filled.opening || filled.family != PineOrderFamily::Entry
-        || filled.projection_position_side != static_cast<std::int32_t>(PositionSide::FLAT)
-        || !finite_positive(filled.requested_qty) || !finite_positive(price)
-        || !same_point_pair_scope()) {
+    const auto fixed_member = [](const PlacementSnapshot& row) {
+        return row.opening && row.family == PineOrderFamily::Entry
+            && row.projection_position_side == static_cast<std::int32_t>(PositionSide::FLAT)
+            && has_requested_units(row) && row.requested_qty > 0.0
+            && row.oca_name.empty() && !row.birth.from_fill();
+    };
+    if (!fixed_member(filled) || !finite_positive(price) || !same_point_pair_scope()) {
         return false;
     }
     return std::any_of(live_handles_.begin(), live_handles_.end(),
@@ -30365,14 +30374,8 @@ bool PineExecutionAdapter::same_point_pair_fill_follows(
             const auto found = placement_.find(handle.incarnation);
             if (found == placement_.end()) return false;
             const auto& row = found->second;
-            if (!row.opening || row.family != PineOrderFamily::Entry
-                || row.is_long == filled.is_long
-                || row.projection_created_bar != filled.projection_created_bar
-                || row.projection_position_side
-                    != static_cast<std::int32_t>(PositionSide::FLAT)
-                || !finite_positive(row.requested_qty) || !row.oca_name.empty()
-                || row.birth.from_fill()
-                || !(row.qty_type < 0 || row.qty_type == static_cast<int>(QtyType::FIXED))) {
+            if (!fixed_member(row) || row.is_long == filled.is_long
+                || row.projection_created_bar != filled.projection_created_bar) {
                 return false;
             }
             const bool stop = finite_positive(row.exit_levels.stop);

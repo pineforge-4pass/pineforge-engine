@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- A cash or equity entry now keeps its place beside two fixed entries at the close. At the next open, a budget entry gets its margin check even when an opposite fixed entry is waiting at the same price.
 - Replacing a resting order under the same ID no longer reports its requested amount as a debit to the close ledger.
 - Preflight accepts a private-fixture skip only from the native-version guard, on a complete line naming one of its missing inputs.
 - A bare `:line` citation in a Markdown table now needs a file in its own row. A citation in the preceding row can no longer supply it.
