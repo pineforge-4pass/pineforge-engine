@@ -269,7 +269,6 @@ static int64_t calendar_clock_ms(int64_t ts, const std::string& tz) {
     return ts - tz_offset_ms(ts, tz);
 }
 
-static int first_window_length_minutes(const std::string& session);
 static int session_length_minutes(const std::string& session);
 static int64_t floor_div_day(int64_t ms);
 
@@ -301,15 +300,9 @@ static int64_t floor_div_day(int64_t ms);
 /// (where a native 17:00-stamped bar's content lies) and the close
 /// arithmetic (open + length = the next 17:00 stamp). No 1800-1700 bar
 /// trades in the 17:00-18:00 hour the two clocks attribute differently.
-/// The exception reads the literal first window, as it always has: a session
-/// with breaks is not that session.
+/// The lead applies to the complete window list, with or without a day mask.
 static int session_day_stamp_offset_minutes(const std::string& session) {
-    const int open = session_open_offset_minutes(session);
-    if (open != session_grid_policy::metals_open_minutes) return open;
-
-    // Keep the legacy first-window parser, even for noncanonical spellings.
-    return open - session_grid_policy::stamp_lead_minutes(
-        open, (open + first_window_length_minutes(session)) % 1440);
+    return session_open_offset_minutes(session) - session_grid_policy::stamp_lead_minutes(session);
 }
 
 /// Session clock: exchange-tz milliseconds since (local-midnight + the
