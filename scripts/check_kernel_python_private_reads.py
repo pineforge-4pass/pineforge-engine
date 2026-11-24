@@ -50,6 +50,8 @@ SKIP_LITERAL = 'SKIP private fixtures not present: '
 PRIVATE_PREFIXES = ('tests/fixtures/', 'tests/oracle/')
 ADD_TEST = re.compile(r'add_test\(\s*NAME\s+([A-Za-z0-9_.-]+)', re.MULTILINE)
 CMAKE_ARGUMENT = re.compile(ARGUMENT_LITERAL + r'|(?:\\.|[^\s;\\])+', re.DOTALL)
+CMAKE_REF = re.compile(r'\$\{([^{}]+)\}')
+PYTHON = '${Python3_EXECUTABLE}'
 CMAKE_ESCAPE = {'n': '\n', 'r': '\r', 't': '\t', '\n': ''}
 TEST_OPTIONS = {'WORKING_DIRECTORY', 'CONFIGURATIONS', 'COMMAND_EXPAND_LISTS'}
 LITERAL_PRIVATE = re.compile(r'["\']((?:[\w.-]+/)?tests/(?:fixtures|oracle)/[\w./-]+)["\']')
@@ -61,6 +63,10 @@ LOCAL_IMPORT = re.compile(r'^\s*(?:from\s+([A-Za-z_]\w*)\s+import|import\s+([A-Z
 
 class SweepError(Exception):
     """A construct the sweep cannot parse; reported and exits non-zero."""
+
+
+class UnknownCommand(SweepError):
+    """The executable or Python program cannot be selected from this file."""
 
 
 class InlineProgram(NamedTuple):
@@ -78,6 +84,103 @@ def argument_text(arg: re.Match) -> str:
     return re.sub(r'\\(.)', lambda m: CMAKE_ESCAPE.get(m[1], m[1]), text, flags=re.DOTALL)
 
 
+class Word(NamedTuple):
+    text: str
+    line: int
+    raw: str
+
+
+def words(body, line):
+    for arg in CMAKE_ARGUMENT.finditer(body):
+        yield Word(argument_text(arg), line + body.count('\n', 0, arg.start()) +
+                   int((arg['bracket_value'] or '').startswith('\n')),
+                   arg[0] if arg['bracket_value'] is None else '')
+
+
+def expand(words, values):
+    for word in words:
+        ref = CMAKE_REF.fullmatch(word.text)
+        if ref and ref[1] in values and word.raw == word.text:
+            for item in values[ref[1]]:
+                parts = [item.text] if r'\;' in item.raw else item.text.split(';')
+                yield from (item._replace(text=part) for part in parts if part)
+        elif '${' in word.raw and r'\$' not in word.raw:
+            def scalar(m):
+                return ';'.join(w.text for w in values[m[1]]) if m[1] in values else m[0]
+            yield word._replace(text=CMAKE_REF.sub(scalar, word.text),
+                                raw=CMAKE_REF.sub(scalar, word.raw))
+        else:
+            yield word
+
+
+def after_env(argv):
+    if (argv and argv[0].text in ('${CMAKE_COMMAND}', 'cmake')
+            and [w.text for w in argv[1:3]] == ['-E', 'env']):
+        argv = argv[3:]
+        while argv and (re.match(r'[\w.-]+=', argv[0].text) or argv[0].text == '--'):
+            argv = argv[1:]
+    return argv
+
+
+def command_values(history, argv):
+    """Replay only bindings used by this command, at the point each value is used."""
+    needed = set(CMAKE_REF.findall(' '.join(w.text for w in argv)))
+    writes = {}
+    for cmd in reversed(history):
+        op = cmd.name.lower()
+        if (op not in ('set', 'list', 'unset', 'string', 'file', 'math', 'execute_process')
+                or not any(key in cmd.body for key in needed)):
+            continue
+        args = list(words(cmd.body, cmd.line))
+        if op == 'list' and args and args[0].text == 'APPEND':
+            op, args = 'append', args[1:]
+        if args and op in ('set', 'append', 'unset') and args[0].text in needed:
+            key, value = args[0].text, args[1:]
+            if any(w.text in ('CACHE', 'PARENT_SCOPE') for w in value):
+                op = 'unknown'
+            writes[cmd.line] = [(op, key, value)]
+            needed.update(CMAKE_REF.findall(' '.join(w.text for w in value)))
+        elif op in ('list', 'string', 'file', 'math', 'execute_process'):
+            writes[cmd.line] = [('unknown', w.text, ()) for w in args if w.text in needed]
+
+    states, blocks = [{}], []
+    for cmd in history:
+        op = cmd.name.lower()
+        if op in ('if', 'function', 'macro', 'foreach', 'block'):
+            blocks.append((states, [], False))
+            if op in ('function', 'macro', 'foreach'):
+                formals = cmd.body.split()
+                hidden = set(formals[:1] if op == 'foreach' else formals[1:])
+                states = [{k: v for k, v in s.items() if k not in hidden} for s in states]
+        if blocks and op in ('else', 'elseif'):
+            before, arms, _ = blocks[-1]
+            arms.extend(s for s in states if s not in arms)
+            states = before
+            blocks[-1] = before, arms, op == 'else'
+        if op in ('if', 'elseif'):
+            guard = re.fullmatch(r'\s*(\w+)\s+STREQUAL\s+"([\w.-]+)"\s*', cmd.body)
+            if guard and guard[1] in needed:
+                value = (Word(guard[2], cmd.line, guard[2]),)
+                states = [dict(s, **{guard[1]: value}) for s in states]
+        elif blocks and op in ('endif', 'endfunction', 'endmacro', 'endforeach', 'endblock'):
+            before, arms, exhaustive = blocks.pop()
+            if op in ('endfunction', 'endmacro', 'endblock'):
+                states = before
+            else:
+                arms.extend(s for s in states + ([] if exhaustive else before) if s not in arms)
+                states = arms
+        for action, key, value in writes.get(cmd.line, ()):
+            if action in ('set', 'append'):
+                def assigned(s):
+                    prefix = s.get(key, ()) if action == 'append' else ()
+                    return dict(s, **{key: prefix + tuple(expand(value, s))})
+                states = [assigned(s) for s in states]
+            else:
+                states = [dict(s, **{key: (Word('${' + key + '}', cmd.line, ''),)}) for s in states]
+    for state in states:
+        yield after_env(tuple(expand(argv, state)))
+
+
 def discovered_programs(directory: Path):
     """unittest discover's default test*.py files and imported package initializers."""
     for path in sorted(directory.iterdir()):
@@ -89,54 +192,76 @@ def discovered_programs(directory: Path):
             yield from discovered_programs(path)
 
 
-def python_row(cmake_path: Path, line: int, statement: str):
+def python_row(cmake_path: Path, line: int, statement: str, history=()):
     """The row name and every program selected by this Python add_test()."""
+    fields = list(words(statement[len('add_test('):-1], line))
+    if len(fields) >= 4 and fields[0].text == 'NAME' and fields[2].text == 'COMMAND':
+        argv = after_env(fields[3:])
+        if (argv and re.fullmatch(r'\$\{(?:[^{}]|\$\{[^{}]*\})*\}', argv[0].text)
+                and argv[0].raw in (argv[0].text, '"' + argv[0].text + '"')
+                and argv[0].text not in (PYTHON, '${CMAKE_COMMAND}')):
+            name, var = fields[1].text, argv[0].text
+            unknown = UnknownCommand(name, f'{cmake_path}:{line}: row {name} command {var}')
+
+            def selected(args):
+                if not args:
+                    raise unknown
+                exe = args[0].text
+                if exe == PYTHON and args[0].raw and r'\$' not in args[0].raw:
+                    return python_programs(cmake_path, line, name, iter(args[1:]), unknown)
+                if not exe or (exe != '${CMAKE_COMMAND}' and
+                               ('$' in exe or ';' in exe or exe.startswith('-'))):
+                    raise unknown
+                return None
+
+            candidates = map(selected, command_values(history, argv))
+            first = next(candidates)
+            if any(candidate != first for candidate in candidates):
+                raise unknown
+            return first
     if 'Python3_EXECUTABLE' not in statement:
         return None
     name = ADD_TEST.search(statement)
     if not name:
         raise SweepError(f'{cmake_path}:{line}: add_test() with an unreadable NAME runs '
                          f'Python3_EXECUTABLE; the sweep refuses to skip it: {statement!r}')
-    end = len(statement) - 1
-    args = CMAKE_ARGUMENT.finditer(statement, name.end(), end)
+    args = words(statement[name.end():-1], line + statement.count('\n', 0, name.end()))
     for arg in args:
-        if argument_text(arg) == '${Python3_EXECUTABLE}':
-            break
-    else:
-        return None
-    where = f'{cmake_path}:{line}: row {name[1]}'
+        if arg.text == PYTHON:
+            return python_programs(cmake_path, line, name[1], args)
+    return None
+
+
+def python_programs(cmake_path, line, name, args, unknown=None):
+    where = f'{cmake_path}:{line}: row {name}'
 
     def path_for(word: str) -> Path:
         path = word.replace('${PROJECT_SOURCE_DIR}', str(ROOT)).replace(
             '${CMAKE_CURRENT_SOURCE_DIR}', str(ROOT / 'tests'))
         if '$' in path:
-            raise SweepError(f'{where} names an unexpanded path {word!r}')
+            raise unknown or SweepError(f'{where} names an unexpanded path {word!r}')
         return ROOT / path
 
     # Stop at the script or module: a later -c belongs to that program.
     for arg in args:
-        option = argument_text(arg)
+        option = arg.text
         if option == '-c':
             program = next(args, None)
-            text = argument_text(program) if program is not None else None
+            text = program.text if program is not None else None
             if text is None or text in TEST_OPTIONS:
-                raise SweepError(f'{cmake_path}:{line}: row {name[1]} runs Python3_EXECUTABLE '
+                raise SweepError(f'{where} runs Python3_EXECUTABLE '
                                  'but names no .py script and -c has no program; '
                                  'the sweep cannot read it and refuses to skip it')
-            if (program['bracket_value'] is None and re.search(
-                    r'(?<!\\)\$(?:\{|ENV\{|CACHE\{|<)', program[0])):
-                raise SweepError(f'{cmake_path}:{line}: row {name[1]} has an unexpanded '
-                                 'inline program; the sweep refuses to skip it')
-            start_line = line + statement.count('\n', 0, program.start())
-            if (program['bracket_value'] or '').startswith('\n'):
-                start_line += 1
-            return name[1], [InlineProgram(text, start_line)]
+            if re.search(r'(?<!\\)\$(?:\{|ENV\{|CACHE\{|<)', program.raw):
+                raise unknown or SweepError(f'{where} has an unexpanded '
+                                            'inline program; the sweep refuses to skip it')
+            return name, [InlineProgram(text, program.line)]
         if option in ('-W', '-X', '--check-hash-based-pycs'):
             next(args, None)
         elif option == '-m':
             words = []
             for item in args:
-                word = argument_text(item)
+                word = item.text
                 if word in TEST_OPTIONS:
                     break
                 words.append(word)
@@ -157,15 +282,19 @@ def python_row(cmake_path: Path, line: int, statement: str):
                     elif not re.fullmatch(r'-(?:[qvs]+|r[A-Za-z]+)', word):
                         raise SweepError(f'{where} has an unsupported pytest operand {word!r}')
             else:
+                if unknown and any('$' in word for word in words):
+                    raise unknown
                 raise SweepError(f'{where} has an unsupported Python module command: {words!r}')
             if not programs:
                 raise SweepError(f'{where} selects no Python programs')
-            return name[1], programs
+            return name, programs
         elif option == '--':
             continue
         elif option == '-' or not option.startswith('-'):
             if option.endswith('.py'):
-                return name[1], [path_for(option)]
+                return name, [path_for(option)]
+            if unknown and '$' in option:
+                raise unknown
             break
     raise SweepError(f'{where} runs Python3_EXECUTABLE but names no .py script or inline program')
 
@@ -303,6 +432,8 @@ def main() -> int:
     cmake_path = args.cmake
     offenders = []
     errors = []
+    unknown_command = False
+    history = {}
     programs_seen = 0
     try:
         registrations = list(registration_statements(cmake_path))
@@ -311,10 +442,12 @@ def main() -> int:
         print(f'check_kernel_python_private_reads: NOT COMPARED: {error}', file=sys.stderr)
         return 2
     for source, cmd in registrations:
+        previous = history.setdefault(source, [])
         if cmd.name.lower() != 'add_test':
+            previous.append(cmd)
             continue
         try:
-            row = python_row(source, cmd.line, f'add_test({cmd.body})')
+            row = python_row(source, cmd.line, f'add_test({cmd.body})', previous)
             if row is None:
                 continue
             name, programs = row
@@ -336,6 +469,10 @@ def main() -> int:
                     if path == source:
                         line += program.line - 1
                     offenders.append((name, (path, line, reference)))
+        except UnknownCommand as error:
+            name, message = error.args
+            print(f'NOT COMPARED: {message}', file=sys.stderr)
+            unknown_command |= '${' not in name
         except (OSError, SweepError) as error:
             errors.append(str(error))
     for name, (path, line, reference) in offenders:
@@ -345,7 +482,7 @@ def main() -> int:
         print(f'exempt: {name} -- {reason}')
     if not programs_seen and not errors:
         errors.append('no registered Python programs')
-    if errors:
+    if errors or unknown_command:
         for error in errors:
             print(f'check_kernel_python_private_reads: NOT COMPARED: {error}', file=sys.stderr)
         return 2
