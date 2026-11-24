@@ -2449,6 +2449,7 @@ private:
     void book_pyramiding_records(const SourceId& id, std::uint64_t armed_for, double units);
     std::optional<std::size_t> open_ledger_records() const;
     std::optional<std::size_t> held_ledger_records() const;
+    bool records_are_open_lots() const;
     std::uint64_t entry_incarnation_of(const SourceId& from_entry) const;
     bool exit_tombstoned(const SourceId& exit_id, const SourceId& from_entry) const;
     bool unified_placement_book_clear() const;

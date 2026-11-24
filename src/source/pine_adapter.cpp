@@ -2971,7 +2971,7 @@ PineExecutionAdapter::refresh_configuration_scopes(const PineStrategyConfig& con
     unified_configured_ = lot_grid_pinned_ && !config.calc_on_order_fills && commission_free
         && one_lot_cap && staged_scopes_.unit_money && staged_scopes_.mintick;
     ledger_records_configured_ = config.pyramiding > 1 && !config.close_entries_rule_any
-        && lot_grid_pinned_;
+        && (lot_grid_pinned_ || !staged_.quantity_grid);
     pooc_fee_configured_ = config.process_orders_on_close
         && config.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
         && config.commission_value > 0.0
@@ -8653,8 +8653,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
             }
             accepted_in_cycle = *records + pending;
         }
-        // Pine's cap is a monotone entry-incarnation count for the current
-        // position cycle; a partial close does not free a pyramiding slot.
+        // Booking part of an entry does not free its slot.
         if (!(config_.process_orders_on_close && close_precedes_entry)
             && accepted_in_cycle >= static_cast<std::size_t>(config_.pyramiding)
             && !short_seed_final_candidate && !paired_all_in_reentry
@@ -10513,8 +10512,7 @@ void PineExecutionAdapter::book_close_ledger(const SourceId& id, double units) {
 // books that opening's record first, then the named id's records oldest
 // first, then every record in fill order. Only under pyramiding above one,
 // where it can decide.
-// Pyramiding above one, a close rule other than ANY and a pinned lot grid are
-// ledger_records_configured_, formed once per configuration.
+// With no quantity step, the records retain the units as filled.
 void PineExecutionAdapter::credit_pyramiding_record(const SourceId& id, std::uint64_t incarnation,
                                                     double units) {
     if (!ledger_records_configured_ || !(units > 0.0)) return;
@@ -10564,6 +10562,27 @@ std::optional<std::size_t> PineExecutionAdapter::held_ledger_records() const {
     for (const auto& record : pyramiding_records_) units += record.units;
     if (!(std::abs(units - held) <= std::max(1e-9, held * 1e-12))) return std::nullopt;
     return pyramiding_records_.size();
+}
+
+// Whether the records are the open lots, one for one: no close has booked
+// another opening than the one it drained.
+[[gnu::noinline]]
+bool PineExecutionAdapter::records_are_open_lots() const {
+    struct Walk {
+        const std::vector<PyramidingRecord>& records;
+        std::size_t next = 0;
+        bool same = true;
+    } walk{pyramiding_records_};
+    (void)require_host().visit_native_open_lot_values(
+        &walk, [](void* context, std::uint64_t origin, double, double units) {
+            auto& at = *static_cast<Walk*>(context);
+            at.same = at.next < at.records.size()
+                && at.records[at.next].incarnation == origin
+                && same_double_bits(at.records[at.next].units, std::abs(units));
+            ++at.next;
+            return at.same;
+        });
+    return walk.same && walk.next == pyramiding_records_.size();
 }
 
 // The incarnation of the newest opening of `from_entry` this cycle, 0 when
