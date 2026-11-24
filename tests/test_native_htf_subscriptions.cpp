@@ -1260,16 +1260,29 @@ void test_fixed_period_fine_primary_and_sparse_boundary() {
     missing.tf = "75";
     unbacked.subscriptions.push_back(missing);
     SeriesHost refused;
-    CHECK(refused.configure_native(unbacked).status == NativeSetupStatus::Failed);
-    auto enormous = unbacked;
+    const auto unbacked_setup = refused.configure_native(unbacked);
+    CHECK(unbacked_setup.status == NativeSetupStatus::Failed);
+    CHECK(unbacked_setup.validation.field == NativeRunSpecField::SubscriptionTimeframe);
+    CHECK(unbacked_setup.validation.error == NativeRunSpecError::InvalidSubscriptionTimeframe);
+
+    auto valid = unbacked;
+    valid.subscriptions[0].authoritative_bars = native_fixed_period_fixture::native();
+    CHECK(SeriesHost{}.configure_native(valid).status == NativeSetupStatus::Applied);
+
+    auto enormous = valid;
     enormous.subscriptions[0].tf = std::to_string(std::numeric_limits<int>::max() / 60 + 2);
-    enormous.subscriptions[0].authoritative_bars = native_fixed_period_fixture::native();
-    CHECK(refused.configure_native(enormous).status == NativeSetupStatus::Failed);
-    auto malformed = unbacked;
-    malformed.subscriptions[0].authoritative_bars = native_fixed_period_fixture::native();
-    malformed.subscriptions[0].authoritative_bars[0].close =
+    const auto enormous_setup = refused.configure_native(enormous);
+    CHECK(enormous_setup.status == NativeSetupStatus::Failed);
+    CHECK(enormous_setup.validation.field == NativeRunSpecField::SubscriptionTimeframe);
+    CHECK(enormous_setup.validation.error == NativeRunSpecError::InvalidSubscriptionTimeframe);
+
+    auto malformed = valid;
+    malformed.subscriptions[0].authoritative_bars.at(0).close =
         std::numeric_limits<double>::quiet_NaN();
-    CHECK(refused.configure_native(malformed).status == NativeSetupStatus::Failed);
+    const auto malformed_setup = refused.configure_native(malformed);
+    CHECK(malformed_setup.status == NativeSetupStatus::Failed);
+    CHECK(malformed_setup.validation.field == NativeRunSpecField::SubscriptionBars);
+    CHECK(malformed_setup.validation.error == NativeRunSpecError::NotFinitePositive);
 }
 
 void test_fixed_period_confirmed_stream_and_tick_contract() {
