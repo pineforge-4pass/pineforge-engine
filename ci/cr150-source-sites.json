@@ -12743,6 +12743,32 @@
   },
   {
    "file": "include/pineforge/ta.hpp",
+   "symbol": "window",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "class ValidWindowBar #1",
+    "public : bool push ( OwnedDeque < double > & window , double src , long long limit ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "window . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/ta.hpp",
+   "symbol": "window",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "class ValidWindowBar #1",
+    "void undo ( OwnedDeque < double > & window ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "window . push_front ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/ta.hpp",
    "symbol": "buffer_",
    "scope": [
     "namespace pineforge #1",
@@ -39799,7 +39825,7 @@
     "void PineExecutionAdapter :: observe_intraday_cap ( const native_order :: ExecutionAppliedEvent & event , const PlacementSnapshot & snapshot , const NativeDecisionContext & context ) #1",
     "if ( snapshot . family = = PineOrderFamily :: Close || snapshot . family = = PineOrderFamily :: CloseAll ) #1",
     "if ( observe_close || ordinary_full_close ) #1",
-    "if ( candidates . size ( ) = = 1 U && continuation && continuation_snapshot && finite_positive ( continuation_units ) ) #1"
+    "if ( candidates . size ( ) = = 1 U && continuation && continuation_snapshot && ( size_at_fill || finite_positive ( continuation_units ) ) ) #1"
    ],
    "cls": "assign",
    "spelling": "cancelled = . . .",
@@ -39813,7 +39839,7 @@
     "void PineExecutionAdapter :: observe_intraday_cap ( const native_order :: ExecutionAppliedEvent & event , const PlacementSnapshot & snapshot , const NativeDecisionContext & context ) #1",
     "if ( snapshot . family = = PineOrderFamily :: Close || snapshot . family = = PineOrderFamily :: CloseAll ) #1",
     "if ( observe_close || ordinary_full_close ) #1",
-    "if ( candidates . size ( ) = = 1 U && continuation && continuation_snapshot && finite_positive ( continuation_units ) ) #1"
+    "if ( candidates . size ( ) = = 1 U && continuation && continuation_snapshot && ( size_at_fill || finite_positive ( continuation_units ) ) ) #1"
    ],
    "cls": "assign",
    "spelling": "comment = . . .",
@@ -48616,18 +48642,6 @@
   },
   {
    "file": "src/ta_extremes_volume.cpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Median :: compute ( double src ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "buffer_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_extremes_volume.cpp",
    "symbol": "counts_",
    "scope": [
     "namespace pineforge #1",
@@ -48677,46 +48691,6 @@
    ],
    "cls": "subscript",
    "spelling": "counts_ [ . . . ]",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_extremes_volume.cpp",
-   "symbol": "counts",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Mode :: current_mode ( ) const #1",
-    "for ( double value : buffer_ ) #1",
-    "if ( is_na ( value ) ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: unordered_map < double , int >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_extremes_volume.cpp",
-   "symbol": "counts",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Mode :: current_mode ( ) const #1",
-    "for ( double value : buffer_ ) #1",
-    "if ( is_na ( value ) ) #1"
-   ],
-   "cls": "subscript",
-   "spelling": "counts [ . . . ]",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_extremes_volume.cpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Mode :: compute ( double src ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "buffer_ . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -49070,6 +49044,36 @@
    "ordinal": 1
   },
   {
+   "file": "src/ta_moving_averages.cpp",
+   "symbol": "sv_buffer_",
+   "scope": [
+    "namespace pineforge #2",
+    "namespace ta #1",
+    "double VWMA :: recompute ( double src , double vol ) #1",
+    "if ( replay || ! pushed_ ) #1",
+    "if ( pushed_ ) #1",
+    "if ( evicted_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "sv_buffer_ . push_front ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_moving_averages.cpp",
+   "symbol": "v_buffer_",
+   "scope": [
+    "namespace pineforge #2",
+    "namespace ta #1",
+    "double VWMA :: recompute ( double src , double vol ) #1",
+    "if ( replay || ! pushed_ ) #1",
+    "if ( pushed_ ) #1",
+    "if ( evicted_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "v_buffer_ . push_front ( . . . )",
+   "ordinal": 1
+  },
+  {
    "file": "src/ta_oscillators.cpp",
    "symbol": "replacement",
    "scope": [
@@ -49079,78 +49083,6 @@
    ],
    "cls": "decl",
    "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Mom :: compute ( double src ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "buffer_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double ROC :: compute ( double src ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "buffer_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Rising :: compute ( double src ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "buffer_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Falling :: compute ( double src ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "buffer_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double CCI :: compute ( double src ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "buffer_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double RCI :: compute ( double src ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "buffer_ . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -49301,26 +49233,15 @@
   },
   {
    "file": "src/ta_volatility_trend.cpp",
-   "symbol": "buffer_",
+   "symbol": "buffer",
    "scope": [
     "namespace pineforge #1",
     "namespace ta #1",
-    "double Variance :: compute ( double src ) #1"
+    "double StdDev :: recompute ( double src ) #1",
+    "if ( pushed_ ) #1"
    ],
    "cls": "grow",
-   "spelling": "buffer_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_volatility_trend.cpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Dev :: compute ( double src ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "buffer_ . push_back ( . . . )",
+   "spelling": "buffer . push_front ( . . . )",
    "ordinal": 1
   },
   {
