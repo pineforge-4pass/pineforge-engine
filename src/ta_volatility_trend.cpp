@@ -177,6 +177,7 @@ double StdDev::compute(double src) {
     auto& buffer = *buffer_;
     pushed_ = false;
     evicted_ = false;
+    if (length_ <= 0) return na<double>(); // No sample can enter or be undone.
     if (is_na(src)) {
         // Pine ta.stdev, like ta.sma: an na input never enters the
         // compact last-N-valid window; once `length` valid values have been
