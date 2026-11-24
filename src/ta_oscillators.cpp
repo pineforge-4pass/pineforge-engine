@@ -276,11 +276,11 @@ double Mom::compute(double src) {
     }
 
     buffer_.push_back(src);
-    while ((int)buffer_.size() > length_ + 1) {
+    while (static_cast<long long>(buffer_.size()) > static_cast<long long>(length_) + 1) {
         buffer_.pop_front();
     }
 
-    if ((int)buffer_.size() < length_ + 1) {
+    if (static_cast<long long>(buffer_.size()) < static_cast<long long>(length_) + 1) {
         return na<double>();
     }
 
@@ -297,11 +297,11 @@ double ROC::compute(double src) {
     }
 
     buffer_.push_back(src);
-    while ((int)buffer_.size() > length_ + 1) {
+    while (static_cast<long long>(buffer_.size()) > static_cast<long long>(length_) + 1) {
         buffer_.pop_front();
     }
 
-    if ((int)buffer_.size() < length_ + 1) {
+    if (static_cast<long long>(buffer_.size()) < static_cast<long long>(length_) + 1) {
         return na<double>();
     }
 
@@ -323,11 +323,11 @@ double Rising::compute(double src) {
     }
 
     buffer_.push_back(src);
-    while ((int)buffer_.size() > length_ + 1) {
+    while (static_cast<long long>(buffer_.size()) > static_cast<long long>(length_) + 1) {
         buffer_.pop_front();
     }
 
-    if ((int)buffer_.size() < length_ + 1) {
+    if (static_cast<long long>(buffer_.size()) < static_cast<long long>(length_) + 1) {
         return 0.0;
     }
 
@@ -350,11 +350,11 @@ double Falling::compute(double src) {
     }
 
     buffer_.push_back(src);
-    while ((int)buffer_.size() > length_ + 1) {
+    while (static_cast<long long>(buffer_.size()) > static_cast<long long>(length_) + 1) {
         buffer_.pop_front();
     }
 
-    if ((int)buffer_.size() < length_ + 1) {
+    if (static_cast<long long>(buffer_.size()) < static_cast<long long>(length_) + 1) {
         return 0.0;
     }
 
@@ -724,7 +724,7 @@ double Mom::recompute(double src) {
     buffer_.back() = src;
 
     if (is_na(src)) return na<double>();
-    if ((int)buffer_.size() < length_ + 1) return na<double>();
+    if (static_cast<long long>(buffer_.size()) < static_cast<long long>(length_) + 1) return na<double>();
     return src - buffer_.front();
 }
 
@@ -734,7 +734,7 @@ double ROC::recompute(double src) {
     buffer_.back() = src;
 
     if (is_na(src)) return na<double>();
-    if ((int)buffer_.size() < length_ + 1) return na<double>();
+    if (static_cast<long long>(buffer_.size()) < static_cast<long long>(length_) + 1) return na<double>();
 
     double prev = buffer_.front();
     if (prev == 0.0) return na<double>();
@@ -747,7 +747,7 @@ double Rising::recompute(double src) {
     buffer_.back() = src;
 
     if (is_na(src)) return 0.0;
-    if ((int)buffer_.size() < length_ + 1) return 0.0;
+    if (static_cast<long long>(buffer_.size()) < static_cast<long long>(length_) + 1) return 0.0;
 
     for (int i = 1; i < (int)buffer_.size(); i++) {
         if (buffer_[i] <= buffer_[i - 1]) return 0.0;
@@ -761,7 +761,7 @@ double Falling::recompute(double src) {
     buffer_.back() = src;
 
     if (is_na(src)) return 0.0;
-    if ((int)buffer_.size() < length_ + 1) return 0.0;
+    if (static_cast<long long>(buffer_.size()) < static_cast<long long>(length_) + 1) return 0.0;
 
     for (int i = 1; i < (int)buffer_.size(); i++) {
         if (buffer_[i] >= buffer_[i - 1]) return 0.0;

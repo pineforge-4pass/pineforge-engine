@@ -272,12 +272,12 @@ PivotHigh::PivotHigh(int left_bars, int right_bars)
 double PivotHigh::compute(double src) {
     buffer_.push_back(src);
 
-    int total = left_bars_ + right_bars_ + 1;
-    while ((int)buffer_.size() > total) {
+    const long long total = static_cast<long long>(left_bars_) + right_bars_ + 1;
+    while (static_cast<long long>(buffer_.size()) > total) {
         buffer_.pop_front();
     }
 
-    if ((int)buffer_.size() < total) {
+    if (static_cast<long long>(buffer_.size()) < total) {
         return na<double>();
     }
 
@@ -306,7 +306,7 @@ double PivotHigh::compute(double src) {
         }
     }
 
-    for (int i = left_bars_ + 1; i < total; i++) {
+    for (long long i = static_cast<long long>(left_bars_) + 1; i < total; i++) {
         if (is_na(buffer_[i]) || buffer_[i] >= pivot) {
             return na<double>();
         }
@@ -323,12 +323,12 @@ PivotLow::PivotLow(int left_bars, int right_bars)
 double PivotLow::compute(double src) {
     buffer_.push_back(src);
 
-    int total = left_bars_ + right_bars_ + 1;
-    while ((int)buffer_.size() > total) {
+    const long long total = static_cast<long long>(left_bars_) + right_bars_ + 1;
+    while (static_cast<long long>(buffer_.size()) > total) {
         buffer_.pop_front();
     }
 
-    if ((int)buffer_.size() < total) {
+    if (static_cast<long long>(buffer_.size()) < total) {
         return na<double>();
     }
 
@@ -348,7 +348,7 @@ double PivotLow::compute(double src) {
         }
     }
 
-    for (int i = left_bars_ + 1; i < total; i++) {
+    for (long long i = static_cast<long long>(left_bars_) + 1; i < total; i++) {
         if (is_na(buffer_[i]) || buffer_[i] <= pivot) {
             return na<double>();
         }
@@ -911,8 +911,8 @@ double PivotHigh::recompute(double src) {
     if (buffer_.empty()) return compute(src);
     buffer_.back() = src;
 
-    int total = left_bars_ + right_bars_ + 1;
-    if ((int)buffer_.size() < total) return na<double>();
+    const long long total = static_cast<long long>(left_bars_) + right_bars_ + 1;
+    if (static_cast<long long>(buffer_.size()) < total) return na<double>();
 
     double pivot = buffer_[left_bars_];
     if (is_na(pivot)) return na<double>();
@@ -920,7 +920,7 @@ double PivotHigh::recompute(double src) {
     for (int i = 0; i < left_bars_; i++) {
         if (is_na(buffer_[i]) || buffer_[i] > pivot) return na<double>();
     }
-    for (int i = left_bars_ + 1; i < total; i++) {
+    for (long long i = static_cast<long long>(left_bars_) + 1; i < total; i++) {
         if (is_na(buffer_[i]) || buffer_[i] >= pivot) return na<double>();
     }
     return pivot;
@@ -933,8 +933,8 @@ double PivotLow::recompute(double src) {
     if (buffer_.empty()) return compute(src);
     buffer_.back() = src;
 
-    int total = left_bars_ + right_bars_ + 1;
-    if ((int)buffer_.size() < total) return na<double>();
+    const long long total = static_cast<long long>(left_bars_) + right_bars_ + 1;
+    if (static_cast<long long>(buffer_.size()) < total) return na<double>();
 
     double pivot = buffer_[left_bars_];
     if (is_na(pivot)) return na<double>();
@@ -942,7 +942,7 @@ double PivotLow::recompute(double src) {
     for (int i = 0; i < left_bars_; i++) {
         if (is_na(buffer_[i]) || buffer_[i] < pivot) return na<double>();
     }
-    for (int i = left_bars_ + 1; i < total; i++) {
+    for (long long i = static_cast<long long>(left_bars_) + 1; i < total; i++) {
         if (is_na(buffer_[i]) || buffer_[i] <= pivot) return na<double>();
     }
     return pivot;

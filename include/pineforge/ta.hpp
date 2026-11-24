@@ -1208,7 +1208,7 @@ public:
 
 class ValueWhen {
     OwnedDeque<double> values_;
-    int max_occurrence_;
+    long long max_occurrence_; // occurrences kept: max_occurrence + 1, at least 1
 
     OwnedDeque<double> saved_values_;
 

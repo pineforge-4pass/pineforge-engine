@@ -267,7 +267,7 @@ double ema_seed_sum(const std::vector<double>& sources, double fallback) {
 }  // namespace
 
 EMA::EMA(int length)
-    : output_val(na<double>()), alpha(2.0 / (length + 1)), sum(0.0),
+    : output_val(na<double>()), alpha(2.0 / (static_cast<double>(length) + 1.0)), sum(0.0),
       bar_count(0), length_(length),
       // Mirror the initial committed state (see RMA::RMA) so a recompute()
       // issued before the first compute() restores a well-defined pristine
