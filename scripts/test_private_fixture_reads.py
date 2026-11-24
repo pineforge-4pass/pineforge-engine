@@ -654,32 +654,39 @@ class KernelPythonSweepControls(unittest.TestCase):
             [PY, '-B', str(self.script), '--cmake', str(self.cmake)],
             capture_output=True, text=True)
 
-    def test_python_row_reading_absent_private_file_is_caught(self):
-        (self.root / 'tests' / 'e2e_fb2_reader.py').write_text(
-            f'PATH = "{REMOVED_EXAMPLE}/bars.csv"\n'
-            'def main():\n'
-            '    return open(PATH).read()\n')
-        self.cmake.write_text(
-            'add_test(NAME e2e_fb2_python_reader\n'
-            '    COMMAND ${Python3_EXECUTABLE} '
-            '${PROJECT_SOURCE_DIR}/tests/e2e_fb2_reader.py)\n')
-        result = self.run_sweep()
-        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
-        self.assertIn('e2e_fb2_python_reader', result.stdout)
-
-    def test_included_python_read_requires_its_own_skip(self):
+    def included_registration(self) -> Path:
         self.cmake.write_text(
             'file(GLOB LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/lanes.d/*.cmake")\n'
             'list(SORT LANE_CMAKE)\nforeach(lane_file IN LISTS LANE_CMAKE)\n'
             '    include("${lane_file}")\nendforeach()\n')
         directory = self.cmake.parent / 'lanes.d'
         directory.mkdir()
-        fragment = directory / 'reader.cmake'
+        return directory / 'reader.cmake'
+
+    def test_python_row_reading_absent_private_file_is_caught(self):
+        fragment = self.included_registration()
+        reader = self.cmake.parent / 'read_bars.py'
+        reader.write_text(f'with open("{REMOVED_EXAMPLE}/bars.csv") as bars:\n'
+                          '    bars.read()\n')
+        for command in ('${PROJECT_SOURCE_DIR}/tests/read_bars.py -c "pass"',
+                        '-B -c "import read_bars"'):
+            with self.subTest(command=command):
+                fragment.write_text(
+                    'add_test(NAME test_read_bars COMMAND ${Python3_EXECUTABLE} '
+                    + command + ' WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})\n')
+                result = self.run_sweep()
+                self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+                self.assertIn(f'test_read_bars: reads absent {REMOVED_EXAMPLE}/bars.csv '
+                              f'({reader}:1)', result.stdout)
+
+    def test_included_python_read_requires_its_own_skip(self):
+        fragment = self.included_registration()
         fragment.write_text(
             'add_test(NAME test_read_bars COMMAND ${Python3_EXECUTABLE} '
             '${CMAKE_CURRENT_SOURCE_DIR}/read_bars.py)\n'
-            'add_test(NAME test_python_version COMMAND ${Python3_EXECUTABLE} '
-            '-c "import sys; print(sys.version)")\n')
+            'add_test(NAME test_forward_arguments COMMAND ${Python3_EXECUTABLE} -B '
+            '-c "import os, sys; os.execv(sys.argv[1], sys.argv[1:])" '
+            '${CMAKE_COMMAND} -E echo unused.py)\n')
         reader = self.cmake.parent / 'read_bars.py'
         reader.write_text('from pathlib import Path\n'
                           'missing = 77\n'
@@ -688,12 +695,6 @@ class KernelPythonSweepControls(unittest.TestCase):
                           '    print("SKIP private fixtures not present: " + str(bars))\n'
                           '    raise SystemExit(missing)\n'
                           'print(bars.read_text())\n')
-        result = self.run_sweep()
-        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
-        self.assertIn('reader.cmake:2: row test_python_version', result.stderr)
-        self.assertIn('names no .py script', result.stderr)
-        self.assertIn(f'test_read_bars: reads absent {REMOVED_EXAMPLE}/bars.csv', result.stdout)
-        fragment.write_text(fragment.read_text().splitlines(keepends=True)[0])
         result = self.run_sweep()
         self.assertEqual(1, result.returncode, result.stdout + result.stderr)
         self.assertIn(f'test_read_bars: reads absent {REMOVED_EXAMPLE}/bars.csv', result.stdout)
@@ -704,12 +705,33 @@ class KernelPythonSweepControls(unittest.TestCase):
         self.assertIn('kernel python rows reading an absent private file: 0', result.stdout)
 
     def test_unparseable_python_row_exits_2(self):
-        self.cmake.write_text(
-            'add_test(NAME e2e_fb2_python_unparseable\n'
-            '    COMMAND ${Python3_EXECUTABLE} -c "print(1)")\n')
+        fragment = self.included_registration()
+        missing = f'{REMOVED_EXAMPLE}/bars.csv'
+        program = ('from pathlib import Path\n'
+                   f'bars = Path("{missing}")\n'
+                   'if not bars.exists():\n'
+                   '    print("SKIP private fixtures not present: " + str(bars))\n'
+                   '    raise SystemExit(77)\n'
+                   'bars.read_text()')
+        command = 'add_test(NAME test_inline_reader COMMAND ${Python3_EXECUTABLE} -B -c '
+        unreadable = 'add_test(NAME test_no_program COMMAND ${Python3_EXECUTABLE} -B -c)\n'
+        quoted_reader = command + '"' + program.replace('"', r'\"') + '")\n'
+        fragment.write_text(unreadable + quoted_reader)
         result = self.run_sweep()
         self.assertEqual(2, result.returncode, result.stdout + result.stderr)
-        self.assertIn('names no .py script', result.stdout + result.stderr)
+        self.assertIn(f'{fragment}:1: row test_no_program', result.stderr)
+        self.assertIn('names no .py script', result.stderr)
+        self.assertIn(f'test_inline_reader: reads absent {missing} ({fragment}:3)', result.stdout)
+
+        fragment.write_text(command + '[=[\n' + program + ']=])\n')
+        result = self.run_sweep()
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn(f'test_inline_reader: reads absent {missing} ({fragment}:3)', result.stdout)
+        with fragment.open('a') as out:
+            out.write('set_tests_properties(test_inline_reader PROPERTIES SKIP_RETURN_CODE 77)\n')
+        result = self.run_sweep()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn('kernel python rows reading an absent private file: 0', result.stdout)
 
     def test_real_tree_is_clean(self):
         result = subprocess.run([PY, '-B', str(KERNEL_SWEEP)], capture_output=True, text=True)
