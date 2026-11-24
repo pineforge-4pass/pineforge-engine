@@ -46,6 +46,17 @@ explicit: zero fields in that manifest stay zero. Disk mode never activates
 this default. Layout arithmetic must fit `uint64_t`, `size_t` and `off_t`
 before allocation; actual allocation failure remains `out_of_memory`.
 
+Use #strategy_set_scratch_live_order_ids_limit_v1 on an idle handle to set
+a separate maximum for simultaneously active Pine order IDs. Zero (the
+default on a new handle) removes this limit; the historical `U/B_U` budgets
+and the 64-byte limit on each cohort ID still apply. A positive value
+counts each active ID once; closing or cancelling the last order or exposure
+for that ID frees its live slot. The setting applies at each bounded-memory
+begin on the handle until changed, and disk scratch ignores it. It does not
+resize the slab or change the v1 scratch-table descriptor. A finite live-ID
+limit does not bound the number of orders sharing an ID or total heap use.
+The jailed JSON runner exposes the setting as `--limit-live-order-ids N`.
+
 ## Default P0 admission policy
 
 `default_scratch_manifest(std::uint64_t bars)` is the header-only helper in
@@ -117,15 +128,16 @@ retiring readers can keep a preceding slab alive too.
 
 ## Native request journal residency
 
-The native core's unbound request journal has a resident cap of 2,048 events,
-in 32-event chunks, and keeps its 128-event floor. It spills older events even
+The native core's unbound request journal has a resident cap of 2,048 events
+in 32-event chunks. Spilling stops at or below 128 resident events; the last
+chunk can take it below 128 (`kKeepResident`, `src/native_order.cpp:1816`). It spills older events even
 within one bar when that bar exceeds the cap before retirement. Pages hold up to
 32,768 bytes of events plus an 8-byte seal; the decoded cache has four slots.
 The bound `CommandScratchStore` codec instead uses its configured workspace.
 Its owning diagnostic decoder throws typed `out_of_memory` on allocation
 failure; the nonowning validation scan retains its `noexcept` status contract.
 
-A raw native journal append (`append_journal_record`, `src/native_order.cpp:2210`)
+A raw native journal append (`append_journal_record`, `src/native_order.cpp:2241`)
 checks each request definition's own session key and run number against the
 destination. A replacement must match in both definition slots. The check
 applies to the caller's input and to the bytes staged for commit. A mismatch
@@ -252,8 +264,8 @@ Capacity resources are `layout`, `sequence_data`, `sequence_index`,
 `exit_rank`, `successor_roots`, `cohort_ids_total`, and `cohort_orders_live`.
 q names remain in the wire vocabulary. `cohort_ids_total` identifies the
 historical distinct-ID count or aggregate ID-byte budget (`U/B_U`, default
-65,536 IDs / 4,194,304 bytes); `cohort_orders_live` identifies the separate
-4,096 live-order-ID cap. `cohort` remains for the 64-byte single-ID refusal,
+65,536 IDs / 4,194,304 bytes); `cohort_orders_live` identifies a breach of an
+explicit live-ID limit. `cohort` remains for the 64-byte single-ID refusal,
 generic cohort-region capacity and a nonzero generic Store live-object policy.
 The former capped default is now 0 (unbounded); native Store limits are exact, and finite refusals omit the approved-maximum clause.
 The parameter is native-embedder/tests only; scripts need recompilation with new headers for the default.

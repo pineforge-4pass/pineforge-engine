@@ -273,7 +273,7 @@ public:
     void set_scratch_io_policy_config(const ScratchIoPolicy& policy) noexcept {
         scratch_io_policy_config_ = policy;
     }
-    bool scratch_io_policy_setter_busy() const noexcept {
+    bool scratch_policy_setter_busy() const noexcept {
         return preparing_begin_ || cache_policy_preparing_ || in_callback_
             || processing_input_ || in_attempt_call_ || running();
     }
@@ -3105,6 +3105,13 @@ public:
     // host whose own series keep a fixed clock (defined at the end of the source file).
     std::int64_t fixed_clock_seat(std::int64_t stamp_ms, std::int64_t eligible_open_ms,
                                   std::int64_t horizon_ms) const;
+
+    void set_scratch_live_order_ids_limit(std::uint64_t limit) noexcept {
+        scratch_live_order_ids_limit_ = limit;
+    }
+
+private:
+    std::uint64_t scratch_live_order_ids_limit_ = 0;
 };
 
 // The same lazy backing used by RunCommandScratch's Book binding. Kept in

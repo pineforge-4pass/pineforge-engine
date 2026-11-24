@@ -2006,7 +2006,7 @@ bool NativeExecutionConsumer::prepare_public_begin(
                     static_cast<std::uint64_t>(args.n));
             // Invalid negative batch n keeps its existing input-validation path.
         }
-        engine.prepare_scratch_table_run(config);
+        engine.prepare_scratch_table_run(config, scratch_live_order_ids_limit_);
     } catch (const std::exception& e) {
         render_exception(engine, e);
         return false;
@@ -15123,7 +15123,7 @@ std::int64_t NativeExecutionConsumer::subscription_next_input_ms(int index) cons
 // before its first cache or provider mutation. The caller snapshots policy
 // once; this helper never reads configuration or an environment variable.
 // Old backend bindings retain their owner until reset/readers retire.
-void BacktestEngine::prepare_scratch_table_run(const detail::ScratchTableConfig& config) {
+void BacktestEngine::prepare_scratch_table_run(const detail::ScratchTableConfig& config, std::uint64_t live_order_ids_limit) {
     std::shared_ptr<detail::ScratchSlab> next;
     switch (config.backend) {
     case detail::ScratchTableBackend::disk_scratch:
@@ -15133,12 +15133,21 @@ void BacktestEngine::prepare_scratch_table_run(const detail::ScratchTableConfig&
         // The constructor rechecks standalone callers and zeroes the backing
         // allocation before publication. bad_alloc remains out_of_memory.
         (void)detail::compute_layout(config.manifest);
-        next = std::make_shared<detail::ScratchSlab>(config.manifest);
+        next = std::make_shared<detail::ScratchSlab>(config.manifest, live_order_ids_limit);
         break;
     default:
         throw detail::ScratchCapacityError(detail::ScratchResource::layout);
     }
     scratch_table_run_.slab = std::move(next);
+}
+
+int BacktestEngine::set_scratch_live_order_ids_limit(std::uint64_t limit) {
+    const int status = report_sink_setter_status();
+    if (status != 0) return status;
+    auto& consumer = as_native_consumer(execution_consumer());
+    if (consumer.scratch_policy_setter_busy()) return -3;
+    consumer.set_scratch_live_order_ids_limit(limit);
+    return 0;
 }
 
 }  // inline namespace engine_script_run_v20

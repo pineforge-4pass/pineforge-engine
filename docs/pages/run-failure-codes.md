@@ -185,7 +185,8 @@ requires a successful run and a completed receipt.
 For `scratch_capacity_exceeded`, `resource=cohort_ids_total` identifies the
 bounded cohort table's historical distinct-ID count or aggregate ID-byte
 budget (`U/B_U`, default 65,536 IDs / 4,194,304 bytes).
-`resource=cohort_orders_live` identifies the separate 4,096 live-order-ID cap.
+`resource=cohort_orders_live` identifies a breach of a live-order-ID limit set
+by the host for bounded scratch; see [Scratch tables](@ref scratch_tables).
 `resource=cohort` remains valid for the refusal of an ID longer than 64 bytes,
 generic cohort-region capacity and an explicitly finite generic Store live-object policy.
 The former default of 1,048,576 is now 0 (unbounded); Store policy honors exact native limits, and finite-limit text omits the approved-maximum clause.

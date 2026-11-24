@@ -88,6 +88,9 @@ public:
     bool bounded_cohorts() const noexcept {
         return file_.scratch_owner() && file_.scratch_resource() == ScratchResource::cohort;
     }
+    std::uint64_t live_order_ids_limit() const noexcept {
+        return bounded_cohorts() ? file_.scratch_owner()->live_order_ids_limit() : 0;
+    }
     void set_directory(const std::string& directory) { file_.set_directory(directory); }
     void open_for_insert() { file_.open("pineforge-ids"); }
     void bind_scratch(const std::shared_ptr<ScratchSlab>& slab, ScratchResource resource) {

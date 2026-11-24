@@ -134,7 +134,7 @@ const CacheDefaults& BacktestEngine::cache_policy_for_run() const {
 
 void BacktestEngine::set_scratch_io_policy(const ScratchIoPolicy& policy) {
     auto& consumer = as_native_consumer(execution_consumer());
-    if (report_sink_setter_status() != 0 || consumer.scratch_io_policy_setter_busy())
+    if (report_sink_setter_status() != 0 || consumer.scratch_policy_setter_busy())
         throw coded<std::invalid_argument>(RunFailureCode::setting_rejected,
             {{"input", "scratch_io_policy"}, {"reason", "frozen"}},
             "scratch I/O policy is frozen for the current run");
@@ -143,7 +143,7 @@ void BacktestEngine::set_scratch_io_policy(const ScratchIoPolicy& policy) {
 
 int BacktestEngine::set_scratch_io_policy_v1(const pf_scratch_io_policy_v1* descriptor) {
     auto& consumer = as_native_consumer(execution_consumer());
-    if (report_sink_setter_status() != 0 || consumer.scratch_io_policy_setter_busy())
+    if (report_sink_setter_status() != 0 || consumer.scratch_policy_setter_busy())
         throw coded<std::invalid_argument>(RunFailureCode::setting_rejected,
             {{"input", "scratch_io_policy"}, {"reason", "frozen"}},
             "scratch I/O policy is frozen for the current run");

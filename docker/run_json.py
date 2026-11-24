@@ -3155,6 +3155,10 @@ def _bind_scratch_tables(lib) -> None:
         lib.strategy_set_scratch_tables_v1.argtypes = [
             ctypes.c_void_p, ctypes.POINTER(ScratchTablesC)]
         lib.strategy_set_scratch_tables_v1.restype = ctypes.c_int
+    setter = getattr(lib, "strategy_set_scratch_live_order_ids_limit_v1", None)
+    if setter is not None:
+        setter.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
+        setter.restype = ctypes.c_int
 
 
 def default_scratch_manifest(bars: int | None) -> ScratchTablesC:
@@ -3176,7 +3180,8 @@ def default_scratch_manifest(bars: int | None) -> ScratchTablesC:
         262144, 25165824, 32768, 4227072, 65536, 4194304, 27, 6912, roots)
 
 
-def apply_scratch_tables(lib, state, manifest: ScratchTablesC) -> None:
+def apply_scratch_tables(lib, state, manifest: ScratchTablesC,
+                         live_order_ids_limit: int | None = None) -> None:
     """Install this run/trial's admission before its first execution; no fallback."""
     setter = getattr(lib, "strategy_set_scratch_tables_v1", None)
     if setter is None:
@@ -3185,6 +3190,14 @@ def apply_scratch_tables(lib, state, manifest: ScratchTablesC) -> None:
             {"reason": "setter_missing"})
     if setter(state, ctypes.byref(manifest)) != 0:
         raise _engine_invariant("the fresh strategy refused its scratch-table manifest")
+    if live_order_ids_limit is not None:
+        set_limit = getattr(lib, "strategy_set_scratch_live_order_ids_limit_v1", None)
+        if set_limit is None:
+            raise StrategyLibraryError(
+                "--limit-live-order-ids requires strategy_set_scratch_live_order_ids_limit_v1",
+                {"reason": "setter_missing"})
+        if set_limit(state, live_order_ids_limit) != 0:
+            raise _engine_invariant("the fresh strategy refused its live order ID limit")
 
 
 def _bind_outputs(lib) -> None:
@@ -5136,7 +5149,8 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             if args.outputs:
                 enable_outputs(lib, st)
             if args.profile == "jailed":
-                apply_scratch_tables(lib, st, default_scratch_manifest(fed_count))
+                apply_scratch_tables(lib, st, default_scratch_manifest(fed_count),
+                                     getattr(args, "live_order_ids_limit", None))
                 args._scratch_arena_admitted = _require_jailed_arena(lib, st)
             sink = _new_report_sink(lib, st, args)
             if getattr(args, "report_replay", False) or getattr(args, "report_replay_sink", None):
@@ -5606,6 +5620,10 @@ def _main(argv, binary_inputs) -> int:
     ap._legacy_usage = ap.format_usage()
     ap.add_argument("--metrics-only", nargs="?", const="auto", choices=("auto", "legacy"),
                     default=None, help="Omit trade/curve arrays and volatile counters; bare = auto.")
+    ap.add_argument("--limit-live-order-ids", dest="live_order_ids_limit", type=_live_order_ids_count,
+                    default=None, metavar="N",
+                    help="Jailed profile: maximum simultaneously active order IDs. Zero removes "
+                         "the separate live limit; omission uses the loaded library's default.")
     all_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
     argv = _legacy_abbreviations(argv, legacy_long, all_long)
     argv = _legacy_abbreviations(argv, pre_profile_long, all_long)
@@ -5619,6 +5637,8 @@ def _main(argv, binary_inputs) -> int:
                 setattr(args, name, limit)
     if args.profile not in ("unjailed", "jailed"):
         raise _request_invalid("PINEFORGE_RUN_JSON_PROFILE must be unjailed or jailed", "arguments")
+    if args.live_order_ids_limit is not None and args.profile != "jailed":
+        raise _request_invalid("--limit-live-order-ids requires the jailed profile", "arguments")
     missing = []
     if args.so is None:
         missing.append("--so")
@@ -5746,7 +5766,7 @@ def _main(argv, binary_inputs) -> int:
             if args.outputs:
                 enable_outputs(lib, st)
             if args.profile == "jailed":
-                apply_scratch_tables(lib, st, default_scratch_manifest(n))
+                apply_scratch_tables(lib, st, default_scratch_manifest(n), args.live_order_ids_limit)
                 args._scratch_arena_admitted = _require_jailed_arena(lib, st)
             sink = _new_report_sink(lib, st, args, body=body)
             if body and (getattr(args, "report_replay", False)
@@ -9585,6 +9605,14 @@ def _map_pairs_count(text):
     if not re.fullmatch(r"[0-9]+", text) or int(text) > (1 << 63) - 1:
         raise argparse.ArgumentTypeError("expected a nonnegative int64 map-pair count")
     return int(text)
+
+
+def _live_order_ids_count(text):
+    digits = text.lstrip("0") or "0"
+    if (not re.fullmatch(r"[0-9]+", text) or len(digits) > 20
+            or int(digits) > (1 << 64) - 1):
+        raise argparse.ArgumentTypeError("expected a nonnegative uint64 order ID count")
+    return int(digits)
 
 
 def _parse_output_series_limit(parser, argv):
