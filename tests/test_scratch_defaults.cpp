@@ -26,7 +26,6 @@ void policy_fields(const detail::ScratchManifest& m, std::uint64_t roots) {
     require(m.K_e == 262144 && m.B_e == 25165824, "P0 erased key/byte policy");
     require(m.K_c == 32768 && m.B_c == 4227072, "P0 consumed key/byte policy");
     require(m.U == 65536 && m.B_U == 4194304, "P0 cohort row/byte policy");
-    require(detail::kMaxResidentCohorts == 4096, "active cohort policy remains the old U");
     require(m.V == 27 && m.B_V == 6912, "P0 rank row/byte policy");
     require(m.R == roots, "replacement policy uses this run's bar count");
 }
@@ -153,6 +152,8 @@ void engine_all_zero_selects_per_run_default() {
     batch.run(bars.data(), 3);
     require(batch.prepare_calls == 1 && batch.observed, "default slab before provider");
     policy_fields(batch.observed->manifest(), 6);
+    // expectation corrected: 4096 -> 0, because the live-ID limit is now opt-in (#936).
+    require(batch.observed->live_order_ids_limit() == 0, "default batch has no live-ID cap");
     const auto preceding_owner = batch.observed;
     batch.run(bars.data(), 1);
     require(batch.prepare_calls == 2 && batch.observed != preceding_owner,
@@ -170,6 +171,7 @@ void engine_all_zero_selects_per_run_default() {
     require(!stream.stream_begin(bars.data(), 3, "1", "1"), "stop at stream provider");
     require(stream.prepare_calls == 1 && stream.observed, "stream slab before provider");
     policy_fields(stream.observed->manifest(), 65536); // warmup_n is not a lifetime count.
+    require(stream.observed->live_order_ids_limit() == 0, "default stream has no live-ID cap");
 
     // Any nonzero field means an explicit manifest: do not fill its zeros.
     DefaultProbe explicit_caps;

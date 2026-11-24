@@ -28,6 +28,8 @@ void require(bool value, const char* message) {
 // A real reference/call requires the runtime C symbol at link time. There is
 // no dynamic "unsupported" skip and no fallback to a different setter.
 int (*const setter)(pf_strategy_t, const pf_scratch_tables_v1*) = &strategy_set_scratch_tables_v1;
+int (*const set_live_limit)(pf_strategy_t, std::uint64_t) =
+    &strategy_set_scratch_live_order_ids_limit_v1;
 
 pf_strategy_t handle(BacktestEngine& engine) { return static_cast<pf_strategy_t>(&engine); }
 
@@ -101,6 +103,8 @@ private:
         auto next = descriptor();
         require(setter(handle(*this), &next) == (is_stream ? -2 : -3), "active setter refusal");
         require(setter(handle(*this), nullptr) == (is_stream ? -2 : -3), "active NULL refusal");
+        require(set_live_limit(handle(*this), 0) == (is_stream ? -2 : -3),
+                "active live-limit setter refusal");
         same_config(*this, before);
     }
 };
@@ -122,6 +126,8 @@ public:
                 "pre-begin bounded owner refuses replacement");
         require(setter(handle(*this), nullptr) == (args.is_stream ? -2 : -3),
                 "pre-begin bounded owner refuses NULL");
+        require(set_live_limit(handle(*this), 0) == (args.is_stream ? -2 : -3),
+                "pre-begin bounded owner refuses to change the live limit");
         same_config(*this, before);
         require(observed == scratch_tables_for_run(), "active setter preserves the same slab owner");
         // Deliberately stop at the provider boundary: this witness exercises
@@ -172,6 +178,7 @@ void descriptor_layout_and_idle_setter() {
     same_config(host, {});
     auto config = descriptor();
     require(setter(nullptr, &config) == -1 && setter(nullptr, nullptr) == -1, "NULL handle refused");
+    require(set_live_limit(nullptr, 0) == -1, "live-limit setter refuses a NULL handle");
     require(setter(handle(host), &config) == 0, "idle C setter exists and accepts v1");
     const detail::ScratchTableConfig expected{detail::ScratchTableBackend::bounded_memory,
                                               {0, 0, 3, 11, 4, 13, 5, 17, 6, 19, 7}};
@@ -232,9 +239,11 @@ void active_batch_and_stream_refusals() {
             "warmup refusal sites actually executed");
     require(setter(handle(stream), &config) == -2, "between-input stream setter refusal");
     require(setter(handle(stream), nullptr) == -2, "between-input stream NULL refusal");
+    require(set_live_limit(handle(stream), 1) == -2, "between-input live-limit setter refusal");
     same_config(stream, {});
     require(strategy_stream_end(handle(stream), 0) == 0, "C stream end");
     require(setter(handle(stream), &config) == 0, "setter allowed after stream");
+    require(set_live_limit(handle(stream), 1) == 0, "live-limit setter allowed after stream");
     require(setter(handle(stream), nullptr) == 0, "NULL allowed after stream");
     same_config(stream, {});
 }
@@ -243,12 +252,16 @@ void allocation_precedes_provider_and_copies_drop_ownership() {
     InspectionHost host;
     auto config = descriptor();
     require(setter(handle(host), &config) == 0, "select bounded memory");
+    const auto live_limit = std::numeric_limits<std::uint64_t>::max();
+    require(set_live_limit(handle(host), live_limit) == 0, "install exact positive live limit");
     const auto expected = host.scratch_table_config();
     host.run(bars.data(), static_cast<int>(bars.size()));
     require(host.prepare_calls == 1 && host.begin_calls == 0 && host.bar_calls == 0,
             "allocation observed at provider boundary before execution");
     require(host.has_run_owner() && host.observed, "sink-OFF common begin owns the slab");
     require(same_manifest(host.observed->manifest(), expected.manifest), "run uses the copied manifest");
+    require(host.observed->live_order_ids_limit() == live_limit,
+            "run snapshots the full uint64 live limit independently of layout");
     require(std::strcmp(strategy_get_last_error_code(handle(host)), "engine_invariant") == 0,
             "provider-boundary witness stopped where requested");
     for (const auto& region : host.observed->regions()) {

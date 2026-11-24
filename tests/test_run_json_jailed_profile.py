@@ -32,6 +32,7 @@ REAL_CDLL = ctypes.CDLL
 
 PROFILE_ENV = "PINEFORGE_RUN_JSON_PROFILE"
 SETTER = "strategy_set_scratch_tables_v1"
+LIVE_SETTER = "strategy_set_scratch_live_order_ids_limit_v1"
 FIELDS = ("K_q", "B_q", "K_e", "B_e", "K_c", "B_c", "U", "B_U", "V", "B_V", "R")
 # P0 policy, independently transcribed from the brief, after q removal.
 P0_FIXED = (0, 0, 262144, 25165824, 32768, 4227072, 65536, 4194304, 27, 6912)
@@ -66,6 +67,12 @@ class ScratchRecorder:
                     self.configured[state] = snapshot
                 return self.setter_status
             setattr(self, SETTER, install)
+
+    def enable_live_limit(self):
+        def install(state, limit):
+            self.history.append(("live_limit", state, limit))
+            return 0
+        setattr(self, LIVE_SETTER, install)
 
     def create(self, params):
         state = (1 << 40) + len(self.created) + 1
@@ -328,7 +335,7 @@ def invoke(tmp_path, monkeypatch, library, *extra):
     return status, stdout.getvalue(), stderr.getvalue()
 
 
-def assert_admission(library, count, roots, *, require_arena=False):
+def assert_admission(library, count, roots, *, require_arena=False, live_limit=None):
     admissions = [row for row in library.history if row[0] == "scratch"]
     runs = [row for row in library.history if row[0] == "run"]
     assert len(admissions) == len(runs) == len(library.created) == count
@@ -342,9 +349,16 @@ def assert_admission(library, count, roots, *, require_arena=False):
         names = [row[0] for row in history]
         assert names.count("scratch") == names.count("run") == 1
         assert names.index("create") < names.index("scratch") < names.index("run") < names.index("free")
+        if live_limit is None:
+            assert "live_limit" not in names
+        else:
+            assert [row for row in history if row[0] == "live_limit"] == [
+                ("live_limit", state, live_limit)]
+            assert names.index("scratch") < names.index("live_limit") < names.index("run")
         if require_arena:
             before_arena = next(before for owner, before in library.arena_admissions if owner == state)
-            assert [row[0] for row in before_arena if row[1] == state][-1] == "scratch"
+            expected = "scratch" if live_limit is None else "live_limit"
+            assert [row[0] for row in before_arena if row[1] == state][-1] == expected
         for setting in ("input", "override"):
             if setting in names:
                 assert names.index(setting) < names.index("scratch")
@@ -356,26 +370,34 @@ def assert_admission(library, count, roots, *, require_arena=False):
 
 def test_jailed_configures_every_fresh_bench_and_body_handle_without_a_sink(tmp_path, monkeypatch):
     library = ProfileLibrary()
+    library.enable_live_limit()
     files = forbid_spools(monkeypatch)
+    live_limit = (1 << 64) - 1
     result = invoke(tmp_path, monkeypatch, library, "--profile", "jailed", "--bench",
                     "--warmup", "2", "--repeats", "3", "--inputs", '{"Fast EMA":"3"}',
-                    "--overrides", '{"pyramiding":"2"}')
+                    "--overrides", '{"pyramiding":"2"}', "--limit-live-order-ids", str(live_limit))
     assert (result[0], result[2]) == (0, ""), result
     sinks.assert_run_profile(reports.strict_line(result[1]), "jailed", admitted=True)
     assert json.loads(result[1])["summary"]["total_trades"] == 3
-    assert_admission(library, 6, 10, require_arena=True)  # five input bars, including each warmup/repeat.
+    assert_admission(library, 6, 10, require_arena=True, live_limit=live_limit)
+    setter = getattr(library, LIVE_SETTER)
+    assert setter.argtypes == [ctypes.c_void_p, ctypes.c_uint64] and setter.restype is ctypes.c_int
     assert files == [] and library.installed == [] and library.queried == 0
     assert not list(tmp_path.glob("*.sink"))
 
 
 def test_selected_uses_retained_fed_count_before_its_native_run(tmp_path, monkeypatch):
-    monkeypatch.setattr(reports, "ReportLib", SelectedProfileLibrary)
+    def factory(*args, **kwargs):
+        library = SelectedProfileLibrary(*args, **kwargs)
+        library.enable_live_limit()
+        return library
+    monkeypatch.setattr(reports, "ReportLib", factory)
     harness = reports.Harness(tmp_path)
     files = forbid_spools(monkeypatch)
-    result = harness.run("selected", extra=["--profile", "jailed"])
+    result = harness.run("selected", extra=["--profile", "jailed", "--limit-live-order-ids", "0"])
     assert (result.status, result.stderr) == (0, ""), result.stdout
     sinks.assert_run_profile(reports.strict_line(result.stdout), "jailed", admitted=True)
-    assert_admission(result.library, 1, 18, require_arena=True)  # ten supplied rows, nine retained/fed.
+    assert_admission(result.library, 1, 18, require_arena=True, live_limit=0)
     assert result.library.run_args[1] == 9
     assert result.library.window_config is None and result.library.observer_descriptor is None
     assert files == []
@@ -400,12 +422,16 @@ def test_selected_unjailed_report_and_existing_preroll_prefix_stay_unchanged(tmp
     assert [row[0] for row in ordinary.library.calls] == [row[0] for row in explicit.library.calls]
 
 
-@pytest.mark.parametrize("mode", ["ordinary", "selected"])
+@pytest.mark.parametrize("mode", ["ordinary", "selected", "live-limit"])
 def test_missing_setter_is_a_typed_incompatibility_without_execution_or_sink(tmp_path, monkeypatch, mode):
     files = forbid_spools(monkeypatch)
     if mode == "ordinary":
         library = ProfileLibrary(symbol=False)
         status, text, stderr = invoke(tmp_path, monkeypatch, library, "--profile", "jailed")
+    elif mode == "live-limit":
+        library = ProfileLibrary()
+        status, text, stderr = invoke(tmp_path, monkeypatch, library, "--profile", "jailed",
+                                      "--limit-live-order-ids", "5000")
     else:
         def factory(*args, **kwargs):
             return SelectedProfileLibrary(*args, symbol=False, **kwargs)
@@ -418,8 +444,10 @@ def test_missing_setter_is_a_typed_incompatibility_without_execution_or_sink(tmp
     # 'missing' is optional; the released closed vocabulary does not yet name
     # this export. Do not send a new unregistered argument value to APP.
     assert document["args"] == {"reason": "setter_missing"}
-    assert SETTER in document["error"] and "summary" not in document
-    assert [row[0] for row in library.history] == ["create", "free"]
+    assert (LIVE_SETTER if mode == "live-limit" else SETTER) in document["error"]
+    assert "summary" not in document
+    assert [row[0] for row in library.history] == (
+        ["create", "scratch", "free"] if mode == "live-limit" else ["create", "free"])
     assert library.released == library.created and files == []
 
 

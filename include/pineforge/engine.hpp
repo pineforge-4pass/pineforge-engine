@@ -2779,7 +2779,7 @@ private:
         ScratchTableRun& operator=(ScratchTableRun&&) noexcept = default;
     };
     ScratchTableRun scratch_table_run_;
-    void prepare_scratch_table_run(const detail::ScratchTableConfig& config);
+    void prepare_scratch_table_run(const detail::ScratchTableConfig& config, std::uint64_t live_order_ids_limit);
 
     // Reporting configuration and run-local output ownership. Copies retain
     // configuration, never a writer, receipt, or an active-call barrier.
@@ -3089,6 +3089,9 @@ public:
     /// Repeating the release succeeds. Published sink output and returned
     /// owning trade and event values remain available.
     void release_run_results();
+
+    /// Set the next bounded run's live order ID limit while idle (0: no separate limit).
+    int set_scratch_live_order_ids_limit(std::uint64_t limit);
 };
 
 inline constexpr std::size_t kReportSinkHeldEquityPoints = 1;

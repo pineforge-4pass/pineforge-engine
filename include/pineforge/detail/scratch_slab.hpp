@@ -109,11 +109,13 @@ inline Layout compute_layout(const ScratchManifest& manifest) {
 // a future mapped-window byte store without exposing window lifetimes.
 class ScratchSlab {
 public:
-    explicit ScratchSlab(const ScratchManifest& manifest)
+    explicit ScratchSlab(const ScratchManifest& manifest,
+                         std::uint64_t live_order_ids_limit = 0)
         : manifest_(manifest), layout_(compute_layout(manifest)),
           allocation_(static_cast<std::uint8_t*>(::operator new(
               static_cast<std::size_t>(layout_.slab_size),
-              std::align_val_t{static_cast<std::size_t>(kScratchPageSize)}))) {
+              std::align_val_t{static_cast<std::size_t>(kScratchPageSize)}))),
+          live_order_ids_limit_(live_order_ids_limit) {
         for (std::size_t i = 0; i < regions_.size(); ++i) {
             const auto& item = layout_.regions[i];
             regions_[i] = {allocation_ + static_cast<std::size_t>(item.offset),
@@ -131,6 +133,7 @@ public:
     ScratchSlab& operator=(ScratchSlab&&) = delete;
 
     const ScratchManifest& manifest() const noexcept { return manifest_; }
+    std::uint64_t live_order_ids_limit() const noexcept { return live_order_ids_limit_; }
     const Layout& layout() const noexcept { return layout_; }
     const std::array<Region, kScratchRegionCount>& regions() const noexcept { return regions_; }
     const Region& region(ScratchResource resource) const { return regions_[index(resource)]; }
@@ -233,6 +236,7 @@ private:
     const Layout layout_;
     std::uint8_t* const allocation_;
     std::array<Region, kScratchRegionCount> regions_{};
+    const std::uint64_t live_order_ids_limit_; // 0 sets no separate live-cohort limit.
 };
 
 } // namespace pineforge::detail

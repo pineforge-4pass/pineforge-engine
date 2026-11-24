@@ -3363,12 +3363,12 @@ class CAbiRuntimeInventory(unittest.TestCase):
         header = [name for relative in RUNTIME_HEADERS
                   for name in _pf_api_names(ROOT / 'include/pineforge' / relative)]
         runtime = _pf_api_names(ROOT / 'src/c_abi.cpp')
-        # Source rows: pineforge.h 116 + observer 3 + window 3 + sink 5;
-        # 107 c_abi.cpp definitions and twenty generated declarations.
-        # expectation corrected: 126 -> 127 and 106 -> 107, because the runtime
-        # adds the export strategy_release_run_results_v1.
-        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 127)
-        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 107)
+        # Source rows: pineforge.h 117 + observer 3 + window 3 + sink 5;
+        # 108 c_abi.cpp definitions and twenty generated declarations.
+        # expectation corrected: 127 -> 128 and 107 -> 108, because the runtime
+        # adds the export strategy_set_scratch_live_order_ids_limit_v1.
+        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 128)
+        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 108)
         self.assertEqual(len(EXPECTED_RUNTIME), EXPECTED_RUNTIME_IMPLEMENTATIONS)
         self.assertEqual(len(header), EXPECTED_PUBLIC_DECLARATIONS)
         self.assertEqual(len(header), len(set(header)))
@@ -3386,7 +3386,9 @@ class CAbiRuntimeInventory(unittest.TestCase):
                      'strategy_report_sink_summary_v1',
                      'strategy_report_sink_diagnostics_v1',
                      'strategy_require_report_scratch_arena_v1',
+                     'strategy_release_run_results_v1',
                      'strategy_set_scratch_tables_v1',
+                     'strategy_set_scratch_live_order_ids_limit_v1',
                      'strategy_set_cache_policy_v1',
                      'strategy_stream_engine_layout_version',
                      'pf_output_series_limit_set_checked',

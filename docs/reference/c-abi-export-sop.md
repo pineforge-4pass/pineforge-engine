@@ -14,8 +14,8 @@ Checklist when touching runtime exports — update ALL of these together:
 2. `include/pineforge/pineforge.h` — the `PF_API` declaration (+ doxygen).
 3. `scripts/check_c_abi_runtime.py` — add the symbol to `EXPECTED_RUNTIME` and
    bump `EXPECTED_PUBLIC_DECLARATIONS` / `EXPECTED_RUNTIME_IMPLEMENTATIONS`
-   (currently 127 declarations across the four runtime inventory headers
-   and 107 definitions in `src/c_abi.cpp`).
+   (currently 128 declarations across the four runtime inventory headers
+   and 108 definitions in `src/c_abi.cpp`).
 4. Python ctypes harnesses if consumers must call it
    (`scripts/run_strategy.py`, `tutorial/run*.py`, `docker/run_json.py`,
    `benchmarks/throughput/grid_search_repro.py`).

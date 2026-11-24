@@ -1,14 +1,11 @@
 // CR-365 R2-A: a new source id refused at the live cohort limit.
 //
 // The canonical PineExecutionAdapter::cohort_for must refuse such an id before
-// the host issues a cohort handle or receipt. The limit, the live set, the
-// refusal text and the typed resource are read from the real table and from the
-// source constants, never copied: the live set is built from
-// detail::kMaxResidentCohorts real pending entries, the expected refusal is the
-// one the table's own read-only ticket raises for the same state, and the
-// handle witness is the largest handle the kernel really issued to a live row.
+// the host issues a cohort handle or receipt. Use explicitly configured
+// limits on either side of the former cap. Build the live set from real
+// pending entries and compare with the read-only ticket for that state and
+// the largest handle the kernel really issued to a live row.
 #include <pineforge/source/pine_strategy_host.hpp>
-#include <pineforge/detail/scratch_defaults.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -17,6 +14,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -55,7 +53,7 @@ template<class Call> Refusal attempt(Call&& call) {
 
 class LiveLimitHost final : public pineforge::source::PineStrategyHost {
 public:
-    LiveLimitHost() {
+    explicit LiveLimitHost(std::size_t limit) : limit_(limit) {
         pineforge::source::PineStrategyConfig config;
         config.initial_capital = 1e12;
         config.margin_long = config.margin_short = 0.0;
@@ -68,16 +66,20 @@ public:
         descriptor.struct_size = static_cast<std::uint32_t>(sizeof descriptor);
         descriptor.version = 1;
         descriptor.backend = PF_SCRATCH_TABLE_BOUNDED_MEMORY;
-        if (set_scratch_tables_v1(&descriptor) != 0)
-            fail("SETUP: the bounded cohort table was not selected");
+        const int tables = set_scratch_tables_v1(&descriptor);
+        const int cap = strategy_set_scratch_live_order_ids_limit_v1(
+            static_cast<pineforge::BacktestEngine*>(this), limit_);
+        if (tables != 0 || cap != 0)
+            fail("NOT COMPARED: expected setter statuses 0/0; scratch="
+                 + std::to_string(tables) + " limit=" + std::to_string(cap));
     }
 
     void on_source_bar(const pineforge::Bar&) override {
         const auto bar = static_cast<std::size_t>(pine_bar_index());
         const auto na = std::numeric_limits<double>::quiet_NaN();
-        if (bar < detail::kMaxResidentCohorts) {
+        if (bar < limit_) {
             strategy_entry("live-" + std::to_string(bar), true, 1.0, na, 1.0); // Never fills.
-        } else if (bar == detail::kMaxResidentCohorts) {
+        } else if (bar == limit_) {
             probe();
         }
     }
@@ -86,6 +88,8 @@ public:
     std::string verdict;
 
 private:
+    const std::size_t limit_;
+
     void fail(const std::string& why) {
         if (verdict.empty()) verdict = why;
     }
@@ -93,7 +97,7 @@ private:
     void probe() {
         probed = true;
         auto& table = adapter_.*access(Cohorts{});
-        const std::size_t limit = detail::kMaxResidentCohorts;
+        const std::size_t limit = limit_;
         std::size_t live = 0;
         std::uint64_t max_handle = 0;
         for (const auto& row : table.resident_rows()) {
@@ -116,10 +120,12 @@ private:
                     static_cast<unsigned long long>(next.value), reference.refused ? 1 : 0,
                     actual.refused ? 1 : 0, actual.args.c_str(), actual.code, actual.what.c_str());
         if (live != limit || resident < limit || logical != live)
-            return fail("SETUP: the live cohort set is not at its limit (live=" + std::to_string(live)
+            return fail("NOT COMPARED: live cohort set is not at its limit (live=" + std::to_string(live)
                         + " limit=" + std::to_string(limit) + " logical=" + std::to_string(logical) + ")");
         if (!reference.refused || reference.what != detail::scratch_resident_cohort_limit_message(limit))
-            return fail("SETUP: the table ticket does not refuse with the live-limit text derived from the constant");
+            return fail("BEHAVIOR: expected table ticket text '"
+                        + detail::scratch_resident_cohort_limit_message(limit)
+                        + "'; actual '" + reference.what + "'");
         if (!actual.refused)
             return fail("BEHAVIOR: cohort_for accepted a new id at the live cohort limit");
         if (actual.what != reference.what || actual.args != reference.args || actual.code != reference.code)
@@ -136,20 +142,25 @@ private:
 
 int main() {
     try {
-        std::vector<pineforge::Bar> bars(detail::kMaxResidentCohorts + 1);
-        for (std::size_t i = 0; i < bars.size(); ++i)
-            bars[i] = {100.0, 101.0, 99.0, 100.0, 1000.0,
-                       1736121600000LL + static_cast<std::int64_t>(i) * 60000};
-        LiveLimitHost host;
-        host.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
-        if (!host.verdict.empty() && !host.probed) throw std::runtime_error(host.verdict);
-        if (!host.last_error().empty()) throw std::runtime_error("SETUP: run failed: " + host.last_error());
-        if (!host.probed) throw std::runtime_error("SETUP: the probe bar was never reached");
-        if (!host.verdict.empty()) throw std::runtime_error(host.verdict);
+        for (const std::size_t limit : {4097, 2}) {
+            LiveLimitHost host(limit);
+            if (!host.verdict.empty()) throw std::runtime_error(host.verdict);
+            std::vector<pineforge::Bar> bars(limit + 1);
+            for (std::size_t i = 0; i < bars.size(); ++i)
+                bars[i] = {100.0, 101.0, 99.0, 100.0, 1000.0,
+                           1736121600000LL + static_cast<std::int64_t>(i) * 60000};
+            host.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+            if (!host.last_error().empty())
+                throw std::runtime_error("NOT COMPARED: expected no run error; actual: " + host.last_error());
+            if (!host.probed)
+                throw std::runtime_error("NOT COMPARED: expected probe count 1; actual 0");
+            if (!host.verdict.empty()) throw std::runtime_error(host.verdict);
+        }
         std::puts("cohort_for live-limit new id: OK");
         return 0;
     } catch (const std::exception& error) {
-        std::fprintf(stderr, "FAIL: %s\n", error.what());
+        const std::string_view message = error.what();
+        std::fprintf(stderr, "%s%s\n", message.find("NOT COMPARED:") == 0 ? "" : "FAIL: ", error.what());
         return 1;
     }
 }

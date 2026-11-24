@@ -63,6 +63,14 @@ startup from `--profile` or `PINEFORGE_RUN_JSON_PROFILE` (CLI wins; default
 the host used the jailed profile and native arena admission succeeded;
 unjailed runs report `false` even with an attached arena.
 
+In the jailed profile, `--limit-live-order-ids N` sets an optional maximum
+for simultaneously active order IDs. Zero removes the separate live-ID
+limit; the historical ID count and byte budgets still apply. To keep the
+former live limit, pass `--limit-live-order-ids 4096`. Passing this option,
+including zero, requires a strategy library that exports
+`strategy_set_scratch_live_order_ids_limit_v1`. Omitting it uses the library's
+default: no separate limit in the new runtime, 4,096 in the previous one.
+
 `diagnostics.warnings` is present only when the library's optional
 `strategy_get_run_warnings` getter returns a nonempty list of objects with
 `code` (string) and `args` (object). It includes

@@ -2303,6 +2303,17 @@ PF_API int strategy_set_account_currency_fx_scalar(pf_strategy_t s, double rate)
  *  #strategy_get_last_error and #strategy_get_last_error_code set. */
 PF_API int strategy_release_run_results_v1(pf_strategy_t s);
 
+/** @ingroup pf_config
+ *  Set the maximum simultaneously active Pine order IDs in bounded scratch
+ *  runs on this handle. Zero (the default) sets no separate live-ID limit;
+ *  positive values are exact. U/B_U still limit all historical IDs and their
+ *  bytes. Disk scratch ignores this setting. The setting is independent of
+ *  #strategy_set_scratch_tables_v1 and is copied to the slab at each begin.
+ *  Returns 0 on success, -1 for a null handle, -2 during a stream and -3
+ *  during a batch (including begin callbacks). A refusal keeps the setting. */
+PF_API int strategy_set_scratch_live_order_ids_limit_v1(pf_strategy_t s,
+                                                        uint64_t limit);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

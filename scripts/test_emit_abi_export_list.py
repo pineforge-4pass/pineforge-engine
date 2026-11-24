@@ -110,12 +110,13 @@ class ExportListTests(unittest.TestCase):
                 for symbol in source_symbols(include_dir / header)
             )
         self.assertEqual(runtime, sorted(expected_runtime))
-        # PF_API: 116 + 3 + 3 + 5 declared; c_abi.cpp defines 107; 20 are generated.
+        # PF_API: 117 + 3 + 3 + 5 declared; c_abi.cpp defines 108; 20 are generated.
         # Prior: 125 -> 126 and 105 -> 106 (strategy_set_account_currency_fx_scalar).
-        # expectation corrected: 126 -> 127 and 106 -> 107, because the runtime
-        # adds the export strategy_release_run_results_v1.
-        self.assertEqual(len(runtime), 127)
-        self.assertEqual(len(implemented_names), 107)
+        # Then: 126 -> 127 and 106 -> 107 (strategy_release_run_results_v1).
+        # expectation corrected: 127 -> 128 and 107 -> 108, because the runtime
+        # adds the export strategy_set_scratch_live_order_ids_limit_v1.
+        self.assertEqual(len(runtime), 128)
+        self.assertEqual(len(implemented_names), 108)
         self.assertIn(
             ["strategy_stream_engine_layout_version", "pineforge.h", "yes"],
             runtime,
@@ -127,8 +128,11 @@ class ExportListTests(unittest.TestCase):
         self.assertIn(["strategy_get_run_warnings", "pineforge.h", "yes"], runtime)
         self.assertIn(
             ["strategy_set_account_currency_fx_scalar", "pineforge.h", "yes"], runtime)
+        self.assertIn(["strategy_release_run_results_v1", "pineforge.h", "yes"], runtime)
+        self.assertIn(
+            ["strategy_set_scratch_live_order_ids_limit_v1", "pineforge.h", "yes"], runtime)
         yes_count = sum(row[2] == "yes" for row in runtime)
-        self.assertEqual(yes_count, 107)
+        self.assertEqual(yes_count, 108)
         self.assertEqual(yes_count, len(implemented_names))
         for symbol, header, _ in runtime + native:
             with self.subTest(symbol=symbol, header=header):
