@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_str_format_time_before_epoch)
+pineforge_add_unit_test(test_str_format_time_before_epoch)
