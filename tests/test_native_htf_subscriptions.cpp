@@ -1259,8 +1259,7 @@ void test_fixed_period_fine_primary_and_sparse_boundary() {
     NativeTimeframeSubscription missing;
     missing.tf = "75";
     unbacked.subscriptions.push_back(missing);
-    SeriesHost refused;
-    const auto unbacked_setup = refused.configure_native(unbacked);
+    const auto unbacked_setup = SeriesHost{}.configure_native(unbacked);
     CHECK(unbacked_setup.status == NativeSetupStatus::Failed);
     CHECK(unbacked_setup.validation.field == NativeRunSpecField::SubscriptionTimeframe);
     CHECK(unbacked_setup.validation.error == NativeRunSpecError::InvalidSubscriptionTimeframe);
@@ -1271,7 +1270,7 @@ void test_fixed_period_fine_primary_and_sparse_boundary() {
 
     auto enormous = valid;
     enormous.subscriptions[0].tf = std::to_string(std::numeric_limits<int>::max() / 60 + 2);
-    const auto enormous_setup = refused.configure_native(enormous);
+    const auto enormous_setup = SeriesHost{}.configure_native(enormous);
     CHECK(enormous_setup.status == NativeSetupStatus::Failed);
     CHECK(enormous_setup.validation.field == NativeRunSpecField::SubscriptionTimeframe);
     CHECK(enormous_setup.validation.error == NativeRunSpecError::InvalidSubscriptionTimeframe);
@@ -1279,7 +1278,7 @@ void test_fixed_period_fine_primary_and_sparse_boundary() {
     auto malformed = valid;
     malformed.subscriptions[0].authoritative_bars.at(0).close =
         std::numeric_limits<double>::quiet_NaN();
-    const auto malformed_setup = refused.configure_native(malformed);
+    const auto malformed_setup = SeriesHost{}.configure_native(malformed);
     CHECK(malformed_setup.status == NativeSetupStatus::Failed);
     CHECK(malformed_setup.validation.field == NativeRunSpecField::SubscriptionBars);
     CHECK(malformed_setup.validation.error == NativeRunSpecError::NotFinitePositive);
