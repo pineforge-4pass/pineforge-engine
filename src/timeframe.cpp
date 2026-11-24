@@ -1107,7 +1107,7 @@ bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period,
     const int64_t pf_prev_clock = intraday_clock_ms(prev_ms, tz, session);
     const int64_t pf_curr_clock = intraday_clock_ms(curr_ms, tz, session);
     if (security_trace_enabled() && curr_ms - prev_ms <= 3600000
-        && (curr_ms - prev_ms != 0)) {
+        && (curr_ms - prev_ms != 0)) { // PF_SEC_TRACE: show the session clock used for each bar.
         std::fprintf(stderr,
             "[xsb] prev=%lld clock=%lld | curr=%lld clock=%lld\n",
             (long long)prev_ms, (long long)pf_prev_clock,
@@ -1644,7 +1644,7 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
                                   int64_t input_close_ms = 0, int weeks = 1) {
     AggregatedBar result;
     const bool pf_tr = security_trace_enabled();
-    if (pf_tr) {
+    if (pf_tr) { // PF_SEC_TRACE: show the bucket before consuming this input.
         std::fprintf(stderr,
             "[calmode] ts=%lld first=%lld subs=%d emitted=%d tz='%s' sess='%s'\n",
             (long long)input_bar.timestamp, (long long)s.current_bar.timestamp,
@@ -1699,7 +1699,7 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
             result.bar = s.last_completed_bar;
             result.is_complete = true;
             result.sub_bar_count = completed_subs;
-            if (pf_tr) {
+            if (pf_tr) { // PF_SEC_TRACE: the next bucket triggered completion.
                 std::fprintf(stderr,
                     "[calmode] BOUNDARY-COMPLETE trigger_ts=%lld bucket_first=%lld close=%.6f subs=%d\n",
                     (long long)input_bar.timestamp,
@@ -1902,7 +1902,7 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
         result.bar = s.last_completed_bar;
         result.is_complete = true;
         result.sub_bar_count = s.sub_bar_count;
-        if (pf_tr) {
+        if (pf_tr) { // PF_SEC_TRACE: this input completed its own bucket.
             std::fprintf(stderr,
                 "[calmode] PROJECTION/EAGER-COMPLETE trigger_ts=%lld bucket_first=%lld close=%.6f subs=%d\n",
                 (long long)input_bar.timestamp,

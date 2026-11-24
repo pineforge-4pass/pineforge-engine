@@ -1094,7 +1094,7 @@ struct PlacementAudit {
              std::map<std::uint64_t, std::unique_ptr<PlacementSnapshot>>> tombstones;
     std::map<std::pair<int, unsigned>, std::uint64_t> hits;
     std::vector<std::pair<std::uint64_t, const PlacementSnapshot*>> view;
-    ~PlacementAudit() {
+    ~PlacementAudit() { // Audit builds report to stderr if no log is available.
         const char* path = std::getenv("PINEFORGE_PLACEMENT_AUDIT_LOG");
         std::FILE* out = path ? std::fopen(path, "a") : nullptr;
         std::uint64_t rows = 0;

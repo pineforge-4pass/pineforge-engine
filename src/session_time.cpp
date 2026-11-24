@@ -2169,7 +2169,7 @@ int64_t timeframe_time_close(int64_t bar_ms,
 int64_t session_trading_day_open_ms(int64_t bar_ms,
                              const std::string& session,
                              const std::string& tz) {
-    // 24/7 or empty session: fall back to UTC calendar-day midnight.
+    // Use UTC midnight for all-day sessions; warn when the session metadata is missing.
     if (is_allday_session(session)) {
         if (session.empty()) {
             std::fprintf(stderr,
@@ -2183,7 +2183,7 @@ int64_t session_trading_day_open_ms(int64_t bar_ms,
 
     int session_start_min = parse_session_start_minutes(session);
     if (session_start_min < 0) {
-        // Unparseable session: fall back to UTC midnight
+        // Tell the host that an unparseable session also selects UTC midnight.
         std::fprintf(stderr,
             "[pineforge] WARNING: session_trading_day_open_ms: cannot parse session '%s' "
             "— falling back to UTC calendar-day midnight.\n",
