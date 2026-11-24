@@ -2320,6 +2320,10 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
         f.s("ta-lookback-limit/v1");
         f.i(ta_lookback_limit_);
     }
+    if (run_live_order_ids_limit_ != 0) {
+        f.s("live-order-ids-limit/v1");
+        f.u(run_live_order_ids_limit_);
+    }
     f.u(static_cast<uint64_t>(state_.index()));
     if (const auto* running = std::get_if<NativeRunning>(&state_)) {
         f.u(static_cast<uint64_t>(running->phase));
@@ -3324,7 +3328,9 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         cache_policy_run_.successor_root_pages,
         cache_policy_run_.receipt_tail_pages,
         cache_policy_run_.chain_segment_pages);
-    requests_.bind_scratch_slab(engine.scratch_table_run_.slab);
+    const auto& slab = engine.scratch_table_run_.slab;
+    run_live_order_ids_limit_ = slab ? slab->live_order_ids_limit() : 0;
+    requests_.bind_scratch_slab(slab);
     host_cache_.reset();
     clear_cohort_target_cache();
     terminal_receipt_high_water_ = 0;

@@ -3115,6 +3115,8 @@ public:
 private:
     std::uint64_t scratch_live_order_ids_limit_ = 0;
     const std::int64_t ta_lookback_limit_ = detail::ta_lookback_limit();
+    // The admitted book keeps its cap when the host stages the next run.
+    std::uint64_t run_live_order_ids_limit_ = 0;
 };
 
 // The same lazy backing used by RunCommandScratch's Book binding. Kept in
