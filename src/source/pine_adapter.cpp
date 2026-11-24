@@ -5469,12 +5469,12 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
                         snapshot.reservation_growth_source =
                             predecessor_snapshot->reservation_growth_source;
                     }
+                    // Replacing a working request does not debit the close ledger.
                     snapshot.cancellation = {PineCancellationCause::Replacement, 1, 0,
                         existing_handle->incarnation,
                         static_cast<std::int64_t>(predecessor_snapshot->source_sequence),
                         existing_handle->incarnation, predecessor_snapshot->placement_cycle,
-                        predecessor_revision,
-                        predecessor_snapshot->requested_qty, kNaN};
+                        predecessor_revision};
                     if ((family == PineOrderFamily::ExitLimit
                          || family == PineOrderFamily::ExitStop
                          || family == PineOrderFamily::ExitTrail)

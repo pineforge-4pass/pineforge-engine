@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- Replacing a resting order under the same ID no longer reports its requested amount as a debit to the close ledger.
 - Preflight accepts a private-fixture skip only from the native-version guard, on a complete line naming one of its missing inputs.
 - A bare `:line` citation in a Markdown table now needs a file in its own row. A citation in the preceding row can no longer supply it.
 - A code-only commit with an unreadable published page now makes the documentation history walk report `NOT COMPARED`, even when another page can be read.
