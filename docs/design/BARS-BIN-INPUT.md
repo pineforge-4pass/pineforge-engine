@@ -165,7 +165,7 @@ same file: resolved path equality is tried first, then `os.path.samefile`
 The loader accepts CSV and binary feed paths, choosing the binary reader by
 `suffix` docker/run_json.py:3877.
 The old comment example lists only CSV feeds; it is an example, not an
-extension restriction (comment's `feeds` docker/run_json.py:3567).
+extension restriction (the comment above `SYMBOL_FEED_CANONICALIZATION` docker/run_json.py:3569).
 The actual branch accepts binary feeds (`suffix` docker/run_json.py:3877).
 Likewise, the invalid-feed-path error still says “CSV file”
 (`SymbolFeedsError` docker/run_json.py:3582), although valid `.bin` paths

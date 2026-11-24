@@ -139,7 +139,7 @@ rather than defaulted.
 | `backtest_fill_limits_assumption` | none — a generic limit fills when the level is reached | — | `tests/test_native_order_core.cpp` | TradingView's assumption is "the price must exceed the limit by *n* ticks". The generic knob beside it is `Limit::fill_through` native_order.hpp:261, which makes a limit market-if-touched; the *n*-tick assumption itself is a TradingView rule and stays in the adapter. |
 | `use_bar_magnifier` | `IntrabarPath` native_run_spec.hpp:378 | `intrabar_kind` native_c_api.h:2387 | `tests/test_native_calc_timing.cpp` | The host owns the lower bars, as `lower_tf` native_run_spec.hpp:394 or `synthesized` native_run_spec.hpp:408. The C magnifier arguments of `run_backtest_full` pineforge.h:615 configure a *compiled Pine strategy*, never a native host; its lower bars are TradingView's own intrabars, built from the finer feed at TradingView's table's timeframe (2 minutes on a 15-minute chart) and owned by the chart bar holding their last minute (`tradingview_magnifier_bars` magnifier_intrabars.hpp:48, @ref magnifier_intrabars). |
 | `fill_orders_on_standard_ohlc` | none — the kernel matches the bars you feed it | — | — | TradingView's switch exists because a Heikin-Ashi chart's candles are not the traded prices. A native host feeds the standard OHLC it wants matched, and derives any transformed series itself. |
-| `max_bars_back` | none — a native host owns its own history | — | `hello_kernel.cpp` | Pine infers a buffer length for every series. `pineforge::Series<T>` series.hpp:474 is a fixed-capacity ring you size yourself, so nothing is inferred and nothing silently truncates. |
+| `max_bars_back` | none — a native host owns its own history | — | `hello_kernel.cpp` | Pine infers a buffer length for every series. `pineforge::Series<T>` series.hpp:483 is a fixed-capacity ring you size yourself, so nothing is inferred and nothing silently truncates. |
 | `risk_free_rate` | none — the ratio is a report field with TradingView's fixed rate | `sharpe_monthly` pineforge.h:290 | `native_sized_report_strategy.cpp` | `pf_metrics_t::equity.sharpe_monthly` and `pf_metrics_t::equity.sortino_monthly` (`sortino_monthly` pineforge.h:296) use a fixed 2 %/yr, the TradingView default; nothing in the kernel takes a declared rate. In v0.13.1, the last 0.x release, they were spelled `sharpe_tv` / `sortino_tv`; v1.0.0 renames them at the same offsets, and the serialized report keys stay `sharpe_tv` / `sortino_tv`. A host that needs another rate computes it from `pf_report_t::equity_curve`. |
 
 ### The feed-shape and presentation policies Pine has no word for
@@ -549,7 +549,7 @@ positions still open at the end of the run do not enter these averages.
 | `strategy.grossloss_percent` | `grossloss_percent` engine.hpp:1286 | `pf_metrics_t` pineforge.h:320 | `native_sized_report_strategy.cpp` | |
 | `strategy.openprofit` | `open_profit` engine.hpp:1333 | `strategy_native_marked_equity_v1` native_c_api.h:3112 less realized balance, plus open lots' `entry_commission` | `native_open_lots_strategy.cpp` | Pine's open profit is gross of remaining entry fees. The native marked equity and open-lot `unrealized_pnl` are net of them; use the same explicit mark for every term. |
 | `strategy.openprofit_percent` | derive from `open_profit` engine.hpp:1333 | — | `native_open_lots_strategy.cpp` | Pine's denominator is the initial capital plus `strategy.netprofit`, the open lots' paid entry fees charged. |
-| `strategy.max_drawdown` | `max_drawdown_` engine.hpp:767 | `max_equity_drawdown` pineforge.h:274 | `native_open_lots_strategy.cpp` | Folded under **every** report policy — see the rule above. The scalar is the run's own; the `pf_equity_stats_t` figure derived from the recorded curve still needs `KernelRecorded` native_run_spec.hpp:63. |
+| `strategy.max_drawdown` | `max_drawdown_` engine.hpp:767 | `max_equity_drawdown` pineforge.h:273 | `native_open_lots_strategy.cpp` | Folded under **every** report policy — see the rule above. The scalar is the run's own; the `pf_equity_stats_t` figure derived from the recorded curve still needs `KernelRecorded` native_run_spec.hpp:63. |
 | `strategy.max_drawdown_percent` | `max_drawdown_percent` engine.hpp:1873 | `max_equity_drawdown_pct` pineforge.h:274 | `native_sized_report_strategy.cpp` | Same rule. |
 | `strategy.max_runup` | `max_runup_` engine.hpp:768 | `max_equity_runup` pineforge.h:276 | `native_open_lots_strategy.cpp` | Same rule. |
 | `strategy.max_runup_percent` | `max_runup_percent` engine.hpp:1280 | `max_equity_runup_pct` pineforge.h:278 | `native_sized_report_strategy.cpp` | Same rule. |
@@ -687,7 +687,7 @@ classifies its own rows by order family instead. Which leg closed a row is its
 Indicators and history need no translation at all: `pineforge::ta` ta.hpp:13 is
 the same numerics the adapter uses, and the header pulls only `na`, `series`
 and `window_sum` ta.hpp:2-4, so it is engine-free. `pineforge::Series<T>`
-series.hpp:474 is Pine's history operator as a fixed-capacity ring you push what
+series.hpp:483 is Pine's history operator as a fixed-capacity ring you push what
 you want to keep into. Pine's `input.*` becomes ordinary constructor
 parameters: `set_input` engine.hpp:2329 exists but its getters are protected,
 and a native host takes its parameters in C++.
