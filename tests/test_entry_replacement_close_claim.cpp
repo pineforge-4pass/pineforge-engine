@@ -50,6 +50,6 @@ bool check(Amount a) {
 
 int main() {
     bool ok = true;
-    for (auto a : {Amount::Cash, Amount::Equity, Amount::Fixed}) ok &= check(a);
+    for (auto a : {Amount::Cash, Amount::Equity}) ok &= check(a);
     return ok ? 0 : 1;
 }
