@@ -326,8 +326,10 @@ class VerificationResult:
     gating_matched_count: int = 0
     tv_gate_count: int = 0
     eng_gate_count: int = 0
-    count_delta: float = 0.0
-    count_abs_delta: int = 0
+    count_delta: float = 0.0  # Gross unmatched count / larger gated pool size.
+    count_abs_delta: int = 0  # Unmatched TV trades plus unmatched engine trades.
+    net_count_abs_delta: int = 0  # Report-only absolute difference of pool sizes.
+    gross_unmatched_count: int = 0  # Alias of the canonical count_abs_delta.
     entry_p90: float = 0.0
     exit_p90: float = 0.0
     pnl_p90: float = 0.0
@@ -398,6 +400,8 @@ class VerificationResult:
             "matched": self.matched_count,
             "count_delta": self.count_delta,
             "count_abs_delta": self.count_abs_delta,
+            "net_count_abs_delta": self.net_count_abs_delta,
+            "gross_unmatched_count": self.gross_unmatched_count,
             "entry_p90": self.entry_p90,
             "exit_p90": self.exit_p90,
             "pnl_p90": self.pnl_p90,
@@ -1222,7 +1226,9 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     matched = align_by_time(tv_cmp, eng_cmp)
 
     if not matched and not mark_pairs:
-        label = "excellent" if len(tv_cmp) == 0 and len(eng_cmp) == 0 else "minimal"
+        count_abs_delta = len(tv_cmp) + len(eng_cmp)
+        count_ok = count_abs_delta == 0
+        label = "excellent" if count_ok else "minimal"
         # The historical both-empty Excellent branch returned before reading
         # override metadata. Keep that exact behavior while fixing declared
         # divergence for the non-excellent zero-alignment branch.
@@ -1241,9 +1247,11 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
             eng_count=len(eng_cmp),
             tv_raw_count=len(tv),
             eng_raw_count=len(eng),
-            count_delta=relative_max(len(tv_cmp), len(eng_cmp)),
-            count_abs_delta=abs(len(tv_cmp) - len(eng_cmp)),
-            count_ok=len(tv_cmp) == len(eng_cmp),
+            count_delta=count_abs_delta / max(len(tv_cmp), len(eng_cmp), 1),
+            count_abs_delta=count_abs_delta,
+            net_count_abs_delta=abs(len(tv_cmp) - len(eng_cmp)),
+            gross_unmatched_count=count_abs_delta,
+            count_ok=count_ok,
         )
 
     # Resolve parity profile (strict vs production) per probe.
@@ -1259,6 +1267,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         "scope": "per_probe",
         "comparison": "<",
         "count_rule": "exact",
+        "count_basis": "unmatched_both_sides",
     }
     grade_percentile = grading_policy["percentile"]
 
@@ -1292,8 +1301,19 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     eng_gate_n = len(eng_gate) + n_gate_marks
     gating_matched_n = len(gating_matched) + n_gate_marks
 
-    count_abs_delta = abs(tv_gate_n - eng_gate_n)
-    count_delta = relative_max(tv_gate_n, eng_gate_n)
+    net_count_abs_delta = abs(tv_gate_n - eng_gate_n)
+    # Each unmatched gated trade counts, even when the two list sizes agree.
+    # Count only pairs with both rows in the gated pools: metric fallback can
+    # include matches outside the interior when no interior pair exists.
+    tv_gate_ids = {id(t) for t in tv_gate}
+    eng_gate_ids = {id(e) for e in eng_gate}
+    count_matched_n = n_gate_marks + sum(
+        id(t) in tv_gate_ids and id(e) in eng_gate_ids for t, e in matched
+    )
+    unmatched_tv = tv_gate_n - count_matched_n
+    unmatched_engine = eng_gate_n - count_matched_n
+    count_abs_delta = unmatched_tv + unmatched_engine
+    count_delta = count_abs_delta / max(tv_gate_n, eng_gate_n, 1)
     # A mark pair's entry is a fill on both sides, so the identity gate
     # sees it with the others: the engine's range-end row must carry an
     # entry incarnation at a TV-proven multi-entry key exactly as any
@@ -1355,10 +1375,11 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     exit_p90  = percentile(exit_deltas,  grade_percentile)
     pnl_p90   = percentile(pnl_deltas,   grade_percentile) if pnl_deltas else 0.0
 
-    # Fragmented FIFO grids can have exact entry/count parity and exact
-    # position-level close events while entry-grouped consolidation smears exit
-    # prices across different FIFO lot boundaries. Under a strict guard, score
-    # exit/PnL on the raw exit schedule instead of the consolidated deal blend.
+    # Fragmented FIFO grids can have exact entry and position-level close
+    # events while entry-grouped consolidation smears exit prices across
+    # different FIFO lot boundaries. Below the same gross-count percentage
+    # limit as strong grading, score exit/PnL on the raw exit schedule instead
+    # of the consolidated deal blend.
     tv_sched_rows, eng_sched_rows = schedule_rows_for_gate(
         tv_raw_all, eng_raw_all, tv_gate, eng_gate, gating_matched
     )
@@ -1412,9 +1433,10 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     entry_ok = entry_p90  < thresh["entry"]
     # Count mismatch is a primary reproduction signal. Percent thresholds can
     # hide dozens of missing/extra trades in large strategies, so excellent
-    # requires exact gated TV/engine count parity. Any non-zero absolute count
-    # mismatch is an engine/codegen gap unless separately proven as a TV/export
-    # anomaly.
+    # requires zero unmatched gated trades on either side. An engine-only and
+    # a TV-only trade are two mismatches, even if their net count is zero.
+    # Any mismatch is an engine/codegen gap unless separately proven as a
+    # TV/export anomaly.
     count_ok = count_abs_delta == 0
     # HARD GATES ONLY. The former heuristic escape hatches (tiny_exit_pnl_noise,
     # strong_exit_pnl_coupling, pnl_validated_exit_noise, and the mae_* waivers)
@@ -1532,6 +1554,8 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         eng_gate_count=eng_gate_n,
         count_delta=count_delta,
         count_abs_delta=count_abs_delta,
+        net_count_abs_delta=net_count_abs_delta,
+        gross_unmatched_count=count_abs_delta,
         entry_p90=entry_p90,
         exit_p90=exit_p90,
         pnl_p90=pnl_p90,
@@ -1577,14 +1601,19 @@ def _print_verification(result: VerificationResult, *, show_diffs: int = 0) -> N
             f"  MISSING (tv: {result.tv_exists}, engine: {result.eng_exists})"
         )
         return
+    check = lambda b: "OK" if b else "X"
+    count_line = (
+        f"  Count delta:           {result.count_delta * 100:8.4f}%  "
+        f"({check(result.count_ok)}; abs={result.count_abs_delta}; "
+        f"net={result.net_count_abs_delta})\n"
+    )
     if result.no_aligned_trades:
         print(
             f"{result.rel}: TV={result.tv_raw_count} engine={result.eng_raw_count} "
-            f"matched=0  (no aligned trades)\n  -> {result.label}"
+            f"matched=0  (no aligned trades)\n{count_line}  -> {result.label}"
         )
         return
 
-    check = lambda b: "OK" if b else "X"
     match_pct = 100.0 * result.matched_count / max(result.tv_raw_count, 1)
     interior_line = ""
     if result.bounds is not None:
@@ -1600,7 +1629,7 @@ def _print_verification(result: VerificationResult, *, show_diffs: int = 0) -> N
         f"  Engine trades: {result.eng_count}  (raw {result.eng_raw_count})\n"
         f"  Matched:       {result.matched_count} ({match_pct:.1f}% of TV)\n"
         f"{interior_line}"
-        f"  Count delta:           {result.count_delta * 100:8.4f}%  ({check(result.count_ok)}; abs={result.count_abs_delta})\n"
+        f"{count_line}"
         f"  Entry-price p90 delta: {result.entry_p90  * 100:8.4f}%  ({check(result.entry_ok)})\n"
         f"  Exit-price  p90 delta: {result.exit_p90   * 100:8.4f}%  ({check(result.exit_ok)})\n"
         f"  PnL         p90 delta: {result.pnl_p90    * 100:8.4f}%  ({check(result.pnl_ok)})\n"
