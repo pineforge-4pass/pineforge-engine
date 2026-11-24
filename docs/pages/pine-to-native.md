@@ -126,9 +126,9 @@ rather than defaulted.
 | `currency` | `account_fx` native_run_spec.hpp:650 | `account_fx` pineforge.h:506 | `native_fx_roll_strategy.cpp` | Pine declares the account currency; a native host supplies the rate from quote to account. The native instrument field `currency` native_run_spec.hpp:639 is the quote code. |
 | `commission_type` | `NativeFeeKind` native_run_spec.hpp:19 | `fee_kind` pineforge.h:507 | `native_open_lots_strategy.cpp` | `Percent`, `CashPerUnit`, `CashPerExecution` — the same three TradingView offers. |
 | `commission_value` | `fee_value` native_run_spec.hpp:658 | `fee_value` pineforge.h:507 | `native_open_lots_strategy.cpp` | Quoted per execution by `quote_execution_commissions` engine_execution.cpp:1690. A cash-per-execution ticket is split by units over every slice of that execution. |
-| `slippage` | `slippage_ticks` native_run_spec.hpp:652 | `slippage_ticks` pineforge.h:507 | `native_price_grid_strategy.cpp` | Raw `ticks * price_tick`, applied once by `native_matching::apply_slippage` native_execution_consumer.cpp:7902. TradingView's round-then-slip order is adapter-only. |
-| `process_orders_on_close` | `NativeCloseExecution` native_run_spec.hpp:33 | `close_execution` pineforge.h:508 | `native_open_lots_strategy.cpp` | `AfterCalculation` emits the post-calculation close point native_execution_consumer.cpp:9483, so a request submitted in bar *k*'s calculation fills at bar *k*'s own close. |
-| `pyramiding` | `max_open_lots` native_run_spec.hpp:664 | `max_open_lots` pineforge.h:510 | `native_open_lots_strategy.cpp` | Caps surviving+new physical lots (`resulting_lot_count` native_execution_consumer.cpp:4185). The Pine adapter keeps its own per-cycle *entry count*, ruled **adapter-policy** in ADR-0001's table row `max_open_lots`; measured against TradingView it is not TradingView's rule, and this cap is the closer one (14 of 15 tape scenarios against 13, a private test). Lowered onto the cap, four corpus probes move away from TradingView, for want of its first-eligible-point rule, so the adapter keeps its count. |
+| `slippage` | `slippage_ticks` native_run_spec.hpp:652 | `slippage_ticks` pineforge.h:507 | `native_price_grid_strategy.cpp` | Raw `ticks * price_tick`, applied once by `native_matching::apply_slippage` native_execution_consumer.cpp:7908. TradingView's round-then-slip order is adapter-only. |
+| `process_orders_on_close` | `NativeCloseExecution` native_run_spec.hpp:33 | `close_execution` pineforge.h:508 | `native_open_lots_strategy.cpp` | `AfterCalculation` emits the post-calculation close point native_execution_consumer.cpp:9489, so a request submitted in bar *k*'s calculation fills at bar *k*'s own close. |
+| `pyramiding` | `max_open_lots` native_run_spec.hpp:664 | `max_open_lots` pineforge.h:510 | `native_open_lots_strategy.cpp` | Caps surviving+new physical lots (`resulting_lot_count` native_execution_consumer.cpp:4191). The Pine adapter keeps its own per-cycle *entry count*, ruled **adapter-policy** in ADR-0001's table row `max_open_lots`; measured against TradingView it is not TradingView's rule, and this cap is the closer one (14 of 15 tape scenarios against 13, a private test). Lowered onto the cap, four corpus probes move away from TradingView, for want of its first-eligible-point rule, so the adapter keeps its count. |
 | `default_qty_type` | `Sized` native_order.hpp:186 with `CashValue` native_order.hpp:113 or `EquityFraction` native_order.hpp:119 | `PF_NATIVE_INTENT_SIZED` native_c_api.h:361 with `size_basis` native_c_api.h:2160 | `native_sized_report_strategy.cpp` | The size is a property of the *request*, not of the run: a native host may size one order by cash and the next by equity fraction. `Transact` native_order.hpp:62 is the fixed-units form. Pine itself has no per-call `qty_type` — TradingView's compiler refuses one — so a script's `strategy.entry(qty = ...)` is always units; the source layer's typed per-call entry, which only generated or C++ callers reach, converts its money exactly as the declared default does. |
 | `default_qty_value` | the basis's own scalar: `CashValue::cash` native_order.hpp:114, `EquityFraction::fraction` native_order.hpp:120 | `intent_value` native_c_api.h:2164 | `native_sized_report_strategy.cpp` | `SizeTime` native_order.hpp:128 chooses *when* the basis resolves and `SizePrice` native_order.hpp:168 *which* price it converts at; both compose. |
 | `calc_on_order_fills` | `NativeCalculationTrigger` native_run_spec.hpp:94 | `calculation` native_c_api.h:2334 | `native_calc_on_fills_strategy.cpp` | `BarCloseAndFills` recalculates once at the cursor of each applied execution, bounded by `max_recalculations_per_point` native_run_spec.hpp:695. The generic cadence only: TradingView's waypoint-only refill, its two-fills-at-open rule and its script-state rollback stay in the adapter. |
@@ -296,7 +296,7 @@ is `strategy_native_submit_v1` native_c_api.h:2755 over a
 | `strategy.oca.reduce` | `GroupEffect::Reduce` native_order.hpp:526 | `PF_NATIVE_GROUP_REDUCE` native_c_api.h:492 | `tests/test_native_resting_group_contract.cpp` | The sibling's quantity is reduced instead of cancelled. |
 | `strategy.oca.none` | `NoGroup` native_order.hpp:527 | `PF_NATIVE_GROUP_NONE` native_c_api.h:485 | `hello_kernel.cpp` | The default: no group, no sibling effect. |
 | `strategy.direction.all` | `NativeOpenDirections::Both` native_run_spec.hpp:76 | `allowed_open_directions` pineforge.h:508 | `native_risk_limits_strategy.cpp` | The default. |
-| `strategy.direction.long` | `NativeOpenDirections::Long` native_run_spec.hpp:74 | `allowed_open_directions` pineforge.h:508 | `tests/test_native_run_spec.cpp` | An opening the direction forbids is refused with `OpeningDirection` native_execution_consumer.cpp:4174. |
+| `strategy.direction.long` | `NativeOpenDirections::Long` native_run_spec.hpp:74 | `allowed_open_directions` pineforge.h:508 | `tests/test_native_run_spec.cpp` | An opening the direction forbids is refused with `OpeningDirection` native_execution_consumer.cpp:4180. |
 | `strategy.direction.short` | `NativeOpenDirections::Short` native_run_spec.hpp:75 | `allowed_open_directions` pineforge.h:508 | `tests/test_native_run_spec.cpp` | Same, the other way. |
 | `strategy.commission.percent` | `NativeFeeKind::Percent` native_run_spec.hpp:20 | `fee_kind` pineforge.h:507 | `native_sized_report_strategy.cpp` | `fee_value` is percent ÷ 100 of the absolute account notional. |
 | `strategy.commission.cash_per_contract` | `NativeFeeKind::CashPerUnit` native_run_spec.hpp:21 | `fee_kind` pineforge.h:507 | `tests/test_native_selected_requests.cpp` | Account currency per unit. |
@@ -405,7 +405,7 @@ block is the `PF_NATIVE_SPEC_EXT_RISK` native_c_api.h:752 tail.
 
 | Pine | C++ | C | Runs in | Notes |
 | --- | --- | --- | --- | --- |
-| `strategy.risk.allow_entry_in()` | `allowed_open_directions` native_run_spec.hpp:665 | `allowed_open_directions` pineforge.h:508 | `native_risk_limits_strategy.cpp` | The one `strategy.risk.*` rule that is already the kernel's, per ADR-0001's `risk` ruling row. Rejects with `OpeningDirection` native_execution_consumer.cpp:4174. |
+| `strategy.risk.allow_entry_in()` | `allowed_open_directions` native_run_spec.hpp:665 | `allowed_open_directions` pineforge.h:508 | `native_risk_limits_strategy.cpp` | The one `strategy.risk.*` rule that is already the kernel's, per ADR-0001's `risk` ruling row. Rejects with `OpeningDirection` native_execution_consumer.cpp:4180. |
 | `strategy.risk.max_position_size()` | `max_abs_units` native_run_spec.hpp:663 | `max_abs_units` pineforge.h:509 | `tests/test_native_run_spec.cpp` | Tests the *resulting* book. TradingView gates the *live* book before the fill, so an entry is refused only once the book already holds the limit — ruled **adapter-policy** in ADR-0001's `max_abs_units` row, with lane N12's measurement (the adapter ends at 4 where the kernel cap ends at 2). |
 | `strategy.risk.max_drawdown()` | `NativeRiskLimits::max_drawdown` native_run_spec.hpp:311 | `risk_max_drawdown` native_c_api.h:2370 | `native_risk_limits_strategy.cpp` | `NativeLossLimit` native_run_spec.hpp:259 is account currency, or a percent of the running peak when `percent` native_run_spec.hpp:261 is set. Blocks openings to the end of the run. |
 | `strategy.risk.max_intraday_loss()` | `NativeRiskLimits::max_intraday_loss` native_run_spec.hpp:312 | `risk_max_intraday_loss` native_c_api.h:2373 | `native_risk_limits_strategy.cpp` | Percent is of the day's opening equity. Blocks to the end of its own day. |
@@ -463,7 +463,7 @@ part both ways (the private test `test_adapter_margin_schedule_differential`, M1
 | `barstate.isrealtime` | `NativeStateView::phase` native_host.hpp:285 with `NativeRunPhase` native_host.hpp:41 | `pf_native_state_v1` native_c_api.h:1804 | `native_market_strategy.cpp` | `Batch`, `Warmup`, `Realtime`. |
 | bar-open pre-pass | `on_native_bar_open` native_host.hpp:909 | `on_bar_open` native_c_api.h:2519 | `native_calc_on_fills_strategy.cpp` | Receives the whole script bar by default; `NativeOpenBarView::OpenOnly` native_run_spec.hpp:109 masks that lookahead (H = L = C = open, volume 0) for a host that must decide at the open with open-only information. |
 | the bar so far, mid-bar | `current_partial_bar` native_host.hpp:1093 | `strategy_native_partial_bar_v1` native_c_api.h:3072 | `native_calc_on_fills_strategy.cpp` | Never runs ahead of the cursor: at a fill inside a leg it holds the points already reached and never the later high. |
-| a fill, as it happens | `on_native_applied` native_host.hpp:958 | `on_applied` native_c_api.h:2522 | `native_calc_on_fills_strategy.cpp` | Fires mid-path after each fill; a request born there is eligible on the unconsumed rest of the bar (`born_on_remaining_path` native_execution_consumer.cpp:7187-7191). |
+| a fill, as it happens | `on_native_applied` native_host.hpp:958 | `on_applied` native_c_api.h:2522 | `native_calc_on_fills_strategy.cpp` | Fires mid-path after each fill; a request born there is eligible on the unconsumed rest of the bar (`born_on_remaining_path` native_execution_consumer.cpp:7193-7197). |
 | raw input before aggregation | `on_native_input` native_host.hpp:895 | `on_input` native_c_api.h:2517 | `native_auxiliary_feed_strategy.cpp` | Every accepted confirmed input bar, before aggregation or matching. |
 | a lower-timeframe sub-bar | `on_native_sub_bar` native_host.hpp:948 | `on_sub_bar` native_c_api.h:2558 | `tests/test_native_calc_timing.cpp` | `NativeCalculationReason::SubBar` is reserved and never delivered to the recalculate hook — a sub-bar has its own callback. |
 | `time`, `bar_index`, the bar's calendar interval, session facts | `NativeDecisionContext` market_driver.hpp:120 with `NativeCoordinate` market_driver.hpp:72 | `pf_native_decision_v1` native_c_api.h:1498 | `hello_kernel.cpp` | `NativeCoordinate::interval_index` is the sequential SCRIPT-bar index on every run, including aggregation; `input_interval_index` names the input slot for a host that needs input cadence. Both are copied onto the callback stack, and mutating them changes nothing. In C++ `script_interval` market_driver.hpp:124 and `input_interval` market_driver.hpp:123 add the calendar facts (eligible open, last traded close, next period and next input opens); the C decision carries the script interval's five instants and the session days of its open and of the next input in its tail, presented to a callback table at `PF_NATIVE_CALLBACKS_V1_POLICY_SIZE` or later, and no input interval. The C `on_input` callback receives the input index separately. The session-day facts are the three rows below. |
@@ -713,7 +713,7 @@ it, so a valid length gives that class's values. The adapters do not touch
 
 ### Series-length SMA source adapter {#pine_to_native_series_sma}
 
-`pineforge::source::SeriesSma` (include/pineforge/source/pine_ta_length.hpp:522)
+`pineforge::source::SeriesSma` (include/pineforge/source/pine_ta_length.hpp:524)
 provides an SMA with a length supplied on every evaluation in the Pine source
 adapter. The paired code generator uses it for series-length `ta.sma`. Keep
 one instance per written call site and evaluation context. Its public signatures are below.
@@ -734,7 +734,7 @@ Transport numeric Pine operands through the existing `ta_number` overloads
 for `double`, `int` and `std::int64_t`, so integer `na` sentinels reach the
 adapter as a double NaN.
 
-`compute` (src/source/pine_ta_length.cpp:548) makes one logical update per call,
+`compute` (src/source/pine_ta_length.cpp:558) makes one logical update per call,
 starting at the site's first execution. A non-`na` source appends one retained
 observation; an `na` source contributes no sample. Each call uses its current
 length to select the last N non-`na` observations and returns `na` while fewer
@@ -745,7 +745,7 @@ most recent L + 1 non-`na` samples regardless of the current length. Length
 changes keep the same instance and ring; equal source values on successive
 calls remain distinct observations.
 
-`checked_length` (src/source/pine_ta_length.cpp:489) validates before either
+`checked_length` (src/source/pine_ta_length.cpp:501) validates before either
 entry point records or replaces an update. Finite fractional lengths truncate
 toward zero. A nonpositive truncated length throws the family's
 `length_not_positive` error for `sma`; `na` and other nonfinite lengths throw
@@ -756,7 +756,7 @@ selects 15,000 unless a cap was supplied; `--limit-ta-lookback 0` selects
 unlimited. Invalid calls leave the logical checkpoint unchanged.
 For a valid length, warm-up returns `na` until N non-`na` samples are retained.
 
-`recompute` (src/source/pine_ta_length.cpp:571) replaces the most recent logical
+`recompute` (src/source/pine_ta_length.cpp:581) replaces the most recent logical
 update from its pre-update ring head/count, including the oldest value evicted
 by a full-ring push. Replacing a value with `na` restores that evicted value;
 replacing `na` with a value inserts one observation, evicting the oldest if
@@ -765,7 +765,7 @@ On an unused instance it creates the first logical update. Copy construction
 and assignment preserve the ring, head/count, saved eviction and replacement
 state, with storage detached before mutation.
 
-`mean` (src/source/pine_ta_length.cpp:507) sums the selected window afresh.
+`mean` (src/source/pine_ta_length.cpp:517) sums the selected window afresh.
 For finite sources without intermediate overflow, it rounds the exact sum
 once, then divides by N. When its window is full, fixed SMA subtracts the
 oldest source before adding the incoming source. It accumulates each step's
@@ -788,11 +788,11 @@ at N=20 reports difference counts and maximum ULP distance against fixed
 with the largest ULP distance, with timestamps and hexadecimal values. The
 comparison calls the two C++ implementations directly.
 
-`ensure_capacity` (src/source/pine_ta_length.cpp:496) grows the ring as
+`ensure_capacity` (src/source/pine_ta_length.cpp:506) grows the ring as
 non-`na` samples arrive, up to L + 1 when capped. Rollback needs only a
 scalar checkpoint. The cache policy controls residency, and summation uses
 bounded local scratch and takes O(N) work. `observe_owned_storage`
-(include/pineforge/source/pine_ta_length.hpp:528) reports owned history through
+(include/pineforge/source/pine_ta_length.hpp:530) reports owned history through
 the existing storage accounting. Allocation, capacity and scratch I/O failures
 propagate. Ring/checkpoint fields are published after required writes
 succeed, including restoration of an evicted oldest value.
