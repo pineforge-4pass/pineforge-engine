@@ -742,7 +742,6 @@ class AppTokenEnvironments(unittest.TestCase):
     def test_real_minting_jobs_have_exactly_the_inventoried_environments(self):
         expected = {
             ('release.yml', 'release'): ['release'],
-            ('release.yml', 'prebuilt-x86'): ['release-toolchain'],
             ('release.yml', 'notify-hub'): ['release'],
             ('release-ruleset-probe.yml', 'probe'): ['release'],
             ('promote-baseline.yml', 'promote'): ['release-bot'],
@@ -1913,8 +1912,6 @@ class OptionCAdmission(unittest.TestCase):
                  "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))"),
                 ('pineforge-4pass/pineforge-engine/.github/workflows/release.yml@{0}',
                  'pineforge-4pass/pineforge-engine/.github/workflows/other.yml@{0}'),
-                ('    environment: release-toolchain\n', ''),
-                ('    environment: release-toolchain\n', '    environment: release\n'),
                 ('      contents: read\n      id-token: write',
                  '      contents: write\n      id-token: write'),
                 ('--password-stdin', '--password "${REGISTRY_ACCESS_TOKEN}"'),
@@ -3405,8 +3402,8 @@ class PostFleetRunnerPolicy(unittest.TestCase):
         # "Where the full suites run" section and re-words the trigger map.
         # expectation corrected: 2170 -> 2177, because the shard/join contract
         # paragraph adds seven lines to docs/ci.md.
-        # expectation corrected: 2177 -> 2208, because the release toolchain environment, baseline promotion guard, and unmatched-trade grading fixes extend the CI guide.
-        self.assertEqual(len(docs.splitlines()), 2208)
+        # expectation corrected: 2177 -> 2187, because the baseline promotion guard and unmatched-trade grading fixes extend the CI guide.
+        self.assertEqual(len(docs.splitlines()), 2187)
         # The test-owned job catalog defines the protected label inventory.
         tables = re.findall(
             r"^\| Workflow \| Events/callers \| Inline jobs' `runs-on` \|\n"
@@ -5909,8 +5906,8 @@ class PreflightFailures(unittest.TestCase):
         # "Where the full suites run" section and re-words the trigger map.
         # expectation corrected: 2170 -> 2177, because the shard/join contract
         # paragraph adds seven lines to docs/ci.md.
-        # expectation corrected: 2177 -> 2208, because the release toolchain environment, baseline promotion guard, and unmatched-trade grading fixes extend the CI guide.
-        self.assertEqual(len(text.splitlines()), 2208)
+        # expectation corrected: 2177 -> 2187, because the baseline promotion guard and unmatched-trade grading fixes extend the CI guide.
+        self.assertEqual(len(text.splitlines()), 2187)
         slices = tuple(name for name in EXPECTED_PR_SLOW_ROWS
                        if name.startswith('test_ci_verify_slice_'))
         self.assertTrue(slices, 'verifier slice inventory must not be empty')
@@ -13096,11 +13093,7 @@ class SplitHostedReleaseAdmission(unittest.TestCase):
         gke_bytes = gke_fixture.read_bytes()
         self.assertEqual(hashlib.sha256(gke_bytes).hexdigest(),
                          '21025075090a0a40bfd7360e54a36a0c9bbac9bb8109fbbaa86edce347c27b87')
-        # Keep the recorded fixture's bytes. Exercise its layout with the
-        # current x86 environment before making the admission mutations.
-        self.split = in_job(split_bytes.decode('utf-8'), 'prebuilt-x86',
-                            '    runs-on: ubuntu-24.04\n',
-                            '    runs-on: ubuntu-24.04\n    environment: release-toolchain\n')
+        self.split = split_bytes.decode('utf-8')
         self.legacy = legacy_bytes.decode('utf-8')
         self.shipped = release.read_text(encoding='utf-8')
         self.gke = legacy_gke_arm_smoke(gke_bytes.decode('utf-8'))

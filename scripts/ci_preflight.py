@@ -3681,7 +3681,6 @@ RELEASE_OPTION_C_JOBS = {
     'prebuilt-x86': r'''    needs: release
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.workflow_ref == format('pineforge-4pass/pineforge-engine/.github/workflows/release.yml@{0}', github.ref) }}
     runs-on: ubuntu-24.04
-    environment: release-toolchain
     permissions:
       contents: read
       id-token: write
@@ -4501,7 +4500,6 @@ RELEASE_SPLIT_HEADERS = {
     'prebuilt-x86': '''    needs: release
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.workflow_ref == format('pineforge-4pass/pineforge-engine/.github/workflows/release.yml@{0}', github.ref) }}
     runs-on: ubuntu-24.04
-    environment: release-toolchain
     permissions:
       contents: read
       id-token: write
@@ -4766,10 +4764,9 @@ def _release_split_toolchain_reader_is_pinned(workflow: str, body: str) -> bool:
             or _job_values(workflow, 'defaults')
             or _release_split_job_findings('prebuilt-x86', body)):
         return False
-    # The full job comparison above pins this environment and OIDC permission.
-    # Exclude only those two declarations from the strict credential scan.
-    token_only_body = re.sub(
-        r'(?m)^(?:    environment: release-toolchain|      id-token: write)\n', '', body)
+    # The full job comparison above accounts for this one permission. Retain
+    # strict scanning of inherited/raw secrets, environments and private keys.
+    token_only_body = body.replace('      id-token: write\n', '', 1)
     return not _holds_credentials(workflow, token_only_body, strict=True)
 
 

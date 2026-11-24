@@ -363,7 +363,6 @@ jobs:
     needs: release
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.workflow_ref == format('pineforge-4pass/pineforge-engine/.github/workflows/release.yml@{0}', github.ref) }}
     runs-on: ubuntu-24.04
-    environment: release-toolchain
     permissions:
       contents: read
       id-token: write

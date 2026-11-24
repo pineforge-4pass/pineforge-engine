@@ -86,8 +86,6 @@ version number follows semantic versioning over the surfaces the
   strategy library before it loads. If the digest differs, the JSON harness
   returns a typed error before any constructor in the strategy library runs
   (#956).
-- The x86 release build now uses the dedicated `release-toolchain` GitHub
-  environment for access to the private compiler image (#957).
 - When CMake downloads Eigen 3.4.0 because no suitable system installation is available, it now rejects an archive whose SHA-256 does not match the pinned value (#959).
 - Backtests that read and update a Pine map on every bar no longer force its
   scratch file to disk and discard cached pages every 64 KiB. The operating
