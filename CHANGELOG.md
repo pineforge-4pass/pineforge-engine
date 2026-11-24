@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- Before the Unix epoch, calendar fields, week and month opens, trading-day fallbacks and period changes use the day and second containing the bar. An opening outside the millisecond range reports `engine_unclassified_error`.
 - `str.format_time` now formats the second containing a negative Unix timestamp, including in named timezones. For example, −1 ms formats as 1969-12-31 23:59:59 UTC. (#938)
 - Installing or clearing a `3M` feed leaves `M` and `12M` prices intact. Each monthly request selects its own feed when supplied; `M` and `1M` still share a feed.
 - A market entry rebuilt after a full close keeps its OCA group, so its fill still cancels or reduces resting group members.

@@ -257,7 +257,7 @@ int64_t reach(const ZoneInterval& slot, int64_t from, int64_t direction) {
 // tests/test_local_time_fields.cpp can compare it with libc field by field; not
 // part of the installed API.
 void decompose_ms_local(int64_t bar_ms, const std::string& tz, struct tm& out) {
-    const time_t secs = static_cast<time_t>(bar_ms / 1000);
+    const time_t secs = static_cast<time_t>(floor_div(bar_ms, 1000));
     if (plain_utc_spelling(tz)) {
         utc_fields(secs, out);
         return;
@@ -405,14 +405,15 @@ static int64_t zoned_calendar_boundary_ms(const std::tm& date, int retry_hours =
 
 static int64_t calendar_day_open_local_ms_tz(int64_t bar_ms, const std::string& tz);
 
+static int64_t utc_day_open_ms(int64_t bar_ms) {
+    return calendar_boundary_ms_from_seconds(floor_div(bar_ms, kMsPerDay) * kSecPerDay);
+}
+
 int64_t calendar_day_open_local_ms(int64_t bar_ms, const std::string& tz) {
     // UTC needs no tzset: local midnight is exact integer floor. Avoiding
     // ScopedTimezone(UTC) here keeps the process TZ from flipping to UTC every
     // bar (which would re-slow the strategy's hour()/minute() zone).
-    if (utc_zone(tz)) {
-        const int64_t day = floor_div(bar_ms, kMsPerDay);
-        return calendar_boundary_ms_from_seconds(day * kSecPerDay);
-    }
+    if (utc_zone(tz)) return utc_day_open_ms(bar_ms);
     return calendar_day_open_local_ms_tz(bar_ms, tz);
 }
 
@@ -481,20 +482,17 @@ static int64_t calendar_week_open_local_ms(int64_t bar_ms, const std::string& tz
     // the same-zone skip of setenv/tzset and pays a tzset->notifyd round trip
     // per bar.
     if (utc_zone(tz)) {
-        time_t secs = static_cast<time_t>(bar_ms / 1000);
-        int64_t days = static_cast<int64_t>(secs) / 86400;
-        if (secs % 86400 != 0 && secs < 0)
-            --days;  // floor toward -inf (pre-1970 bars)
+        const int64_t days = floor_div(bar_ms, kMsPerDay);
         int wday = static_cast<int>(((days + 4) % 7 + 7) % 7);  // 0=Sun, == tm_wday
         int days_from_mon = (wday + 6) % 7;
-        return (days - days_from_mon) * 86400000LL;
+        return calendar_boundary_ms_from_seconds((days - days_from_mon) * kSecPerDay);
     }
     return calendar_week_open_local_ms_tz(bar_ms, tz);
 }
 
 static int64_t calendar_week_open_local_ms_tz(int64_t bar_ms, const std::string& tz) {
     tz_util::ScopedTimezone guard(tz);
-    time_t secs = static_cast<time_t>(bar_ms / 1000);
+    const time_t secs = static_cast<time_t>(floor_div(bar_ms, 1000));
     struct tm local_tm {};
     localtime_r(&secs, &local_tm);
     int wday = local_tm.tm_wday;  // 0=Sun
@@ -512,20 +510,18 @@ static int64_t calendar_month_open_local_ms(int64_t bar_ms, const std::string& t
     // TZ from flipping to UTC every bar (which would re-slow the strategy's
     // hour()/minute() zone).
     if (utc_zone(tz)) {
-        time_t secs = static_cast<time_t>(bar_ms / 1000);
-        int64_t days = static_cast<int64_t>(secs) / 86400;
-        if (secs % 86400 != 0 && secs < 0)
-            --days;  // floor toward -inf (pre-1970 bars)
+        const time_t secs = static_cast<time_t>(floor_div(bar_ms, 1000));
+        const int64_t days = floor_div(bar_ms, kMsPerDay);
         struct tm g {};
         utc_fields(secs, g);
-        return (days - (g.tm_mday - 1)) * 86400000LL;
+        return calendar_boundary_ms_from_seconds((days - (g.tm_mday - 1)) * kSecPerDay);
     }
     return calendar_month_open_local_ms_tz(bar_ms, tz);
 }
 
 static int64_t calendar_month_open_local_ms_tz(int64_t bar_ms, const std::string& tz) {
     tz_util::ScopedTimezone guard(tz);
-    time_t secs = static_cast<time_t>(bar_ms / 1000);
+    const time_t secs = static_cast<time_t>(floor_div(bar_ms, 1000));
     struct tm local_tm {};
     localtime_r(&secs, &local_tm);
     local_tm.tm_mday = 1;
@@ -2176,9 +2172,7 @@ int64_t session_trading_day_open_ms(int64_t bar_ms,
                 "[pineforge] WARNING: session_trading_day_open_ms called with empty session "
                 "string — falling back to UTC calendar-day midnight.\n");
         }
-        // UTC midnight: truncate to day boundary
-        time_t secs = static_cast<time_t>(bar_ms / 1000);
-        return static_cast<int64_t>((secs / kSecPerDay) * kSecPerDay) * 1000;
+        return utc_day_open_ms(bar_ms);
     }
 
     int session_start_min = parse_session_start_minutes(session);
@@ -2188,8 +2182,7 @@ int64_t session_trading_day_open_ms(int64_t bar_ms,
             "[pineforge] WARNING: session_trading_day_open_ms: cannot parse session '%s' "
             "— falling back to UTC calendar-day midnight.\n",
             session.c_str());
-        time_t secs = static_cast<time_t>(bar_ms / 1000);
-        return static_cast<int64_t>((secs / kSecPerDay) * kSecPerDay) * 1000;
+        return utc_day_open_ms(bar_ms);
     }
 
     // Obtain bar's local time in the given timezone.

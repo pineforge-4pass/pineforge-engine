@@ -189,7 +189,7 @@ CalendarPeriod calendar_period_for(const std::string& tf) {
 }
 
 static void decompose_utc(int64_t ms, struct tm& out) {
-    time_t secs = static_cast<time_t>(ms / 1000);
+    const time_t secs = static_cast<time_t>(ms / 1000 - (ms % 1000 < 0));
     gmtime_r(&secs, &out);
 }
 
@@ -203,6 +203,7 @@ static void decompose_utc(int64_t ms, struct tm& out) {
 // dividing 24h also reproduce the continuous epoch grid.
 
 static int64_t utc_floor_day_ms(int64_t ms) {
+    if (ms < 0) return calendar_day_open_local_ms(ms, "UTC");
     return (ms / kMsPerDay) * kMsPerDay;
 }
 
