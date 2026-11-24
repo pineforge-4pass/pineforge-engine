@@ -8756,7 +8756,8 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
     const bool cash_sized = qty_type == static_cast<int>(QtyType::CASH);
     const bool percent_sized = qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY);
     const bool typed_sized = !default_sized && (cash_sized || percent_sized);
-    const bool fixed_priced_reverse = reverses && !default_sized && priced && !cash_sized;
+    // Cash and percent are converted at the fill; neither is a contract count at placement.
+    const bool fixed_priced_reverse = reverses && !default_sized && priced && !typed_sized;
     const bool cash_priced_reverse = reverses && !default_sized && priced && cash_sized;
     // A default-percent stop entry freezes its units at placement whatever
     // the percentage (see the freeze below); ab9714be's own placement

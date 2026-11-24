@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- A resting stop or limit entry sized in percent of equity that reverses a position now converts its percentage at the fill. Before, when the position had grown to that number of contracts after the order was placed, the order only closed it.
 - A timeframe multiplier above the `int` range now reports `pine_invalid_argument`. The security trace also compares timestamps across the full signed range without wrapping a distant forward gap into its one-hour window.
 - Before the Unix epoch, calendar fields, week and month opens, trading-day fallbacks and period changes use the day and second containing the bar. An opening outside the millisecond range reports `engine_unclassified_error`.
 - `str.format_time` now formats the second containing a negative Unix timestamp, including in named timezones. For example, −1 ms formats as 1969-12-31 23:59:59 UTC. (#938)
