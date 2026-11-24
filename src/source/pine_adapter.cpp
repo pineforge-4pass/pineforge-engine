@@ -6046,7 +6046,7 @@ bool PineExecutionAdapter::compute_exit_reservation(
         snapshot.from_entry = pending.from_entry;
         snapshot.requested_qty = pending.qty;
         snapshot.qty_percent = pending.qty_percent;
-        // Admit a full sibling against the same whole steps these waiting
+        // Admit a sibling against the same whole steps these waiting
         // shares will claim. Two halves of three units reserve one each.
         if (pending_market_units > 0.0 && pending.has_ranked_share(from_entry)) {
             snapshot.projection_remaining_qty =
@@ -12860,7 +12860,7 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
     double pending_parent_units = 0.0;
     const bool full_request = !std::isfinite(requested_qty_percent)
         || requested_qty_percent >= 100.0 - internal::kFullPercentEps;
-    const bool size_waiting_shares = dynamic && full_request && !pending_relative_exits_.empty()
+    const bool size_waiting_shares = dynamic && !pending_relative_exits_.empty()
         && !from_entry.empty() && physical.signed_units == 0.0;
     double pending_market_units = 0.0;
     const auto reservation_point = detail::callback_point(require_host());

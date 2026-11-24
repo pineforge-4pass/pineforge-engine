@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- A partial stop placed after two 50% tick targets on a three-contract market entry can now close the remaining contract on its first crossing.
 - A price stop placed behind waiting percentage targets on a cash-sized market entry now closes the contracts the targets leave after rounding at the fill price.
 - On Hong Kong's `0930-1200,1300-1600` session, the public C++ `TimeframeAggregator` now includes the 11:57 input in the 11:00 hourly bar built from 7-minute inputs starting at 09:30. It previously published after eight inputs at 11:50 because it rounded the number of inputs per hour down.
 - When the broker reads a v1 strategy receipt for host FX, it now requires a `declarations` object even if `currency` is unresolved. A missing or non-object `declarations` stops the run before the first bar callback with `strategy_library_incompatible` (reason `capabilities_receipt_invalid`) (#990).
