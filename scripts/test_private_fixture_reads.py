@@ -789,7 +789,7 @@ class ExemptRowTraceControls(unittest.TestCase):
                 if match and match[1] in kernel.EXEMPT:
                     row = kernel.python_row(source, cmd.line, statement)
                     if row is not None:
-                        name, script = row
+                        name, (script,) = row
                         scripts[name] = (script, row_argv(statement, name))
         self.assertEqual(set(scripts), set(kernel.EXEMPT),
                          'every exemption must name a registered Python row')

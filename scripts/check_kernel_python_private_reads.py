@@ -36,6 +36,7 @@ missing.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import re
 import sys
 from pathlib import Path
@@ -47,10 +48,10 @@ from cmake_test_includes import registration_statements
 ROOT = Path(__file__).resolve().parents[1]
 SKIP_LITERAL = 'SKIP private fixtures not present: '
 PRIVATE_PREFIXES = ('tests/fixtures/', 'tests/oracle/')
-CMAKE_HEAD = re.compile(r'^\s*([A-Za-z_]\w*)\s*\(')
 ADD_TEST = re.compile(r'add_test\(\s*NAME\s+([A-Za-z0-9_.-]+)', re.MULTILINE)
 CMAKE_ARGUMENT = re.compile(ARGUMENT_LITERAL + r'|(?:\\.|[^\s;\\])+', re.DOTALL)
 CMAKE_ESCAPE = {'n': '\n', 'r': '\r', 't': '\t', '\n': ''}
+TEST_OPTIONS = {'WORKING_DIRECTORY', 'CONFIGURATIONS', 'COMMAND_EXPAND_LISTS'}
 LITERAL_PRIVATE = re.compile(r'["\']((?:[\w.-]+/)?tests/(?:fixtures|oracle)/[\w./-]+)["\']')
 COMPOSED_PRIVATE = re.compile(
     r'["\']tests["\']\s*/\s*["\'](fixtures|oracle)["\']\s*/\s*["\']([\w./-]+)["\']')
@@ -67,24 +68,6 @@ class InlineProgram(NamedTuple):
     line: int
 
 
-def statements(text: str):
-    """(line, statement) pairs, split at balanced parentheses."""
-    out, buffer, depth, line = [], [], 0, 0
-    for number, raw in enumerate(text.splitlines(), 1):
-        if not buffer and (not raw.strip() or raw.strip().startswith('#')):
-            continue
-        if not buffer:
-            line = number
-        buffer.append(raw)
-        depth += raw.count('(') - raw.count(')')
-        if depth <= 0:
-            out.append((line, '\n'.join(buffer)))
-            buffer, depth = [], 0
-    if buffer:
-        out.append((line, '\n'.join(buffer)))
-    return out
-
-
 def argument_text(arg: re.Match) -> str:
     """Strip CMake delimiters and decode escapes, leaving bracket contents literal."""
     text = arg['bracket_value']
@@ -95,8 +78,19 @@ def argument_text(arg: re.Match) -> str:
     return re.sub(r'\\(.)', lambda m: CMAKE_ESCAPE.get(m[1], m[1]), text, flags=re.DOTALL)
 
 
+def discovered_programs(directory: Path):
+    """unittest discover's default test*.py files and imported package initializers."""
+    for path in sorted(directory.iterdir()):
+        if (path.is_file() and fnmatch.fnmatchcase(path.name, 'test*.py')
+                and path.stem.isidentifier()):
+            yield path
+        elif path.is_dir() and (path / '__init__.py').is_file():
+            yield path / '__init__.py'
+            yield from discovered_programs(path)
+
+
 def python_row(cmake_path: Path, line: int, statement: str):
-    """The row name and its script path or inline source for a Python add_test()."""
+    """The row name and every program selected by this Python add_test()."""
     if 'Python3_EXECUTABLE' not in statement:
         return None
     name = ADD_TEST.search(statement)
@@ -110,13 +104,22 @@ def python_row(cmake_path: Path, line: int, statement: str):
             break
     else:
         return None
+    where = f'{cmake_path}:{line}: row {name[1]}'
+
+    def path_for(word: str) -> Path:
+        path = word.replace('${PROJECT_SOURCE_DIR}', str(ROOT)).replace(
+            '${CMAKE_CURRENT_SOURCE_DIR}', str(ROOT / 'tests'))
+        if '$' in path:
+            raise SweepError(f'{where} names an unexpanded path {word!r}')
+        return ROOT / path
+
     # Stop at the script or module: a later -c belongs to that program.
     for arg in args:
         option = argument_text(arg)
         if option == '-c':
             program = next(args, None)
             text = argument_text(program) if program is not None else None
-            if text is None or text in {'WORKING_DIRECTORY', 'CONFIGURATIONS', 'COMMAND_EXPAND_LISTS'}:
+            if text is None or text in TEST_OPTIONS:
                 raise SweepError(f'{cmake_path}:{line}: row {name[1]} runs Python3_EXECUTABLE '
                                  'but names no .py script and -c has no program; '
                                  'the sweep cannot read it and refuses to skip it')
@@ -127,31 +130,44 @@ def python_row(cmake_path: Path, line: int, statement: str):
             start_line = line + statement.count('\n', 0, program.start())
             if (program['bracket_value'] or '').startswith('\n'):
                 start_line += 1
-            return name[1], InlineProgram(text, start_line)
+            return name[1], [InlineProgram(text, start_line)]
         if option in ('-W', '-X', '--check-hash-based-pycs'):
             next(args, None)
-        elif option in ('-m', '--', '-') or not option.startswith('-'):
+        elif option == '-m':
+            words = []
+            for item in args:
+                word = argument_text(item)
+                if word in TEST_OPTIONS:
+                    break
+                words.append(word)
+            if words[:3] == ['unittest', 'discover', '-s'] and len(words) == 4:
+                directory = path_for(words[3])
+                if not directory.is_dir():
+                    raise SweepError(f'{where} discovers {words[3]!r}, which is not a directory')
+                programs = list(discovered_programs(directory))
+            elif words[:1] == ['pytest']:
+                programs = []
+                operands = iter(words[1:])
+                for word in operands:
+                    if word in ('-p', '-k', '-m'):
+                        if next(operands, None) is None:
+                            raise SweepError(f'{where} has no argument for pytest {word}')
+                    elif word.partition('::')[0].endswith('.py'):
+                        programs.append(path_for(word.partition('::')[0]))
+                    elif not re.fullmatch(r'-(?:[qvs]+|r[A-Za-z]+)', word):
+                        raise SweepError(f'{where} has an unsupported pytest operand {word!r}')
+            else:
+                raise SweepError(f'{where} has an unsupported Python module command: {words!r}')
+            if not programs:
+                raise SweepError(f'{where} selects no Python programs')
+            return name[1], programs
+        elif option == '--':
+            continue
+        elif option == '-' or not option.startswith('-'):
+            if option.endswith('.py'):
+                return name[1], [path_for(option)]
             break
-    scripts = re.findall(r"[\w${}/.-]+\.py\b", statement)
-    if not scripts:
-        discovered = re.search(r"-m\s+unittest\s+discover\s+-s\s+([\w./-]+)", statement)
-        if discovered:
-            directory = ROOT / discovered.group(1)
-            if not directory.is_dir():
-                raise SweepError(f'{cmake_path}:{line}: row {name.group(1)} discovers '
-                                 f'{discovered.group(1)!r}, which is not a directory')
-            scripts = sorted(str(path) for path in directory.glob('test_*.py'))
-        if not scripts:
-            raise SweepError(
-                f'{cmake_path}:{line}: row {name.group(1)} runs Python3_EXECUTABLE '
-                'but names no .py script or inline program; the sweep cannot read it '
-                'and refuses to skip it')
-    script = (scripts[0].replace('${PROJECT_SOURCE_DIR}', str(ROOT))
-                        .replace('${CMAKE_CURRENT_SOURCE_DIR}', str(ROOT / 'tests')))
-    if '${' in script:
-        raise SweepError(f'{cmake_path}:{line}: row {name.group(1)} names an unexpanded script '
-                         f'{script!r}; the sweep refuses to skip it')
-    return name.group(1), ROOT / script
+    raise SweepError(f'{where} runs Python3_EXECUTABLE but names no .py script or inline program')
 
 
 def module_closure(script: Path, seen=None, *, text=None, source_dir=None):
@@ -191,15 +207,21 @@ def private_reads(closure):
     return missing
 
 
-def row_properties(cmake_text: str, row: str) -> str:
-    """Every set_tests_properties call whose row list names `row`."""
-    found = []
-    for _, statement in statements(cmake_text):
-        head = CMAKE_HEAD.match(statement)
-        if head and head.group(1) == 'set_tests_properties' and re.search(
-                r'(?<![\w-])' + re.escape(row) + r'(?![\w-])', statement):
-            found.append(statement)
-    return '\n'.join(found)
+def row_properties(registrations):
+    """Map only the names before PROPERTIES to their assigned keys and values."""
+    found = {}
+    for source, cmd in registrations:
+        if cmd.name.lower() != 'set_tests_properties':
+            continue
+        words = [argument_text(arg) for arg in CMAKE_ARGUMENT.finditer(cmd.body)]
+        if 'PROPERTIES' not in words:
+            raise SweepError(f'{source}:{cmd.line}: missing PROPERTIES')
+        at = words.index('PROPERTIES')
+        if not at or at + 1 == len(words) or (len(words) - at - 1) % 2:
+            raise SweepError(f'{source}:{cmd.line}: incomplete set_tests_properties')
+        for row in words[:at]:
+            found.setdefault(row, {}).update(zip(words[at + 1::2], words[at + 2::2]))
+    return found
 
 
 # Rows whose closure names an absent private path that the row provably never
@@ -261,16 +283,15 @@ def module_gates_its_own_paths(text: str) -> bool:
     return SKIP_LITERAL in text and GATED_BY_MODULE.search(text) is not None
 
 
-def has_skip_path(cmake_text: str, row: str, closure) -> bool:
+def has_skip_path(properties, closure) -> bool:
     """The row's own skip path: the pinned literal plus a ctest skip property,
     or a unittest SkipTest/skipUnless around the private read."""
     texts = closure.values()
     if not any(SKIP_LITERAL in text for text in texts):
         return False
-    properties = row_properties(cmake_text, row)
-    if re.search(r'SKIP_RETURN_CODE\s+77', properties):
+    if properties.get('SKIP_RETURN_CODE') == '77':
         return True
-    if 'SKIP_REGULAR_EXPRESSION' in properties and 'private fixtures not present' in properties:
+    if 'private fixtures not present' in properties.get('SKIP_REGULAR_EXPRESSION', ''):
         return True
     return any(('SkipTest' in text or 'skipUnless' in text) for text in texts)
 
@@ -282,13 +303,13 @@ def main() -> int:
     cmake_path = args.cmake
     offenders = []
     errors = []
+    programs_seen = 0
     try:
         registrations = list(registration_statements(cmake_path))
-    except ValueError as error:
-        print(f'check_kernel_python_private_reads: {error}', file=sys.stderr)
+        properties = row_properties(registrations)
+    except (ValueError, SweepError) as error:
+        print(f'check_kernel_python_private_reads: NOT COMPARED: {error}', file=sys.stderr)
         return 2
-    properties = '\n'.join(f'set_tests_properties({cmd.body})' for _, cmd in registrations
-                           if cmd.name.lower() == 'set_tests_properties')
     for source, cmd in registrations:
         if cmd.name.lower() != 'add_test':
             continue
@@ -296,32 +317,40 @@ def main() -> int:
             row = python_row(source, cmd.line, f'add_test({cmd.body})')
             if row is None:
                 continue
-            name, program = row
-            if isinstance(program, InlineProgram):
-                closure = module_closure(source, text=program.text, source_dir=cmake_path.parent)
-            else:
-                if not program.is_file():
-                    raise SweepError(f'{source}:{cmd.line}: row {name} runs a missing script {program}')
-                closure = module_closure(program)
-            unguarded = [read for read in private_reads(closure)
-                         if read[0] == source or not module_gates_its_own_paths(closure[read[0]])]
-            if unguarded and name not in EXEMPT and not has_skip_path(properties, name, closure):
-                path, line, reference = unguarded[0]
-                if path == source:
-                    line += program.line - 1
-                offenders.append((name, (path, line, reference)))
-        except SweepError as error:
+            name, programs = row
+            for program in programs:
+                try:
+                    if isinstance(program, InlineProgram):
+                        closure = module_closure(source, text=program.text, source_dir=cmake_path.parent)
+                    else:
+                        closure = module_closure(program)
+                except SweepError as error:
+                    errors.append(f'{source}:{cmd.line}: row {name}: {error}')
+                    continue
+                programs_seen += 1
+                unguarded = [read for read in private_reads(closure)
+                             if read[0] == source or not module_gates_its_own_paths(closure[read[0]])]
+                if (unguarded and name not in EXEMPT
+                        and not has_skip_path(properties.get(name, {}), closure)):
+                    path, line, reference = unguarded[0]
+                    if path == source:
+                        line += program.line - 1
+                    offenders.append((name, (path, line, reference)))
+        except (OSError, SweepError) as error:
             errors.append(str(error))
     for name, (path, line, reference) in offenders:
         print(f'{name}: reads absent {reference} ({path}:{line}) '
               f'without printing {SKIP_LITERAL!r} and skipping')
     for name, reason in sorted(EXEMPT.items()):
         print(f'exempt: {name} -- {reason}')
+    if not programs_seen and not errors:
+        errors.append('no registered Python programs')
     if errors:
         for error in errors:
-            print(f'check_kernel_python_private_reads: {error}', file=sys.stderr)
+            print(f'check_kernel_python_private_reads: NOT COMPARED: {error}', file=sys.stderr)
         return 2
-    print(f'kernel python rows reading an absent private file: {len(offenders)}')
+    count = len({name for name, _ in offenders})
+    print(f'kernel python rows reading an absent private file: {count}')
     return 1 if offenders else 0
 
 
