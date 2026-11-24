@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_calendar_before_epoch)
+pineforge_add_unit_test(test_calendar_before_epoch)

@@ -8,8 +8,8 @@
 // Until this lane each call was gmtime_r, or localtime_r under the zone's
 // process-global ScopedTimezone (a mutex, the normalization strings and, on a
 // zone switch, setenv + tzset). The decomposition may not move a single
-// field, so this row compares it with what that pre-lane body answers (below:
-// the same libc calls, the zone's guard held across a batch of stamps) field by
+// field of the containing second, so this row compares it with libc (below:
+// the same calls, the zone's guard held across a batch of stamps) field by
 // field -- the nine ISO fields, tm_gmtoff and the tm_zone text:
 //
 //   * every UTC spelling that normalizes to UTC, hourly 1970-2100 for the
@@ -28,8 +28,8 @@
 //     read in turn on one thread (more zones than the memo holds);
 //   * fixed-offset spellings, which normalize to a POSIX offset.
 //
-// Then the UTC calendar paths the lane moved off libc, against their pre-lane
-// bodies: the month open (gmtime_r) and the D / W / M period close (localtime_r
+// Then compare the UTC calendar paths with libc: the month open
+// (gmtime_r/timegm) and the D / W / M period close (localtime_r
 // + mktime under ScopedTimezone("UTC")), through timeframe_time /
 // timeframe_time_close. (Under AddressSanitizer the bulk sweeps read every 15th
 // stamp; see kBulkStride.)
@@ -37,6 +37,7 @@
 
 #include "../src/timezone.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -57,7 +58,7 @@ using namespace pineforge;
 int failures = 0;
 long long checks = 0;
 
-// What decompose_ms_local answered before this lane: gmtime_r for a zone that
+// The reference uses gmtime_r for a zone that
 // normalizes to UTC, otherwise localtime_r under the zone's ScopedTimezone. The
 // pre-lane body took the guard per call; here it is held across a batch of
 // stamps, which changes nothing localtime_r answers (the process TZ is the
@@ -69,12 +70,17 @@ struct Expected {
     char zone[64];
 };
 
+time_t containing_second(int64_t ms) {
+    using namespace std::chrono;
+    return static_cast<time_t>(floor<seconds>(milliseconds{ms}).count());
+}
+
 std::vector<Expected> libc_answers(const std::string& tz, const std::vector<int64_t>& stamps) {
     std::vector<Expected> out(stamps.size());
     const std::string t = normalize_timezone_for_posix(tz);
     const bool utc = t.empty() || t == "UTC" || t == "Etc/UTC";
     const auto read = [&](std::size_t i) {
-        time_t secs = static_cast<time_t>(stamps[i] / 1000);
+        const time_t secs = containing_second(stamps[i]);
         Expected& e = out[i];
         e.fields = {};
         if (utc) {
@@ -323,16 +329,16 @@ void fixed_offsets() {
 }
 
 // timeframe_time's month open and timeframe_time_close's D / W / M close in
-// UTC, against their pre-lane bodies. The close is the next period's open
+// UTC, against libc on the containing second. The close is the next period's open
 // itself, not its last millisecond: lane W12-ENG-TIME moved the boundary to
 // TradingView's (lab tv w12-tclose-*, tests/fixtures/time_close_function).
 int64_t libc_month_open(int64_t bar_ms) {
-    time_t secs = static_cast<time_t>(bar_ms / 1000);
-    int64_t days = static_cast<int64_t>(secs) / 86400;
-    if (secs % 86400 != 0 && secs < 0) --days;
+    const time_t secs = containing_second(bar_ms);
     struct tm g {};
     gmtime_r(&secs, &g);
-    return (days - (g.tm_mday - 1)) * 86400000LL;
+    g.tm_mday = 1;
+    g.tm_hour = g.tm_min = g.tm_sec = 0;
+    return static_cast<int64_t>(timegm(&g)) * 1000;
 }
 
 int64_t libc_period_close(int64_t open_ms, char period) {
