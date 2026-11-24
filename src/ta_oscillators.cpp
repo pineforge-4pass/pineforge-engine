@@ -374,9 +374,9 @@ RCI::RCI(int length)
 
 double RCI::calculate() {
     const int n = static_cast<int>(buffer_.size());
-    // Rank the live random-access window directly. Keep the legacy prices_
-    // member empty so the public C++ class layout stays unchanged without a
-    // second length-sized price allocation or a full-window copy per call.
+    // Rank the live window directly. The legacy prices_ member stays empty:
+    // there is no second price allocation or full-window copy. The separate
+    // bar_ member records what to undo on a recalculation.
     for (int i = 0; i < n; i++) {
         order_[i] = i;
     }

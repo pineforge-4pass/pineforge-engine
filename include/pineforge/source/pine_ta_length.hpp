@@ -133,9 +133,9 @@ public:
 // the function names are written without "ta.", as simple_ta_length's other
 // callers write them ("supertrend", "sma"). A length that simple_ta_length
 // limits to INT_MAX (a larger double or int64 value) is passed on as it is,
-// as for every other call of this header; the fixed-length class's own
-// arithmetic on an extreme length (for ta::EMA, 2.0 / (length + 1) is
-// computed in int) is outside these adapters.
+// as for every other call of this header. The fixed-length class computes
+// its own coefficients: ta::EMA converts the length to double before
+// adding one in the denominator of its smoothing factor.
 // Covered: the length constructor (explicit only for PineEma, as for the
 // classes), compute, recompute and observe_owned_storage: the paired codegen
 // maps ta.ema, ta.tsi, ta.macd, ta.kc and ta.kcw to these types and its shims
