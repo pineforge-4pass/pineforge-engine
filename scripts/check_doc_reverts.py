@@ -314,16 +314,13 @@ def named(message: str, finding: Finding, row_key: str) -> bool:
     return False
 
 
-def judge_change(root: Path, parent: str, head_texts: dict[str, str], messages: list[str],
-                 history_tip: str) -> list[Finding]:
-    """The unnamed deletions and reverts of one change parent -> head.
-
-    `head_texts` maps each page to its text at the head (the pages changed);
-    `history_tip` is the commit whose history the introducer and revert
-    questions read (the parent, for a commit)."""
+def judge_change(root: Path, parent: str, head: str, pages: list[tuple[str, str]],
+                 messages: list[str]) -> list[Finding]:
+    """Judge each page at its respective paths in the parent and head."""
     findings: list[Finding] = []
-    for path, head_text in sorted(head_texts.items()):
-        parent_text = show(parent, path, root)
+    for parent_path, path in sorted(pages):
+        parent_text = show(parent, parent_path, root)
+        head_text = show(head, path, root)
         if parent_text == head_text:
             continue
         before = units(parent_text)
@@ -332,7 +329,7 @@ def judge_change(root: Path, parent: str, head_texts: dict[str, str], messages: 
         if not removed:
             continue
         added_texts = [unit.text for unit in (after - before).elements()]
-        history = History(root, history_tip, path)
+        history = History(root, parent, parent_path)
         for unit in removed.elements():
             partner, ratio = None, 0.0
             for candidate in added_texts:
@@ -412,27 +409,45 @@ def judged_commits(root: Path, base: str | None) -> list[str]:
     return kept
 
 
-def changed_pages(root: Path, parent: str, commit: str) -> list[str]:
-    out = git('diff', '--name-only', '-z', parent, commit, '--', *DOC_ROOTS, root=root)
-    return [p for p in out.split('\0') if p.endswith('.md')]
+def changed_pages(root: Path, parent: str, commit: str) -> list[tuple[str, str]]:
+    out = git('diff', '--name-status', '--find-renames', '-z', parent, commit, '--',
+              *DOC_ROOTS, root=root)
+    fields = iter(out.split('\0')[:-1])
+    pages = []
+    for status in fields:
+        path = next(fields)
+        if status.startswith('R'):
+            destination = next(fields)
+            if path.endswith('.md') and destination.endswith('.md'):
+                pages.append((path, destination))
+                continue
+            # Moving into or out of the published pages is an addition or deletion.
+            if not path.endswith('.md'):
+                path = destination
+        if path.endswith('.md'):
+            pages.append((path, path))
+    return pages
 
 
-def select_pages(root: Path, base: str, head: str, selected: list[str] | None) -> list[str]:
-    if selected is None:
-        changed = changed_pages(root, base, head)
-        if changed:
-            return changed
-    elif not selected:
+def select_pages(root: Path, base: str, head: str,
+                 selected: list[str] | None) -> list[tuple[str, str]]:
+    if selected == []:
         raise GitError('NOT COMPARED: no pages to compare')
+    changed = changed_pages(root, base, head)
+    if selected is None and changed:
+        return changed
     published = set(doc_paths(base, root)) | set(doc_paths(head, root))
     if selected is not None:
         for path in selected:
             if path not in published:
                 raise GitError(f'NOT COMPARED: no published page {path}')
-        return selected
+        wanted = set(selected)
+        matches = [pair for pair in changed if not wanted.isdisjoint(pair)]
+        unchanged = wanted.difference(path for pair in matches for path in pair)
+        return matches + [(path, path) for path in sorted(unchanged)]
     if not published:
         raise GitError('NOT COMPARED: no pages to compare')
-    return sorted(published)
+    return [(path, path) for path in sorted(published)]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -469,8 +484,7 @@ def main(argv: list[str] | None = None) -> int:
                     messages.append(args.message_file.read_text(encoding='utf-8'))
                 except (OSError, UnicodeError) as error:
                     raise GitError('NOT COMPARED: cannot read message file') from error
-            texts = {path: show(head, path, root) for path in pages}
-            findings = judge_change(root, base, texts, messages, base)
+            findings = judge_change(root, base, head, pages, messages)
             judged = f'{base[:SHA_CHARS]} -> {head[:SHA_CHARS]} ({len(pages)} pages)'
         else:
             commits = judged_commits(root, base)
@@ -487,8 +501,7 @@ def main(argv: list[str] | None = None) -> int:
                 if not pages:
                     continue
                 saw_page = True
-                texts = {path: show(commit, path, root) for path in pages}
-                findings += judge_change(root, parent, texts, [message_of(commit, root)], parent)
+                findings += judge_change(root, parent, commit, pages, [message_of(commit, root)])
             if not compared:
                 raise GitError('NOT COMPARED: no commits to compare')
             if not saw_page and not any(doc_paths(commit, root) for commit in compared):

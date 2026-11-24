@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- The documentation history check now compares a renamed page with its source and reports any unnamed sentence it lost.
 - The private-fixture checker now scans Python `-c` test commands for absent files and accepts launchers that only forward their arguments.
 - At a bar close, only entries that name contracts enter the fixed-quantity market-pair check. A cash or equity amount no longer inflates the pair's margin cost or its transactions.
 - A stop entry deferred behind a marketable buy or rearmed after another entry was stopped out now keeps its cash or equity sizing at the eventual fill.
