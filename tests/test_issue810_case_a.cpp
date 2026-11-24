@@ -853,12 +853,13 @@ bool check_b_pending(Probe& probe, const std::vector<Bar>& bars) {
 //   R4  Exits reserve the entry's quantity in the order they were placed,
 //       and a later full exit is left what the earlier ones have not
 //       reserved.
-//       - CHANGELOG.md:4064-4067 (1.0.0): the strategy.exit orders of one
-//         entry queue in the order they were created, and a later exit gets
-//         only what the earlier ones leave.
-//       - CHANGELOG.md:29 (unreleased, #810): a partial exit placed before
-//         its market entry fills keeps its place ahead of a full exit placed
-//         after it, which closes only the remainder.
+//       - CHANGELOG.md (1.0.0, "The `strategy.exit` orders of one entry queue
+//         in the order they were created"): a later exit gets only what the
+//         earlier ones leave.
+//       - CHANGELOG.md (unreleased, "When a partial percentage exit waits for
+//         a named market entry's fill"): on a three-contract entry two
+//         waiting 50% exits reserve one contract each, leaving one for a
+//         later full stop.
 //       - docs/pages/quantity-intent.md:35-37: a full request clipped behind
 //         another reservation holds less than its basis.
 //       - src/source/pine_adapter.cpp:859-862 (exit_queue_rank), :5880-5884
@@ -875,8 +876,8 @@ bool check_b_pending(Probe& probe, const std::vector<Bar>& bars) {
 //         what it closes does not depend on which exit fills first.
 //       - docs/pages/quantity-intent.md:22-23: a deferred exit acquires its
 //         reservation when a live owner is bound.
-//       - CHANGELOG.md:29 (unreleased, #810): the partial exit is sized from
-//         the quantity the entry actually opens.
+//       - CHANGELOG.md (the same unreleased entry): the partial exit is sized
+//         from the quantity the entry actually opens.
 //       - src/source/pine_adapter.cpp:15589-15601
 //         (materialize_relative_exits): the partial exit's quantity is its
 //         percentage of what the entry opened; :6321-6327
