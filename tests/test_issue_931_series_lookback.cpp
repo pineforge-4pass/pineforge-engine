@@ -1,4 +1,5 @@
 #include <pineforge/pineforge.h>
+#include <pineforge/run_failure.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/source/pine_ta_length.hpp>
 
@@ -7,12 +8,72 @@
 #include <cstdint>
 #include <cstdio>
 #include <exception>
+#include <limits>
+#include <string>
 #include <string_view>
 #include <vector>
 
 // Keep the red comparison buildable against the issue's base headers.
 #ifdef PINEFORGE_HAS_TA_LOOKBACK_LIMIT_V1
 namespace {
+
+int run_length_boundary() {
+    using namespace pineforge::source;
+    constexpr auto largest = std::numeric_limits<std::int64_t>::max();
+    constexpr double boundary = 0x1p63;
+    const double below = std::nextafter(boundary, 0.0);
+    const double above = std::nextafter(boundary, std::numeric_limits<double>::infinity());
+    struct Case { std::int64_t cap; double length; bool refuse; };
+    const Case cases[] = {
+        {largest - 1, below, false}, {largest - 1, boundary, true},
+        {largest, boundary, false}, {largest, above, true},
+        {largest, 0x1p64, true}, {0, 0x1p64, false},
+        {2, 3.75, false}, {2, 4.0, true},
+    };
+    for (const auto& row : cases) {
+        const pineforge::detail::TaLookbackScope cap(row.cap);
+        const auto args = "{\"limit\":\"max_bars_back\",\"max\":" + std::to_string(row.cap) + "}";
+        const auto check = [&](const char* name, auto& site, auto... extra) {
+            for (bool again : {false, true}) {
+                const char* method = again ? "recompute" : "compute";
+                try {
+                    const double value = again ? site.recompute(1.0, row.length, extra...)
+                                               : site.compute(1.0, row.length, extra...);
+                    if (!row.refuse && std::isnan(value)) continue;
+                    std::fprintf(stderr, "FAIL: %s::%s length %a cap %lld: expected %s; returned %g\n",
+                                 name, method, row.length, static_cast<long long>(row.cap),
+                                 row.refuse ? "pine_runtime_limit" : "warm-up na", value);
+                } catch (const pineforge::RunFailureInfo& error) {
+                    const auto& actual = error.run_failure();
+                    if (row.refuse && actual.code == pineforge::RunFailureCode::pine_runtime_limit
+                        && actual.args && *actual.args == args) continue;
+                    std::fprintf(stderr, "FAIL: %s::%s length %a cap %lld: expected %s; threw %s %s\n",
+                                 name, method, row.length, static_cast<long long>(row.cap),
+                                 row.refuse ? args.c_str() : "warm-up na",
+                                 pineforge::run_failure_code_name(actual.code),
+                                 actual.args ? actual.args->c_str() : "(null)");
+                } catch (const std::exception& error) {
+                    std::fprintf(stderr, "FAIL: %s::%s length %a: unexpected exception: %s\n",
+                                 name, method, row.length, error.what());
+                }
+                return false;
+            }
+            return true;
+        };
+        SeriesSma sma;
+        SeriesHighest highest;
+        SeriesLowest lowest;
+        SeriesHighestBars highestbars;
+        SeriesLowestBars lowestbars;
+        SeriesPercentileNearestRank percentile;
+        if (!check("SeriesSma", sma) || !check("SeriesHighest", highest)
+            || !check("SeriesLowest", lowest) || !check("SeriesHighestBars", highestbars)
+            || !check("SeriesLowestBars", lowestbars)
+            || !check("SeriesPercentileNearestRank", percentile, 50.0)) return 1;
+    }
+    std::puts("PASS: series lengths respect the lookback cap at and around 2^63");
+    return 0;
+}
 
 class CallbackHost final : public pineforge::source::PineStrategyHost {
 public:
@@ -153,6 +214,7 @@ int main(int argc, char** argv) {
     }
 
 #ifdef PINEFORGE_HAS_TA_LOOKBACK_LIMIT_V1
+    if (const int status = run_length_boundary(); status != 0) return status;
     try {
         if (const int status = run_cap_control(); status != 0) return status;
     } catch (const std::exception& error) {
