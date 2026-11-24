@@ -6289,9 +6289,17 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
             notice = MAIN_TIP_NOTICE.encode()
             main_tip = any(notice in stream.splitlines()
                            for stream in (result.stdout, result.stderr) if notice in stream)
+            private_skip = False
+            if (code == 77 and name == 'source-guard-native-versions' and not advisory
+                    and not main_tip and not private_fixtures_overlay()):
+                from check_native_cpp_versions import missing_private_fixtures
+                reasons = {(PRIVATE_FIXTURE_SKIP_LITERAL + path.relative_to(source).as_posix()).encode()
+                           for path in missing_private_fixtures(source)}
+                private_skip = any(not reasons.isdisjoint(stream.splitlines())
+                                   for stream in (result.stdout, result.stderr))
         except OSError as error:
             code, log = 127, str(error).encode()
-            main_tip = False
+            main_tip = private_skip = False
         seconds = round(time.monotonic() - stage_t0, 3)
         (output / stage['log']).write_bytes(log)
         with record_lock:
@@ -6300,14 +6308,7 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
                 print(f'ci_preflight: {name}: output ({stage["log"]})', flush=True)
                 print(log.decode('utf-8', 'replace'),
                       end='' if log.endswith(b'\n') else '\n', flush=True)
-            if (code == 77 and not advisory and not history_stage and not main_tip
-                    and not private_fixtures_overlay()
-                    and PRIVATE_FIXTURE_SKIP_LITERAL.encode() in log):
-                # A source guard whose private fixture input the tree lacks exits
-                # 77 with the pinned literal naming the missing path.  The literal
-                # is required: a bare 77 without it stays a failure -- and so does
-                # the literal itself while PINEFORGE_PRIVATE_FIXTURES is set, when
-                # the input the guard names is in the tree (R2-F3).
+            if private_skip:
                 print(f'ci_preflight: {name}: skipped (exit 77, private fixtures absent)',
                       flush=True)
                 stage.update(status='skipped', exitCode=code)
