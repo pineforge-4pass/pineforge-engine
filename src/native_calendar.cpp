@@ -2936,5 +2936,31 @@ int64_t fixed_bucket_ms(const Timeframe& tf) {
     return bucket;
 }
 
+ClippedDayEdges clipped_day_edges(const SessionCalendar& calendar, const Timeframe& tf,
+                                  int64_t chart_open, SessionDayMemo& memo) {
+    auto& m = memo.state(calendar);
+    if (!m.valid || m.leads.grid_ms == 0) return {};
+    const int64_t width = fixed_bucket_ms(tf);
+    if (width <= 0 || m.leads.grid_ms % width == 0) return {};
+
+    const auto* day = memo_session_day_containing(calendar, chart_open, m);
+    if (!day || day->spans.empty() || day->spans.front().start_ms != day->origin_ms) return {};
+    const auto opening = fixed_day_core(*day, day->origin_ms, width, m.leads);
+    if (!opening || opening->open_ms != day->origin_ms) return {};
+    const auto next = opening->next_period_open_ms;
+    // Only adjacent eligible chart opens share an edge. A lunch break in
+    // its own empty grid cell does not end or restart the trading day.
+    if (next <= opening->open_ms || next - opening->open_ms >= width ||
+        next >= day->last_traded_ms || (chart_open != opening->open_ms && chart_open != next))
+        return {};
+    const auto following = fixed_day_core(*day, next, width, m.leads);
+    if (!following || following->eligible_open_ms != next || following->last_traded_close_ms <= next)
+        return {};
+    // The clipped bar's nominal width reaches into the next cell. That
+    // cell also opens the day; if it is the closing cell, both close it.
+    return {chart_open == next,
+            chart_open == opening->open_ms && following->last_traded_close_ms == day->last_traded_ms};
+}
+
 }  // inline namespace native_calendar_v2
 }  // namespace pineforge::native_calendar

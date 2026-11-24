@@ -196,5 +196,11 @@ std::optional<CycleCertificate> cycle_certificate(const SessionCalendar& calenda
 // timeframe `tf`, in ms; 0 for a timeframe that is not valid or not fixed.
 int64_t fixed_bucket_ms(const Timeframe& tf);
 
+// Extra day edges where clipping the first fixed cell at the stamp leaves
+// adjacent chart opens less than one chart width apart.
+struct ClippedDayEdges { bool opens = false, closes = false; };
+ClippedDayEdges clipped_day_edges(const SessionCalendar& calendar, const Timeframe& tf,
+                                  int64_t chart_open, SessionDayMemo& memo);
+
 }  // inline namespace native_calendar_v2
 }  // namespace pineforge::native_calendar

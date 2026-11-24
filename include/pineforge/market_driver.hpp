@@ -137,10 +137,10 @@ struct NativeDecisionContext {
     // and recalculation on it.
     //   in_session         in session at the bar's label, or at its interval's
     //                      first eligible instant when later (a break's reopen).
-    //   opens_session_day  in session, and the bar before it is not, or is on
-    //                      another session day.
-    //   closes_session_day in session, and the bar after it is not, or is on
-    //                      another session day.
+    //   opens_session_day  in session after a day boundary, also at the next
+    //                      eligible grid open inside a clipped opening bar's nominal width.
+    //   closes_session_day in session before a day boundary, also on that clipped
+    //                      opening bar if the overlapping cell reaches the day's close.
     // "The bar before / after" is the one the run holds — the batch input or
     // stream warmup being consumed — and otherwise the calendar's previous
     // or next eligible input slot, across declared breaks. At the run's own
