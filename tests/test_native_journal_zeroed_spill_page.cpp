@@ -699,6 +699,15 @@ int run_measurement() {
     const Reading reading = classify(answer, host, match);
     print_case("zeroed", reading, target, host.expected, answer, match);
 
+    Answer wrong;
+    wrong.threw = wrong.coded = true;
+    wrong.code = run_failure_code_name(RunFailureCode::engine_invariant);
+    wrong.text = answer.threw ? answer.text : host.last_error();
+    if (classify(wrong, host, match).outcome == Outcome::Coded) {
+        std::printf("SPILL_PAGE FAIL: an unrelated failure code passed the seal check\n");
+        return 1;
+    }
+
     std::vector<unsigned char> afterwards(page_bytes, 1);
     const bool still_zero =
         read_exact(data_fd, page->offset, afterwards.data(), afterwards.size())

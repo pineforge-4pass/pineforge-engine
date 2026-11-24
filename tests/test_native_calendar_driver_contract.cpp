@@ -1866,8 +1866,11 @@ void partial_end_extremes_do_not_depend_on_the_report_policy() {
         host.callback = [](TraceHost& h) { CHECK(h.submit_market(buy()).status == SubmitStatus::Accepted); };
         CHECK(host.stream_push_tick(TradeTick{60100, 1, 107, 3}));
         CHECK(host.stream_advance_time(90000));
+        const auto prior_dd = host.equity_peak_drawdown();
+        const auto prior_ru = host.equity_peak_runup();
         CHECK(host.stream_end(true));
         CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+        CHECK(host.equity_peak_drawdown() > prior_dd || host.equity_peak_runup() > prior_ru);
         if (!count(host, 2)) return;
         const auto executed = fills(host);
         CHECK(executed.size() == 1);
