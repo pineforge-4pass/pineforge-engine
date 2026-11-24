@@ -8349,7 +8349,7 @@
         },
         {
           "line": 212,
-          "text": "CHECK(p.trade_count() == 1)"
+          "text": "CHECK(p.trade_count() == 3)"
         },
         {
           "line": 214,
@@ -8361,10 +8361,10 @@
         },
         {
           "line": 217,
-          "text": "CHECK(near(p.pos_size(), 25.0))"
+          "text": "CHECK(near(p.pos_size(), 15.0))"
         }
       ],
-      "sourceSha256": "2dc43af7e2c92c3d5993321b6ff184579abd5210f3f17c4544e692f99ab56ad0"
+      "sourceSha256": "b68c1a880d4f16db3561fe3e9ae0d1ab3872df93819f1af5599dd938a79ae9e1"
     },
     "test_high_value_fractional_money_margin": {
       "assertions": [

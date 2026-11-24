@@ -161,15 +161,15 @@ static void test_full_close_reexpands_while_pyramiding() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Guard: a genuine PARTIAL (qty_percent < 100) re-issue must STILL honour
-// the preserved reserved qty so it does not double-reserve against the same
-// from_entry as the position grows. Here a 50% exit is issued once (on the
-// first long bar, capturing 50% of 10 = 5), then re-issued every bar; the
-// preserved 5 must be carried even though the position later grows to 30,
-// so the partial closes 5 units at its limit — not 50% of the grown stack.
+// Guard: a genuine PARTIAL (qty_percent < 100) re-issue places one order for
+// each entry, for that share of its own units, and must not double-reserve
+// against the same from_entry as the position grows. Here a 50% exit is
+// issued on the first long bar (5 of 10), then re-issued every bar: each
+// later entry brings its own 5. The three orders close 15 of the grown 30 at
+// their limit, as TradingView's list for case C of issue #810 shows.
 // ─────────────────────────────────────────────────────────────────────
-static void test_partial_reissue_keeps_preserved_qty() {
-    std::printf("test_partial_reissue_keeps_preserved_qty\n");
+static void test_partial_reissue_sizes_each_entry() {
+    std::printf("test_partial_reissue_sizes_each_entry\n");
     class Probe : public pineforge::source::PineStrategyHost {
     public:
         Probe() {
@@ -207,19 +207,19 @@ static void test_partial_reissue_keeps_preserved_qty() {
     };
     p.run(bars, 6);
 
-    // The partial preserved its original reserved qty (5), not 50% of the
-    // grown 30 (=15). One partial trade closes 5 at 106; position stays open.
-    CHECK(p.trade_count() == 1);
+    // Each of the three entries has its own order for half of its 10 units.
+    // All three fill at 106, book first in first out, and leave 15 open.
+    CHECK(p.trade_count() == 3);
     if (p.trade_count() < 1) return;
     CHECK(near(p.get_trade(0).exit_price, 106.0));
     CHECK(near(p.get_trade(0).qty, 5.0));
-    // 30 - 5 = 25 remain open.
-    CHECK(near(p.pos_size(), 25.0));
+    // 30 - 15 = 15 remain open.
+    CHECK(near(p.pos_size(), 15.0));
 }
 
 int main() {
     test_full_close_reexpands_while_pyramiding();
-    test_partial_reissue_keeps_preserved_qty();
+    test_partial_reissue_sizes_each_entry();
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;
 }

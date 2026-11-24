@@ -28,9 +28,9 @@ LEDGER = ROOT / "tests/twin_parity_ledger.md"
 # Patched to the generated fixture bytes by the landing. Keeping these pins in
 # executable code means a ledger/inventory rewrite cannot silently redefine
 # what the guard proves.
-BASE_MANIFEST_SHA256 = "b56602bfbddeca65161a712c862da31e04a14a4f66ab7564be48d6af03439020"
-INVENTORY_SHA256 = "d807701fbfb71a88f86477b08b14d2e1c904f72df2f54e567096d19d3a2947a4"
-LEDGER_SHA256 = "80acc6f5381bd554f8199d57a3d0c8996fcfe667b45a62c7bbda4950e90f344e"
+BASE_MANIFEST_SHA256 = "910c5c758777b01ef703f5e3407eb3288e23c501135a6bf7e3389a7187867922"
+INVENTORY_SHA256 = "ea85f38685a76d324a8d3eb007eabfce48ac2dc5dd0351398af8941f5f9a6707"
+LEDGER_SHA256 = "597038eb2eb8fc0adfe9a190658934572a73d0169ec039561c3986f70f2cf286"
 
 APPENDIX_HEADING = "## Appendix 5 — CHECK-parity unobservable literal ledger"
 TABLE_HEADING = "| base file:line | CHECK text | reason unobservable | covering twin row |"
