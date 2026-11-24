@@ -49,20 +49,21 @@ namespace {
             "' function. It must not be na");
 }
 
-[[noreturn]] void max_bars_back_exceeded(long long length, std::int64_t maximum) {
+[[noreturn]] void max_bars_back_exceeded(std::uint64_t offset, std::int64_t maximum,
+                                         bool beyond_uint64 = false) {
     throw coded<std::runtime_error>(
         RunFailureCode::pine_runtime_limit,
         {{"limit", "max_bars_back"}, {"max", maximum}},
         run_error_bar_prefix() +
         "The script attempts to reference historical data that is too far from "
-        "the current bar (" + std::to_string(length - 1) +
+        "the current bar (" + (beyond_uint64 ? "more than " : "") + std::to_string(offset) +
         " bars back). The historical buffer's limit is " +
         std::to_string(maximum) + " bars.");
 }
 
 void check_lookback(long long length, const char* function, std::int64_t maximum) {
     if (length <= 0) length_not_positive(length, function, "length");
-    if (maximum != 0 && length - 1 > maximum) max_bars_back_exceeded(length, maximum);
+    if (maximum != 0 && length - 1 > maximum) max_bars_back_exceeded(length - 1, maximum);
 }
 
 constexpr std::size_t kMaxHistorySlots = std::numeric_limits<std::size_t>::max() / sizeof(double);
@@ -321,44 +322,57 @@ SeriesWindowExtreme::Result SeriesWindowExtreme::update(double src, long long le
 
 namespace {
 
-long long series_length(double length, const char* function) {
-    long long value = 0;
-    // TradingView reports an na length as 0 (RE10001).
-    if (!length_value(length, value)) length_not_positive(0, function, "length");
-    // Larger positive requests must not round down below a configured cap.
-    if (length >= 0x1p63) return LLONG_MAX;
-    return length > 1e15 ? static_cast<long long>(length) : value;
+std::uint64_t series_length(double length, const char* function, std::int64_t maximum) {
+    if (!(length >= 1.0)) {
+        long long value = 0;
+        // TradingView reports an na length as 0 (RE10001).
+        length_value(length, value);
+        length_not_positive(value, function, "length");
+    }
+    if (length >= 0x1p64) {
+        constexpr auto last = std::numeric_limits<std::uint64_t>::max();
+        if (maximum != 0) max_bars_back_exceeded(last, maximum, length > 0x1p64);
+        return last;
+    }
+    // The unsigned conversion preserves the integer part, including 2^63.
+    const auto requested = static_cast<std::uint64_t>(length);
+    if (maximum != 0 && requested - 1 > static_cast<std::uint64_t>(maximum))
+        max_bars_back_exceeded(requested - 1, maximum);
+    return requested;
 }
 
 }  // namespace
 
+SeriesWindowExtreme::Result SeriesWindowExtreme::update_series(
+        double src, double length, bool advance, bool want_max, const char* function) {
+    const auto requested = series_length(length, function, max_lookback_);
+    const auto window = std::min(requested, static_cast<std::uint64_t>(LLONG_MAX));
+    return update(src, static_cast<long long>(window), advance, want_max, function);
+}
+
 double SeriesHighest::compute(double src, double length) {
-    return core_.update(src, series_length(length, "highest"), true, true, "highest").value;
+    return core_.update_series(src, length, true, true, "highest").value;
 }
 double SeriesHighest::recompute(double src, double length) {
-    return core_.update(src, series_length(length, "highest"), false, true, "highest").value;
+    return core_.update_series(src, length, false, true, "highest").value;
 }
 double SeriesLowest::compute(double src, double length) {
-    return core_.update(src, series_length(length, "lowest"), true, false, "lowest").value;
+    return core_.update_series(src, length, true, false, "lowest").value;
 }
 double SeriesLowest::recompute(double src, double length) {
-    return core_.update(src, series_length(length, "lowest"), false, false, "lowest").value;
+    return core_.update_series(src, length, false, false, "lowest").value;
 }
 double SeriesHighestBars::compute(double src, double length) {
-    return core_.update(src, series_length(length, "highestbars"), true, true, "highestbars")
-        .offset;
+    return core_.update_series(src, length, true, true, "highestbars").offset;
 }
 double SeriesHighestBars::recompute(double src, double length) {
-    return core_.update(src, series_length(length, "highestbars"), false, true, "highestbars")
-        .offset;
+    return core_.update_series(src, length, false, true, "highestbars").offset;
 }
 double SeriesLowestBars::compute(double src, double length) {
-    return core_.update(src, series_length(length, "lowestbars"), true, false, "lowestbars")
-        .offset;
+    return core_.update_series(src, length, true, false, "lowestbars").offset;
 }
 double SeriesLowestBars::recompute(double src, double length) {
-    return core_.update(src, series_length(length, "lowestbars"), false, false, "lowestbars")
-        .offset;
+    return core_.update_series(src, length, false, false, "lowestbars").offset;
 }
 
 // --- SeriesPercentileNearestRank ---
@@ -411,15 +425,13 @@ double SeriesPercentileNearestRank::evaluate(double src, std::uint64_t length,
 }
 
 double SeriesPercentileNearestRank::compute(double src, double length, double percentage) {
-    const long long value = series_length(length, "percentile_nearest_rank");
-    check_lookback(value, "percentile_nearest_rank", max_lookback_);
-    return evaluate(src, static_cast<std::uint64_t>(value), percentage, false);
+    const auto requested = series_length(length, "percentile_nearest_rank", max_lookback_);
+    return evaluate(src, requested, percentage, false);
 }
 
 double SeriesPercentileNearestRank::recompute(double src, double length, double percentage) {
-    const long long value = series_length(length, "percentile_nearest_rank");
-    check_lookback(value, "percentile_nearest_rank", max_lookback_);
-    return evaluate(src, static_cast<std::uint64_t>(value), percentage, true);
+    const auto requested = series_length(length, "percentile_nearest_rank", max_lookback_);
+    return evaluate(src, requested, percentage, true);
 }
 
 void SeriesPercentileNearestRank::observe_owned_storage(OwnedStorage& out) const noexcept {
@@ -488,9 +500,7 @@ ta::SupertrendResult PineSupertrend::recompute(double factor, double atr_period,
 
 std::uint64_t SeriesSma::checked_length(double current_length) const {
     if (!std::isfinite(current_length)) length_na("sma", "length");
-    const long long length = series_length(current_length, "sma");
-    check_lookback(length, "sma", max_lookback_);
-    return static_cast<std::uint64_t>(length);
+    return series_length(current_length, "sma", max_lookback_);
 }
 
 void SeriesSma::ensure_capacity(std::size_t count) {

@@ -353,6 +353,8 @@ public:
     };
     Result update(double src, long long length, bool advance, bool want_max,
                   const char* function);
+    Result update_series(double src, double length, bool advance, bool want_max,
+                         const char* function);
     void observe_owned_storage(OwnedStorage& out) const noexcept {
         history_.observe_owned_storage(out);
     }
