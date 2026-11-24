@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_ta_length_int_limit)
+pineforge_add_unit_test(test_ta_length_int_limit)
