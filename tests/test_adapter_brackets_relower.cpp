@@ -1230,11 +1230,14 @@ constexpr Row kRelParentCancel_rows[] = {
 };
 constexpr Pinned kRelParentCancel = {kRelParentCancel_rows, 1, 10002, 0, 0, 0, 0xe109b35e14c45190ULL};
 
+// expectation corrected, because each entry's tick bracket is measured from its own fill (#694, case 3): the second entry
+// fills at 100.75, so its target is 104.75, which this tape does not reach. The old pin closed it at the first entry's 104.
+// Harvested on 5bf6affa.
 constexpr Row kRelPyramid_rows[] = {
     {1700000060000LL, 1700000300000LL, 100, 104, 2, 8, 1, 0},
-    {1700000180000LL, 1700000300000LL, 100.75, 104, 2, 6.5, 1, 0},
+    {1700000180000LL, 1700000840000LL, 100.75, 103, 2, 4.5, 1, 1},
 };
-constexpr Pinned kRelPyramid = {kRelPyramid_rows, 2, 10014.5, 0, 0, 0, 0x7a228a3c3666f510ULL};
+constexpr Pinned kRelPyramid = {kRelPyramid_rows, 2, 10012.5, 12.5, 11, 2, 0xf9f4323af7b0b998ULL};
 
 constexpr Row kRelDeclined_rows[] = {
     {1700000060000LL, 1700000300000LL, 100, 111, 100, 1100, 1, 0},
