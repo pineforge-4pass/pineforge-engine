@@ -133,22 +133,36 @@ the mark and returns -1, as do a NULL handle and a call made once
 `strategy_set_syminfo_metadata` installs through the same rule, and
 `strategy_set_account_currency_fx_series` remains the timestamped curve.
 
-The mark matters to calls that read an account-currency rate. For different
-currencies, these calls can use the scalar or the curve point in effect at the
-evaluated time. A conversion that requires a rate stops the run with
-`currency_conversion_rate_unavailable` if it cannot read one
-([run-failure codes](@ref run_failure_codes)). `request.currency_rate` with
+The source host's `strategy_convert_to_account`, `strategy_convert_to_symbol`
+and `request_currency_rate` share the `currency_conversion` lookup
+(`src/source/pine_strategy_host.cpp:4433`). For a supported pair of different
+currencies, they use the supplied scalar or the curve point in effect at the
+evaluated time. The lookup never substitutes the ledger's 1.0 fallback for a
+missing rate. If the lookup fails, the direct conversion helpers stop the run
+with `currency_conversion_rate_unavailable`, as does a required
+`request.currency_rate` ([run-failure codes](@ref run_failure_codes)). A request with
 `ignore_invalid_currency` returns `na` and warns instead. Generated
 `strategy.convert_to_account` and `strategy.convert_to_symbol` calls that use
 `strategy_convert_identity_or_warn` return the input value; the helper warns
 once per call site when it cannot read a required rate. The same currency on
-both sides needs no rate. The ledger converts at
-the same numbers as before, so no trade, fill, size or equity value moves. The
-broker-state hash folds the mark only when a scalar was supplied: a run that
-supplies none keeps its hash values, and a run that supplies one, through
-either setter, hashes differently from 1.12.0. The setter adds no C struct and
-changes neither existing C layouts nor the size of an installed host class;
-the public ABI and the 1.14.0 stream layout both remained at 5.
+both sides needs no rate.
+
+For broker accounting, the Pine host looks for a v1 capabilities receipt when
+the chart has a valid quote code and the host supplied either a scalar other than
+1.0 or a curve. An omitted `currency` is recorded as `currency.NONE` and
+uses the chart's quote currency. If the resolved account and quote codes
+match, the broker leaves both the scalar and the curve unused. The broker
+still uses the supplied FX for a different account code or for a module
+that does not advertise v1 capabilities.
+
+The handle retains the supplied FX for reuse. The broker-state hash
+distinguishes a supplied scalar from the default and, when the broker leaves
+FX unused in `account_fx_identity_` mode (`src/engine_state_hash.cpp:130`),
+includes the mode and the retained scalar and curve.
+
+The setter adds no C struct and changes neither existing C layouts nor the
+size of an installed host class; the public ABI and the 1.14.0 stream layout
+both remained at 5.
 
 ## Symbol inventory
 
