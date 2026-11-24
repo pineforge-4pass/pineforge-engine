@@ -8745,6 +8745,14 @@ if(UNIX)
 endif()
 # --- lane issue-958 end ---
 
+# --- lane issue-937 begin ---
+if(TARGET test_issue_937_journal_comment)
+    add_test(NAME test_issue_937_spanning_page_seal
+        COMMAND test_issue_937_journal_comment --damage-spanning)
+    set_tests_properties(test_issue_937_spanning_page_seal PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+# --- lane issue-937 end ---
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
