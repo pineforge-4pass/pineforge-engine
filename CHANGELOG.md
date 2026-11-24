@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- A `strategy.exit` with prices and a partial `qty` that is called with its market entry from a flat position now keeps its resting orders through the entry bar. This covers a single exit with the default order processing whose prices are not already reached at the open.
 - At the open, a market reversal sized in cash or percent of equity is now checked for funding with its contracts at the fill, not with the amount of money read as contracts. A funded reversal no longer suspends the exits of the position that it closes before it fills; a reversal that cannot be funded still does.
 - With FIFO and pyramiding above one, spending an entry’s last units frees its slot on any declared quantity step, including 0.25, and when no step is declared. A partial debit still occupies one slot. (#694).
 - On ordinary chart bars with pyramiding and FIFO, a full named tick exit that omits `qty` and specifies an OCA name prices its orders from the individual entries when their units are unreserved. A fill reduces its working siblings; a later call can reissue an unfilled bracket, while a bracket that fired stays spent. (#694).

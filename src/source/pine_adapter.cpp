@@ -27727,7 +27727,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             return row.bracket_origin.incarnation != 0
                 && row.bracket_origin != event.handle();
         };
-        bool partial_prearmed_parent = false;
+        std::optional<std::uint64_t> partial_command;
         bool only_new_partials = filled_at_signal_close && !materialized.empty();
         for (const auto& handle : live_handles_) {
             const auto pending = placement_.find(handle.incarnation);
@@ -27738,10 +27738,9 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 || row.projection_created_bar != placement_snapshot->projection_created_bar
                 || !std::isfinite(row.requested_qty)
                 || !(row.requested_qty < std::abs(event.opened_units))) continue;
-            partial_prearmed_parent = true;
-            // A partial that already named units before the fill still delays
-            // the entire bracket. Only the ranked percentages resolved by this
-            // fill acquired their explicit units here.
+            partial_command = row.command_sequence;
+            // Only ranked percentages resolved by this fill acquired their
+            // explicit units at the signal close.
             if (!only_new_partials || row.bracket_origin != event.handle()
                 || row.command_sequence <= before_materialization
                 || row.command_sequence > after_materialization
@@ -27752,6 +27751,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 break;
             }
         }
+        const bool partial_prearmed_parent = partial_command.has_value();
         const bool multiple_prearmed_parents = std::any_of(
             live_handles_.begin(), live_handles_.end(), [&](const auto& handle) {
                 if (handle == event.handle()) return false;
@@ -27778,8 +27778,27 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         // parent's priced exits on the entry bar itself. With sibling pre-armed
         // parents on the same bar, only the wrong-side (marketable) legs wait
         // for the next opening; the right-side legs join the entry bar
-        // (L9g; delta-3 P0-N4). A partial-quantity bracket waits entirely.
+        // (L9g; delta-3 P0-N4).
         if (partial_prearmed_parent || multiple_prearmed_parents) {
+            // A single priced exit submitted with its market entry already
+            // has a reservation and a bound origin at the open. Keep it live
+            // for the remaining path without reissuing the source command.
+            const bool keep_resting_partial = partial_prearmed_parent && !multiple_prearmed_parents
+                && !config_.process_orders_on_close && !config_.calc_on_order_fills
+                && event.cursor.point.path_phase == NativePathPhase::Open
+                && created_side == PositionSide::FLAT && event.closed_units == 0.0
+                && live_position == event.opened_units
+                && source_market_entry(*placement_snapshot)
+                && std::holds_alternative<native_order::Market>(event.request().trigger)
+                && *partial_command > placement_snapshot->command_sequence
+                && *partial_command <= before_materialization
+                && !any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) {
+                    const bool priced = row.family == PineOrderFamily::ExitLimit
+                        || row.family == PineOrderFamily::ExitStop;
+                    return (row.from_entry.empty() || row.from_entry == placement_snapshot->source_id)
+                        && (row.family == PineOrderFamily::ExitTrail
+                            || (priced && row.command_sequence != *partial_command));
+                });
             detail::ExitScratchRows<native_order::RequestHandle> delayed_legs(*this);
             for (const auto& handle : live_handles_) {
                 const auto pending = placement_.find(handle.incarnation);
@@ -27794,11 +27813,13 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                         == placement_snapshot->projection_created_bar
                     && !carried_origin_leg(row)
                     && (partial_prearmed_parent || marketable_at_fill(row))) {
-                    // At the signal close these legs cannot match until the
-                    // next bar. Leave them at their prices with their queue
-                    // ranks, replacement keys and OCA groups intact.
-                    if (only_new_partials && !multiple_prearmed_parents && !row.void_issue
-                        && row.bracket_origin == event.handle() && !marketable_at_fill(row)) {
+                    // A present nonpositive level has separate trigger rules.
+                    const bool resting_at_open = keep_resting_partial
+                        && (std::isnan(row.exit_levels.stop) || finite_positive(row.exit_levels.stop))
+                        && (std::isnan(row.exit_levels.limit) || finite_positive(row.exit_levels.limit));
+                    if ((resting_at_open || (only_new_partials && !multiple_prearmed_parents))
+                        && !row.void_issue && row.bracket_origin == event.handle()
+                        && !marketable_at_fill(row)) {
                         continue;
                     }
                     delayed_legs.push_back(handle);
