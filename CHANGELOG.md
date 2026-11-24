@@ -12,6 +12,7 @@ version number follows semantic versioning over the surfaces the
 ### Fixed
 
 - `strategy_pending_order_fill_qty` now accounts for a market close queued by a fill recalculation before a limit order that fills later, and treats a remainder within the fill's quantity tolerance as flat.
+- With finer bars supplied to the bar magnifier, a repeated FIFO `strategy.close(id)` no longer closes the new position or prevents a market reversal from opening it. (#966)
 - `strategy.cancel`, and an exit call that withdraws its bracket, now also withdraw exit orders that wait for the next bar.
 - With two entries in one direction, an opposite market entry that follows a named close of one of them reverses the units that remain, and a second call with the same ID replaces the first and transacts its own units (#993).
 - When market entries with different IDs follow a named close on one bar, an entry that would exceed the pyramiding limit is refused once the entry before it has filled (#993).

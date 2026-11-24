@@ -10740,6 +10740,17 @@ void PineExecutionAdapter::record_close_first(bool whole_position) {
     close_first_side_ = held > 0.0 ? 1 : -1;
 }
 
+static bool magnified_fifo_closes(const NativeStrategyHost& host, const PineStrategyConfig& config,
+                                  bool magnifier) {
+    if (!magnifier || config.close_entries_rule_any || config.process_orders_on_close
+        || config.calc_on_order_fills) return false;
+    const auto* spec = detail::run_spec(host);
+    const auto* lower = spec ? spec->intrabar.lower() : nullptr;
+    if (!lower) return false;
+    const auto* borrowed = detail::run_consumer(host).bar_views().lower_path;
+    return borrowed ? borrowed->count() != 0 : !lower->bars.empty();
+}
+
 void PineExecutionAdapter::close(const SourceId& id, const std::string& comment, double qty,
                                  double qty_percent, bool immediately, std::uint64_t callsite_token) {
     if (intraday_loss_orders_blocked()) return;
@@ -10748,6 +10759,65 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         return;
     }
     require_cohort_ticket();
+    const bool default_fifo_close = !config_.close_entries_rule_any
+        && std::isnan(qty) && std::isnan(qty_percent);
+    // On the lower-timeframe path these orders are already working or waiting
+    // for a close's fill. A spent close must not become a new reversal parent
+    // or record a close-first fact for an entry the script calls later.
+    if (default_fifo_close && !id.empty() && !immediately
+        && magnified_fifo_closes(require_host(), config_, bar_magnifier_)
+        && (!pending_entries_.empty() || has_live_family(PineOrderFamily::Close))) {
+        const auto point = detail::callback_point(require_host());
+        const double held = detail::run_position(require_host()).signed_units;
+        if (point && held != 0.0) {
+            const auto bar = point->decision.script_bar_open_ms;
+            const auto market_entry = [&](const PlacementSnapshot& row) {
+                return row.opening && row.family == PineOrderFamily::Entry
+                    && row.placement_script_open_ms == bar && row.placement_cycle == current_position_cycle_
+                    && !row.signal_price_refused && !row.affordability_close_only;
+            };
+            bool reopened = false, reversed = false;
+            for (const auto& entry : pending_entries_) {
+                const auto& row = entry.snapshot;
+                if (!market_entry(row) || !std::holds_alternative<native_order::Market>(entry.request.trigger))
+                    continue;
+                if (row.source_id == id) reopened = true;
+                else if (row.is_long != (held > 0.0) && row.paired_reversal_parent.incarnation != 0)
+                    reversed = true;
+            }
+            double claimed = 0.0;
+            const auto& core = detail::run_consumer(require_host()).request_core();
+            const auto& placements = std::as_const(placement_);
+            native_order::RequestHandle replacement{};
+            if (callsite_token) {
+                const auto site = live_by_source_key_.find(
+                    checked_live_key("__pine_close_site__" + std::to_string(callsite_token)));
+                if (site != live_by_source_key_.end()) replacement = site->second;
+            }
+            for (const auto& live : core.live()) {
+                const auto found = placements.find(live.handle().incarnation);
+                if (found == placements.end()) continue;
+                const auto& row = found->second;
+                if (!std::holds_alternative<native_order::Market>(live.request().trigger)) continue;
+                if (market_entry(row) && row.source_id == id && !row.projection_over_pyramiding)
+                    reopened = true;
+                // A call resizing its own working order replaces that claim.
+                if (row.family == PineOrderFamily::Close && !row.immediately && live.handle() != replacement
+                    && row.placement_script_open_ms == bar && row.placement_cycle == current_position_cycle_
+                    && (row.close_first_id.empty() ? row.source_id : row.close_first_id) == id
+                    && std::holds_alternative<native_order::Independent>(live.request().owner)
+                    && finite_positive(row.projection_remaining_qty))
+                    claimed += row.projection_remaining_qty;
+            }
+            if (!reopened && (reversed || claimed > 0.0)) {
+                const double target = std::min(fixture_close_logical_units(id), std::abs(held));
+                if (target > 0.0 && (reversed || claimed + internal::kQtyEpsilon >= target)) {
+                    record_dropped_close(id, comment, qty, qty_percent, immediately, callsite_token);
+                    return;
+                }
+            }
+        }
+    }
     record_close_first(!immediately && !std::isfinite(qty)
                        && (!std::isfinite(qty_percent) || qty_percent >= 100.0)
                        && (id.empty() || open_lot_of(id)));
@@ -11114,8 +11184,6 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         // at the eventual candidate.
         effective_qty = kNaN;
     }
-    const bool default_fifo_close = !config_.close_entries_rule_any
-        && std::isnan(qty) && std::isnan(qty_percent);
     bool paired_reversal_close = false;
     bool paired_reversal_whole_drop = false;
     std::optional<native_order::RequestHandle> paired_reversal_parent;

@@ -787,8 +787,8 @@ is live.
 
 ```text
 Nonzero compiler-token path. Every syntactic strategy.close site owns an
-independent copy of the accepted replacement batch. Distinct sites all
-flush; repeated runtime evaluations of one site replace only that batch.
+independent copy of the accepted replacement batch. Only sites with a target flush;
+repeated calls at one site can replace only that site's order.
 Per-source-bar only. Cross-bar reservation/provenance is stored in the
 owner-aware maps below, so a one-callsite generated strategy remains
 behavior-identical to token 0 while distinct sites coexist.
