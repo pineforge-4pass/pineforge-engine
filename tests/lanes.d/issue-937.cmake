@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_issue_937_journal_comment)
+pineforge_add_unit_test(test_issue_937_journal_comment)

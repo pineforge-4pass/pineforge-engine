@@ -14,7 +14,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -238,10 +237,10 @@ enum class Shape { Wide, Deep, Tree, ManySeeds };
 constexpr std::size_t kJournalMaxResident = 2048;
 constexpr std::size_t kJournalChunk = 32;
 constexpr std::size_t kJournalSpillPageBytes = 32768;
-// src/native_order.cpp:1582: std::array<Cached, 4>; :1567 has four read buffers.
+// JournalStore::cache has four decoded slots; SpillStorage::read has four buffers.
 // exercise_reload_control counts the decoded storage slots through history_at.
 constexpr std::size_t kJournalCacheSlots = 4;
-// Mirrors kBookMax at src/native_order.cpp:1486 and BookSpill::kSide at :1926.
+// Mirrors kBookMax in native_order.cpp and BookSpill::kSide in native_order_book.hpp.
 constexpr std::size_t kBookMaxResident = 4096;
 constexpr std::size_t kBookSideRows = 8;
 constexpr std::size_t kWideRootCount = 2;
@@ -631,7 +630,7 @@ void exercise_reload_control(bool direct, const no::Request& request, const no::
         CHECK(core.submit(filler, 0, incarnation, ordinal).status == no::SubmitStatus::Rejected);
 
     // The next append spills [0,32); every further 32 appends spills another
-    // chunk (src/native_order.cpp:1679-1717). Do not read any spilled row until
+    // chunk in JournalStore::spill_front_chunk. Do not read any spilled row until
     // recording: all six distinct pages must be cold. Below, verify that each
     // entire chunk moved into one contiguous decoded CommandEvent vector.
     std::array<std::size_t, page_count> page_positions{};
@@ -697,10 +696,10 @@ void exercise_reload(bool direct) {
     const no::Request root_request{no::Transact{1.0}, "root", ""};
     const no::Request child_request{no::Reduce{no::ExplicitUnits{1.0}}, "child", ""};
     const no::Request filler{no::Transact{0.0}, "filler", ""};
-    // Definitions are allocated by src/native_order.cpp:1285, once per event.
+    // archive_definition allocates one definition per event in this fixture.
     constexpr auto decoded_events = kJournalCacheSlots * kJournalChunk;
     constexpr auto definition_bytes = decoded_events * kDefinitionAllocationBytes;
-    // archive_string (:1205-1215) resizes fresh strings. Bound both text fields
+    // archive_string resizes fresh strings. Bound both text fields
     // by these actual case strings' largest capacities, including terminators,
     // even where short-string storage is already included in sizeof(definition).
     const auto label_capacity = std::max({root_request.label.capacity(),
@@ -713,19 +712,19 @@ void exercise_reload(bool direct) {
     // definition. Independent/WaitForApplied owners and BookTransaction/Wait
     // authority with PendingNone contain no opening handles or adjustment ids.
     // The control pages contain only Accepted/Independent events, also no ids.
-    // archive_vector (src/native_order.cpp:1235-1246) therefore resizes no ids.
+    // archive_vector therefore resizes no ids.
     constexpr std::size_t opening_ids_per_event = 0, adjustment_ids_per_event = 0;
     constexpr auto id_vector_bytes = decoded_events *
         (opening_ids_per_event * sizeof(no::RequestHandle)
          + adjustment_ids_per_event * sizeof(std::uint64_t));
-    // prepare_spill (:1595-1602) reserves all event vectors and buffers and,
-    // via ExtFile::prepare (:979-982), the first arena chunk/table entry BEFORE
+    // JournalStore::prepare_spill reserves all event vectors and buffers and,
+    // via ExtFile::prepare, the first arena chunk/table entry BEFORE
     // recording. The drain can still grow the data extent: bound one existing
     // page plus a full fixed resident cap of appends (enforced below), each
-    // chunk spilling at most kSpillPageBytes for these short, full-page rows.
+    // chunk spilling at most one transfer of event bytes plus its uint64_t seal.
     // The page directory stays within its prepared first arena chunk.
     constexpr auto max_spill_bytes =
-        (1 + kJournalMaxResident / kJournalChunk) * kJournalSpillPageBytes;
+        (1 + kJournalMaxResident / kJournalChunk) * (kJournalSpillPageBytes + sizeof(std::uint64_t));
     constexpr std::size_t arena_chunk_bytes = detail::ScratchArena::kChunkBytes;
     constexpr auto max_arena_chunks = (max_spill_bytes + arena_chunk_bytes - 1) / arena_chunk_bytes;
     // src/scratch_arena.cpp:295-301 doubles the uint32_t table capacity:
@@ -975,8 +974,8 @@ void exercise_limits(bool direct) {
         CHECK(found && full_fold::value(*found) == values[kJournalChunk]);
     }
     {
-        no::WorkingRequestCore core{no::RunIdentity{"x08-limits-refuse", 1}};
-        core.reset(no::RunIdentity{"x08-limits-refuse", 1});
+        no::WorkingRequestCore core{no::RunIdentity{"x08-limits-spanning", 1}};
+        core.reset(no::RunIdentity{"x08-limits-spanning", 1});
         core.reserve(kJournalMaxResident + 64);
         std::uint64_t incarnation = 1, ordinal = 1;
         const no::Request over{no::Transact{1.0}, std::string(over_label, 'o'), ""};
@@ -985,40 +984,32 @@ void exercise_limits(bool direct) {
         while (core.history_end() < kJournalMaxResident)
             CHECK(submit_limit_case(core, filler, incarnation, ordinal, direct).status
                   == no::SubmitStatus::Rejected);
-        const auto before = full_fold::core_value(core);
+        const auto over_value = full_fold::value(core.history_at(0));
         const auto before_end = core.history_end();
         const auto before_incarnation = incarnation, before_ordinal = ordinal;
         std::array<std::uintptr_t, kJournalChunk> addresses{};
         for (std::size_t index = 0; index < addresses.size(); ++index)
             addresses[index] = reinterpret_cast<std::uintptr_t>(&core.history_at(index));
-        // The event is already resident; the next append reaches the spill
-        // refusal in reserve_plan/seal_direct. Retry also must publish nothing.
-        for (unsigned attempt = 0; attempt < 2; ++attempt) {
-            bool refused = false;
-            try {
-                (void)submit_limit_case(core, filler, incarnation, ordinal, direct);
-            } catch (const detail::ScratchIoError& error) {
-                refused = true;
-                CHECK(error.code() == std::error_code(EFBIG, std::generic_category()));
-                CHECK(std::string(error.what()).find(
-                          "native o1 journal event exceeds the spill page byte bound")
-                      != std::string::npos);
-            }
-            CHECK(refused);
-            CHECK(core.history_end() == before_end && core.history_base() == 0);
-            CHECK(incarnation == before_incarnation && ordinal == before_ordinal);
-            CHECK(full_fold::core_value(core) == before);
-            for (std::size_t index = 0; index < addresses.size(); ++index)
-                CHECK(reinterpret_cast<std::uintptr_t>(&core.history_at(index)) == addresses[index]);
-        }
-        // Removing only the oversized event leaves a partial resident chunk.
-        // The following appends must still spill/read its surviving prefix.
+        // expectation corrected: spill EFBIG -> one published filler, because
+        // this page-plus-one event now spans two transfers of its own.
+        const auto appended = submit_limit_case(core, filler, incarnation, ordinal, direct);
+        CHECK(appended.status == no::SubmitStatus::Rejected && appended.event_ordinal == before_ordinal);
+        CHECK(core.history_end() == before_end + 1 && core.history_base() == 0);
+        CHECK(incarnation == before_incarnation && ordinal == before_ordinal + 1);
+        CHECK(reinterpret_cast<std::uintptr_t>(&core.history_at(0)) != addresses[0]);
+        CHECK(full_fold::value(core.history_at(0)) == over_value);
+        CHECK(std::get<no::AcceptedEvent>(core.history_at(0)).request().label == over.label);
+        for (std::size_t index = 1; index < addresses.size(); ++index)
+            CHECK(reinterpret_cast<std::uintptr_t>(&core.history_at(index)) == addresses[index]);
+
+        // Retire the spanning event, then spill/read the surviving chunk prefix.
         const auto survivor = full_fold::value(core.history_at(1));
         CHECK(core.retire_history(accepted.event_ordinal) == 1);
-        for (unsigned index = 0; index < 2; ++index)
-            CHECK(submit_limit_case(core, filler, incarnation, ordinal, direct).status
-                  == no::SubmitStatus::Rejected);
+        CHECK(!core.event_at(no::EventId{core.identity(), accepted.event_ordinal}));
+        CHECK(submit_limit_case(core, filler, incarnation, ordinal, direct).status
+              == no::SubmitStatus::Rejected);
         CHECK(core.history_base() == 1 && core.history_end() == before_end + 2);
+        CHECK(incarnation == before_incarnation && ordinal == before_ordinal + 2);
         CHECK(reinterpret_cast<std::uintptr_t>(&core.history_at(1)) != addresses[1]);
         CHECK(full_fold::value(core.history_at(1)) == survivor);
     }
