@@ -682,8 +682,11 @@ flag is false. This flag is informational: it does not affect the top-level
 verdict, its reason or `unboundedTerms`. Private growth is capped by the
 child's `RLIMIT_AS` and a breach is the strategy's typed `memory_limit`.
 
-The native request `JournalStore` caps 2,048 committed events in 32-event chunks,
-with a keep-resident floor of 128, spill pages holding up to 32,768 bytes of events plus an 8-byte seal, and four decoded cache slots.
+The native request `JournalStore` keeps committed events in 32-event chunks.
+It spills while an append would exceed the 2,048-event cap and more than 128
+events remain resident. The last spill can leave fewer than 128. Each transfer
+carries up to 32,768 bytes of events plus an 8-byte seal. A larger event
+occupies one page spanning multiple transfers. The decoded cache has four slots.
 A bar exceeding the cap spills before retirement. The short waiting-child
 parent-terminal fixture's 4,096-row book cap and this journal cap give the plateau
 `456*(2048 + (4096/2+2) + (32+1)) + 6720 + 524 = 1890980` bytes on GNU 13.4 x86-64,
