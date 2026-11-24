@@ -237,11 +237,11 @@ struct PlacementSnapshot {
     // and a cancel and re-entry of the id. Cleared when the id fills, which
     // binds the exit to that fill's lot (ExitBindingRuleSwitches).
     bool pending_bound_exit = false;
-    // A leg of one entry's bracket of a from_entry "" exit that covers the
-    // position entry by entry (ExitBindingRuleSwitches::
-    // global_exit_per_entry_levels): the incarnation of the entry order whose
-    // fill price set its level, and that entry's quantity, which is all the
-    // leg closes. Zero for every other row.
+    // The opening that owns this leg and the units it can close. A tick
+    // bracket takes its level from that opening; a named percentage target
+    // takes its quantity from it. FIFO can book either against an older lot.
+    // A pending add keeps the same identity when its fill arms the leg.
+    // Orders without per-opening sizing or pricing have an origin of zero.
     std::uint64_t per_entry_origin = 0;
     double per_entry_units = std::numeric_limits<double>::quiet_NaN();
     // Sized when it was placed and executed as a plain market transaction:
@@ -2403,6 +2403,9 @@ private:
                                   std::uint64_t& reservation_sequence,
                                   bool whole_position_percent,
                                   double pending_market_units) const;
+    void withdraw_percent_limits(const SourceId& exit_id, const SourceId& from_entry,
+                                 std::optional<std::uint64_t> origin);
+    double completed_opening_units(std::uint64_t origin, bool long_side, const SourceId& from_entry);
     void reconcile_deferred_exit_reservations(const SourceId& from_entry,
                                                double live_basis);
     void reconcile_exit_reservations_after_margin();
@@ -2948,9 +2951,20 @@ private:
     // then suppress just that duplicate debit at notification delivery.
     std::unordered_set<std::uint64_t> current_debited_applied_ordinals_;
     std::unordered_set<std::uint64_t> intraday_loss_relabel_ordinals_;
+    // Positive: the position cycle. Negative: the last order of a split
+    // percentage target filled at the negated Applied ordinal.
     pineforge::detail::IdPairStore<std::int64_t, true> consumed_partial_exit_cycles_{
         pineforge::detail::IdTableReadCache::kPairCacheBytes};
-    std::unordered_set<std::uint64_t> bracket_shadowed_openings_;
+    // Incarnation zero (never an opening) dates the first percentage TP fill
+    // this cycle. Only openings after it need a date. Units are the basis
+    // before FIFO cuts. Shadowed lots retain the existing slot-retirement rule.
+    struct OpeningExitFacts {
+        std::uint64_t applied = 0;
+        double units = 0.0;
+        bool shadowed = false;
+    };
+    std::unordered_map<std::uint64_t, OpeningExitFacts> opening_exit_facts_;
+    void forget_opening(std::uint64_t origin);
     std::unordered_map<SourceId, NamedEntryCancelToken> named_entry_cancel_tokens_;
     // An exit bound to its entry id whose working order a strategy.cancel of
     // the id withdrew (PlacementSnapshot::pending_bound_exit): TradingView

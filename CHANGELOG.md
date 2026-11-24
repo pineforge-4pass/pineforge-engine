@@ -12,6 +12,7 @@ version number follows semantic versioning over the surfaces the
 ### Fixed
 
 - When a C++ host makes an exit leg wait for another order, an entry reversal now cancels the hidden leg of the entry it closed. A market opening also withdraws a hidden global exit placed while flat with no pending entry, and switching between a whole-position bracket and per-entry orders withdraws the old hidden leg.
+- Reissuing a percentage take-profit over an added entry with the same ID now gives each opening its own order. FIFO can book both fills against the older entry (#810).
 - A historical daily `lookahead_on` projection now keeps the Unix epoch bar in its exchange day, including when midnight falls at a different UTC hour.
 - `strategy.entry` now places no order when it omits `qty` under a declared cash or percent-of-equity default of zero. A resting order with the same ID keeps its price and place in the book.
 - The observation counters in `ta.atr`, `ta.tr` and `ta.tsi` now stop at 2147483647 instead of overflowing on the next increment.

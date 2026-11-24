@@ -626,11 +626,22 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.u(intraday_relabel_ordinals.size());
     for (const auto ordinal : intraday_relabel_ordinals) f.u(ordinal);
     consumed_partial_exit_cycles_.fold_sorted(f);
-    std::vector<std::uint64_t> shadowed_openings(
-        bracket_shadowed_openings_.begin(), bracket_shadowed_openings_.end());
+    std::vector<std::uint64_t> shadowed_openings, dated_openings;
+    for (const auto& row : opening_exit_facts_) {
+        if (row.second.shadowed) shadowed_openings.push_back(row.first);
+        if (row.second.applied || row.second.units > 0.0) dated_openings.push_back(row.first);
+    }
     std::sort(shadowed_openings.begin(), shadowed_openings.end());
     f.u(shadowed_openings.size());
     for (const auto opening : shadowed_openings) f.u(opening);
+    if (!dated_openings.empty()) {
+        std::sort(dated_openings.begin(), dated_openings.end());
+        f.s("percent-limit-opening-order/v1"); f.u(dated_openings.size());
+        for (const auto id : dated_openings) {
+            const auto& opening = opening_exit_facts_.at(id);
+            f.u(id); f.u(opening.applied); f.d(opening.units);
+        }
+    }
     std::vector<std::string> named_cancel_keys;
     named_cancel_keys.reserve(named_entry_cancel_tokens_.size());
     for (const auto& row : named_entry_cancel_tokens_) named_cancel_keys.push_back(row.first);
