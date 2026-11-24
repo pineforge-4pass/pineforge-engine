@@ -133,8 +133,8 @@ def compile_baseline(args: argparse.Namespace, root: Path) -> Path:
     return output
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+def parse_args(argv=None, *, parser_class=argparse.ArgumentParser):
+    parser = parser_class(description=__doc__)
     parser.add_argument("--candidate", type=Path, required=True)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--csv", type=Path, required=True)
@@ -146,7 +146,11 @@ def main() -> int:
     mode.add_argument("--skip-if-receipt-missing", action="store_true")
     mode.add_argument("--require-receipts", action="store_true")
     parser.add_argument("--candidate-only", action="store_true")
-    args = parser.parse_args()
+    return parser.parse_args(argv)
+
+
+def main() -> int:
+    args = parse_args()
     try:
         receipt = enforce_receipt_mode(
             [args.v16_frozen_receipt], skip=args.skip_if_receipt_missing,

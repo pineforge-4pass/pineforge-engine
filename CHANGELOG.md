@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- The ABI receipt check now names a missing required option or an unavailable relative command before reporting receipt and compile database files as present.
 - The design inventory ignores disabled writes to source lists and names a list it cannot resolve instead of accepting it as evidence of closure.
 - A resting stop or limit entry sized in percent of equity that reverses a position now converts its percentage at the fill. Before, when the position had grown to that number of contracts after the order was placed, the order only closed it.
 - A timeframe multiplier above the `int` range now reports `pine_invalid_argument`. The security trace also compares timestamps across the full signed range without wrapping a distant forward gap into its one-hour window.
@@ -19,7 +20,7 @@ version number follows semantic versioning over the surfaces the
 - Installing or clearing a `3M` feed leaves `M` and `12M` prices intact. Each monthly request selects its own feed when supplied; `M` and `1M` still share a feed.
 - A market entry rebuilt after a full close keeps its OCA group, so its fill still cancels or reduces resting group members.
 - An entry whose call names a cash amount of zero or an equity percentage of zero places no order, including when another order closes the position on the same bar. An entry that leaves out its quantity under a declared default of zero is not changed.
-- The ABI receipt check names unusable CTest commands and malformed receipt arguments. It reports which inputs are present; only CTest results establish which rows executed. It does not know every argument that a row's own program requires, and it looks for the program only under an absolute path, so a row that lacks one of these can still be reported with its inputs present.
+- The ABI receipt check names unusable CTest commands and malformed receipt arguments. It reports which inputs are present; only CTest results establish which rows executed.
 - The design inventory follows kernel registration branches, checks primary rows and executable aliases, and states when no CTest listing was compared. Preflight gives the inventory no CTest listing, so that part reads `NOT COMPARED` there.
 - The private-fixture check inspects each discovered Python module, applies skip properties only to the tests they name, and reports when there are no Python programs to compare. It does not read a Python command that is registered through a CMake variable, it accepts a skip by its text without proving that the skip guards the read, and it does not ask whether a test property stands in an active branch.
 - With pyramiding above one and the first-in-first-out close rule, a run that declares no quantity step now counts open entries as a run does whose declared step is a power of ten from 1e-12 to 1e6, such as 0.01: an entry whose own exit or close filled frees its slot even when an older trade was closed instead (#694). A run with another declared step, such as 0.25, is not changed.

@@ -12,8 +12,9 @@ skipped row as passed, so it still prints "100% tests passed".
 scripts/ci_verify.py prepares its providers itself and configures the option
 ON, where a missing receipt fails the row; this script needs neither.
 
-It reads the rows CTest registered (ctest --show-only=json-v1) and reports
-which declared receipt inputs are files, along with the missing-input mode
+It reads the rows CTest registered (ctest --show-only=json-v1), validates a
+gated command with its program's argument parser, and reports which
+declared receipt inputs are files, along with the missing-input mode
 for each blocked row. test_l4g_runtime_budget also reads the tree's
 compile_commands.json once its receipt exists, so a tree configured without
 CMAKE_EXPORT_COMPILE_COMMANDS=ON is named too. --prepare first prepares the
@@ -28,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import importlib
 import json
 import os
 from pathlib import Path
@@ -50,6 +52,8 @@ MODES = {'--skip-if-receipt-missing': 'skip', '--require-receipts': 'require'}
 # An input receipt: --base-receipt, --v16-frozen-receipt, ...; a bare
 # --receipt names the row's own output.
 RECEIPT_INPUT = re.compile(r'--(?:[a-z0-9]+-)+receipt')
+RECEIPT_PROGRAMS = {'check_runtime_budget', 'check_script_cpp_abi',
+                    'check_settlement_cpp_abi', 'check_aggregate_cpp_versions'}
 
 
 @dataclass(frozen=True)
@@ -79,6 +83,53 @@ def registered_tests(build_dir: Path, ctest: str = 'ctest') -> list[dict]:
     return tests
 
 
+def registered_path(value: str, test: dict, field: str) -> Path:
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    name = test['name']
+    properties = test.get('properties', [])
+    if not isinstance(properties, list):
+        raise ValueError(f'{name}: malformed CTest properties')
+    cwd = next((p.get('value') for p in properties if isinstance(p, dict)
+                and p.get('name') == 'WORKING_DIRECTORY'), None)
+    if not isinstance(cwd, str) or not Path(cwd).is_absolute():
+        raise ValueError(f'{name}: {field} {value!r} is relative without a CTest working directory')
+    return Path(cwd) / path
+
+
+class RegistryParser(argparse.ArgumentParser):
+    """Only complete option names have corresponding file checks in the listing."""
+    def __init__(self, **kwargs):
+        super().__init__(**{**kwargs, 'allow_abbrev': False, 'add_help': False})
+
+    def error(self, message):
+        raise ValueError(message)
+
+
+def check_program_arguments(test: dict, executable: Path) -> None:
+    command = test['command']
+    name = test['name']
+    pos = 1
+    while pos < len(command) and command[pos] in ('-B', '-I'):
+        pos += 1
+    if (pos == len(command) or command[pos].startswith('-')
+            or executable.resolve() != Path(sys.executable).resolve()):
+        raise ValueError(f'{name}: no receipt argument parser for command {command[:pos + 1]!r}')
+    program = registered_path(command[pos], test, 'program').resolve()
+    if (program.parent != ROOT / 'scripts' or program.suffix != '.py'
+            or program.stem not in RECEIPT_PROGRAMS or not program.is_file()):
+        raise ValueError(f'{name}: no receipt argument parser for {program}')
+    try:
+        # Import only this checkout's known programs. Never execute a registered command.
+        module = importlib.import_module(program.stem)
+        if program != Path(module.__file__).resolve():
+            raise ValueError('imported parser belongs to a different file')
+        module.parse_args(command[pos + 1:], parser_class=RegistryParser)
+    except (AttributeError, ImportError, OSError, SyntaxError, TypeError, ValueError) as error:
+        raise ValueError(f'{name}: {program.name}: {error}') from error
+
+
 def gated_rows(tests: list[dict]) -> list[GatedRow]:
     """The receipt-gated rows among tests, with the inputs each is missing."""
     rows = []
@@ -91,10 +142,10 @@ def gated_rows(tests: list[dict]) -> list[GatedRow]:
                 or not all(isinstance(arg, str) for arg in command)
                 or not command[0].strip()):
             raise ValueError(f'{name}: CTest did not supply a usable command')
-        executable = Path(command[0])
-        if (command[0] in ('NOT_AVAILABLE', 'NOTFOUND') or command[0].endswith('-NOTFOUND')
-                or (executable.is_absolute() and
-                    (not executable.is_file() or not os.access(executable, os.X_OK)))):
+        if command[0] in ('NOT_AVAILABLE', 'NOTFOUND') or command[0].endswith('-NOTFOUND'):
+            raise ValueError(f'{name}: unavailable CTest command {command[0]!r}')
+        executable = registered_path(command[0], test, 'command')
+        if not executable.is_file() or not os.access(executable, os.X_OK):
             raise ValueError(f'{name}: unavailable CTest command {command[0]!r}')
         modes = [MODES[arg] for arg in command[1:] if arg in MODES]
         if not modes:
@@ -112,19 +163,9 @@ def gated_rows(tests: list[dict]) -> list[GatedRow]:
                 raise ValueError(f'{name}: {flag} needs a path')
             if flag in inputs:
                 raise ValueError(f'{name}: duplicate {flag}')
-            path = Path(value)
-            if not path.is_absolute() and flag != '--receipt':
-                # Row inputs are relative to CTest's working directory, not ours.
-                properties = test.get('properties', [])
-                if not isinstance(properties, list):
-                    raise ValueError(f'{name}: malformed CTest properties')
-                cwd = next((p.get('value') for p in properties if isinstance(p, dict)
-                            and p.get('name') == 'WORKING_DIRECTORY'), None)
-                if not isinstance(cwd, str) or not Path(cwd).is_absolute():
-                    raise ValueError(f'{name}: {flag} is relative without a CTest working directory')
-                path = Path(cwd) / path
-            inputs[flag] = path
+            inputs[flag] = Path(value) if flag == '--receipt' else registered_path(value, test, flag)
         receipts = [path for flag, path in inputs.items() if RECEIPT_INPUT.fullmatch(flag)]
+        check_program_arguments(test, executable)
         if not receipts:
             raise ValueError(f'{name}: receipt mode has no input receipt')
         database = inputs.get('--compile-commands')
