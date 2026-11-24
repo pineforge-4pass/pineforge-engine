@@ -558,6 +558,8 @@ ClipResult check_observation(const ClipRow& row, const ClipObservation& obs, boo
     if (pair_blocked.empty() && partial.unbound) pair_blocked = std::string("partial_exit:") + partial.unbound;
     report("fills_on_quantity_step", fills_on_quantity_step(obs, pair_blocked), want_block);
     if (self && !ok) return ClipResult::ControlFailed;
+    report("complete_fill_list", complete_fill_list(obs, pair_blocked), want_block);
+    if (self && !ok) return ClipResult::ControlFailed;
     const double stop = later.fill ? later.fill->price : kNaN;
     const double limit = partial.fill ? partial.fill->price : kNaN;
     std::printf("EXIT_FILLS mode=%s row=%s later_bar=%.0f expected_later_bar=%d "
@@ -606,18 +608,9 @@ ClipResult run_row(const ClipRow& row) {
                 static_cast<unsigned long long>(probe.broker_state_hash()));
     const ClipResult real = check_observation(row, obs, completed);
     if (real != ClipResult::Pass) {
-        print_check(row.name, "complete_fill_list",
-                    {ClipStatus::NotCompared, "real_fills_not_verified", kNaN, kNaN});
         std::printf("CONTROL mode=%s name=reject_extra_fill status=NOT COMPARED "
                     "reason=real row did not pass\n", row.name);
         return real;
-    }
-    const auto list = complete_fill_list(obs, {});
-    print_check(row.name, "complete_fill_list", list);
-    if (!list.passed()) {
-        std::printf("CONTROL mode=%s name=reject_extra_fill status=NOT COMPARED "
-                    "reason=real fill list did not match\n", row.name);
-        return ClipResult::Fail;
     }
 
     // Preserve every real fill and the final position and ledger; append one
