@@ -31,7 +31,7 @@ these recomputation controls.
 | `strategy_request_abort` | Set a cooperative abort flag, consumed by the run in progress, checked at the top of the batch run's ordinary and aggregated paths. | N/A — an action, not configuration; cleared at `run()` entry. | No |
 | `strategy_last_run_status` | `0` completed, `1` `NOT_COMPLETED` (failed, aborted, or void setter failure), `-1` if `s` is `NULL`. A zero status alone does not establish success; read `strategy_get_last_error` and `strategy_get_last_error_code` after every start. | N/A — read-only. | No |
 | `strategy_set_realtime_tail` | Mark the array's last bar as a still-forming tail (§3.1 semantics below). | Off (`on == 0`). | No |
-| `strategy_set_probe_suppress_tail_logic` | Run only the broker's pre-`on_bar` steps on the last bar and stop (§3.2 below). | Off (`on == 0`). | No |
+| `strategy_set_probe_suppress_tail_logic` | Skip the ordinary script calculation on the last script bar. The broker still matches orders and the adapter still runs its close checks, including any margin call due on that bar (§3.2 below). | Off (`on == 0`). | No |
 | `strategy_set_path_order` | Force the intrabar leg order used by every OHLC-path helper (§3.3 below). | `0` AUTO (the unchanged TV-emulator "nearer-to-open" rule). | No |
 | `strategy_last_bar_dual_entry_path` | Read which side won a same-bar dual-entry-stop arbitration on the last dispatched bar (`0` none, `1` long-first, `2` short-first, `-1` if `s` is `NULL`). | N/A — read-only per-bar snapshot. | No |
 | `strategy_set_broker_state_hash_recording` | Toggle a 64-bit broker-state hash appended to `pf_report_t::broker_state_hash` after each report point (§3.4 below). A bare native host gets points under `KernelRecorded`. | Off (`on == 0`); `broker_state_hash` stays `NULL`/0-length. | No |
@@ -68,7 +68,7 @@ tail, not the chart's rightmost historical bar. This is **persistent
 configuration**, not one-shot: it stays in effect until a caller passes
 `on == 0`. When `on` is non-zero:
 
-1. `barstate.islast` is false for that bar.
+1. In a chart callback `barstate.islast` is true exactly when `bar_index == last_bar_index`. A horizon beyond the supplied script bars therefore makes it false on the forming bar.
 2. The Pine host starts `session.islastbar_regular` and `session.islastbar`
    from the kernel's `NativeDecisionContext::closes_session_day_open_ended`
    (`market_driver.hpp:164`). On the forming tail the kernel uses the next
@@ -80,8 +80,8 @@ configuration**, not one-shot: it stays in effect until a caller passes
    the dated close. On an extended-hours chart a following post-market bar
    of the same day can move `session.islastbar` to a later bar; the regular
    flag stays put.
-3. `bar_index` stays put; `last_bar_index` is frozen at the horizon bar
-   (`horizon_bars - 1`), when `horizon_bars > 0`. `last_bar_time` is exact
+3. The flag leaves `bar_index` alone. For `last_bar_index`, Pine adds `bar_index_offset` to `horizon_bars - 1` when the horizon is positive, or to the expected last script index otherwise.
+   With a positive horizon, `last_bar_time` is exact
    when the horizon bar is in the script-bar array, one script-TF step per
    missing bar past the array's last bar otherwise; under aggregation
    (`input_tf < script_tf`) it is extrapolated from the first bar instead.
@@ -91,8 +91,8 @@ configuration**, not one-shot: it stays in effect until a caller passes
 5. The tail flag leaves the kernel's session close facts for interior bars unchanged.
 
 The session flags are evaluated when the timeframe is known, including on
-the aggregated and magnified batch paths. With no dated override, a tape
-of regular-session bars ending at the scheduled close gives:
+the aggregated and magnified batch paths. With no dated override and a horizon beyond
+the six script bars, a tape from one regular session ending at its scheduled close gives:
 
 | path | `session.ismarket` | `session.islastbar` | `barstate.islast` |
 |---|---|---|---|
@@ -128,9 +128,9 @@ historical batch semantics.
 
 ### §3.2 — `strategy_set_probe_suppress_tail_logic(s, on)`
 
-The last bar of the array fed to every subsequent `run()` does not
-calculate the script: the host's `on_bar` is not invoked for that bar, so
-neither is anything the script would have ordered on it. What the *broker*
+On the last script bar of each subsequent `run()`, the host skips the ordinary
+`on_bar` call and the orders it would place. With `calc_on_order_fills`, an
+eligible fill can still run the script on that bar. What the *broker*
 owes that bar it still does: the kernel still matches a resting liquidation
 on the bar's path, and the adapter still runs its post-script close pass
 (`on_bar_close`) whether or not the script ran. A margin call or an
@@ -153,9 +153,9 @@ ruling of 2026-09-22 is that the scheduler is right and the promise was
 wrong: a caller polling a forming bar wants the liquidation the broker has
 already decided, not a report that arrives one run late.
 
-The run's last-bar fills are exactly the settled book's fills against the
-forming bar, and the post-run pending-order book is the book in force
-during that bar. This is persistent configuration, like
+Resting orders can fill on the forming bar; the post-run pending-order
+book shows which orders are still resting after fills and close checks.
+This is persistent configuration, like
 `strategy_set_realtime_tail`, and **independent of it** — the two flags are
 not coupled; set each explicitly.
 
@@ -173,14 +173,14 @@ Two of these contradict what this paragraph used to claim. The bar
 magnifier is **not** a silent no-op: the probe is honoured there exactly as
 on `dispatch_bar`. And `calc_on_order_fills` is not a no-op either, but it
 is not a full suppression: the tail bar's *ordinary* calculation is
-suppressed, while a fill landing on the tail bar still recalculates the
+suppressed, while an eligible fill on the tail bar still recalculates the
 script. With the flag off, bar 9 is calculated twice (once ordinarily, once
 for the fill); with it on, bar 9 is calculated once, and that one call has
 `barstate.islast` set — it is the fill recalculation.
 
-The aggregation path is not UNDEFINED either; it is the row above, and the
-partial bucket it used to be blocked on is a separate fact: a trailing
-partial bucket is **never** calculated, with or without this flag. On
+In the 1-minute to 5-minute example above, the trailing partial bucket is
+not calculated with either flag setting. A historical calendar chart can
+instead calculate its partial final period when both tail flags are off. On
 17 1-minute bars aggregated to 5 minutes, the host sees the buckets opening
 at +0, +5 and +10 minutes with the flag off, and +0 and +5 with it on. The
 bucket opening at +15, which holds only two of its five inputs, appears on
@@ -191,14 +191,14 @@ On a Pine handle, both historical overrides must be off before calling
 and `strategy_set_probe_suppress_tail_logic(s, 0)`. If either flag is set,
 stream begin refuses with `native stream cannot use historical probe/tail overrides`.
 
-A one-bar array is all tail, so `run(bars, 1)` under this flag calculates nothing.
+A one-bar array is all tail, so `run(bars, 1)` skips its only ordinary script call.
 
 Under `process_orders_on_close`, a carried position's margin checkpoints are
 not skipped on the suppressed last bar: the bar-open slice, the kernel's path
 liquidation and the adapter's post-script close pass all run there, as on any
 settled bar (the E20 f1 rows of
-the private test `test_adapter_margin_schedule_differential`). Only the script
-calculation itself is suppressed.
+the private test `test_adapter_margin_schedule_differential`). Only the ordinary
+script calculation is suppressed.
 
 Default off (`on == 0`): every historical run stays byte-identical to
 before this flag existed.

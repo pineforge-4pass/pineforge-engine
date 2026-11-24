@@ -715,7 +715,10 @@ it, so a valid length gives that class's values. The adapters do not touch
 
 `pineforge::source::SeriesSma` (include/pineforge/source/pine_ta_length.hpp:524)
 provides an SMA with a length supplied on every evaluation in the Pine source
-adapter. The paired code generator uses it for series-length `ta.sma`. Keep
+adapter. The paired code generator uses it for series-length `ta.sma`. For
+finite inputs without intermediate overflow, fixed-length `ta.sma` follows
+TradingView's running sum and series-length `ta.sma` sums the window exactly
+before division, so the same window can round to different averages. Keep
 one instance per written call site and evaluation context. Its public signatures are below.
 
 ```cpp

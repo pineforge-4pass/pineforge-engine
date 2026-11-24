@@ -685,16 +685,16 @@ public:
     }
     bool margin_call_enabled() const { return margin_call_enabled_; }
 
-    // Live-runtime tail semantics (spec §3.1, ABI v4): the caller's fed array
-    // ends with a still-forming bar rather than the chart's rightmost
-    // historical bar. When `on`, the LAST bar of every subsequent run() (this
-    // is persistent configuration, not a one-shot flag -- it stays set until
-    // a caller passes on=false, and reset_run_state() does not touch it)
-    // gets barstate.islast == false, session.islastbar computed from the
-    // bucket calendar (no i+1 bar to peek at), pine_last_bar_index() /
-    // last_bar_time_ frozen at the horizon bar (`horizon_bars - 1`), and no
-    // range-end close row/trade. Default off: every historical run is
-    // byte-identical to before this flag existed.
+    // Live-runtime tail (spec §3.1, ABI v4; default off): treat the final bar
+    // as still forming and skip the range-end row until the flag is cleared.
+    // In a chart callback barstate.islast tests bar_index == last_bar_index.
+    // Pine adds bar_index_offset to horizon_bars - 1 for a positive horizon,
+    // or to the expected last script index otherwise. A positive horizon also
+    // fixes last_bar_time_ at the horizon. The session last-bar flags start
+    // from the kernel's open-ended close. On a regular intraday bar opening in
+    // a dated interval, both test whether one chart step reaches its close;
+    // a following post-market input on the same day can clear session.islastbar
+    // while session.islastbar_regular stays true.
     //
     // The source-runtime extraction: this and probe tail suppression used to be BacktestEngine
     // state. Both are the live runner's probe / settle protocol expressed in
@@ -710,19 +710,19 @@ public:
     bool realtime_tail() const { return realtime_tail_; }
 
     // Live probe tail suppression (spec §3.2, ABI v4): when `on`, the LAST
-    // script bar of every subsequent run() is matched but not calculated:
-    // the kernel settles the resting book against it, and PineScheduler::bar
-    // publishes it through scheduler_publish_suppressed_tail instead of
-    // on_source_bar (source history and bar_index advance, the already-
-    // matched receipts settle, the report point is marked; no range-end
-    // row). on_native_bar still runs adapter_.on_bar_close after the
-    // scheduler, so the risk-state update and the TradingView margin-call
-    // checkpoint see the forming bar, and a margin call due against it is
-    // booked there. This is persistent configuration, like
+    // script bar skips its ordinary calculation. The kernel still matches
+    // resting orders. PineScheduler::bar publishes the bar's history;
+    // scheduler_publish_suppressed_tail advances bar_index, settles matched
+    // receipts and marks the report point. This step writes no range-end row.
+    // At the chart timeframe the run can still write one unless realtime_tail
+    // is on; aggregation skips it. After the scheduler, on_native_bar calls
+    // adapter_.on_bar_close, so the risk update and TradingView margin-call
+    // checkpoint see the forming bar. A margin call due there is booked on
+    // that bar. This is persistent configuration, like
     // set_realtime_tail, and independent of it — do not couple the two
     // flags. Honoured on every batch path (single-TF, timeframe-aware,
     // magnifier; under aggregation, the last completed script bar). Under
-    // calc_on_order_fills a fill on the forming bar still triggers the fill
+    // calc_on_order_fills an eligible fill on the bar still triggers the fill
     // recalculation, which runs the script there; COOF and the magnifier
     // stay gated in live v1. A stream begin refuses the flag
     // (prepare_native_begin); see pineforge.h. Default off (@p on == 0):
@@ -1556,9 +1556,9 @@ protected:
     long long symbol_calendar_days_ = -1;
     void install_symbol_calendar_metadata();
 
-    // Live-runtime tail (spec §3.1): once script_tf_seconds_ is known for
-    // this run, freeze pine_last_bar_index()/last_bar_time_ at the horizon
-    // bar instead of the fed array's actual last index. No-op unless
+    // Live-runtime tail (spec §3.1): set last_bar_index_ and last_bar_time_
+    // to the horizon. pine_last_bar_index() adds the configured
+    // bar_index_offset when it reads that index. No-op unless
     // realtime_tail_ is on and realtime_tail_horizon_bars_ > 0.
     //
     // `script_bar_geometry` says whether `bars` is script-bar geometry:

@@ -3528,11 +3528,11 @@ void source::PineStrategyHost::scheduler_update_session_state() {
     // convention -- the kernel's open-ended reading, which equals the ordinary
     // one on every other bar.
     //
-    // The scheduler's old lookahead indexed its retained input by the count
-    // of source bars published, which under calc_on_order_fills read two bars
-    // ahead on a bar a fill recalculation had already published
-    // (tests/test_session_day_facts_adapter.cpp); the chart day's lookahead
-    // starts from the point's own input and its script bar's end instead.
+    // A fill recalculation can publish the script bar before its close.
+    // For the chart's session flags, update_extended_session_day therefore
+    // uses the callback's input index to look for the first later input
+    // at or after the script interval's end, strictly after its open.
+    // It does not use the number of published bars as an input cursor.
     const NativeCurrentPointView* point = detail::callback_point(*this);
     if (!point) return;
     const NativeDecisionContext& facts = point->decision;

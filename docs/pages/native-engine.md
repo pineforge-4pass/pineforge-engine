@@ -4593,9 +4593,9 @@ type itself lives in the adapter (`IntradayCap` `intraday_cap.hpp:84`).
 
 Nor is there a build-level one. The two source sets are disjoint:
 `PINEFORGE_SOURCE_LAYER_SOURCES` (`CMakeLists.txt:92`) holds all six
-`src/compat/pine/` units and all fourteen `src/source/` ones, and
+`src/compat/pine/` units and all sixteen `src/source/` ones, and
 `PINEFORGE_KERNEL_SOURCES` (`CMakeLists.txt:119`) holds the kernel's own
-forty-five, which are what `add_library` (`CMakeLists.txt:187`) compiles into
+sixty-six, which are what `add_library` (`CMakeLists.txt:186`) compiles into
 `pineforge_kernel`. `libpineforge.a` still carries both sets when
 `PINEFORGE_BUILD_SOURCE_LAYER` is ON, which is the default; the kernel archive
 exists either way. The installed-header closure is clean too, which the
