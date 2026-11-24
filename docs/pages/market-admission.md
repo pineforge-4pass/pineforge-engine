@@ -55,6 +55,16 @@ Appending nested events out of allocation order is supported; reclaiming a recor
 does not make its sequence available again. An unfinished allocation is abandoned
 by its call frame, and reset refuses outstanding operations.
 
+The C++ journal checks stored order births on append and decode (`Schema::birth`
+at `src/source/admission_journal_codec.cpp:241`). For `Unattributed`,
+`DirectCommand` and `ChartEvaluation`, the cursor domain and position must both
+be `None`, the index must be −1 and the count must be zero. The cursor price must
+have the exact bits of the factory's absent price (a quiet NaN); both fill
+numbers and the evaluation ordinal must be zero. `Unattributed` also requires
+bar −1 and timestamp zero. A direct command or chart evaluation keeps its own
+bar and timestamp. Append and decode return `ScratchStatus::corrupt` for a
+violation; a refused append leaves the sequence available for retry.
+
 For an encoded command, `admission::append_journal_record` checks the order's
 fill cursor and fill numbers by the same rules as readback. For example, a
 fill evaluation whose first fill number is zero returns `ScratchStatus::corrupt`

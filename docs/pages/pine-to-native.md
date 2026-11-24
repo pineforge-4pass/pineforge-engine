@@ -782,8 +782,11 @@ after multiple calls and requested-context clocks require separate
 qualification. These ordinary C++ API rules do not establish Pine overload
 admission or TradingView parity for those contexts. Constant-length calls
 continue to use `ta::SMA`. The unit test covers a cancellation where only the
-series-length path retains a tiny addend. Its separate 1441-row feed comparison at N=20 reports
-difference counts and maximum ULP distance against fixed `ta::SMA`.
+series-length path retains a tiny addend. Its separate 1441-row feed comparison
+at N=20 reports difference counts and maximum ULP distance against fixed
+`ta::SMA`. If values differ, it prints the first differing row and the row
+with the largest ULP distance, with timestamps and hexadecimal values. The
+comparison calls the two C++ implementations directly.
 
 `ensure_capacity` (src/source/pine_ta_length.cpp:496) grows the ring as
 non-`na` samples arrive, up to L + 1 when capped. Rollback needs only a

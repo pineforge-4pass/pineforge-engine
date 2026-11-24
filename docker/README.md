@@ -111,6 +111,12 @@ Mount points (provide exactly one of `strategy.pine` / `strategy.cpp`):
 | `strategy.cpp`   | `/in/strategy.cpp`    | back-compat | Pre-transpiled PineForge translation unit (used only if no `.pine`). Must pass the bundled codegen allowlist. The host must set `PINEFORGE_STRATEGY_CPP_SHA256` to the SHA-256 of those exact bytes unless `PINEFORGE_ALLOW_UNATTESTED_CPP=1` (local trust only; a hosted caller must never set it). |
 | `ohlcv.csv`      | `/in/ohlcv.csv`       | yes      | `timestamp,open,high,low,close,volume` |
 
+The entrypoint copies mounted C++ into its work directory. It verifies that
+copy against the host's digest, checks it with the same allowlist used for
+Pine translation, and compiles the copy. The local opt-out skips only the
+digest check. Empty or whitespace-only source, a finding from the allowlist,
+or an allowlist check that cannot run stops the request before compilation.
+
 ### Check the compiled strategy before loading
 
 A trusted parent can set `PINEFORGE_STRATEGY_SO_SHA256` in the engine

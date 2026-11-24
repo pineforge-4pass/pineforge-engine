@@ -342,6 +342,14 @@ throwing diagnostic surfaces: they raise typed `out_of_memory` before their
 callers can interpret invalid-storage status. Their nonowning validation scans
 remain nonallocating and `noexcept`.
 
+When a C++ caller appends a raw record to a bound journal, the journal checks
+the pending value before committing it (`put_checked` at
+`include/pineforge/detail/journal_codec.hpp:236`). A native record's ordinal
+must be greater than the last committed ordinal. An admission record's sequence
+must match the key chosen for the append. The journal uses the stored outcome
+and sequence to decide whether to update the last rejected command bar.
+Callers must still supply immutable byte sources.
+
 If an I/O error prevents reading a field's type tag in an otherwise valid
 admission journal record, `append_journal_record` and `decode_journal_record`
 return `io_error`. On a journal bound to a store, `Journal::events()` and

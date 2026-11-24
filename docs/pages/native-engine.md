@@ -555,6 +555,10 @@ Accepted definitions use canonical handle order; execution still closes lots
 in physical FIFO order. Later retirement narrows the live subset, while the
 immutable definition retains the original cohort. Several fragments of one
 opening share its provenance. A new handle with the same label is excluded.
+For a C++ host that supplies the handles through an `OpeningReadback`, use
+`BindOpenings{{}, cycle, reader}`. Supply the nonempty list in exactly one
+form. Both `submit` and `replace` validate the live openings during the call
+and freeze the selection, so later matches do not read the caller's reader.
 
 One selected request produces one execution and ticket, even when it closes
 several rows. `ExecutionAppliedEvent::scope` uses native `ExecutionScope`
@@ -3689,6 +3693,9 @@ in either form, both for the request owner (`hash_owner`,
 only when their cycles and canonical lists match (`same_reduction_scope`,
 `src/native_execution_consumer.cpp:723`). If a required handle cannot be read,
 the hash or sizing call reports the failure without returning a partial result.
+The host builds its opening observations from the supplied handles. C callers
+pass them as an array of opening incarnation numbers in `owner_incarnations`
+(`include/pineforge/native_c_api.h:2184`).
 
 `ScopeBasis` chooses *when* the scope is measured. `AtMatch` (the default)
 reads the bound scope as it stands at the matching candidate, so two 50 %
