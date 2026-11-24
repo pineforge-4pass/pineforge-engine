@@ -120,6 +120,17 @@ def tree(body: str, **kwargs):
 class MustFail(unittest.TestCase):
     """Every way a citation can be wrong is a non-zero exit that names itself."""
 
+    def test_no_anchors_is_not_a_successful_comparison(self) -> None:
+        with tree('```console\nnative_host.hpp:9999: example output\n```\n') as t:
+            for selected in (True, False):
+                with self.subTest(selected=selected):
+                    if not selected:
+                        t.page.unlink()
+                    code, out = t.run('--list', '--fix')
+                    self.assertEqual(code, 2, out)
+                    self.assertIn('NOT COMPARED: no documentation anchors found', out)
+                    self.assertNotIn('every documentation anchor resolves', out)
+
     def test_wrong_line(self) -> None:
         with tree('The host callback `on_native_bar` native_host.hpp:5.\n') as t:
             code, out = t.run()
@@ -141,6 +152,74 @@ class MustFail(unittest.TestCase):
             self.assertEqual(code, 1, out)
             self.assertIn('SYMMISS', out)
             self.assertIn('NONE', out)                  # nowhere to point it at
+
+    def test_unrelated_code_cannot_vouch_for_a_symbol_in_a_comment(self) -> None:
+        body = 'See `retired` example.cpp:1.\n'
+        with tree(body) as t:
+            source = t.root / 'src/example.cpp'
+            header = "int live = 1'000; // retired; it's gone\nint next;\n"
+            source.write_text(header)
+            for args in ((), ('--fix',)):
+                code, out = t.run(*args)
+                self.assertEqual(code, 1, out)
+                self.assertIn('example.cpp:1  [SYMMISS]', out)
+                self.assertIn('only in a comment', out)
+                self.assertEqual(t.page.read_text(), body)
+            for prefix in ('', f'`{pin(1, 2, header)}` '):
+                t.page.write_text(f'See `retired` {prefix}example.cpp:1-2.\n')
+                code, out = t.run()
+                self.assertEqual(code, 1, out)
+                self.assertIn('example.cpp:1-2  [SYMMISS]', out)
+                self.assertIn('only in a comment', out)
+            t.page.write_text(body)
+            source.write_text('int live; // retired\nint retired;\n')
+            self.assertEqual(t.run('--fix')[0], 0)
+            self.assertEqual(t.page.read_text(), 'See `retired` example.cpp:2.\n')
+
+    def test_a_ruling_fragment_must_be_code(self) -> None:
+        body = RULING + '| field | `int limit = 0` example.cpp:1 |\n'
+        with ruling(body) as t:
+            source = t.root / 'src/example.cpp'
+            source.write_text('int limit = 1; /* int limit = 0 */\n')
+            code, out = t.run('--fix')
+            self.assertEqual(code, 1, out)
+            self.assertIn('example.cpp:1  [SYMMISS]', out)
+            self.assertEqual(t.page.read_text(), body)
+            source.write_text('int limit = 0;\n')
+            self.assertEqual(t.run()[0], 0)
+            comment = '// int limit = 0\n// end of example\n'
+            source.write_text(comment)
+            t.page.write_text(RULING + '| field | the comment `int limit = 0` '
+                              f'`{pin(1, 2, comment)}` example.cpp:1-2 |\n')
+            self.assertEqual(t.run()[0], 0)
+
+    def test_comment_markers_in_literals_do_not_hide_code(self) -> None:
+        source = ('const char* text = R"tag(example /* not a comment\n'
+                  '// still text)tag"; int present;\n'
+                  'const char* url = "https://example.invalid"; int also_present;\n'
+                  'int live; // retired\n')
+        body = ('See `present` example.cpp:2.\n\n'
+                'See `also_present` example.cpp:3.\n\n'
+                'See `retired` example.cpp:4.\n')
+        with tree(body) as t:
+            (t.root / 'src/example.cpp').write_text(source)
+            code, out = t.run('--list')
+            self.assertEqual(code, 1, out)
+            self.assertRegex(out, r'OK +example\.cpp:2 ')
+            self.assertRegex(out, r'OK +example\.cpp:3 ')
+            self.assertIn('example.cpp:4  [SYMMISS]', out)
+
+    def test_a_python_symbol_in_a_comment_is_not_code(self) -> None:
+        body = ('See `present` example.py:1.\n\n'
+                'See `retired` example.py:2.\n')
+        with tree(body) as t:
+            (t.root / 'example.py').write_text('marker = "#"; present = 1\nlive = 2  # retired\n')
+            code, out = t.run('--list', '--fix')
+            self.assertEqual(code, 1, out)
+            self.assertRegex(out, r'OK +example\.py:1 ')
+            self.assertIn('example.py:2  [SYMMISS]', out)
+            self.assertIn('only in a comment', out)
+            self.assertEqual(t.page.read_text(), body)
 
     def test_range_past_eof(self) -> None:
         with tree('See `NativeRunSpec` native_host.hpp:900-910.\n') as t:
@@ -187,7 +266,7 @@ class MustPass(unittest.TestCase):
             self.assertEqual(t.run()[0], 0)
 
     def test_fenced_code_is_not_a_citation(self) -> None:
-        body = 'Text.\n\n```\nnative_host.hpp:9999: error: nope\n```\n'
+        body = 'See `initial_capital` native_host.hpp:6.\n\n```\nnative_host.hpp:9999: error: nope\n```\n'
         with tree(body) as t:
             code, out = t.run()
             self.assertEqual(code, 0, out)
