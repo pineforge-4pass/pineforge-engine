@@ -1445,17 +1445,17 @@ typedef enum pf_fill_qty_partition_e {
  *  Under ANY a named close consumes only what its entry still holds. An OCA
  *  cancel order or an order without its own quantity can only reduce the
  *  opposite balance that remains; if flat, it opens its own size. A plain
- *  explicit order transacts its remaining units. This report does not
- *  account for checks the fill makes at fill time against equity, price and
- *  margin (for example, an entry the account cannot afford in whole units). In
- *  those cases the fill can differ from the report. Not modelled: the fill-time
- *  money guards (whole-lot tie, low-value or fractional lot), affordability at
- *  the fill, the margin-call surplus, the close quantity a reversal keeps when a
- *  margin call was booked after the script, a refused signal price, an admission
- *  refusal, other competing fills (including staged or conditional closes), and an
- *  entry that names its own quantity or a row whose request cannot be read (one
- *  held in the source's shadow queue), which is judged by the prior-cycle rule
- *  alone.
+ *  explicit order transacts its remaining units. Within the fill's quantity tolerance the balance
+ *  is flat. If a fill recalculation queues a market close before a limit order, the close counts
+ *  when the rest of the bar and, if known, the next open miss the limit. This report does not account
+ *  for checks the fill makes at fill time against equity, price and margin (for example, an entry
+ *  the account cannot afford in whole units). In those cases the fill can differ from the report.
+ *  Not modelled: the fill-time money guards (whole-lot tie, low-value or fractional lot),
+ *  affordability at the fill, the margin-call surplus, the close quantity a reversal keeps when a
+ *  margin call was booked after the script, a refused signal price, an admission refusal, other
+ *  competing fills (including other staged closes and conditional closes), and an entry that names
+ *  its own quantity or a row whose request cannot be read (one held in the source's shadow queue),
+ *  which is judged by the prior-cycle rule alone.
  *  NOT folded into @p qty: the deferred-flip carry (`tv_carry_qty`, added on
  *  a priced entry from FLAT whose placement side is the opposite of the
  *  requested side) -- read `tv_carry_qty` / `created_position_side` from

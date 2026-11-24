@@ -362,8 +362,12 @@ a partial or full named close draws from that entry's remaining units.
 A plain order with an explicit size transacts its remaining units, opening any
 excess. An OCA cancel order or a default-sized order can only close what is
 left of the opposite position, but opens its size if the close left it flat.
-`close_only` is 1 when the planned fill has no opening leg. The plan does not
-predict races with staged or conditional closes.
+`close_only` is 1 when the planned fill has no opening leg. A remainder within
+the fill's quantity tolerance counts as flat. If a fill recalculation queues a
+market close for the next open before placing a limit order, the plan deducts
+that close when the rest of the bar misses the limit and the next open, if it is
+known, misses it too.
+The plan does not predict other races with staged or conditional closes.
 
 ## Evidence {#live_surface_evidence}
 

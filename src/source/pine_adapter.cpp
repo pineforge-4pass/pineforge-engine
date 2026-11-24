@@ -33311,16 +33311,51 @@ void visit_bound_openings(const native_order::BindOpenings& owner, const Visit& 
 
 } // namespace
 
-// Project only live market closes ahead of the target in the working book.
-// Later/staged commands and priced closes do not have that ordering guarantee.
+// Market closes already ahead in the book, and earlier fill-recalculation
+// closes whose next open comes before the target can trade.
 double PendingIntentView::position_before_order(const PlacementSnapshot& target,
         const native_order::RequestHandle& handle, double signed_position) const {
-    if (!owner_->has_live_family(PineOrderFamily::Close)
-        && !owner_->has_live_family(PineOrderFamily::CloseAll))
-        return signed_position;
+    // An immediate close can leave a fragment until on_native_applied settles it.
+    if (std::abs(signed_position) <= internal::kQtyEpsilon) return 0.0;
+    const auto& counts = owner_->retired_row_scratch_.live_families;
+    const bool working = counts[static_cast<std::size_t>(PineOrderFamily::Close)]
+                      || counts[static_cast<std::size_t>(PineOrderFamily::CloseAll)];
+    const auto& tail = owner_->pending_coof_requests_;
+    const auto staged_close = [&](const auto& cmd) {
+        const auto& close = cmd.snapshot;
+        return cmd.next_open && close.family == PineOrderFamily::Close
+            && close.command_ordinal != 0 && close.command_ordinal < target.command_ordinal
+            && !close.immediately && !close.crosses_zero
+            && std::holds_alternative<native_order::Market>(cmd.request.trigger)
+            && !std::holds_alternative<native_order::WaitForApplied>(cmd.request.owner);
+    };
+    const bool staged = !tail.empty() && owner_->coof_script_bar_valid_
+        && target.placement_script_open_ms == owner_->coof_script_bar_.timestamp
+        && std::isfinite(target.exit_levels.limit) && !std::isfinite(target.exit_levels.stop)
+        && std::any_of(tail.begin(), tail.end(), staged_close);
+    if (!working && !staged) return signed_position;
     auto* consumer = owner_->bound_consumer();
     if (!consumer || handle.incarnation == 0) return signed_position;
-    const auto book = as_native_consumer(*consumer).request_core().live();
+    const auto& core = as_native_consumer(*consumer).request_core();
+    const auto* order = core.find_live(handle);
+    if (!order) return signed_position;
+    // At the same open the already working limit keeps priority over a
+    // newly submitted close. Its native threshold includes tick rounding.
+    // A market close comes first on an open that is not known yet.
+    const auto limit_waits = [&] {
+        const auto* limit = std::get_if<native_order::Limit>(&order->request().trigger);
+        if (!limit) return false;
+        const auto next = owner_->input_scheduler_
+            ? owner_->input_scheduler_->next_source_bar(target.projection_created_bar) : std::optional<Bar>{};
+        const auto& bar = owner_->coof_script_bar_;
+        const double extreme = owner_->source_path_uses_high_first(bar) ? bar.low : bar.high;
+        const auto missed = [&](double price) { return target.is_long ? price > limit->price : price < limit->price; };
+        return missed(target.is_long ? std::min(extreme, bar.close) : std::max(extreme, bar.close))
+            && (!next || missed(next->open));
+    };
+    const bool include_staged = staged && limit_waits();
+    if (!working && !include_staged) return signed_position;
+    const auto book = core.live();
     const auto prior_close = [&](const native_order::LiveRequest& live) -> const PlacementSnapshot* {
         const auto& request = live.request();
         if (!std::holds_alternative<native_order::Market>(request.trigger)
@@ -33342,38 +33377,63 @@ double PendingIntentView::position_before_order(const PlacementSnapshot& target,
         const double part = owner_->quantize_close_units(available, close.qty_percent);
         return part >= available - internal::kQtyEpsilon ? available : part;
     };
+    // The queue is flushed in command order. Merge by the ordinal assigned
+    // at the script call: a staged close has no submission sequence yet.
+    const auto predecessors = [&](const auto& visit) {
+        auto it = tail.cbegin();
+        const auto advance_staged = [&]() -> const PlacementSnapshot* {
+            while (include_staged && it != tail.cend()) {
+                const auto& cmd = *it++;
+                if (staged_close(cmd)) return &cmd.snapshot;
+            }
+            return nullptr;
+        };
+        const auto* staged_row = advance_staged();
+        if (working) {
+            for (const auto& live : book) {
+                if (live.handle() == handle) break;
+                if (const auto* close = prior_close(live)) {
+                    while (staged_row && staged_row->command_ordinal < close->command_ordinal) {
+                        if (!visit(*staged_row)) return;
+                        staged_row = advance_staged();
+                    }
+                    if (!visit(*close)) return;
+                }
+            }
+        }
+        while (staged_row && visit(*staged_row)) staged_row = advance_staged();
+    };
     double remaining = std::abs(signed_position);
     // Consecutive closes of a name consume its remaining lots. Keep one
     // balance; if names interleave, recover that name's balance from the
     // earlier market closes without building a second order or lot book.
     const SourceId* name = nullptr;
     double named_remaining = 0.0;
-    for (const auto& live : book) {
-        if (live.handle() == handle) return std::copysign(remaining, signed_position);
-        const auto* close = prior_close(live);
-        if (!close || remaining == 0.0) continue;
+    predecessors([&](const PlacementSnapshot& close) {
         double available = remaining;
-        const bool named = owner_->config_.close_entries_rule_any && !close->from_entry.empty();
+        const bool named = owner_->config_.close_entries_rule_any && !close.from_entry.empty();
         if (named) {
-            if (!name || *name != close->from_entry) {
-                named_remaining = owner_->cohort_exposure_for(close->from_entry);
+            if (!name || *name != close.from_entry) {
+                named_remaining = owner_->cohort_exposure_for(close.from_entry);
                 if (name) {
-                    for (const auto& older : book) {
-                        if (older.handle() == live.handle()) break;
-                        const auto* prior = prior_close(older);
-                        if (prior && prior->from_entry == close->from_entry)
-                            named_remaining -= close_units(*prior, named_remaining);
-                    }
+                    predecessors([&](const PlacementSnapshot& prior) {
+                        if (&prior == &close) return false;
+                        if (prior.from_entry == close.from_entry)
+                            named_remaining -= close_units(prior, named_remaining);
+                        return true;
+                    });
                 }
-                name = &close->from_entry;
+                name = &close.from_entry;
             }
             available = std::min(remaining, named_remaining);
         }
-        const double closed = close_units(*close, available);
+        const double closed = close_units(close, available);
         remaining -= closed;
         if (named) named_remaining -= closed;
-    }
-    return signed_position; // the target is not in this working book
+        return remaining > internal::kQtyEpsilon;
+    });
+    if (remaining <= internal::kQtyEpsilon) return 0.0;
+    return std::copysign(remaining, signed_position);
 }
 
 } // namespace pineforge::source
