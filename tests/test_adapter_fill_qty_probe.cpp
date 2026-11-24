@@ -1101,7 +1101,7 @@ struct CloseKey { std::uint64_t incarnation; std::string command; };
 
 struct ReportSample {
     int matches = 0, rc = -1, partition = -2, close_only = -1;
-    bool buy = false, peer = false;
+    bool buy = false, peer = false, group_matches = true;
     double qty = kNaN, position = kNaN;
     std::uint64_t incarnation = 0, last_fill = 0;
     std::vector<CloseKey> pending_closes;
@@ -1114,14 +1114,16 @@ struct AppliedSample {
     std::string command;
 };
 
-class PendingFillReplay final : public source::PineStrategyHost {
+class PendingFillReplay : public source::PineStrategyHost {
 public:
-    PendingFillReplay(const ReportCase& row, bool buy)
-        : row(row), buy(buy), limit(buy ? 95.0 : 105.0) {
+    PendingFillReplay(const ReportCase& row, bool buy, int pyramiding = 2,
+                      bool recalculate = false, double distance = 5.0)
+        : row(row), buy(buy), limit(100 + (buy ? -distance : distance)) {
         source::PineStrategyConfig config;
         config.default_qty_value = row.default_value;
         if (row.command == Command::CashOrder) config.default_qty_type = static_cast<int>(QtyType::CASH);
-        config.pyramiding = 2;
+        config.pyramiding = pyramiding;
+        config.calc_on_order_fills = recalculate;
         config.close_entries_rule_any = row.other > 0.0;
         configure_pine_strategy(config);
         set_syminfo_mintick(0.01);
@@ -1177,7 +1179,7 @@ public:
         }
     }
 
-private:
+protected:
     double position = 0.0;
     std::uint64_t last_fill = 0;
 
@@ -1192,11 +1194,12 @@ private:
                 out.pending_closes.push_back({item.incarnation, item.comment});
             if (std::strcmp(item.id, "Peer") == 0 && item.oca_type == 1) out.peer = true;
             if (std::strcmp(item.id, "Target") != 0
-                || item.type != (row.command == Command::Entry ? kEntryRow : kOrderRow)) continue;
+                || item.type != (row.command == Command::Entry ? kEntryRow : kOrderRow)
+                || item.limit_price != limit) continue;
             ++out.matches;
             out.incarnation = item.incarnation;
             out.buy = item.is_long != 0;
-            CHECK(item.oca_type == (row.command == Command::CancelGroup ? 1 : 0));
+            out.group_matches &= item.oca_type == (row.command == Command::CancelGroup ? 1 : 0);
             out.rc = strategy_pending_order_fill_qty(this, i, limit, &out.qty,
                                                      &out.close_only, &out.partition);
         }
@@ -1221,6 +1224,33 @@ private:
     }
 };
 
+// Each read names the same live incarnation. The report's quantity for a raw
+// order covers both booked legs; an ordinary reversing entry reports its opening leg.
+void compare_report(const ReportCase& row, bool buy, const ReportSample& s,
+                    const AppliedSample& f, const char* phase) {
+    const auto field = [&](const char* name, double reported, double booked) {
+        ++checks;
+        if (reported != booked) ++failures;
+        std::printf("%s %s %s phase=%s field=%s reported=%g actual=%g "
+                    "Target#%llu after_event=%llu fill_event=%llu bar=%d price=%g closed=%g opened=%g\n",
+                    reported == booked ? "PASS" : "FAIL", row.name, buy ? "buy" : "sell",
+                    phase, name, reported, booked, static_cast<unsigned long long>(f.incarnation),
+                    static_cast<unsigned long long>(s.last_fill),
+                    static_cast<unsigned long long>(f.ordinal), f.bar, f.price, f.closed, f.opened);
+    };
+    const int partition = row.command == Command::CashOrder ? PF_FILL_QTY_PARTITION_FROZEN_PLACEMENT
+        : std::isnan(row.own) ? PF_FILL_QTY_PARTITION_AT_FILL : PF_FILL_QTY_PARTITION_EXPLICIT;
+    field("partition", s.partition, partition);
+    field("side", s.buy, f.after > f.before);
+    field("qty", s.qty, std::abs(f.opened) + (row.command == Command::Entry ? 0.0 : f.closed));
+    field("close_only", s.close_only, f.opened == 0.0);
+    if (row.command == Command::CancelGroup) {
+        // An OCA cancel order either reduces the opposite book or opens its own size.
+        field("closed", s.close_only ? s.qty : 0.0, f.closed);
+        field("opened", s.close_only ? 0.0 : (s.buy ? s.qty : -s.qty), f.opened);
+    }
+}
+
 void compare_pending_fill(const ReportCase& row, bool buy) {
     const Bar bars[] = {
         mk_bar(10, 100, 100, 100, 100, 60'000), mk_bar(11, 100, 100, 100, 100, 60'000),
@@ -1239,6 +1269,7 @@ void compare_pending_fill(const ReportCase& row, bool buy) {
     bool reached = host.last_error().empty() && host.targets.size() == 1
         && pre.position == held && pre.matches == 1 && post.matches == 1 && pre.rc == 0 && post.rc == 0
         && pre.incarnation != 0 && pre.incarnation == post.incarnation
+        && pre.group_matches && post.group_matches
         && pre.pending_closes.size() == count && host.closes.size() == count
         && post.pending_closes.empty() && host.named_lots_only && !host.peer_filled
         && pre.peer == group && post.peer == group;
@@ -1287,31 +1318,8 @@ void compare_pending_fill(const ReportCase& row, bool buy) {
         return;
     }
     const auto& f = host.targets.front();
-    // A normal strategy.entry reversal reports its OPENING leg. A raw
-    // strategy.order reports the entire transaction, including what it closed.
-    const double booked_qty = std::abs(f.opened) + (row.command == Command::Entry ? 0.0 : f.closed);
-    const bool booked_buy = f.after > f.before;
-    const int booked_close_only = f.opened == 0.0;
-    const auto compare = [&](const ReportSample& s, const char* phase) {
-        const auto field = [&](const char* name, double reported, double booked) {
-            ++checks;
-            if (reported != booked) ++failures;
-            std::printf("%s %s %s phase=%s field=%s reported=%g actual=%g "
-                        "Target#%llu after_event=%llu fill_event=%llu bar=%d price=%g closed=%g opened=%g\n",
-                        reported == booked ? "PASS" : "FAIL", row.name, side, phase, name, reported,
-                        booked, static_cast<unsigned long long>(f.incarnation),
-                        static_cast<unsigned long long>(s.last_fill),
-                        static_cast<unsigned long long>(f.ordinal), f.bar, f.price, f.closed, f.opened);
-        };
-        const int partition = row.command == Command::CashOrder ? PF_FILL_QTY_PARTITION_FROZEN_PLACEMENT
-            : std::isnan(row.own) ? PF_FILL_QTY_PARTITION_AT_FILL : PF_FILL_QTY_PARTITION_EXPLICIT;
-        field("partition", s.partition, partition);
-        field("side", s.buy, booked_buy);
-        field("qty", s.qty, booked_qty);
-        field("close_only", s.close_only, booked_close_only);
-    };
-    compare(pre, count ? "before-close" : "no-close");
-    compare(post, count ? "after-close" : "still-resting");
+    compare_report(row, buy, pre, f, count ? "before-close" : "no-close");
+    compare_report(row, buy, post, f, count ? "after-close" : "still-resting");
 }
 
 void pending_reports_match_later_applied_events() {
@@ -1341,6 +1349,199 @@ void pending_reports_match_later_applied_events() {
     };
     for (const auto& row : rows)
         for (bool buy : {true, false}) compare_pending_fill(row, buy);
+}
+
+enum class CloseTiming { Pending, Immediate, AfterOrder, Fill, FillOnFinerInput };
+
+bool placed_on_fill(CloseTiming timing) {
+    return timing == CloseTiming::Fill || timing == CloseTiming::FillOnFinerInput;
+}
+
+struct CloseSchedule {
+    ReportCase order;
+    CloseTiming timing;
+    double next_open = 100, second = kNaN;
+};
+
+class CloseTimingReplay final : public PendingFillReplay {
+public:
+    explicit CloseTimingReplay(const CloseSchedule& s)
+        : PendingFillReplay(s.order, true, 1, placed_on_fill(s.timing),
+                            placed_on_fill(s.timing) ? 10 : 5), timing(s.timing), second(s.second) {}
+
+    void on_source_bar(const Bar&) override {
+        if (placed_on_fill(timing)) {
+            if (!seeded) {
+                seeded = true;
+                strategy_entry("Named", false, kNaN, kNaN, row.named);
+                strategy_order("Trigger", true, 0.25, 97.0);
+            } else if (adapter_.fixture_coof_recalc_active()) {
+                if (trigger_fill == last_fill && trigger_fill != 0)
+                    strategy_order("Waypoint", false, 0.25);
+                if (waypoint_fill == last_fill && waypoint_fill != 0 && !placed)
+                    place();
+            }
+        } else if (pine_bar_index() == 0) {
+            strategy_entry("Named", false, kNaN, kNaN, row.named);
+        } else if (pine_bar_index() == 1) {
+            place();
+        }
+    }
+
+    std::uint64_t trigger_fill = 0, waypoint_fill = 0;
+    bool path_fills = true;
+
+private:
+    CloseTiming timing;
+    double second;
+    bool seeded = false, placed = false;
+
+    void place() {
+        placed = true;
+        if (timing != CloseTiming::AfterOrder) {
+            strategy_close("Named", "first", row.close_operand, kNaN, timing == CloseTiming::Immediate);
+            if (std::isfinite(second)) strategy_close("Named", "second", second);
+        }
+        strategy_order("Target", buy, row.own, limit, kNaN, "pair", 1);
+        if (timing == CloseTiming::AfterOrder) strategy_close("Named", "later");
+        capture(placement);
+    }
+
+    void on_native_applied_event(const native_order::ExecutionAppliedEvent& e,
+                                 const NativeDecisionContext& context) override {
+        PendingFillReplay::on_native_applied_event(e, context);
+        const auto& id = e.request().label;
+        if (id == "Trigger") {
+            path_fills &= !trigger_fill && e.interval_index() == 2 && e.closed_units == 0.25;
+            trigger_fill = e.ordinal;
+        } else if (id == "Waypoint") {
+            path_fills &= !waypoint_fill && e.interval_index() == 2 && e.opened_units == -0.25;
+            waypoint_fill = e.ordinal;
+            if (timing == CloseTiming::FillOnFinerInput) {
+                // The scheduler keeps 30-second inputs. The next input can still
+                // be in this chart minute, so it cannot supply the next chart open.
+                const int input = e.cursor.point.input_interval_index;
+                path_fills &= !scheduler_.retained_input_is_chart() && !scheduler_.bar_magnifier_enabled()
+                    && input >= 0 && static_cast<std::size_t>(input) + 1 < scheduler_.retained_input().size()
+                    && !scheduler_.next_source_bar(input);
+            }
+        } else if (id == "__close__Named" && targets.empty()
+                   && closes.size() == (std::isfinite(second) ? 2U : 1U)) {
+            if (timing == CloseTiming::FillOnFinerInput)
+                path_fills &= e.cursor.point.path_phase == NativePathPhase::Open;
+            capture(resting);
+        }
+    }
+};
+
+void compare_close_timing(const CloseSchedule& s) {
+    const bool from_fill = placed_on_fill(s.timing);
+    const bool immediate = s.timing == CloseTiming::Immediate;
+    const bool later = s.timing == CloseTiming::AfterOrder;
+    const bool two = std::isfinite(s.second);
+    CloseTimingReplay host(s);
+    const bool at_open = s.next_open <= host.limit;
+    Bar bars[] = {
+        mk_bar(10, 100, 100, 100, 100, 60'000), mk_bar(11, 100, 100, 100, 100, 60'000),
+        mk_bar(12, 100, 100, 100, 100, 60'000), mk_bar(13, 100, 100, 94, 95, 60'000),
+        mk_bar(14, 100, 100, 89, 90, 60'000), mk_bar(15, 90, 90, 90, 90, 60'000),
+    };
+    const bool same_bar = s.timing == CloseTiming::Pending && !two;
+    if (from_fill) bars[2] = mk_bar(12, 100, 101, 94, 100, 60'000);
+    const int next = from_fill ? 3 : 2;
+    bars[next] = mk_bar(10 + next, s.next_open, s.next_open, same_bar ? 94 : s.next_open,
+                        same_bar ? 95 : s.next_open, 60'000);
+    if (s.timing == CloseTiming::FillOnFinerInput) {
+        std::vector<Bar> input;
+        for (const Bar& b : bars) {
+            input.push_back({b.open, b.high, b.open, b.open, b.volume / 2, b.timestamp});
+            input.push_back({b.open, std::max(b.open, b.close), b.low, b.close,
+                             b.volume / 2, b.timestamp + 30'000});
+        }
+        host.run(input.data(), static_cast<int>(input.size()), "30S", "1", false);
+    } else {
+        host.run(bars, 6);
+    }
+    const auto& row = s.order;
+    const auto& pre = host.placement;
+    const auto& post = host.resting;
+    const std::size_t nclose = later ? 0 : two ? 2 : 1;
+    bool reached = host.last_error().empty() && pre.matches == 1 && pre.rc == 0 && pre.group_matches
+        && pre.incarnation != 0 && host.targets.size() == 1 && host.closes.size() == nclose
+        && pre.position == (immediate ? row.close_operand - row.named : -row.named)
+        && pre.pending_closes.size() == (immediate ? 0U : two ? 2U : 1U)
+        && host.path_fills && (!from_fill || (host.trigger_fill > 0
+            && host.waypoint_fill > host.trigger_fill && pre.last_fill == host.waypoint_fill));
+    for (std::size_t i = 0; i < pre.pending_closes.size(); ++i) {
+        const auto& key = pre.pending_closes[i];
+        reached &= key.command == (later ? "later" : i == 0 ? "first" : "second")
+            && (key.incarnation == 0) == (later || from_fill);
+    }
+    double position = -row.named;
+    auto ordinal = pre.last_fill;
+    for (std::size_t i = 0; i < host.closes.size(); ++i) {
+        const auto& c = host.closes[i];
+        const double units = i == 0 ? row.close_operand : s.second;
+        const bool after_target = from_fill && at_open;
+        if (after_target && host.targets.size() == 1) {
+            position = host.targets.front().after;
+            ordinal = host.targets.front().ordinal;
+        }
+        reached &= c.incarnation != 0 && c.incarnation != pre.incarnation && c.ordinal > ordinal
+            && c.command == (i == 0 ? "first" : "second") && c.closed == std::min(units, -position)
+            && c.opened == 0 && c.before == position && c.bar == (immediate ? 1 : next)
+            && c.price == (immediate ? 100 : s.next_open);
+        if (!immediate && !from_fill)
+            reached &= i < pre.pending_closes.size() && pre.pending_closes[i].incarnation == c.incarnation;
+        position = c.after;
+        ordinal = c.ordinal;
+    }
+    if (host.targets.size() == 1) {
+        const auto& f = host.targets.front();
+        reached &= f.incarnation == pre.incarnation && f.ordinal > pre.last_fill
+            && f.bar == (at_open || same_bar ? next : next + 1)
+            && f.price == (at_open ? s.next_open : host.limit)
+            && f.closed == row.closed && f.opened == row.opened
+            && f.closed + f.opened > 0 && f.after - f.before == f.closed + f.opened;
+        if (at_open) {
+            reached &= f.before == -row.named && post.matches == 0;
+        } else {
+            reached &= post.matches == 1 && post.rc == 0 && post.group_matches && post.incarnation == f.incarnation
+                && post.pending_closes.empty() && post.last_fill == ordinal && f.ordinal > ordinal
+                && post.position == position && f.before == position;
+        }
+    }
+    if (!reached) {
+        std::printf("NOT COMPARED %s buy: target=%zu closes=%zu pending=%zu rc=%d/%d "
+                    "pos=%.17g/%.17g error='%s'\n", row.name, host.targets.size(), host.closes.size(),
+                    pre.pending_closes.size(), pre.rc, post.rc, pre.position, post.position,
+                    host.last_error().c_str());
+        CHECK(reached);
+        return;
+    }
+    const auto& f = host.targets.front();
+    compare_report(row, true, pre, f, immediate ? "immediate-call" : at_open ? "order-first" : "before-close");
+    if (!at_open) compare_report(row, true, post, f, "after-close");
+}
+
+void pending_reports_at_the_close_boundary() {
+    constexpr double half = 1.0 - 5e-11, twice = 1.0 - 2e-10;
+    using T = CloseTiming;
+    const auto order = [](const char* name, double close, double own, double closed, double opened) {
+        return ReportCase{name, Command::CancelGroup, 1, 0, NamedClose::Units, close, own, 1, closed, opened};
+    };
+    const CloseSchedule rows[] = {
+        {order("fill-queued-close", 0.5, 0.75, 0.5, 0), T::Fill},
+        {order("fill-queued-close-finer-input", 0.5, 0.75, 0.5, 0), T::FillOnFinerInput, 102},
+        {order("open-before-fill-queued-close", 0.5, 0.75, 0.75, 0), T::Fill, 88},
+        {order("order-before-staged-close", kNaN, 1, 1, 0), T::AfterOrder, 94},
+        {order("decimal-closes", 0.7, 0.5, 0, 0.5), T::Pending, 100, 0.3},
+        {order("pending-half-tolerance", half, 1, 0, 1), T::Pending},
+        {order("pending-twice-tolerance", twice, 1, 1 - twice, 0), T::Pending},
+        {order("immediate-half-tolerance", half, 1, 0, 1), T::Immediate},
+        {order("immediate-half-position", 0.5, 1, 0.5, 0), T::Immediate},
+    };
+    for (const auto& s : rows) compare_close_timing(s);
 }
 
 }  // namespace
@@ -1374,6 +1575,7 @@ int main() {
     shape_own_quantity_oca_cancel_order_closes_at_most_the_short();
     shape_own_quantity_order_behind_a_same_bar_close_opens();
     pending_reports_match_later_applied_events();
+    pending_reports_at_the_close_boundary();
     std::printf("R5 B-ADAPTER fill-quantity probe: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
