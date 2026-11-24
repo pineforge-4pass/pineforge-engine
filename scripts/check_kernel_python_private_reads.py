@@ -19,8 +19,8 @@ with
 LOUD-FAIL (shared with the other private-fixture sweeps): a construct this
 sweep cannot parse is an ERROR, never a silent skip --
 
-* an add_test() whose command runs ${Python3_EXECUTABLE} but names no .py
-  script, or names one the tree lacks,
+* an add_test() whose command runs ${Python3_EXECUTABLE} but supplies
+  neither a readable script nor an inline program,
 * a local module a row's script imports that the sweep cannot read,
 * a row whose script text cannot be decoded.
 
@@ -39,7 +39,9 @@ import argparse
 import re
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
+from check_lanes_cmake_d import ARGUMENT_LITERAL
 from cmake_test_includes import registration_statements
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +49,8 @@ SKIP_LITERAL = 'SKIP private fixtures not present: '
 PRIVATE_PREFIXES = ('tests/fixtures/', 'tests/oracle/')
 CMAKE_HEAD = re.compile(r'^\s*([A-Za-z_]\w*)\s*\(')
 ADD_TEST = re.compile(r'add_test\(\s*NAME\s+([A-Za-z0-9_.-]+)', re.MULTILINE)
+CMAKE_ARGUMENT = re.compile(ARGUMENT_LITERAL + r'|(?:\\.|[^\s;\\])+', re.DOTALL)
+CMAKE_ESCAPE = {'n': '\n', 'r': '\r', 't': '\t', '\n': ''}
 LITERAL_PRIVATE = re.compile(r'["\']((?:[\w.-]+/)?tests/(?:fixtures|oracle)/[\w./-]+)["\']')
 COMPOSED_PRIVATE = re.compile(
     r'["\']tests["\']\s*/\s*["\'](fixtures|oracle)["\']\s*/\s*["\']([\w./-]+)["\']')
@@ -56,6 +60,11 @@ LOCAL_IMPORT = re.compile(r'^\s*(?:from\s+([A-Za-z_]\w*)\s+import|import\s+([A-Z
 
 class SweepError(Exception):
     """A construct the sweep cannot parse; reported and exits non-zero."""
+
+
+class InlineProgram(NamedTuple):
+    text: str
+    line: int
 
 
 def statements(text: str):
@@ -76,14 +85,53 @@ def statements(text: str):
     return out
 
 
+def argument_text(arg: re.Match) -> str:
+    """Strip CMake delimiters and decode escapes, leaving bracket contents literal."""
+    text = arg['bracket_value']
+    if text is not None:
+        return text.removeprefix('\n')
+    raw = arg[0]
+    text = raw[1:-1] if raw.startswith('"') else raw
+    return re.sub(r'\\(.)', lambda m: CMAKE_ESCAPE.get(m[1], m[1]), text, flags=re.DOTALL)
+
+
 def python_row(cmake_path: Path, line: int, statement: str):
-    """The row name and its script for a Python add_test(), else None."""
+    """The row name and its script path or inline source for a Python add_test()."""
     if 'Python3_EXECUTABLE' not in statement:
         return None
     name = ADD_TEST.search(statement)
     if not name:
         raise SweepError(f'{cmake_path}:{line}: add_test() with an unreadable NAME runs '
                          f'Python3_EXECUTABLE; the sweep refuses to skip it: {statement!r}')
+    end = len(statement) - 1
+    args = CMAKE_ARGUMENT.finditer(statement, name.end(), end)
+    for arg in args:
+        if argument_text(arg) == '${Python3_EXECUTABLE}':
+            break
+    else:
+        return None
+    # Stop at the script or module: a later -c belongs to that program.
+    for arg in args:
+        option = argument_text(arg)
+        if option == '-c':
+            program = next(args, None)
+            text = argument_text(program) if program is not None else None
+            if text is None or text in {'WORKING_DIRECTORY', 'CONFIGURATIONS', 'COMMAND_EXPAND_LISTS'}:
+                raise SweepError(f'{cmake_path}:{line}: row {name[1]} runs Python3_EXECUTABLE '
+                                 'but names no .py script and -c has no program; '
+                                 'the sweep cannot read it and refuses to skip it')
+            if (program['bracket_value'] is None and re.search(
+                    r'(?<!\\)\$(?:\{|ENV\{|CACHE\{|<)', program[0])):
+                raise SweepError(f'{cmake_path}:{line}: row {name[1]} has an unexpanded '
+                                 'inline program; the sweep refuses to skip it')
+            start_line = line + statement.count('\n', 0, program.start())
+            if (program['bracket_value'] or '').startswith('\n'):
+                start_line += 1
+            return name[1], InlineProgram(text, start_line)
+        if option in ('-W', '-X', '--check-hash-based-pycs'):
+            next(args, None)
+        elif option in ('-m', '--', '-') or not option.startswith('-'):
+            break
     scripts = re.findall(r"[\w${}/.-]+\.py\b", statement)
     if not scripts:
         discovered = re.search(r"-m\s+unittest\s+discover\s+-s\s+([\w./-]+)", statement)
@@ -96,7 +144,8 @@ def python_row(cmake_path: Path, line: int, statement: str):
         if not scripts:
             raise SweepError(
                 f'{cmake_path}:{line}: row {name.group(1)} runs Python3_EXECUTABLE '
-                'but names no .py script; the sweep cannot read it and refuses to skip it')
+                'but names no .py script or inline program; the sweep cannot read it '
+                'and refuses to skip it')
     script = (scripts[0].replace('${PROJECT_SOURCE_DIR}', str(ROOT))
                         .replace('${CMAKE_CURRENT_SOURCE_DIR}', str(ROOT / 'tests')))
     if '${' in script:
@@ -105,19 +154,20 @@ def python_row(cmake_path: Path, line: int, statement: str):
     return name.group(1), ROOT / script
 
 
-def module_closure(script: Path, seen=None):
-    """The script plus every local module it imports, transitively (read-only)."""
+def module_closure(script: Path, seen=None, *, text=None, source_dir=None):
+    """The program's Python source plus every local module it imports, transitively."""
     seen = seen if seen is not None else {}
     if script in seen:
         return seen
-    try:
-        text = script.read_text()
-    except (OSError, UnicodeError) as error:
-        raise SweepError(f'{script}: unreadable: {error}') from error
+    if text is None:
+        try:
+            text = script.read_text()
+        except (OSError, UnicodeError) as error:
+            raise SweepError(f'{script}: unreadable: {error}') from error
     seen[script] = text
     for match in LOCAL_IMPORT.finditer(text):
         name = match.group(1) or match.group(2)
-        for directory in (script.parent, ROOT / 'scripts'):
+        for directory in (source_dir or script.parent, ROOT / 'scripts'):
             candidate = directory / f'{name}.py'
             if candidate.is_file() and candidate not in seen:
                 module_closure(candidate, seen)
@@ -214,7 +264,7 @@ def module_gates_its_own_paths(text: str) -> bool:
 def has_skip_path(cmake_text: str, row: str, closure) -> bool:
     """The row's own skip path: the pinned literal plus a ctest skip property,
     or a unittest SkipTest/skipUnless around the private read."""
-    texts = [text for path, text in closure.items() if path.suffix == '.py']
+    texts = closure.values()
     if not any(SKIP_LITERAL in text for text in texts):
         return False
     properties = row_properties(cmake_text, row)
@@ -246,14 +296,20 @@ def main() -> int:
             row = python_row(source, cmd.line, f'add_test({cmd.body})')
             if row is None:
                 continue
-            name, script = row
-            if not script.is_file():
-                raise SweepError(f'{source}:{cmd.line}: row {name} runs a missing script {script}')
-            closure = module_closure(script)
+            name, program = row
+            if isinstance(program, InlineProgram):
+                closure = module_closure(source, text=program.text, source_dir=cmake_path.parent)
+            else:
+                if not program.is_file():
+                    raise SweepError(f'{source}:{cmd.line}: row {name} runs a missing script {program}')
+                closure = module_closure(program)
             unguarded = [read for read in private_reads(closure)
-                         if not module_gates_its_own_paths(closure[read[0]])]
+                         if read[0] == source or not module_gates_its_own_paths(closure[read[0]])]
             if unguarded and name not in EXEMPT and not has_skip_path(properties, name, closure):
-                offenders.append((name, unguarded[0]))
+                path, line, reference = unguarded[0]
+                if path == source:
+                    line += program.line - 1
+                offenders.append((name, (path, line, reference)))
         except SweepError as error:
             errors.append(str(error))
     for name, (path, line, reference) in offenders:

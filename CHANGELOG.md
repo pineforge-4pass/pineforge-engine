@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- The private-fixture checker now scans Python `-c` test commands for absent files and accepts launchers that only forward their arguments.
 - At a bar close, only entries that name contracts enter the fixed-quantity market-pair check. A cash or equity amount no longer inflates the pair's margin cost or its transactions.
 - A stop entry deferred behind a marketable buy or rearmed after another entry was stopped out now keeps its cash or equity sizing at the eventual fill.
 - With an intraday filled-order limit, an opposite entry that follows a full close at the same price now spends its cash or equity budget on the new position.
