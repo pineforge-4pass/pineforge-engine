@@ -53,6 +53,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -380,8 +381,103 @@ std::vector<SessionCase> session_cases() {
     return cases;
 }
 
+// Each quarter hour has a different volume bit. The 09:00 cell owns ten
+// morning bars and the 12:30 and 12:45 bars (bits 0..11); the 13:00 cell
+// owns the remaining ten (bits 12..21). Check the delivery time as well as
+// the contents, including on every input that must not publish anything.
+void check_quarter_hours(const CivilDay& day) {
+    const SessionCase c{"split weekday", "0900-1130,1230-1530", "UTC",
+                        {{{0, 9, 0}, 150}, {{0, 12, 30}, 180}}, {}, {}, {}};
+    const auto minutes = minutes_of(c, day);
+    CHECK(minutes.size() == 330);
+    if (minutes.size() != 330) return;
+    const auto open = civil_ms(c.zone, day, {0, 9, 0});
+    const auto split = civil_ms(c.zone, day, {0, 13, 0});
+    const auto close = civil_ms(c.zone, day, {0, 15, 30});
+    TimeframeAggregator agg("240", "15", c.zone, c.session);
+    FixedPeriodClock clock;
+    clock.cursor_ms = open;
+    for (std::size_t i = 0; i < minutes.size(); i += 15) {
+        Bar bar = minutes[i];
+        bar.volume = static_cast<double>(1U << (i / 15));
+        const auto end = bar.timestamp + 15 * kMinute;
+        const bool due = end == split || end == close;
+        const auto check = [&](const AggregatedBar& done) {
+            CHECK(done.bar.timestamp == (end == split ? open : split));
+            CHECK(done.sub_bar_count == (end == split ? 12 : 10));
+            CHECK(done.bar.volume == (end == split ? 0xfff : 0x3ff000));
+        };
+        const auto step = agg.feed(bar);
+        CHECK(step.is_complete == due);
+        if (step.is_complete != due)
+            std::printf("    feed %04d-%02d-%02d, quarter hour %zu\n",
+                        day.year, day.month, day.day, i / 15);
+        if (step.is_complete && due) check(step);
+
+        CHECK(!agg.next_fixed_completion(clock, bar.timestamp));
+        agg.observe_fixed(clock, bar);
+        const auto timed = agg.next_fixed_completion(clock, end, bar.timestamp, 0);
+        CHECK(timed.has_value() == due);
+        if (timed.has_value() != due)
+            std::printf("    fixed clock %04d-%02d-%02d, quarter hour %zu\n",
+                        day.year, day.month, day.day, i / 15);
+        if (timed && due) check(*timed);
+    }
+}
+
+// The 20:00 cell on December 31 ends at the epoch. The last bar before
+// the 22:30 break is final if 00:15 is the next input, but not if we could
+// still receive the 23:30 reopen. Both instants are in one session.
+void check_midnight_successor() {
+    const auto bar = [](int minutes_before_epoch) {
+        return Bar{1, 1, 1, 1, 1, -minutes_before_epoch * kMinute};
+    };
+    const Bar last = bar(105);  // 22:15
+    const Bar later = bar(-15);  // 00:15, in the cell that opens at the epoch
+    for (const bool singleton : {false, true}) {
+        TimeframeAggregator agg("240", "15", "UTC", "1600-2230,2330-0600");
+        if (singleton) {
+            // Complete the 16:00 cell, so 22:15 starts a fresh 20:00 cell.
+            agg.feed(bar(270));  // 19:30
+            CHECK(agg.feed(bar(255)).is_complete);  // 19:45
+        } else {
+            agg.feed(bar(120));  // 22:00, in the same cell as 22:15
+        }
+        auto known = agg;
+        const auto clipped = known.feed(last, later.timestamp);
+        CHECK(clipped.is_complete && clipped.bar.timestamp == -240 * kMinute);
+        CHECK(clipped.sub_bar_count == (singleton ? 1 : 2));
+        const auto pending = singleton ? agg.feed(last) : agg.feed(last, 0);
+        CHECK(!pending.is_complete);
+        CHECK(!agg.feed(bar(30)).is_complete);    // 23:30
+        const auto full = agg.feed(bar(15));      // 23:45 closes at midnight
+        CHECK(full.is_complete && full.bar.timestamp == -240 * kMinute);
+        CHECK(full.sub_bar_count == (singleton ? 3 : 4));
+        if (!singleton) {
+            const auto next = known.feed(later);
+            CHECK(!next.is_complete && next.bar.timestamp == 0 && next.sub_bar_count == 1);
+        }
+    }
+
+    const TimeframeAggregator agg("240", "15", "UTC", "1600-2230,2330-0600");
+    FixedPeriodClock clock;
+    clock.cursor_ms = last.timestamp;
+    agg.observe_fixed(clock, last);
+    auto known = clock;
+    const auto horizon = last.timestamp + 15 * kMinute;
+    const auto clipped = agg.next_fixed_completion(known, horizon, last.timestamp, later.timestamp);
+    CHECK(clipped && clipped->bar.timestamp == -240 * kMinute && clipped->sub_bar_count == 1);
+    CHECK(!agg.next_fixed_completion(clock, horizon, last.timestamp, 0));
+}
+
 int run() {
     std::printf("Intraday bars on sessions with a break: where they open, where rows land\n");
+    check_quarter_hours({1969, 12, 31});  // Wednesday
+    check_quarter_hours({2024, 6, 3});    // Monday
+    check_midnight_successor();
+    // The epoch is on a later session-day. Without a successor, neither
+    // the exchange's early-close rule nor window clipping may assume it.
+    check_quarter_hours({1969, 12, 30});
     const char* const names[] = {"aggregator", "fixed clock", "calendar", "calendar memo"};
     for (const SessionCase& c : session_cases()) {
         // The whole feed, and where each session day's rows begin in it.
