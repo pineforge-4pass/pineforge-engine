@@ -200,7 +200,7 @@ def doc_paths(ref: str | None, root: Path) -> list[str]:
 
 def show(ref: str, path: str, root: Path) -> str:
     try:
-        return git('show', f'{ref}:{path}', root=root)
+        return git('cat-file', 'blob', f'{ref}:{path}', root=root)
     except (GitError, UnicodeDecodeError) as error:
         # A page can legitimately be absent before its addition or after deletion.
         if not git('--literal-pathspecs', 'ls-tree', '-z', '--name-only', ref, '--', path,
@@ -429,6 +429,17 @@ def changed_pages(root: Path, parent: str, commit: str) -> list[tuple[str, str]]
     return pages
 
 
+def read_unchanged_pages(root: Path, commit: str, read_blobs: set[str]) -> None:
+    """The diff found no changed page. Read each distinct published blob once."""
+    entries = git('ls-tree', '-r', '-z', commit, '--', *DOC_ROOTS, root=root)
+    for entry in entries.split('\0')[:-1]:
+        metadata, path = entry.split('\t', 1)
+        oid = metadata.split()[2]
+        if path.endswith('.md') and oid not in read_blobs:
+            show(commit, path, root)
+            read_blobs.add(oid)
+
+
 def select_pages(root: Path, base: str, head: str,
                  selected: list[str] | None) -> list[tuple[str, str]]:
     if selected == []:
@@ -491,6 +502,7 @@ def main(argv: list[str] | None = None) -> int:
             findings = []
             compared = []
             saw_page = False
+            read_blobs: set[str] = set()
             for commit in commits:
                 parents = git('rev-list', '--parents', '-n', '1', commit, root=root).split()[1:]
                 parent = parents[0] if parents else None
@@ -499,12 +511,13 @@ def main(argv: list[str] | None = None) -> int:
                 compared.append(commit)
                 pages = changed_pages(root, parent, commit)
                 if not pages:
+                    read_unchanged_pages(root, commit, read_blobs)
                     continue
                 saw_page = True
                 findings += judge_change(root, parent, commit, pages, [message_of(commit, root)])
             if not compared:
                 raise GitError('NOT COMPARED: no commits to compare')
-            if not saw_page and not any(doc_paths(commit, root) for commit in compared):
+            if not saw_page and not read_blobs:
                 raise GitError('NOT COMPARED: no pages to compare')
             judged = (f'{len(compared)} commits since '
                       + (base[:SHA_CHARS] if base else 'this gate landed'))
