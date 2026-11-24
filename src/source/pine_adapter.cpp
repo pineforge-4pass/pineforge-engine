@@ -25185,15 +25185,17 @@ detail::ExitScratchRows<native_order::RequestHandle> PineExecutionAdapter::per_e
 void PineExecutionAdapter::cancel_working_legs(
         const detail::ExitScratchRows<native_order::RequestHandle>& legs, bool retire_ended) {
     if (legs.empty()) return;
-    detail::ExitScratchIndex working(legs.context());
+    detail::ExitScratchIndex working(legs.context());  // Its writes count toward the scratch state hash.
     detail::exit_scratch_working(legs.context(), require_host(),
         [&](const NativeWorkingRequest& request) {
         working.put(request.definition->handle.incarnation, 0);
         return true;
     });
     for (const auto& handle : legs) {
-        const bool still_working =
-            working.find(handle.incarnation) != detail::ExitScratchIndex::absent;
+        // A reversal must see hidden legs and the effects of each earlier cancel.
+        const bool still_working = retire_ended
+            ? detail::run_consumer(require_host()).request_core().find_live(handle) != nullptr
+            : working.find(handle.incarnation) != detail::ExitScratchIndex::absent;
         if (still_working) {
             const auto result = require_host().cancel(handle);
             if (!retire_ended && result.status != native_order::CancelStatus::Cancelled) continue;
