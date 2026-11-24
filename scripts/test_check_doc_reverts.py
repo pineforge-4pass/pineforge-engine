@@ -627,5 +627,40 @@ class MergeCommits(unittest.TestCase):
             self.assertEqual(out, shifted_out)
 
 
+class MainTip(unittest.TestCase):
+    def test_only_the_implicit_range_at_the_tip_of_main_is_skipped(self) -> None:
+        notice = ('NOT COMPARED: HEAD is the tip of main; '
+                  'its commits were judged before the merge\n')
+        for ref in ('refs/remotes/origin/main', 'refs/heads/main'):
+            with self.subTest(ref=ref), repo() as r:
+                parent = r.commit(BASE_PAGE, 'docs: publish the guide')
+                tip = r.commit(with_keep_handle(), 'docs: revise the guide (#12)')
+                r.git('update-ref', ref, tip)
+                r.git('checkout', '-q', '--detach', tip)
+                modes = (((), 'no commits to compare'),
+                         (('--head', 'HEAD'), 'base and head are the same commit'))
+                for args, reason in modes:
+                    with self.subTest(args=args, base='implicit'):
+                        self.assertEqual(r.run(*args), (77, notice))
+                    with self.subTest(args=args, base='explicit'):
+                        self.assertEqual(r.run('--base', tip, *args),
+                                         (2, f'check_doc_reverts: NOT COMPARED: {reason}\n'))
+
+                r.git('checkout', '-q', '-b', 'edit', tip)
+                r.commit(BASE_PAGE, 'docs: tidy the guide')
+                for args, _ in modes:
+                    with self.subTest(args=args, checkout='above main'):
+                        code, out = r.run(*args)
+                        self.assertEqual(code, 1, out)
+                        self.assertIn('unnamed deletion of ' + repr(KEEP_HANDLE), out)
+
+                # An ancestor of main can also be its own merge base.
+                r.git('checkout', '-q', '--detach', parent)
+                for args, reason in modes:
+                    with self.subTest(args=args, checkout='behind main'):
+                        self.assertEqual(r.run(*args),
+                                         (2, f'check_doc_reverts: NOT COMPARED: {reason}\n'))
+
+
 if __name__ == '__main__':
     unittest.main()

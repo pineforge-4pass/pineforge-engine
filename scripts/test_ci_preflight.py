@@ -9754,6 +9754,58 @@ finally:
         source = (ROOT / 'scripts' / 'ci_preflight.py').read_text()
         self.assertEqual(source.count('SKIP private fixtures not present: '), 0)
 
+    def test_main_tip_notice_skips_only_the_named_history_stages(self):
+        notice = ('NOT COMPARED: HEAD is the tip of main; '
+                  'its commits were judged before the merge')
+        names = ('doc-reverts', 'doc-reverts-net')
+
+        def command(stdout, stderr, code):
+            return [sys.executable, '-c',
+                    'import sys; sys.stdout.write(sys.argv[1]); sys.stderr.write(sys.argv[2]); '
+                    'sys.exit(int(sys.argv[3]))', stdout, stderr, str(code)]
+
+        console = io.StringIO()
+        code, summary, logs = self.run_preflight([
+            (names[0], command(notice + '\n', '', 77)),
+            (names[1], command('checking history\n', notice + '\n', 77)),
+        ], console=console)
+        with self.subTest(notice='recognized'):
+            self.assertEqual(code, 0, console.getvalue())
+            self.assertEqual([(s['name'], s['status'], s['exitCode']) for s in summary['stages']],
+                             [(name, 'skipped', 77) for name in names])
+            for name in names:
+                self.assertIn(notice, (logs / f'{name}.log').read_text().splitlines())
+                self.assertIn(f"ci_preflight: {name}: skipped (exit 77, main's own tip "
+                              "has nothing to compare)", console.getvalue().splitlines())
+            self.assertIn('skipped: doc-reverts, doc-reverts-net',
+                          console.getvalue().splitlines()[-1])
+
+        private = 'SKIP private fixtures not present: tests/fixtures/private/witness.csv\n'
+        for name, stdout, stderr, exit_code, advisory in (
+                ('doc-reverts', '', '', 77, False),
+                ('doc-reverts-net', 'prefix: ' + notice, '', 77, False),
+                ('doc-reverts', '', notice + ' extra', 77, False),
+                ('doc-reverts-net', notice[:12], notice[12:], 77, False),
+                ('doc-reverts', private, '', 77, False),
+                ('doc-reverts-tests', notice, '', 77, False),
+                ('doc-anchors', private, notice, 77, False),
+                ('doc-anchors', '', notice, 0, False),
+                ('doc-reverts', notice, '', 0, False),
+                ('doc-reverts-net', '', notice, 2, False),
+                ('other', '', '', 77, True),
+                ('other', '', notice, 77, True)):
+            with self.subTest(stage=name, stdout=stdout, stderr=stderr, exit_code=exit_code,
+                              advisory=advisory), \
+                    mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''}):
+                console = io.StringIO()
+                code, summary, _ = self.run_preflight(
+                    [(name, command(stdout, stderr, exit_code), advisory)], console=console)
+                self.assertEqual(code, 1, console.getvalue())
+                self.assertEqual(summary['status'], 'failed')
+                self.assertEqual([(s['status'], s['exitCode']) for s in summary['stages']],
+                                 [('failed', exit_code)])
+                self.assert_named_failures(console.getvalue(), [(name, exit_code)])
+
     def test_empty_check_plan_cannot_pass(self):
         code, summary, _ = self.run_preflight([])
         self.assertEqual(code, 1)
