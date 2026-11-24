@@ -2295,11 +2295,20 @@ private:
         // A named exit covers an order at its fill only if the call followed the order.
         std::uint64_t last_call = 0;
         std::int64_t cycle = 0;
-        bool long_side = true;
+        // The old side flag and its alignment padding occupy this word.
+        std::uint64_t long_side : 1;
+        std::uint64_t group_bytes : 63;
         double profit_ticks = std::numeric_limits<double>::quiet_NaN();
         double loss_ticks = std::numeric_limits<double>::quiet_NaN();
-        std::string comment;
+        std::string text;  // group followed by comment; neither needs a delimiter
         std::vector<PerEntryExitChild> children;
+        PerEntryExit() : long_side(true), group_bytes(0) {}
+        std::string_view group() const { return std::string_view(text).substr(0, group_bytes); }
+        std::string_view comment() const { return std::string_view(text).substr(group_bytes); }
+        void set_text(const std::string& name, const std::string& note) {
+            text.assign(name).append(note);
+            group_bytes = name.size();
+        }
     };
 
     struct PendingCoofRequest {
@@ -2830,7 +2839,8 @@ private:
                              double qty, const std::string& oca_name, double profit_ticks,
                              double loss_ticks, std::uint64_t command_sequence);
     void submit_per_entry_child(const PerEntryExit& exit, const PerEntryExitChild& child,
-                                std::uint64_t command_sequence);
+                                std::uint64_t command_sequence,
+                                std::optional<PineOrderFamily> only_leg = std::nullopt);
     void per_entry_exits_at_entry_fill(const PlacementSnapshot& opening,
                                        const native_order::ExecutionAppliedEvent& event);
     void per_entry_exits_after_fill(const std::optional<PlacementSnapshot>& placement,

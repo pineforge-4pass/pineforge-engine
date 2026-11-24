@@ -11,6 +11,9 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- On ordinary chart bars with pyramiding and FIFO, a full named tick exit that omits `qty` and specifies an OCA name prices its orders from the individual entries when their units are unreserved. A fill reduces its working siblings; a later call can reissue an unfilled bracket, while a bracket that fired stays spent. (#694).
+- With `calc_on_order_fills` alone, a full named tick exit without `qty` or an OCA name keeps each FIFO entry’s fill price and unspent bracket through recalculations. Changing one tick distance leaves the other working leg in place. (#694).
+- With `process_orders_on_close` alone, a full named tick bracket without `qty` or an OCA name measures its levels from each FIFO entry’s fill at the close. Earlier prices on the entry bar cannot trigger that entry’s bracket. (#694).
 - When a C++ host makes an exit leg wait for another order, an entry reversal now cancels the hidden leg of the entry it closed. A market opening also withdraws a hidden global exit placed while flat with no pending entry, and switching between a whole-position bracket and per-entry orders withdraws the old hidden leg.
 - Reissuing a percentage take-profit over an added entry with the same ID now gives each opening its own order. FIFO can book both fills against the older entry (#810).
 - A historical daily `lookahead_on` projection now keeps the Unix epoch bar in its exchange day, including when midnight falls at a different UTC hour.
@@ -72,7 +75,7 @@ version number follows semantic versioning over the surfaces the
 - When a C++ host makes a global exit leg wait for another order, a Pine entry reversal now cancels the leg even if it is hidden. If cancelling its parent already ended the leg, the reversal no longer records an extra `NotWorking` event.
 - A buy stop accepted while flat that later reverses a short now removes the short’s pending margin call. The same rule applies when a sell reverses a long.
 - A market entry now arms both legs of a `strategy.exit` that mixes prices and ticks at its fill (#694).
-- With pyramiding, a full named tick bracket on chart bars now measures `profit` and `loss` from each entry’s fill price when no other exit reserves its units, `process_orders_on_close` and `calc_on_order_fills` are off, and the call names neither `qty` nor an OCA group. FIFO can still book the close against an older trade (#694).
+- On chart bars with pyramiding and the default order schedule, `strategy.exit("X", "L", profit = 50000, loss = 50000)` gives each opening of `L` its own bracket when no other exit has reserved its units. FIFO can book the close against an older trade (#694).
 - A historical `lookahead_on` request can opt into the day's final close from its first bar; a request that does not opt in keeps the running close (#694).
 - A fixed entry requested while already flat now retires the prior position’s visible brackets and margin calls if its fill closes that position and opens the opposite side.
 - Before the Unix epoch, a four-hour bar on `0900-1130,1230-1530` now includes the 12:30–12:59 inputs and completes at 13:00 when the next input is unknown. The fixed completion clock follows the same rule.

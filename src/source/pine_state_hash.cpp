@@ -554,8 +554,12 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
                 f.s("named-per-entry-exit/v1");
                 f.s(exit.from_entry);
                 f.u(exit.last_call);
+                if (!exit.group().empty()) {
+                    f.s("shared-per-entry-exit-group/v1");
+                    f.s(exit.group());
+                }
             }
-            f.d(exit.profit_ticks); f.d(exit.loss_ticks); f.s(exit.comment);
+            f.d(exit.profit_ticks); f.d(exit.loss_ticks); f.s(exit.comment());
             f.u(exit.children.size());
             for (const auto& child : exit.children) {
                 f.u(child.origin); f.d(child.fill_price); f.d(child.units); f.b(child.consumed);
