@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- When the broker reads a v1 strategy receipt for host FX, it now requires a `declarations` object even if `currency` is unresolved. A missing or non-object `declarations` stops the run before the first bar callback with `strategy_library_incompatible` (reason `capabilities_receipt_invalid`) (#990).
 - `BacktestEngine::release_run_results()` and `strategy_release_run_results_v1()` let callers close the trade ledger, report scratch, and native command history after the last result read without destroying the handle. The closed trade count remains available, and further trade row, report, or journal reads refuse until the next run. An active run or stream refuses the release.
 - Clearing or installing `3551W` no longer removes or replaces monthly prices. Without its own feed, the request groups bars by 3,551 weeks.
 - Reversing a position now keeps the profit target and stop of a resting entry on the newly opened side, even if an earlier trade used the same entry ID on the side that just closed (#964).
