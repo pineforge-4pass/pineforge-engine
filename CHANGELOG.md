@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- A buy stop accepted while flat that later reverses a short now removes the short’s pending margin call. The same rule applies when a sell reverses a long.
 - Before the Unix epoch, a four-hour bar on `0900-1130,1230-1530` now includes the 12:30–12:59 inputs and completes at 13:00 when the next input is unknown. The fixed completion clock follows the same rule.
 - A partial stop placed after two 50% tick targets on a three-contract market entry can now close the remaining contract on its first crossing.
 - A price stop placed behind waiting percentage targets on a cash-sized market entry now closes the contracts the targets leave after rounding at the fill price.

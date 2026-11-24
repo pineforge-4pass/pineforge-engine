@@ -2453,6 +2453,7 @@ void PineExecutionAdapter::retire_cancelled_exits(
 void PineExecutionAdapter::purge_brackets_after_applied_reversal(
         const PlacementSnapshot& reversal, const native_order::ExecutionAppliedEvent& fill) {
     const bool prior_long = fill.opened_units < 0.0;
+    const auto closed_side = prior_long ? PositionSide::LONG : PositionSide::SHORT;
     auto& host = require_host();
     const auto targets_prior = [&](const PlacementSnapshot& leg) {
         if (leg.from_entry.empty() || leg.void_issue) return false;
@@ -2505,8 +2506,12 @@ void PineExecutionAdapter::purge_brackets_after_applied_reversal(
         const bool exit = candidate.family == PineOrderFamily::ExitLimit
             || candidate.family == PineOrderFamily::ExitStop
             || candidate.family == PineOrderFamily::ExitTrail;
+        // A call staged while flat for a pending entry keeps its placement rule.
+        const auto margin_side = static_cast<PositionSide>(candidate.projection_position_side);
         const bool stale_margin = candidate.family == PineOrderFamily::Margin
-            && candidate.projection_position_side == reversal.projection_position_side;
+            && (margin_side == PositionSide::FLAT
+                ? candidate.projection_position_side == reversal.projection_position_side
+                : margin_side == closed_side);
         if ((exit && targets_prior(candidate)) || stale_margin) stale.push_back(handle);
     }
     for (const auto& handle : stale) {  // a cancel of an ended request would journal NotWorking
