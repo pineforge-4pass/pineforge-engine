@@ -111,11 +111,15 @@ continues to report `programming_error`.
 ### Resident bound of the parent-terminal drain (native order)
 
 The native request core's `JournalStore` has a resident cap of 2,048
-committed events in 32-event chunks, with a keep-resident floor of 128.
+committed events in 32-event chunks. It spills while an append would exceed
+the cap and more than 128 events remain resident. The last spill can leave
+fewer than 128.
 A single bar can exceed the cap before its journal is retired; older events
 then spill to pages and remain readable at their original positions and
-ordinals. Each spill page holds up to 32,768 bytes of events plus an 8-byte seal, and the decoded cache has four
-slots. The separately bound `CommandScratchStore` codec uses its own fixed
+ordinals. Each transfer carries up to 32,768 bytes of events plus an 8-byte
+seal. A larger event occupies one page spanning multiple transfers. The
+decoded cache has four slots.
+The separately bound `CommandScratchStore` codec uses its own fixed
 workspace instead of this resident tail.
 
 This is a bound of the native request core, not of `CommandScratchStore`: the
