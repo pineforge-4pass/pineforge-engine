@@ -39,23 +39,34 @@ static bool compiled_account_uses_quote(BacktestEngine& host, const std::string&
         written != required || receipt.back() != '\0')
         refuse_currency_receipt("incomplete compiled strategy currency declaration");
 
+    constexpr auto invalid = "invalid compiled strategy currency declaration";
+    live::Json document;
     try {
-        const auto document = live::parse_json(std::string_view(receipt.data(), written - 1));
+        document = live::parse_json(std::string_view(receipt.data(), written - 1));
         if (document.at("version").integer<unsigned>() != 1) return false;
-        const auto& unresolved = document.at("unresolved");
-        if (unresolved.kind != live::Json::Kind::Array) return false;
-        for (const auto& field : unresolved.items)
-            if (field.kind != live::Json::Kind::String || field.value == "currency") return false;
-        const auto& currency = document.at("declarations").at("currency");
-        if (currency.kind != live::Json::Kind::String) return false;
-        const std::string_view spelling = currency.value;
-        constexpr std::string_view prefix = "currency.";
-        if (spelling.substr(0, prefix.size()) != prefix) return false;
-        const auto code = spelling.substr(prefix.size());
-        return code == "NONE" || code == quote;
     } catch (const std::runtime_error&) {
-        refuse_currency_receipt("invalid compiled strategy currency declaration");
+        refuse_currency_receipt(invalid);
     }
+    const auto* unresolved = document.find("unresolved");
+    if (!unresolved || unresolved->kind != live::Json::Kind::Array)
+        refuse_currency_receipt(invalid);
+    bool currency_unresolved = false;
+    for (const auto& field : unresolved->items) {
+        if (field.kind != live::Json::Kind::String) refuse_currency_receipt(invalid);
+        if (field.value == "currency") currency_unresolved = true;
+    }
+    if (currency_unresolved) return false;
+    const auto* declarations = document.find("declarations");
+    if (!declarations || declarations->kind != live::Json::Kind::Object)
+        refuse_currency_receipt(invalid);
+    const auto* currency = declarations->find("currency");
+    if (!currency || currency->kind != live::Json::Kind::String)
+        refuse_currency_receipt(invalid);
+    const std::string_view spelling = currency->value;
+    constexpr std::string_view prefix = "currency.";
+    if (spelling.substr(0, prefix.size()) != prefix) return false;
+    const auto code = spelling.substr(prefix.size());
+    return code == "NONE" || code == quote;
 }
 
 } // namespace pineforge::source::detail
