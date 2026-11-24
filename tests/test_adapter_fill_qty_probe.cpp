@@ -55,6 +55,7 @@
 #include <string>
 #include <vector>
 
+#include <pineforge/pineforge.h>
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
 #include <pineforge/native_host.hpp>
@@ -1082,6 +1083,266 @@ void shape_own_quantity_order_behind_a_same_bar_close_opens() {
     CHECK(near(host.probe.qty, 1.0));
 }
 
+enum class Command { Order, CancelGroup, Entry, CashOrder };
+enum class NamedClose { None, Units, Percent, Full, HalfThenRest };
+
+struct ReportCase {
+    const char* name;
+    Command command;
+    double named, other; // starting lots; Other, if present, is older
+    NamedClose close;
+    double close_operand, own, default_value;
+    // Fixture preconditions on the target event (magnitudes), not report answers.
+    double closed, opened;
+    double grid = 0.0;
+};
+
+struct CloseKey { std::uint64_t incarnation; std::string command; };
+
+struct ReportSample {
+    int matches = 0, rc = -1, partition = -2, close_only = -1;
+    bool buy = false, peer = false;
+    double qty = kNaN, position = kNaN;
+    std::uint64_t incarnation = 0, last_fill = 0;
+    std::vector<CloseKey> pending_closes;
+};
+
+struct AppliedSample {
+    std::uint64_t incarnation, ordinal;
+    int bar;
+    double price, closed, opened, before, after;
+    std::string command;
+};
+
+class PendingFillReplay final : public source::PineStrategyHost {
+public:
+    PendingFillReplay(const ReportCase& row, bool buy)
+        : row(row), buy(buy), limit(buy ? 95.0 : 105.0) {
+        source::PineStrategyConfig config;
+        config.default_qty_value = row.default_value;
+        if (row.command == Command::CashOrder) config.default_qty_type = static_cast<int>(QtyType::CASH);
+        config.pyramiding = 2;
+        config.close_entries_rule_any = row.other > 0.0;
+        configure_pine_strategy(config);
+        set_syminfo_mintick(0.01);
+        qty_step_ = row.grid;
+    }
+
+    const ReportCase& row;
+    const bool buy;
+    const double limit;
+    ReportSample placement, resting;
+    std::vector<AppliedSample> closes, targets;
+    bool named_lots_only = true, peer_filled = false, peer_left = false;
+
+    void on_source_bar(const Bar&) override {
+        switch (pine_bar_index()) {
+        case 0:
+            if (row.other > 0) strategy_entry("Other", !buy, kNaN, kNaN, row.other);
+            else if (row.named > 0) strategy_entry("Named", !buy, kNaN, kNaN, row.named);
+            break;
+        case 1:
+            if (row.other > 0) strategy_entry("Named", !buy, kNaN, kNaN, row.named);
+            // A priced reversal can queue during placement. Read it on bar 2,
+            // when it has its own published incarnation.
+            if (row.command == Command::Entry) strategy_entry("Target", buy, limit, kNaN, row.own);
+            break;
+        case 2:
+            switch (row.close) {
+            case NamedClose::None: break;
+            case NamedClose::Units: strategy_close("Named", "units", row.close_operand); break;
+            case NamedClose::Percent:
+                strategy_close("Named", "part", kNaN, row.close_operand); break;
+            case NamedClose::HalfThenRest:
+                strategy_close("Named", "part", kNaN, 50.0);
+                [[fallthrough]];
+            case NamedClose::Full: strategy_close("Named", "rest"); break;
+            }
+            if (row.command == Command::Order || row.command == Command::CashOrder)
+                strategy_order("Target", buy, row.own, limit);
+            if (row.command == Command::CancelGroup) {
+                strategy_order("Target", buy, row.own, limit, kNaN, "pair", 1);
+                strategy_order("Peer", buy, 1.0, buy ? 85.0 : 115.0, kNaN, "pair", 1);
+            }
+            capture(placement);
+            break;
+        case 3: capture(resting); break;
+        case 4:
+            for (int i = 0; i < pending_order_count(); ++i) {
+                pf_pending_order_v1_t item{};
+                CHECK(strategy_pending_order_get(this, i, &item, sizeof item) == 0);
+                if (std::strcmp(item.id, "Peer") == 0) peer_left = true;
+            }
+            break;
+        }
+    }
+
+private:
+    double position = 0.0;
+    std::uint64_t last_fill = 0;
+
+    void capture(ReportSample& out) {
+        out.last_fill = last_fill;
+        out.position = live_position_size();
+        const int count = strategy_pending_orders_len(this);
+        for (int i = 0; i < count; ++i) {
+            pf_pending_order_v1_t item{};
+            CHECK(strategy_pending_order_get(this, i, &item, sizeof item) == 0);
+            if (std::strcmp(item.id, "__close__Named") == 0 && item.type == kExitRow)
+                out.pending_closes.push_back({item.incarnation, item.comment});
+            if (std::strcmp(item.id, "Peer") == 0 && item.oca_type == 1) out.peer = true;
+            if (std::strcmp(item.id, "Target") != 0
+                || item.type != (row.command == Command::Entry ? kEntryRow : kOrderRow)) continue;
+            ++out.matches;
+            out.incarnation = item.incarnation;
+            out.buy = item.is_long != 0;
+            CHECK(item.oca_type == (row.command == Command::CancelGroup ? 1 : 0));
+            out.rc = strategy_pending_order_fill_qty(this, i, limit, &out.qty,
+                                                     &out.close_only, &out.partition);
+        }
+    }
+
+    void on_native_applied_event(const native_order::ExecutionAppliedEvent& e,
+                                 const NativeDecisionContext&) override {
+        const AppliedSample fill{e.handle().incarnation, e.ordinal, e.interval_index(),
+            e.resolved_price, e.closed_units, e.opened_units, position, live_position_size(),
+            e.request().comment};
+        position = fill.after;
+        last_fill = e.ordinal;
+        const auto& label = e.request().label;
+        if (label == "Target") targets.push_back(fill);
+        if (label == "Peer") peer_filled = true;
+        if (label == "__close__Named") {
+            closes.push_back(fill);
+            named_lots_only &= e.closed_trade_count != 0;
+            for (std::size_t i = 0; i < e.closed_trade_count; ++i)
+                named_lots_only &= get_trade(static_cast<int>(e.first_trade_index + i)).entry_id == "Named";
+        }
+    }
+};
+
+void compare_pending_fill(const ReportCase& row, bool buy) {
+    const Bar bars[] = {
+        mk_bar(10, 100, 100, 100, 100, 60'000), mk_bar(11, 100, 100, 100, 100, 60'000),
+        mk_bar(12, 100, 100, 100, 100, 60'000), mk_bar(13, 100, 100, 100, 100, 60'000),
+        mk_bar(14, 100, 106, 94, 100, 60'000), mk_bar(15, 100, 100, 100, 100, 60'000),
+    };
+    PendingFillReplay host(row, buy);
+    host.run(bars, 6);
+    const char* side = buy ? "buy" : "sell";
+    const double held = (buy ? -1 : 1) * (row.named + row.other);
+    const bool group = row.command == Command::CancelGroup;
+    const auto& pre = host.placement;
+    const auto& post = host.resting;
+    const std::size_t count = row.close == NamedClose::None ? 0 :
+                              row.close == NamedClose::HalfThenRest ? 2 : 1;
+    bool reached = host.last_error().empty() && host.targets.size() == 1
+        && pre.position == held && pre.matches == 1 && post.matches == 1 && pre.rc == 0 && post.rc == 0
+        && pre.incarnation != 0 && pre.incarnation == post.incarnation
+        && pre.pending_closes.size() == count && host.closes.size() == count
+        && post.pending_closes.empty() && host.named_lots_only && !host.peer_filled
+        && pre.peer == group && post.peer == group;
+    auto prior_position = held;
+    auto prior_ordinal = pre.last_fill;
+    for (std::size_t i = 0; i < host.closes.size(); ++i) {
+        const auto& close = host.closes[i];
+        const char* command = row.close == NamedClose::Units ? "units"
+            : row.close == NamedClose::Percent || (row.close == NamedClose::HalfThenRest && i == 0)
+            ? "part" : "rest";
+        const bool identified = close.incarnation != 0
+            && close.command == command && std::count_if(pre.pending_closes.begin(), pre.pending_closes.end(),
+                [&](const CloseKey& key) { return key.incarnation == close.incarnation && key.command == command; }) == 1;
+        std::printf("FILL %s %s __close__Named#%llu command=%s event=%llu bar=%d "
+                    "price=%g before=%g closed=%g opened=%g after=%g\n",
+                    row.name, side, static_cast<unsigned long long>(close.incarnation), close.command.c_str(),
+                    static_cast<unsigned long long>(close.ordinal), close.bar, close.price,
+                    close.before, close.closed, close.opened, close.after);
+        const double expected = row.close == NamedClose::Units ? row.close_operand
+            : row.close == NamedClose::Percent ? row.named * row.close_operand / 100.0
+            : row.close == NamedClose::HalfThenRest ? row.named / 2.0 : row.named;
+        reached &= identified && close.bar == 3 && close.price == 100 && close.ordinal > prior_ordinal
+            && close.before == prior_position && close.closed == expected && close.opened == 0.0
+            && close.after == prior_position + (buy ? expected : -expected);
+        prior_ordinal = close.ordinal;
+        prior_position = close.after;
+    }
+    reached &= post.last_fill == prior_ordinal && post.position == prior_position;
+    if (host.targets.size() == 1) {
+        const auto& f = host.targets.front();
+        reached &= f.incarnation == pre.incarnation && f.ordinal > post.last_fill
+            && f.bar == 4 && f.price == host.limit && f.before == post.position
+            && f.closed == row.closed && f.opened == (buy ? row.opened : -row.opened)
+            && std::abs(f.after - f.before) == f.closed + std::abs(f.opened)
+            && f.after != f.before && host.live_position_size() == f.after;
+        if (group) reached &= host.peer_left == (f.closed + std::abs(f.opened) < row.own);
+    }
+    if (!reached) {
+        std::printf("NOT COMPARED %s %s: target=%zu close=%zu pre/post rc=%d/%d inc=%llu/%llu "
+                    "pos=%g/%g error='%s'\n", row.name, side, host.targets.size(), host.closes.size(),
+                    pre.rc, post.rc,
+                    static_cast<unsigned long long>(pre.incarnation),
+                    static_cast<unsigned long long>(post.incarnation),
+                    pre.position, post.position, host.last_error().c_str());
+        CHECK(reached);
+        return;
+    }
+    const auto& f = host.targets.front();
+    // A normal strategy.entry reversal reports its OPENING leg. A raw
+    // strategy.order reports the entire transaction, including what it closed.
+    const double booked_qty = std::abs(f.opened) + (row.command == Command::Entry ? 0.0 : f.closed);
+    const bool booked_buy = f.after > f.before;
+    const int booked_close_only = f.opened == 0.0;
+    const auto compare = [&](const ReportSample& s, const char* phase) {
+        const auto field = [&](const char* name, double reported, double booked) {
+            ++checks;
+            if (reported != booked) ++failures;
+            std::printf("%s %s %s phase=%s field=%s reported=%g actual=%g "
+                        "Target#%llu after_event=%llu fill_event=%llu bar=%d price=%g closed=%g opened=%g\n",
+                        reported == booked ? "PASS" : "FAIL", row.name, side, phase, name, reported,
+                        booked, static_cast<unsigned long long>(f.incarnation),
+                        static_cast<unsigned long long>(s.last_fill),
+                        static_cast<unsigned long long>(f.ordinal), f.bar, f.price, f.closed, f.opened);
+        };
+        const int partition = row.command == Command::CashOrder ? PF_FILL_QTY_PARTITION_FROZEN_PLACEMENT
+            : std::isnan(row.own) ? PF_FILL_QTY_PARTITION_AT_FILL : PF_FILL_QTY_PARTITION_EXPLICIT;
+        field("partition", s.partition, partition);
+        field("side", s.buy, booked_buy);
+        field("qty", s.qty, booked_qty);
+        field("close_only", s.close_only, booked_close_only);
+    };
+    compare(pre, count ? "before-close" : "no-close");
+    compare(post, count ? "after-close" : "still-resting");
+}
+
+void pending_reports_match_later_applied_events() {
+    using C = Command;
+    using N = NamedClose;
+    const ReportCase rows[] = {
+        // name, command, Named, Other, close, operand, own, default, booked close/open
+        {"oca-partial", C::CancelGroup, 4, 0, N::Units, 1, 4, 1, 3, 0},
+        {"oca-full", C::CancelGroup, 4, 0, N::Full, kNaN, 4, 1, 0, 4},
+        {"oca-full-smaller", C::CancelGroup, 4, 0, N::Full, kNaN, 2, 1, 0, 2},
+        {"plain-partial", C::Order, 4, 0, N::Units, 1, 3, 1, 3, 0},
+        {"plain-excess", C::Order, 4, 0, N::Units, 1, 5, 1, 3, 2},
+        {"plain-grid", C::Order, 4, 0, N::Units, 1, 3.75, 1, 3, 0, 1},
+        {"named-half", C::CancelGroup, 2, 3, N::Percent, 50, 5, 1, 4, 0},
+        {"named-half-varied", C::CancelGroup, 4, 1, N::Percent, 50, 5, 1, 3, 0},
+        {"named-units", C::CancelGroup, 2, 3, N::Units, 0.5, 5, 1, 4.5, 0},
+        {"named-all", C::CancelGroup, 2, 3, N::Full, kNaN, 5, 1, 3, 0},
+        {"named-half-rest", C::CancelGroup, 2, 3, N::HalfThenRest, kNaN, 5, 1, 3, 0},
+        {"default-capped", C::Order, 2, 0, N::None, kNaN, kNaN, 5, 2, 0},
+        {"default-small", C::Order, 2, 0, N::None, kNaN, kNaN, 1, 1, 0},
+        {"default-full", C::Order, 2, 0, N::Full, kNaN, kNaN, 5, 0, 5},
+        {"cash-frozen", C::CashOrder, 10, 0, N::None, kNaN, kNaN, 500, 5, 0},
+        {"cash-frozen-varied", C::CashOrder, 10, 0, N::None, kNaN, kNaN, 250, 2.5, 0},
+        {"oca-no-close", C::CancelGroup, 4, 0, N::None, kNaN, 4, 1, 4, 0},
+        {"entry-flat", C::Entry, 0, 0, N::None, kNaN, 2, 1, 0, 2},
+        {"entry-reversal", C::Entry, 4, 0, N::None, kNaN, 2, 1, 4, 2},
+    };
+    for (const auto& row : rows)
+        for (bool buy : {true, false}) compare_pending_fill(row, buy);
+}
+
 }  // namespace
 
 int main() {
@@ -1112,6 +1373,7 @@ int main() {
     shape_own_quantity_oca_cancel_order_reports_its_close();
     shape_own_quantity_oca_cancel_order_closes_at_most_the_short();
     shape_own_quantity_order_behind_a_same_bar_close_opens();
+    pending_reports_match_later_applied_events();
     std::printf("R5 B-ADAPTER fill-quantity probe: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
