@@ -1325,14 +1325,43 @@ std::vector<Comparison> step_checks(const Observed& seen, Mode mode) {
         c.require(!seen.applied.empty(), "minimum applied-fill count", seen.applied.size(), 1);
     };
     if (step.on_close) {
-        // The POOC step feed has a distinct signal-close price (R1').
-        out.push_back({"entry_filled_at_signal_close",
-                       entry != nullptr && near(entry->price, kStepBasePrice)
-                           && near(entry->opened, step.entry_qty),
-                       entry != nullptr ? entry->opened : kNaN, step.entry_qty});
-        require_events(out.back());
-        out.back().one(entries.size(), "Long fill count");
-        require_run(out.back(), seen, mode, step_end_close_bar(mode) + 1);
+        const auto at_signal_close = [&](const Applied* fill) {
+            Comparison r{"entry_filled_at_signal_close",
+                         fill && near(fill->price, kStepBasePrice)
+                             && near(fill->opened, step.entry_qty),
+                         fill ? fill->opened : kNaN, step.entry_qty};
+            require_events(r);
+            r.one(entries.size(), "Long fill count");
+            require_run(r, seen, mode, step_end_close_bar(mode) + 1);
+            return r;
+        };
+        const auto positive = at_signal_close(entry);
+        out.push_back(positive);
+        if (!step.stop_first) {
+            const auto reject_copy = [&](const char* name, const char* reason, auto change) {
+                Comparison control = positive;
+                control.name = name;
+                control.require(positive.ok && entry && entry->bar == kStepSignalBar
+                                    && entry->phase == NativePathPhase::Close
+                                    && entry->after_calculation_close,
+                                "real signal-close entry required", 0, 1);
+                if (!control.missing) {
+                    Applied copy = *entry;
+                    change(copy);
+                    const auto result = at_signal_close(&copy);
+                    const bool rejected = !result.ok && !result.missing
+                        && std::string_view(result.reason) == reason;
+                    control.expect(rejected, "copy rejected for changed field", rejected, true);
+                }
+                out.push_back(control);
+            };
+            reject_copy("reject_open_entry_phase", "fill phase",
+                        [](Applied& fill) { fill.phase = NativePathPhase::Open; });
+            reject_copy("reject_late_entry_bar", "fill bar",
+                        [](Applied& fill) { ++fill.bar; });
+            reject_copy("reject_entry_without_close_provenance", "after-calculation close",
+                        [](Applied& fill) { fill.after_calculation_close = false; });
+        }
     } else {
         out.push_back(live_entry_at_next_open(seen, mode));
     }
