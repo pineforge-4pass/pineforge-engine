@@ -17,10 +17,8 @@ using namespace pineforge;
 namespace no = pineforge::native_order;
 
 constexpr double na = std::numeric_limits<double>::quiet_NaN();
-constexpr double open_price = 100;
 constexpr double tick = 0.25;
-constexpr int units = 3;
-constexpr int half = units * 50 / 100; // floor to the one-unit quantity step
+constexpr int fixed_units = 3;
 
 enum class Parent { Working, SignalClose, Limit };
 struct Example {
@@ -31,13 +29,20 @@ struct Example {
     const char* stop_group = "";
     bool replace = false;
     bool check_binding = false;
+    int cash = 0;
+    int signal_price = 99;
+    int fill_price = 100;
 
     bool two_halves() const { return parent == Parent::Working; }
+    int requested_qty() const { return cash ? cash : fixed_units; }
+    int qty_type() const { return cash ? static_cast<int>(QtyType::CASH) : -1; }
+    // Unit point value, FX and lot step: integer division floors cash to contracts.
+    int opened() const { return cash ? cash / fill_price : fixed_units; }
     int side() const { return buy ? 1 : -1; }
     int entry_bar() const { return parent == Parent::SignalClose ? 0 : 1; }
-    double entry_limit() const { return open_price + side(); }
-    double target(int n) const { return open_price + side() * n * 8 * tick; }
-    double stop(int n) const { return open_price - side() * n * 8 * tick; }
+    double entry_limit() const { return fill_price + side(); }
+    double target(int n) const { return fill_price + side() * n * 8 * tick; }
+    double stop(int n) const { return fill_price - side() * n * 8 * tick; }
 };
 
 std::vector<Bar> prices(const Example& e) {
@@ -46,8 +51,8 @@ std::vector<Bar> prices(const Example& e) {
         bars.push_back({open, std::max(open, extreme), std::min(open, extreme), open,
                         1000.0, 1'704'067'200'000LL + static_cast<std::int64_t>(bars.size()) * 60'000});
     };
-    // Working market and limit entries both fill at the gap to 100.
-    if (e.parent == Parent::Working) add(99, 99);
+    const double open_price = e.fill_price;
+    if (e.parent == Parent::Working) add(e.signal_price, e.signal_price);
     if (e.parent == Parent::Limit) add(e.entry_limit() + e.side(), e.entry_limit() + e.side());
     add(open_price, open_price);
     if (e.replace || e.parent == Parent::Limit) add(open_price, open_price);
@@ -89,7 +94,8 @@ public:
         last_bar = bar;
         if (bar == 0) {
             const bool priced = e_.parent == Parent::Limit;
-            strategy_entry("Entry", e_.buy, priced ? e_.entry_limit() : na, na, units, e_.name);
+            strategy_entry("Entry", e_.buy, priced ? e_.entry_limit() : na, na,
+                           e_.requested_qty(), e_.name, "", 0, e_.qty_type());
             target("Half", 8);
             if (e_.two_halves()) target("Second", 16);
             stop(1);
@@ -98,7 +104,8 @@ public:
                 const auto& s = item.snapshot;
                 if (s.comment != e_.name) continue;
                 if (!item.staged && s.opening && s.source_id == "Entry"
-                    && s.is_long == e_.buy && s.requested_qty == units
+                    && s.is_long == e_.buy && s.requested_qty == e_.requested_qty()
+                    && s.qty_type == e_.qty_type()
                     && (priced ? s.exit_levels.limit == e_.entry_limit() : std::isnan(s.exit_levels.limit))
                     && std::isnan(s.exit_levels.stop)) ++parents;
                 if (s.from_entry != "Entry") continue;
@@ -177,8 +184,10 @@ bool check(Example e) {
     if (p.fills.empty()) return failure("NOT COMPARED", "missing entry");
     const auto& entry = p.fills.front();
     const auto phase = e.entry_bar() == 0 ? NativePathPhase::Close : NativePathPhase::Open;
+    const int units = e.opened();
+    const int half = units * 50 / 100;
     if (entry.id != "Entry" || entry.comment != e.name || entry.incarnation == 0
-        || entry.bar != e.entry_bar() || entry.phase != phase || entry.price != open_price
+        || entry.bar != e.entry_bar() || entry.phase != phase || entry.price != e.fill_price
         || entry.opened != e.side() * units || entry.closed != 0)
         return failure("NOT COMPARED", "wrong entry fill");
     bool binding_ok = true;
@@ -204,14 +213,19 @@ bool check(Example e) {
     const int stop_bar = e.replace ? 3 : e.entry_bar() + 1 + int(e.parent == Parent::Limit);
     const int left = units - half * (e.two_halves() ? 2 : 1);
     const int stop_units = std::min(units * e.stop_percent / 100, left);
-    if (!closed("Stop", e.replace ? "replacement" : e.name, stop_bar,
-                e.stop(e.replace ? 2 : 1), stop_units))
+    if (stop_units == 0) {
+        if (std::any_of(p.fills.begin(), p.fills.end(), [](const Fill& f) { return f.id == "Stop"; }))
+            return failure("FAIL", "stop filled with no unreserved contract");
+    } else if (!closed("Stop", e.replace ? "replacement" : e.name, stop_bar,
+                       e.stop(e.replace ? 2 : 1), stop_units)) {
         return failure("FAIL", "stop quantity on first crossing");
+    }
     if (!closed("Half", e.name, stop_bar + 1, e.target(1), half))
         return failure("FAIL", "first half quantity at its limit");
     if (e.two_halves() && !closed("Second", e.name, stop_bar + 2, e.target(2), half))
         return failure("FAIL", "second half quantity at its limit");
-    if (p.fills.size() != (e.two_halves() ? 4u : 3u) || p.physical_position().signed_units != 0)
+    const unsigned expected_fills = 2u + unsigned(e.two_halves()) + unsigned(stop_units != 0);
+    if (p.fills.size() != expected_fills || p.physical_position().signed_units != 0)
         return failure("FAIL", "extra fill or residual position");
     if (!binding_ok) return false;
     std::printf("PASS %s: all opening units accounted for\n", e.name);
@@ -223,6 +237,24 @@ int main(int argc, char** argv) {
     if (argc == 1) return check({"two-halves", Parent::Working, true, 100}) ? 0 : 1;
     if (argc != 2) return 2;
     const std::string row = argv[1];
+    if (row == "cash") {
+        const auto cash_entry = [](const char* name, bool buy, int cash, int signal, int fill) {
+            Example e{name, Parent::Working, buy, 100};
+            e.cash = cash;
+            e.signal_price = signal;
+            e.fill_price = fill;
+            return check(e);
+        };
+        const bool buy = cash_entry("cash-long", true, 300, 99, 100);
+        const bool sell = cash_entry("cash-short", false, 300, 101, 100);
+        // At 75 the cash buys four units; at 76 it buys only three.
+        const bool gap = cash_entry("cash-gap-long", true, 300, 75, 76);
+        const bool rounded = cash_entry("cash-rounded-short", false, 300, 77, 76);
+        const bool odd_cash = cash_entry("cash-extra-dollar", true, 301, 99, 100);
+        // The gap reduces three units to two: both halves fill, leaving no stop fill.
+        const bool no_room = cash_entry("cash-no-remainder", true, 300, 100, 101);
+        return buy && sell && gap && rounded && odd_cash && no_room ? 0 : 1;
+    }
     if (row == "resting") {
         const bool named = check({"named-stop", Parent::SignalClose, true, 100, "protection"});
         const bool later = check({"later-stop", Parent::SignalClose, true, 75});
