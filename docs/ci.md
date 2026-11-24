@@ -1281,7 +1281,7 @@ fail-closed from the day it landed: it reads `docs/design/native-feature-parity.
 §1, replays `tests/CMakeLists.txt`'s own decision about which units the kernel
 profile compiles, and fails when an inventory row's closure marker does not
 match what the tests actually drive. `--ctest-list` cross-checks its transliteration
-against real `ctest -N` output in both directions. Preflight passes no `--ctest-list`, so its registry comparison reads `NOT COMPARED`.
+against real `ctest -N` output in both directions. Preflight passes no `--ctest-list`, so its registry comparison reads `NOT COMPARED`. With the listing of the kernel release build the comparison reports 29 rows that it cannot place: 8 that it takes for source-bound and 21 compiled rows that it does not know.
 
 The sixth is `scripts/check_pine_to_native_coverage.py` (`doc-pine-coverage`),
 fail-closed from the day it landed as well: it derives the offered Pine set

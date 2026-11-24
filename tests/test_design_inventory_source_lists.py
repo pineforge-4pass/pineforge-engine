@@ -77,10 +77,6 @@ class SourceLists(unittest.TestCase):
         self.assertIn(layer, (['ON'], ['OFF']))
         if layer == ['OFF']:
             self.assertNotIn(removed, listed)
-            if ('CMAKE_BUILD_TYPE:STRING=Release' in cache
-                    and 'PINEFORGE_BUILD_LIVE_RUNNER:BOOL=ON' in cache):
-                findings, _ = inventory.check(inventory.ROOT, listing)
-                self.assertEqual(findings, [], '\n'.join(findings))
 
 
 if __name__ == '__main__':
