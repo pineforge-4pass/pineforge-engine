@@ -24022,17 +24022,12 @@ void PineExecutionAdapter::reaccept_gapped_bracket_behind_same_id_add(
         } else {
             request.owner = native_order::Independent{};
         }
-        std::string group_name = leg.oca_name.empty()
-            ? leg.source_id + "\x1f" + leg.from_entry : leg.oca_name;
-        SourceId replacement_key = leg.source_id + "\x1f" + leg.from_entry;
         const auto kind = std::to_string(static_cast<int>(leg.family));
-        if (child) {
-            const auto suffix = "\x1f" + std::to_string(leg.per_entry_origin);
-            group_name += suffix;
-            replacement_key += "\x1f" + kind + suffix;
-        } else {
-            replacement_key += kind;
-        }
+        const auto suffix = child ? "\x1f" + std::to_string(leg.per_entry_origin) : "";
+        const std::string group_name = leg.oca_name.empty()
+            ? leg.source_id + "\x1f" + leg.from_entry + suffix : leg.oca_name + suffix;
+        const SourceId replacement_key = leg.source_id + "\x1f" + leg.from_entry
+            + (child ? "\x1f" + kind : kind) + suffix;
         request.group = group_for(group_name, 1, static_cast<std::int64_t>(leg.family));
         leg.cancellation = {};
         const std::uint64_t family_key = key_for(leg.source_id, leg.from_entry);
@@ -25553,9 +25548,7 @@ void PineExecutionAdapter::submit_per_entry_child(const PerEntryExit& exit,
             EngineValueStage::relative_price, EngineValueReason::numeric_overflow);
     }
     const std::string origin_key = std::to_string(child.origin);
-    const SourceId prefix = exit.from_entry.empty() ? exit.exit_id + "\x1f\x1f"
-        : exit.exit_id + "\x1f" + exit.from_entry + "\x1f";
-    const SourceId group_name = prefix + origin_key;
+    const SourceId group_name = exit.exit_id + "\x1f" + exit.from_entry + "\x1f" + origin_key;
     const OrderBirth birth = capture_order_birth();
     const PineSizingSnapshot sizing = sizing_snapshot();
     const auto family_key = key_for(exit.exit_id, exit.from_entry);
@@ -25589,7 +25582,7 @@ void PineExecutionAdapter::submit_per_entry_child(const PerEntryExit& exit,
         snapshot.per_entry_origin = child.origin;
         snapshot.per_entry_units = child.units;
         initialize_l4c_policy(snapshot, {});
-        const SourceId replacement_key = prefix
+        const SourceId replacement_key = exit.exit_id + "\x1f" + exit.from_entry + "\x1f"
             + std::to_string(static_cast<int>(family)) + "\x1f" + origin_key;
         const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
                                                 replacement_key);
