@@ -450,6 +450,34 @@ double directional_tick(double value, double tick, bool upward,
     return (upward ? std::ceil(scaled - 1e-9) : std::floor(scaled + 1e-9)) * tick;
 }
 
+// ab9714be engine.hpp:1160-1180 and pine_policy_members.cpp:45-53:
+// round the raw bar print before applying the side's slippage.
+double source_bar_fill_price(double raw, double tick, int slippage, bool is_buy) {
+    const double rounded = source_bar_fill_tick(raw, tick);
+    const double slipped = rounded + (is_buy ? 1.0 : -1.0) * slippage * tick;
+    return directional_tick(slipped, tick, is_buy);
+}
+
+// Margin is charged only on the new side of the reversal.
+struct MarketReversalBudget {
+    double price;
+    double equity;
+
+    bool funds(double opened, double pointvalue, double fx, double margin_pct) const noexcept {
+        const double required = opened * price * pointvalue * fx * margin_pct / 100.0;
+        const double guard = std::max(1e-9, std::abs(equity) * 1e-12);
+        return std::isfinite(required) && std::isfinite(equity) && required <= equity + guard;
+    }
+};
+
+std::optional<MarketReversalBudget> market_reversal_placement_budget(
+        const PlacementSnapshot& source, double raw_fill, double tick) noexcept {
+    const double equity = source.projection_affordability_equity;
+    const double signal = source.projection_affordability_signal_price;
+    if (!finite_positive(equity) || !finite_positive(signal)) return std::nullopt;
+    return MarketReversalBudget{std::max(signal, nearest_tick(raw_fill, tick)), equity};
+}
+
 // A same-side default MARKET add as TradingView judges it when it is placed:
 // the held units and its own, at the signal close's tick, against the
 // placement equity (lane W5-ENG-MARGIN-V6; entry() and
@@ -2300,24 +2328,62 @@ void PineExecutionAdapter::suspend_coof_declined_reversal_at_open(
             || !reversal.reverse_to || !opposite || !market_entry) {
             continue;
         }
-        const double units = finite_positive(reversal.sizing.frozen_units)
-            ? reversal.sizing.frozen_units : reversal.requested_qty;
         const double margin = reversal.is_long ? config_.margin_long : config_.margin_short;
-        const double fx = active_staged_fx(context.sub_bar_open_ms);
-        const double required = units * bar.open * staged_.syminfo.pointvalue
-            * fx * margin / 100.0;
-        const double equity = std::isfinite(reversal.sizing.equity)
-            ? reversal.sizing.equity : require_host().native_marked_equity(bar.open);
-        const double guard = std::max(1e-9, std::abs(equity) * 1e-12);
-        if (finite_positive(units) && finite_positive(margin) && std::isfinite(required)
-            && std::isfinite(equity) && required > equity + guard) {
-            const auto domain = config_.calc_on_order_fills ? exit_legs::Domain::FillRecalc
-                                                            : exit_legs::Domain::Ordinary;
-            const exit_legs::Frame cause{context.coordinate.ordinal,
-                context.coordinate.interval_index, domain,
-                exit_legs::Phase::Observation};
-            suspend_brackets_for_reversal(reversal, cause, bar.open);
+        if (!finite_positive(margin)) continue;
+        const bool typed_money = finite_positive(reversal.requested_qty)
+            && (reversal.qty_type == static_cast<int>(QtyType::CASH)
+                || reversal.qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY));
+        if (typed_money) {
+            // The placement holds money, not contracts. Size at the price the
+            // market order will book, then cost those units as precommit does.
+            const auto& core = detail::run_consumer(require_host()).request_core();
+            const auto* live = core.find_live(handle);
+            if (!live || !std::holds_alternative<native_order::Market>(live->request().trigger)) {
+                continue;
+            }
+            const double tick = staged_.syminfo.mintick;
+            const double fill = finite_positive(reversal.forced_execution_price)
+                ? source_bar_fill_tick(reversal.forced_execution_price, tick)
+                : source_bar_fill_price(bar.open, tick, config_.slippage, reversal.is_long);
+            if (!finite_positive(fill)) continue;
+            const double fx = active_staged_fx(context.coordinate.effective_time_ms);
+            const auto units = typed_entry_units(reversal, fill, fx, handle);
+            double deduction, opened;
+            bool exhausted;
+            if (!units || !native_order::WorkingRequestCore::effective_host_units(
+                    live->pending, *units, &deduction, &opened, &exhausted) || exhausted) {
+                continue;
+            }
+            auto budget = market_reversal_placement_budget(reversal, bar.open, tick);
+            if (!budget) {
+                // Without a placement budget precommit uses the account after
+                // the proposed fill, including its fees. Project it at this open.
+                const auto* pine = pine_view_of(&require_host());
+                if (!pine) continue;
+                const auto account = pine->project_native_reversal_v1(
+                    execution::ReverseTo{reversal.is_long ? opened : -opened},
+                    execution::Fill{fill, reversal.source_id, reversal.comment, handle.incarnation});
+                if (account.status != execution::Status::Applied) continue;
+                budget = MarketReversalBudget{fill, account.marked_equity};
+            }
+            if (budget->funds(opened, staged_.syminfo.pointvalue, fx, margin)) continue;
+        } else {
+            const double units = finite_positive(reversal.sizing.frozen_units)
+                ? reversal.sizing.frozen_units : reversal.requested_qty;
+            const double fx = active_staged_fx(context.sub_bar_open_ms);
+            const double required = units * bar.open * staged_.syminfo.pointvalue
+                * fx * margin / 100.0;
+            const double equity = std::isfinite(reversal.sizing.equity)
+                ? reversal.sizing.equity : require_host().native_marked_equity(bar.open);
+            const double guard = std::max(1e-9, std::abs(equity) * 1e-12);
+            if (!finite_positive(units) || !std::isfinite(required) || !std::isfinite(equity)
+                || required <= equity + guard) continue;
         }
+        const auto domain = config_.calc_on_order_fills ? exit_legs::Domain::FillRecalc
+                                                        : exit_legs::Domain::Ordinary;
+        const exit_legs::Frame cause{context.coordinate.ordinal,
+            context.coordinate.interval_index, domain, exit_legs::Phase::Observation};
+        suspend_brackets_for_reversal(reversal, cause, bar.open);
     }
 }
 
@@ -17249,14 +17315,8 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         return directional_tick(slipped, staged_.syminfo.mintick, facts.is_buy);
     };
     const auto source_bar_fill = [&]() {
-        // ab9714be engine.hpp:1160-1180 and pine_policy_members.cpp:45-53:
-        // a raw bar print is rounded half-up first; slippage then rides on
-        // that grid price and the directional projection is an identity.
-        const double rounded = source_bar_fill_tick(
-            facts.raw_price, staged_.syminfo.mintick);
-        const double slipped = rounded + (facts.is_buy ? 1.0 : -1.0)
-            * config_.slippage * staged_.syminfo.mintick;
-        return directional_tick(slipped, staged_.syminfo.mintick, facts.is_buy);
+        return source_bar_fill_price(facts.raw_price, staged_.syminfo.mintick,
+                                     config_.slippage, facts.is_buy);
     };
     // A named stop whose entry filled at this very point is matched from that
     // fill on (the kernel's cause floor), and the kernel reaches one already
@@ -19119,25 +19179,15 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         // carries the reversal's closing fee and the carried side's gap, so it
         // declined fee-only shortfalls that the owner admits and then trims at
         // the fill (pine_fills.cpp:5999-6005, 1386-1482).
-        const bool market_reversal = reversal
-            && std::holds_alternative<native_order::Market>(view.definition->request.trigger)
-            && finite_positive(source.projection_affordability_equity)
-            && finite_positive(source.projection_affordability_signal_price);
-        if (market_reversal) {
+        if (reversal
+            && std::holds_alternative<native_order::Market>(view.definition->request.trigger)) {
             const double raw_fill = finite_positive(view.raw_price)
                 ? view.raw_price : view.resolved_price;
-            const double admit_price = std::max(
-                source.projection_affordability_signal_price,
-                nearest_tick(raw_fill, staged_.syminfo.mintick));
-            const double placement_equity = source.projection_affordability_equity;
-            const double reversal_required = units * admit_price
-                * staged_.syminfo.pointvalue * fx * margin_pct / 100.0;
-            const double guard = std::max(1e-9, std::abs(placement_equity) * 1e-12);
-            if (!std::isfinite(reversal_required)
-                || reversal_required > placement_equity + guard) {
-                return NativePrecommitVerdict::Refuse;
-            }
-            return NativePrecommitVerdict::AdmitWithHostMargin;
+            const auto budget = market_reversal_placement_budget(
+                source, raw_fill, staged_.syminfo.mintick)
+                .value_or(MarketReversalBudget{view.resolved_price, view.account.marked_equity});
+            return budget.funds(units, staged_.syminfo.pointvalue, fx, margin_pct)
+                ? NativePrecommitVerdict::AdmitWithHostMargin : NativePrecommitVerdict::Refuse;
         }
         if (!std::isfinite(required) || !std::isfinite(equity) || required > equity + epsilon) {
             return NativePrecommitVerdict::Refuse;
