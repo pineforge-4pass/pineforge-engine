@@ -624,13 +624,18 @@ gives the same decision either way (decision counters at each call):
   follow-up call (four times the lot-floored remaining shortfall) shows at the
   same fill or not at all.
 
-Every rule of §1.3 and §1.9 is taken only on a lot grid that is a power of
-ten (`pinned_lot_grid`): every tape's
-and every population member's is (1, 0.01, 0.0001, 1e-05). On a continuous
-quantity or another grid no tape decides, and the synthetic fuzz batteries
-that run there book their trades as before: `test_publication_witness` (a
-0.25 lot or none) and `test_adapter_live_state_equivalence` (none), where the
-pyramiding record count had moved closed trades in 32 of 38 runs.
+Every rule of §1.3 and §1.9 except the count of the pyramiding records is
+taken only on a lot grid that is a power of ten (`pinned_lot_grid`): every
+tape's and every population member's is (1, 0.01, 0.0001, 1e-05). On a
+continuous quantity or another grid no tape decides those rules, and the
+synthetic fuzz batteries that run there book their trades without them.
+The records are counted under FIFO with pyramiding above one on every
+declared quantity step and without one. The script recorded for #694 decides
+that without a step; on a step that is not a power of ten no tape decides it,
+and the count is the same arithmetic. `test_publication_witness`,
+`test_adapter_quiet_bar` (a 0.25 lot or none) and
+`test_adapter_live_state_equivalence` (none) hold the engine's own transcripts
+of it.
 
 What the tree does not reproduce yet, each listed in its test:
 - The residual call on the G + L cash after a trade history (the
@@ -701,8 +706,8 @@ the id fills as before (`test_exit_bracket_pending_entry_leg`).
 **Pyramiding records.** The pyramiding cap counts the open records of the
 close ledger -- one per entry fill whose units are not all booked yet -- not
 the physical lots, which drain first in first out (`pyr1-records-below-lots`,
-`pyr2-records-above-lots`). `pyramiding_count`'s P8 tape shows the same rule,
-but its test runs without a lot grid and keeps the earlier count (§1.8).
+`pyr2-records-above-lots`). `pyramiding_count`'s P8 tape, which runs without a
+lot grid, shows the same rule (§1.8).
 A record is booked as the ledger books: an exit leg armed for one opening of
 its id books that opening's record first (its `bracket_origin`;
 `test_exit_bracket_pending_entry_leg`'s capped entry, where the re-issued T1
