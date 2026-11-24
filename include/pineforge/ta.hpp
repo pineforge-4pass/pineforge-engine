@@ -534,10 +534,15 @@ public:
 class StdDev {
     int length_;
     bool biased_;
+    // Unbiased path: what the current bar's compute() did to buffer_, so that
+    // recompute() can undo it before running the bar again.
+    bool pushed_ = false;
+    bool evicted_ = false;
     std::optional<OwnedDeque<double>> buffer_; // materialized only for the unbiased path
     // The later November captures checked these compensated sums separately, not the final deviation.
     KahanWindowSum sum_x_;           // src
     KahanWindowSum sum_xx_;          // src * src
+    double evicted_value_ = 0.0;     // the value the current bar pushed out
 
 public:
     explicit StdDev(int length, bool biased = true);

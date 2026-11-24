@@ -175,6 +175,8 @@ double StdDev::compute(double src) {
         return sum_x_.seeded() ? biased_value() : na<double>();
     }
     auto& buffer = *buffer_;
+    pushed_ = false;
+    evicted_ = false;
     if (is_na(src)) {
         // Pine ta.stdev, like ta.sma: an na input never enters the
         // compact last-N-valid window; once `length` valid values have been
@@ -188,7 +190,10 @@ double StdDev::compute(double src) {
     }
 
     buffer.push_back(src);
+    pushed_ = true;
     while ((int)buffer.size() > length_) {
+        evicted_value_ = buffer.front();
+        evicted_ = true;
         buffer.pop_front();
     }
 
@@ -765,24 +770,16 @@ double StdDev::recompute(double src) {
         sum_xx_.unpush();
         return compute(src);
     }
+    // Undo what this bar's compute() did (its value leaves, the value it
+    // pushed out returns), then run the bar again, so the result is what a
+    // run over the same final values gives whether the bar's value was, or
+    // now is, na. The earlier bars' values are never written.
     auto& buffer = *buffer_;
-    if (buffer.empty()) return compute(src);
-    buffer.back() = src;
-
-    if (is_na(src)) return na<double>();
-    if ((int)buffer.size() < length_) return na<double>();
-
-    double sum = 0.0;
-    for (double v : buffer) sum += v;
-    double mean = sum / length_;
-
-    double sq_sum = 0.0;
-    for (double v : buffer) {
-        double diff = v - mean;
-        sq_sum += diff * diff;
+    if (pushed_) {
+        buffer.pop_back();
+        if (evicted_) buffer.push_front(evicted_value_);
     }
-    const int denom = biased_ ? length_ : (length_ - 1);
-    return denom > 0 ? std::sqrt(sq_sum / denom) : na<double>();
+    return compute(src);
 }
 
 // --- Supertrend ---

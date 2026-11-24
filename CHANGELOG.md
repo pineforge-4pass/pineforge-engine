@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- `ta.stdev(..., biased = false)` recalculated on the same bar now gives what a run over the bar's final value gives when that value changes to or from `na`, and no longer overwrites the previous bar's value or writes `na` into the window. Recalculations between two valid values are unchanged.
 - `ta.rci` with a length of 1291 or more now returns the rank correlation of its formula; the denominator `n * (n * n - 1)` no longer overflows an int. Shorter lengths are unchanged.
 - When a C++ host makes a global exit leg wait for another order, a Pine entry reversal now cancels the leg even if it is hidden. If cancelling its parent already ended the leg, the reversal no longer records an extra `NotWorking` event.
 - A buy stop accepted while flat that later reverses a short now removes the short’s pending margin call. The same rule applies when a sell reverses a long.
