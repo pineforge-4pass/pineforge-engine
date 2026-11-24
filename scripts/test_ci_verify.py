@@ -26,6 +26,7 @@ from unittest import mock
 
 import check_abi_receipt_skips
 import ci_verify
+from cmake_test_includes import registration_statements
 from test_native_live_equivalence_split import driver_probes
 from ci_verify import (
     Completed,
@@ -4802,7 +4803,7 @@ def _split_values(fragment: str):
     return [token for token in fragment.replace('\n', ' ').split() if token]
 
 
-def _substitute(token: str, bindings: dict, environment: dict, *, path, line: int, text: str,
+def _substitute(token: str, bindings: dict, environment: dict, *, path, line: int,
                 depth: int = 0):
     """One token with every ${variable} resolved from the surrounding walk.
 
@@ -4817,7 +4818,7 @@ def _substitute(token: str, bindings: dict, environment: dict, *, path, line: in
             return str(bindings[name])
         if name in environment and depth < 8:
             return ';'.join(_substitute(item, bindings, environment, path=path,
-                                        line=line, text=text, depth=depth + 1)
+                                        line=line, depth=depth + 1)
                             for item in environment[name])
         raise ValueError(
             f'{path}:{line}: cannot expand ${{{name}}} in {token!r}; the '
@@ -4843,11 +4844,12 @@ class _LabelWalk:
     def __init__(self):
         self.names = set()
         self.path = Path('.')
-        self.text = ''
         self.statements = []
 
     def walk_file(self, path: Path) -> None:
         self.visited = set()
+        self.source_dir = Path(path).resolve().parent
+        self.project_dir = _project_root(Path(path).resolve())
         self._walk_into(Path(path), {}, {})
 
     def _walk_into(self, path: Path, bindings: dict, environment: dict) -> None:
@@ -4858,11 +4860,11 @@ class _LabelWalk:
         if path in self.visited:
             return
         self.visited.add(path)
-        previous = self.path, self.text, self.statements
-        self.path, self.text = path, path.read_text()
-        self.statements = _cmake_statements(self.text)
+        previous = self.path, self.statements
+        self.statements = [(cmd.line, f'{cmd.name.lower()}({cmd.body})', source)
+                           for source, cmd in registration_statements(path)]
         self._run(0, len(self.statements), bindings, environment)
-        self.path, self.text, self.statements = previous
+        self.path, self.statements = previous
 
     def _body_carries_labels(self, start: int, end: int) -> bool:
         return any(ci_verify.PRIVATE_FIXTURE_LABEL in self.statements[index][1]
@@ -4891,7 +4893,7 @@ class _LabelWalk:
     def _run(self, start: int, end: int, bindings: dict, environment: dict) -> None:
         index = start
         while index < end:
-            line, statement = self.statements[index]
+            line, statement, self.path = self.statements[index]
             head = CMAKE_HEAD.match(statement)
             head = head.group(1) if head else ''
             if head == 'set':
@@ -4928,8 +4930,7 @@ class _LabelWalk:
                 for item in items:
                     try:
                         bindings[variable] = _substitute(item, bindings, environment,
-                                                         path=self.path, line=line,
-                                                         text=self.text)
+                                                         path=self.path, line=line)
                     except ValueError:
                         if self._body_carries_labels(index + 1, body_end):
                             raise
@@ -4959,16 +4960,15 @@ class _LabelWalk:
                             'call in a shape this walk cannot read')
                     for token in _split_values(match.group('rows')):
                         self.names.add(_substitute(token, bindings, environment,
-                                                   path=self.path, line=line,
-                                                   text=self.text))
+                                                   path=self.path, line=line))
                 index += 1
             elif head == 'include':
                 arguments = _split_values(_statement_arguments(statement))
                 if not arguments:
                     raise ValueError(f'{self.path}:{line}: unreadable include()')
                 target = arguments[0].strip('"')
-                target = target.replace('${PROJECT_SOURCE_DIR}', str(_project_root(self.path)))
-                target = target.replace('${CMAKE_CURRENT_SOURCE_DIR}', str(self.path.parent))
+                target = target.replace('${PROJECT_SOURCE_DIR}', str(self.project_dir))
+                target = target.replace('${CMAKE_CURRENT_SOURCE_DIR}', str(self.source_dir))
                 if ROW_VARIABLE.search(target):
                     raise ValueError(
                         f'{self.path}:{line}: cannot resolve {target!r}; the walk '
@@ -5113,6 +5113,7 @@ class PrivateFixtureFloors(unittest.TestCase):
             # sit beside the copies, or the walk correctly refuses.
             shutil.copyfile(ROOT / 'tests' / 'confirmed_capabilities_refusals.cmake',
                             root / 'tests' / 'confirmed_capabilities_refusals.cmake')
+            shutil.copytree(ROOT / 'tests' / 'lanes.d', root / 'tests' / 'lanes.d')
             label = 'LABELS ' + ci_verify.PRIVATE_FIXTURE_LABEL
 
             (root / 'tests' / 'CMakeLists.txt').write_text(

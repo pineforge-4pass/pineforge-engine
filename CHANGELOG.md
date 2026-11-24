@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- The ABI receipt check now refuses an empty CTest registry. The verifier’s private-fixture label comparison now includes tests registered by the CMake glob.
 - The design inventory now reads included CMake test registrations and reports compiled rows in a kernel CTest listing that the inventory missed.
 - The private-file read check now examines Python tests registered in included CMake files and reads their skip properties.
 - Lengths at the int limit no longer overflow in `length + 1` or `left + right + 1`: `ta.ema`, `ta.mom`, `ta.roc`, `ta.rising`, `ta.falling`, `ta.percentrank`, `ta.pivothigh` and `ta.pivotlow` with a length of 2147483647, and `ta.valuewhen` with that occurrence limit. A negative `ta.valuewhen` occurrence returns `na` instead of reading outside the kept values. Other lengths are unchanged.

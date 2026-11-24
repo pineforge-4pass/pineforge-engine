@@ -20,9 +20,9 @@ CMAKE_EXPORT_COMPILE_COMMANDS=ON is named too. --prepare first prepares the
 seven providers into the tree with the argv ci_verify uses, reusing a matching
 prepared provider and refusing, without deleting it, one that does not match.
 
-Exit status: 0 when every receipt-gated row runs (or none is registered), 1
-when one will not, 2 when the directory is no configured build tree or ctest
-cannot list its rows.
+Exit status: 0 when a nonempty registry has no blocked receipt-gated rows, 1
+when a gated row will not run, 2 when the directory is no configured build
+tree or CTest supplies no usable registry.
 """
 from __future__ import annotations
 
@@ -74,7 +74,11 @@ def registered_tests(build_dir: Path, ctest: str = 'ctest') -> list[dict]:
     if result.returncode:
         raise RuntimeError(f'ctest could not list the rows of {build_dir}:\n'
                            + result.stdout + result.stderr)
-    return json.loads(result.stdout).get('tests', [])
+    registry = json.loads(result.stdout)
+    tests = registry.get('tests') if isinstance(registry, dict) else None
+    if not isinstance(tests, list) or not tests:
+        raise ValueError(f'{build_dir}: no CTest rows in the test registry')
+    return tests
 
 
 def gated_rows(tests: list[dict]) -> list[GatedRow]:
