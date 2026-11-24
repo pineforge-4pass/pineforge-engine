@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- A market entry rebuilt after a full close keeps its OCA group, so its fill still cancels or reduces resting group members.
 - An entry with a cash budget of zero or a zero equity percentage places no order, including when another order closes the position on the same bar.
 - The ABI receipt check names unusable CTest commands and malformed receipt arguments. It reports which inputs are present; only CTest results establish which rows executed.
 - The design inventory follows kernel registration branches, checks primary rows and executable aliases, and states when no CTest listing was compared.

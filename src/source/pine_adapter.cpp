@@ -10893,6 +10893,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                     req.intent = rebuilt_entry_intent(entry_snapshot);
                     req.label = entry_snapshot.source_id;
                     req.comment = entry_snapshot.comment;
+                    req.group = group_for(entry_snapshot.oca_name, entry_snapshot.oca_type);
                     const SourceId replacement_key = entry_snapshot.source_id;
                     pending_write(pending_entries_).push_back({std::move(req), std::move(entry_snapshot), replacement_key});
 #ifdef PINEFORGE_CR277_DIAGNOSTIC
@@ -11668,6 +11669,7 @@ void PineExecutionAdapter::close_all() {
                     req.intent = rebuilt_entry_intent(entry_snapshot);
                     req.label = entry_snapshot.source_id;
                     req.comment = entry_snapshot.comment;
+                    req.group = group_for(entry_snapshot.oca_name, entry_snapshot.oca_type);
                     const SourceId replacement_key = entry_snapshot.source_id;
                     pending_write(pending_entries_).push_back({std::move(req), std::move(entry_snapshot), replacement_key});
 #ifdef PINEFORGE_CR277_DIAGNOSTIC
@@ -23074,6 +23076,7 @@ void PineExecutionAdapter::observe_intraday_cap(
                                                    size_at_fill ? kNaN : continuation_units);
                 request.label = continuation_snapshot->source_id;
                 request.comment = continuation_snapshot->comment;
+                request.group = group_for(continuation_snapshot->oca_name, continuation_snapshot->oca_type);
                 request.trigger = native_order::Market{};
                 continuation_snapshot->projection_predecessor = old.incarnation;
                 continuation_snapshot->projection_predecessor_market = true;
