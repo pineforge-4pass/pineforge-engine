@@ -569,6 +569,7 @@ public:
     bool anchored_filled = false, bound_filled = false;
     bool pending_bound_seen = false, bound_gone_seen = false;
     bool bound_cancel_facts = false;
+    int bound_close_fills = 0;
     bool applied_pending = false, applied_working = false, applied_binding = false;
     bool survival_pending = false, survival_working = false, survival_binding = false;
     bool survival_parent_working = false;
@@ -643,14 +644,28 @@ protected:
         }
         if (event.request().label == "after-bound-fill" && event.closed_units > 0.0) {
             stage = "after-bound-applied";
+            ++bound_close_fills;
             bound_close_calls = active->owner_calls - owner_calls_before;
             const std::uint64_t expected_second_owner_calls = active->oracle ? 1U : 0U;
             require(bound_gone_seen && bound_close_calls == expected_second_owner_calls,
                     "the candidate has no bound owner; the old logical walk may still visit it");
-            require(context.script_bar_open_ms == kStart + (kPrefix + 2) * 60000LL
-                    && event.opened_units == 1.0 && event.closed_units == 1.0
-                    && event.resolved_price == 150.0,
-                    "the second full close follows the observed binding fill");
+            const auto at_signal_close = [](const NativeDecisionContext& at,
+                                            const no::ExecutionAppliedEvent& fill) {
+                return at.script_bar_open_ms == kStart + (kPrefix + 2) * 60000LL
+                    && fill.opened_units == 1.0 && fill.closed_units == 1.0
+                    && fill.resolved_price == 150.0;
+            };
+            require(at_signal_close(context, event),
+                    "the second reversal fills at 150 on the close after calculation");
+            auto high = context;
+            high.coordinate.path_phase = NativePathPhase::High;
+            auto path_close = event;
+            path_close.cursor.point.provenance = NativePriceProvenance::Confirmed;
+            std::string accepted;
+            if (at_signal_close(high, event)) accepted += " high phase;";
+            if (at_signal_close(context, path_close)) accepted += " close before calculation;";
+            if (!accepted.empty())
+                throw std::runtime_error("second reversal accepted changed fill:" + accepted);
         }
     }
 private:
@@ -739,6 +754,8 @@ void owners() {
                 "the gate calls this owner only for the first reversal; no second exit owner remains");
         for (const auto* host : {&candidate, &oracle}) {
             require(host->owner_seen && host->cancelled, "the owner cancellation witness completed");
+            require(which != OwnerCase::PendingBound || host->bound_close_fills == 1,
+                    "expected one applied second reversal after the binding fill");
             require(which != OwnerCase::Coof
                     || (host->coof_parent_filled && host->coof_issued
                         && host->coof_queued && host->coof_callbacks == 2),
