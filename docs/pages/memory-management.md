@@ -32,7 +32,7 @@ begin. Read or finalize the report first if you need the sink's output.
 Default C/C++ and Python callers without a report sink keep the native equity
 curve on the heap: **24 B per script bar plus vector spare capacity**
 (`pf_equity_point_t` include/pineforge/pineforge.h:326-330;
-`equity_curve_` include/pineforge/engine.hpp:772).
+`equity_curve_` include/pineforge/engine.hpp:774).
 Building the default FULL report then adds an owning **24 B per script bar**
 copy (`equity_curve` src/engine_report.cpp:790-793).
 
@@ -132,7 +132,7 @@ The fd setter attaches the arena (`attach_from_environment`
 src/engine_report.cpp:1411), and `ScratchFile::open`
 include/pineforge/detail/scratch_file.hpp:370-378 selects it.
 Linux jailed admission requires sealed memfd backing
-(`strategy_require_report_scratch_arena_v1` src/c_abi.cpp:1521-1540).
+(`strategy_require_report_scratch_arena_v1` src/c_abi.cpp:1548).
 The hosting wrapper supplies `PF_SCRATCH_ARENA_BYTES`
 src/scratch_arena.cpp:400-401.
 The engine never resizes that backing (the sizing comment above `ScratchArena`
@@ -235,8 +235,8 @@ public-report path, its whole-report read at every input and, under
 `--native-config`, the kernel's whole event record; the engine's closed trades
 (`trades_`: a fixed window and cache in memory, older rows in the engine's
 scratch files) and, with broker-state hash recording on, one 8-byte hash per
-script bar (`broker_state_hashes_` include/pineforge/engine.hpp:781, appended
-at `broker_state_hashes_` src/native_execution_consumer.cpp:9818 and not
+script bar (`broker_state_hashes_` include/pineforge/engine.hpp:783, appended
+at `broker_state_hashes_` src/native_execution_consumer.cpp:9844 and not
 released on this route); the selected,
 sink and whole-array routes, which first put the curve back in the engine; a
 ledger on a memory filesystem, where under `window` the curve scratch is refused and the
@@ -319,6 +319,11 @@ the sha256 of that file against the release's `HARNESS-SHA256SUMS`. After a run,
 received no header line, with the trade and equity arrays on stdout, means the variable was ignored.
 `run_json.py --capabilities-json` (`_capabilities_main` at `docker/run_json.py:5017`) carries no
 report-sink key, so it is not a probe.
+
+The historical grep counts above do not identify newer builds: the build manifest also
+mentions the variable (`docker/entrypoint.sh:245`). On those builds, check that the
+entrypoint actually passes `--report-sink-fd` (`docker/entrypoint.sh:892`), or compare
+the installed file with the release checksum.
 
 **What the caller passes.** A descriptor number N, open for writing in the process that executes the
 entrypoint: a FIFO or an `AF_UNIX` stream socket. N is from 3 through `INT_MAX` and is not 5. A request
@@ -433,6 +438,7 @@ to EOF got exit status 0 and a complete verified trailer.
 | `PF_SCRATCH_WINDOW_BYTES` | environment | 32 MiB | Total cap on the arena bytes mapped at one time, rounded down to whole pages. Mapped pages count toward the resident size while mapped |
 | `pf_scratch_tables_v1` through `strategy_set_scratch_tables_v1` | descriptor of eleven maxima | disk tables; with `bounded_memory`, the policy values of [Scratch tables](@ref scratch_tables) | Sizes the fixed slab of the historical tables: `K_e`, `B_e`, `K_c`, `B_c`, `U`, `B_U`, `V`, `B_V`, `R` and the unused q pair. Exceeding a maximum fails the run with `scratch_capacity_exceeded` |
 | `strategy_set_scratch_live_order_ids_limit_v1` | active IDs, `uint64_t` | 0 (no separate limit) | Optional maximum on live cohort IDs in bounded scratch. The jailed runner accepts `--limit-live-order-ids` (`docker/run_json.py:5623`). The limit does not resize the historical slab |
+| `--limit-ta-lookback N` or `PINEFORGE_LIMIT_TA_LOOKBACK` | maximum bars back for series-length TA; captured at strategy creation (`pf_ta_lookback_limit_set_checked`, `include/pineforge/pineforge.h:2325`) | unlimited; `--tv-compat` selects 15,000 if neither is supplied | History grows with observations. A positive N allows a window of N + 1; a longer request fails with `pine_runtime_limit`. The flag overrides the environment, including when set to zero for unlimited history (`docker/run_json.py:9647`). This bounds the lookback, not process memory |
 | A report sink (`strategy_set_report_sink_v1`, `strategy_set_report_sink_fd_v1`) | setter | none | Streams the trades and the equity curve to the sink instead of keeping them in the report. See [Report schema](@ref report_schema) |
 | `--spill-dir DIR` | `docker/run_json.py` flag (`docker/run_json.py:5573`), available only when `run_json.py` is invoked directly: the release entrypoint forwards no command-line flags | the system temporary directory, then `/var/tmp` if disk backing is required | The writable directory for engine scratch and unlinked report temporaries when no arena is attached. The jailed profile refuses it |
 | `--profile jailed` or `PINEFORGE_RUN_JSON_PROFILE=jailed` | `docker/run_json.py` flag (`docker/run_json.py:5611`) or environment (`environment_profile` at `docker/run_json.py:5488`); the release entrypoint forwards the environment form only | `unjailed` | Selects the bounded-memory table backend and the inherited arena for the Python host. It is the scratch profile of the engine run, not a read-only container: the entrypoint itself still compiles in `${TMPDIR:-/tmp}`. Every executed success report carries `diagnostics.run_profile` (`"jailed"` or `"unjailed"`) and `diagnostics.scratch_arena_jailed` (true only when the jailed profile ran and the arena admission succeeded; `_add_scratch_arena_diagnostics` at `docker/run_json.py:6066-6071`); the marker records the checked profile and the admission, not an independent check of operating-system confinement |

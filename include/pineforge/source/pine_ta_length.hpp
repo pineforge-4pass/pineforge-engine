@@ -39,6 +39,7 @@
 // stops TradingView's (the texts below are TradingView's own).
 #include <pineforge/ta.hpp>
 #include <pineforge/na.hpp>
+#include <pineforge/detail/ta_lookback.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -272,10 +273,9 @@ public:
 // The history a series-length window reads: one value per bar of the
 // evaluation context, from the call site's first execution on. A bar the site
 // executes holds its source; a bar it skips holds the value of the last
-// execution before it. The last kMaxBarsBack + 1 bars are kept. Full chunks
-// are shared between copies until written, so an in-memory checkpoint copies
-// at most the current chunk. Numeric scratch backing is also copy-on-write;
-// its resident cache size is independent of the retained lookback.
+// execution before it. Keep 0 retains the whole history; a positive keep
+// allows retirement in whole chunks. Numeric storage is copy-on-write; its
+// resident cache size is independent of the retained lookback.
 class HeldHistory {
 public:
     static constexpr std::size_t kChunk = 1024;
@@ -299,9 +299,9 @@ public:
     }
 
 private:
-    void ensure_slots(std::size_t keep);
+    void ensure_slots(std::size_t minimum, std::size_t keep);
     std::size_t slot(std::size_t offset) const;
-    void push(double value);
+    void push(double value, std::size_t keep);
     void drop_front_chunks(std::size_t keep);
 
     ::pineforge::detail::WindowValues<double> values_;
@@ -336,11 +336,12 @@ private:
 //   is the extremum over the members newer than it); an na source answers na
 //   and invalidates the cache.
 // * A length of 0, a negative length or an na length stops the run
-//   (RE10001, na reported as 0); a window reaching more than 15000 bars back
-//   stops it too (RE10008) -- pinned on ta.lowest / ta.highestbars / ta.sma
-//   (tv/edge), and 4990, 5001 and 9000-bar windows answered in full.
+//   (RE10001, na reported as 0). Lookback is unlimited unless the host sets a
+//   cap. TradingView's 15,000-bar cap raises RE10008 (tv/edge on ta.lowest,
+//   ta.highestbars and ta.sma).
 class SeriesWindowExtreme {
 public:
+    // TradingView compatibility value, not the default run policy.
     static constexpr long long kMaxBarsBack = 15000;
 
     SeriesWindowExtreme() : SeriesWindowExtreme(window_cache_capacity()) {}
@@ -376,6 +377,7 @@ private:
     bool has_bar_ = false;
     long long first_exec_bar_ = 0;
     long long own_bar_ = -1;         // cadence when no context is installed
+    std::int64_t max_lookback_ = ::pineforge::detail::ta_lookback_limit();
 };
 
 class SeriesHighest {
@@ -440,7 +442,7 @@ public:
 // time order. recompute() replaces the value appended by the previous call of
 // this site. Re-execution of a bar containing a call site that runs more than
 // once in a bar is not modelled, as with ta::PercentileNearestRank. The ring
-// retains kMaxBarsBack + 1 values.
+// retains the full history when unlimited and at most cap + 1 values otherwise.
 class SeriesPercentileNearestRank {
 public:
     double compute(double src, double length, double percentage);
@@ -451,13 +453,13 @@ private:
     void append(double src);
     void replace_last(double src);
     double history_at(std::size_t offset) const;
-    const std::vector<double>* rebuild_window(std::size_t length);
+    double evaluate(double src, std::uint64_t length, double percentage, bool replace);
 
     std::vector<double> history_;
     std::optional<ta::PercentileWindow> window_;
     std::size_t window_length_ = 0;
     std::size_t next_ = 0;
-    std::size_t count_ = 0;
+    std::int64_t max_lookback_ = ::pineforge::detail::ta_lookback_limit();
 };
 
 // ta.supertrend(factor, atrPeriod) as TradingView computes it: the Pine
@@ -503,15 +505,15 @@ private:
 
 // Series-length SMA for one written site with one ordinary update per call.
 // Validate current_length before updating: na/nonfinite, a nonpositive
-// truncated length, or a length above kMaxBarsBack + 1 stops via family errors.
-// A valid call records only non-na sources and selects its current length
-// from the last kMaxBarsBack + 1 non-na observations. Warm-up returns na.
+// truncated length or a configured lookback cap exceeded stops the run.
+// A valid call records only non-na sources, retaining them all by default
+// or the last cap + 1 samples when capped. Warm-up returns na.
 // Finite fractions truncate toward zero; changing length preserves the ring.
 // recompute replaces the most recent logical update: restore its pre-update
 // head/count and any evicted oldest value, then record only a non-na source.
 // Repeated recompute uses that same checkpoint; unused instances start there.
 // Cache capacity controls residency only. For finite inputs without overflow,
-// divide the exact window sum, rounded once as in fixed SMA, by the length.
+// divide the exact window sum, rounded once, by the length.
 // Finite TV clock/source-na evidence supports sample
 // membership only; numerical order/domains, runtime overrides, whole-history
 // TV parity and repeated/requested-context Pine clocks/rollback are unqualified.
@@ -528,19 +530,18 @@ public:
     }
 
 private:
-    static constexpr std::size_t kCapacity =
-        static_cast<std::size_t>(SeriesWindowExtreme::kMaxBarsBack) + 1;
-    static std::size_t checked_length(double current_length);
-    void ensure_capacity();
-    double mean(std::size_t length) const;
+    std::uint64_t checked_length(double current_length) const;
+    void ensure_capacity(std::size_t count);
+    double mean(std::uint64_t length) const;
 
     ::pineforge::detail::WindowValues<double> history_;
-    std::size_t head_ = 0; // next slot to write; the oldest when full
+    std::size_t head_ = 0; // next write; one past storage if it has to grow
     std::size_t count_ = 0;
     std::size_t pre_update_head_ = 0;
     std::size_t pre_update_count_ = 0;
     double pre_update_evicted_ = na<double>();
     bool current_pushed_ = false;
+    std::int64_t max_lookback_ = ::pineforge::detail::ta_lookback_limit();
 };
 
 }  // namespace source

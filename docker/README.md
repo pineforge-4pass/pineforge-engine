@@ -179,7 +179,7 @@ is authoritative.
 | `--magnifier-volume-weighted` | `PINEFORGE_MAGNIFIER_VOLUME_WEIGHTED` is `1`, `true`, `yes` or `on` |
 | `--syminfo`, `--symbol-feeds` | Nonempty `PINEFORGE_SYMINFO`, `PINEFORGE_SYMBOL_FEEDS`, in that order |
 | `--max-symbol-feeds` | `PINEFORGE_MAX_SYMBOL_FEEDS` is set, including empty or `0` |
-| `--tv-compat`, `--max-inventory-bytes` | On the plain g++ branch (including zero-only compile-guard settings), compatibility flag when `PINEFORGE_TV_COMPAT` is `1`, `true`, `yes` or `on`; then the inventory value when `PINEFORGE_MAX_INVENTORY_BYTES` is set, including empty or `0`. Neither flag is forwarded on the compile-guard branch |
+| `--tv-compat`, `--max-inventory-bytes` | Compatibility flag when `PINEFORGE_TV_COMPAT` is `1`, `true`, `yes` or `on`; then the inventory value when `PINEFORGE_MAX_INVENTORY_BYTES` is set, including empty or `0`. Neither flag is forwarded on the compile-guard branch; the runner reads those settings from the inherited environment when the flags are absent |
 | `--report-sink-fd`, `--run-id` | Corresponding `PINEFORGE_REPORT_SINK_FD`, `PINEFORGE_RUN_ID` is set; empty strings are retained |
 | `--bench`, `--warmup`, `--repeats` | `PINEFORGE_BENCH` is `1`, `true`, `yes` or `on`; warmup/repeats use `PINEFORGE_WARMUP`/`PINEFORGE_REPEATS`, with unset or empty values defaulting to `3`/`20` |
 | `--report-policy`, window arguments | Nonempty `PINEFORGE_REPORT_POLICY`, followed by each nonempty `PINEFORGE_WINDOW_START_MS`, `PINEFORGE_WINDOW_END_MS`, `PINEFORGE_PREROLL_BARS`, `PINEFORGE_FED_START_MS` as `--window-start-ms`, `--window-end-ms`, `--preroll-bars`, `--fed-start-ms` |
@@ -188,7 +188,9 @@ is authoritative.
 Run phase 2 in the manifest's `cwd`, the entrypoint's working directory.
 In particular, relative syminfo and symbol-feed index paths resolve there.
 Preserve the phase-1 environment unchanged, as `inherits.environment` states.
-The engine reads `PINEFORGE_RUN_JSON_PROFILE`,
+The runner reads `PINEFORGE_LIMIT_TA_LOOKBACK` from that environment and uses
+it as the default for `--limit-ta-lookback`. The engine also reads
+`PINEFORGE_RUN_JSON_PROFILE`,
 `PINEFORGE_COMMAND_SCRATCH_MAX_BYTES`, `PINEFORGE_COMMAND_SCRATCH_DIR`,
 `TMPDIR`, `PF_SCRATCH_ARENA_FD`, `PF_SCRATCH_ARENA_BYTES`,
 `PF_SCRATCH_ARENA_JAILED`, `PF_SCRATCH_WINDOW_BYTES`, `PATH` and locale
@@ -241,15 +243,15 @@ completed; 1 means a failed run, harness fault or report that could not be
 written whole; 2 means argparse refused the command line or explicit request
 validation failed. The module describes failures and incomplete publication
 at `docker/run_json.py:117` and `docker/run_json.py:136`; `main()` describes
-its status contract at `docker/run_json.py:5314` and propagates typed failure
-statuses at `docker/run_json.py:5336` and `docker/run_json.py:5345`.
-The argparse error exits 2 at `docker/run_json.py:4583`; explicit sink-option
-refusals also use 2 at `docker/run_json.py:6040`. The standalone `csv2bin`
-refusal returns 2 at `docker/run_json.py:5304`, but the entrypoint never
+its status contract at `docker/run_json.py:5406` and propagates typed failure
+statuses at `docker/run_json.py:5424` and `docker/run_json.py:5433`.
+The argparse error exits 2 at `docker/run_json.py:4668`; explicit sink-option
+refusals also use 2 at `docker/run_json.py:6147`. The standalone `csv2bin`
+refusal returns 2 at `docker/run_json.py:5392`, but the entrypoint never
 selects that subcommand. `_host_main()` returns 1 on report-channel setup
-failure at `docker/run_json.py:8718`, propagates the run status at
-`docker/run_json.py:8751`, and the process exits through
-`sys.exit(_host_main())` at `docker/run_json.py:9582`.
+failure at `docker/run_json.py:8825`, propagates the run status at
+`docker/run_json.py:8858`, and the process exits through
+`sys.exit(_host_main())` at `docker/run_json.py:9814`.
 
 Statuses 3 (compile or bind failure) and 5 (transpile failure) are
 build-phase-only; the engine step never returns them. Status 4 is only the
@@ -661,6 +663,13 @@ docker run --rm \
   timeframe, and `strategy_set_symbol_feed` installs the bars as given. A `240`
   feed does not serve a `D` request, and a `1` feed serves only a request at
   `1`, so give each requested timeframe its own bars.
+- Series-length TA windows keep their full history by default. Set
+  `PINEFORGE_LIMIT_TA_LOOKBACK` to cap them at N bars back; a length of N + 1
+  fits. An explicit `--limit-ta-lookback N` passed to `run_json.py` takes
+  precedence over the environment. `PINEFORGE_TV_COMPAT=1` selects 15,000
+  when neither is supplied.
+  An explicit `0` means unlimited; empty, negative and non-integer values
+  are usage errors.
 - An index or feed the harness cannot install (for example: not JSON, a bad
   timeframe spelling, two feeds at one timeframe, a CSV without `close`,
   timestamps that do not strictly increase, a close after the next bar's open,

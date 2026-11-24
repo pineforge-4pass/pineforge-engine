@@ -109,7 +109,8 @@ def module_layout(probe, module):
 
 
 def engine_layout_proof(probe):
-    assert module_layout(probe, native_example) == {'has_stamp': True, 'version': 5}, (
+    # expectation corrected: 5 -> 6, because the consumer stores the new TA lookback policy.
+    assert module_layout(probe, native_example) == {'has_stamp': True, 'version': 6}, (
         'the normally linked native example must export the current engine layout stamp')
     with tempfile.TemporaryDirectory(prefix='pineforge-engine-layout-') as temporary:
         root = Path(temporary)
@@ -161,7 +162,8 @@ def old_layout_refusal_proof(probe, declared=2):
         assert result.returncode == 1, (
             'a mismatched engine layout stamp must end the run with status 1',
             result.returncode, result.stdout, result.stderr)
-        refusal = f'pineforge-live: strategy engine layout mismatch: module={declared} runtime=5'
+        # expectation corrected: runtime=5 -> runtime=6, because of the new consumer field.
+        refusal = f'pineforge-live: strategy engine layout mismatch: module={declared} runtime=6'
         assert refusal in result.stderr.decode('utf-8', 'replace').splitlines(), (
             'the refusal line is missing', result.stderr)
         assert result.stdout == b'', ('a refused module must produce no output', result.stdout)

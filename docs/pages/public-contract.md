@@ -204,8 +204,8 @@ The selected-window path is **PUBLIC for walk-forward use** through the
 A walk-forward driver such as the HPO native layer may submit successive
 non-overlapping windows over one chart, for example `[T0, T1)` followed by
 `[T1, T2)`. Each window is one independent request. The CLI creates a fresh
-strategy state for its request in `_make_state` (`docker/run_json.py:5116`)
-inside `_selected_run` (`docker/run_json.py:5021`).
+strategy state for its request in `_make_state` (`docker/run_json.py:5129`)
+inside `_selected_run` (`docker/run_json.py:5034`).
 
 ### Public request and capability surface
 
@@ -213,18 +213,18 @@ These are the selected-window options declared by the CLI:
 
 | Option | Contract | Declaration |
 | --- | --- | --- |
-| `--report-policy selected-window/v1` | Opt into the selected-window report policy. | `add_argument` (`docker/run_json.py:5565`) |
-| `--window-start-ms` | Start T in calendar-aligned Unix milliseconds. | `add_argument` (`docker/run_json.py:5568`) |
-| `--window-end-ms` | End E in calendar-aligned Unix milliseconds; T < E. | `add_argument` (`docker/run_json.py:5570`) |
-| `--preroll-bars` | Requested warm-up N in script bars, from 0 through 5000. | `add_argument` (`docker/run_json.py:5572`) |
-| `--fed-start-ms` | Frozen start F of the supplied primary feed; F <= T. | `add_argument` (`docker/run_json.py:5574`) |
-| `--capabilities-json` | With `--so LIB`, report runtime support without reading OHLCV or running a strategy. | `add_argument` (`docker/run_json.py:5576`) |
-| `--validate-window-only` | Validate and plan the request; return `report_window` with `applied: false`, without executing a strategy. | `add_argument` (`docker/run_json.py:5579`) |
-| `--run-phase-fd` | Inherited AF_UNIX SOCK_STREAM descriptor N >= 3 for phase transport v1. | `add_argument` (`docker/run_json.py:5582`) |
-| `--request-feed-inventory` | Inventory bound to the strategy library, used for selected-window admission. | `add_argument` (`docker/run_json.py:5585`) |
-| `--report-shape` | This build offers `full/v1` for selected-window requests. | `add_argument` (`docker/run_json.py:5588`) |
-| `--curve-point-budget` | Refused by this build, which does not offer a compact shape. | `add_argument` (`docker/run_json.py:5590`) |
-| `--results-digest` | Refused by this build, which does not offer a results digest. | `add_argument` (`docker/run_json.py:5593`) |
+| `--report-policy selected-window/v1` | Opt into the selected-window report policy. | `add_argument` (`docker/run_json.py:5579`) |
+| `--window-start-ms` | Start T in calendar-aligned Unix milliseconds. | `add_argument` (`docker/run_json.py:5582`) |
+| `--window-end-ms` | End E in calendar-aligned Unix milliseconds; T < E. | `add_argument` (`docker/run_json.py:5584`) |
+| `--preroll-bars` | Requested warm-up N in script bars, from 0 through 5000. | `add_argument` (`docker/run_json.py:5586`) |
+| `--fed-start-ms` | Frozen start F of the supplied primary feed; F <= T. | `add_argument` (`docker/run_json.py:5588`) |
+| `--capabilities-json` | With `--so LIB`, report runtime support without reading OHLCV or running a strategy. | `add_argument` (`docker/run_json.py:5590`) |
+| `--validate-window-only` | Validate and plan the request; return `report_window` with `applied: false`, without executing a strategy. | `add_argument` (`docker/run_json.py:5593`) |
+| `--run-phase-fd` | Inherited AF_UNIX SOCK_STREAM descriptor N >= 3 for phase transport v1. | `add_argument` (`docker/run_json.py:5596`) |
+| `--request-feed-inventory` | Inventory bound to the strategy library, used for selected-window admission. | `add_argument` (`docker/run_json.py:5599`) |
+| `--report-shape` | This build offers `full/v1` for selected-window requests. | `add_argument` (`docker/run_json.py:5602`) |
+| `--curve-point-budget` | Refused by this build, which does not offer a compact shape. | `add_argument` (`docker/run_json.py:5604`) |
+| `--results-digest` | Refused by this build, which does not offer a results digest. | `add_argument` (`docker/run_json.py:5607`) |
 
 An execution request supplies the policy, all four window arguments and
 explicit `--input-tf` and `--script-tf` values, as checked by
@@ -240,14 +240,29 @@ non-integer value is a usage error (exit 2). `--tv-compat` selects defaults of
 256 symbols/feeds and 8 MiB inventory from `TV_COMPAT_LIMITS` in
 `docker/run_json.py`. Explicit parameters, including `0`, always win.
 The inventory binder accepts `--max-inventory-bytes` and `--tv-compat` with
-the same semantics. The entrypoint forwards `PINEFORGE_MAX_SYMBOL_FEEDS`,
-`PINEFORGE_MAX_INVENTORY_BYTES` and `PINEFORGE_TV_COMPAT` to the relevant tools;
-the inventory setting reaches both binder and runner.
+the same semantics. In the container, the entrypoint forwards
+`PINEFORGE_MAX_SYMBOL_FEEDS` to the runner. The binder and runner use
+`PINEFORGE_MAX_INVENTORY_BYTES` and `PINEFORGE_TV_COMPAT` from the inherited
+environment when their respective flags are absent.
+
+Series-length TA windows have no lookback cap by default. The runner's
+`--limit-ta-lookback N` sets the maximum number of bars back for `ta.sma`,
+`ta.highest`, `ta.lowest`, `ta.highestbars`, `ta.lowestbars` and
+`ta.percentile_nearest_rank` when the script supplies a series length.
+With a positive cap N, a length `N + 1` fits. A larger one fails with
+`pine_runtime_limit`, with `limit: max_bars_back` and `max: N`. The runner reads
+`PINEFORGE_LIMIT_TA_LOOKBACK` from the inherited environment when the flag
+is absent. `--tv-compat` selects 15,000 when neither is supplied. A value
+of `0` selects unlimited. Older strategy libraries keep their built-in
+lookback policy and must be rebuilt to accept a supplied limit.
+A caller embedding a strategy library can use
+`pf_ta_lookback_limit_set_checked` (`include/pineforge/pineforge.h:2325`)
+before creating the strategy.
 
 Before relying on the CLI path, probe the library with
 `docker/run_json.py --so LIB --capabilities-json`. The probe is
-`_capabilities_main` (`docker/run_json.py:5004`); its support decision is
-`_runtime_supports_selected_window` (`docker/run_json.py:4975`), which checks
+`_capabilities_main` (`docker/run_json.py:5017`); its support decision is
+`_runtime_supports_selected_window` (`docker/run_json.py:4988`), which checks
 the selected-window ABI, execution observer, phase transport and planner.
 The capability record is built by
 `capabilities_record` (`docker/selected_window_report.py:756`).
@@ -259,7 +274,7 @@ understands. This tree declares `["1.3"]` on a supported runtime and `[]`
 otherwise; see the [capability table](../../docker/README.md#selected-window-contract-revision)
 for revision history. The revision is declared in the probe, not in each
 report. The probe also sets `selected_window_bars_bin_version`
-(`docker/run_json.py:5017`) to 0: selected-window requests
+(`docker/run_json.py:5030`) to 0: selected-window requests
 require a CSV chart. General binary-feed support does not imply selected-window
 binary-chart support.
 
@@ -312,7 +327,7 @@ does not establish execution success. Request or execution failures have a
 nonzero harness status and the typed `code` / `args` failure line described in
 @ref run_failure_codes. If stdout cannot take a whole report, the harness
 returns 1 with the reason on stderr and no second JSON document, as enforced by
-`_write_report` (`docker/run_json.py:4927`).
+`_write_report` (`docker/run_json.py:4940`).
 
 **Functions and flags are append-only.** No published function or flag above
 is removed or renamed in 1.x; new ones are added. The C layout rules above

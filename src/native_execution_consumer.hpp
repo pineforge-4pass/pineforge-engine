@@ -1,9 +1,9 @@
 #pragma once
 
 #include <pineforge/cache_policy.hpp>
-
 #include <pineforge/detail/scratch_store.hpp>
 #include <pineforge/detail/scratch_arena.hpp>
+#include <pineforge/detail/ta_lookback.hpp>
 #include <pineforge/execution_consumer.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
@@ -2688,6 +2688,7 @@ private:
         const bool nested_;
         const bool allow_live_;
         detail::RunCacheDiagnosticsScope cache_diagnostics_scope_;
+        detail::TaLookbackScope ta_lookback_scope_;
     public:
         // Inline: stream pushes are per-input entries. Keep the lifecycle
         // guard and the run's allocation-owner binding in the same scope.
@@ -2697,7 +2698,8 @@ private:
               uncaught_(tracked_ ? std::uncaught_exceptions() : 0),
               nested_(c.in_attempt_call_ || c.preparing_begin_ || c.in_callback_
                          || c.processing_input_ || c.selected_epoch_.dispatching),
-              allow_live_(allow_live), cache_diagnostics_scope_(c.run_cache_diagnostics_) {}
+              allow_live_(allow_live), cache_diagnostics_scope_(c.run_cache_diagnostics_),
+              ta_lookback_scope_(c.ta_lookback_limit_) {}
         ~EntryExitGuard() {
             if (nested_) return;
             if (tracked_)
@@ -3112,6 +3114,7 @@ public:
 
 private:
     std::uint64_t scratch_live_order_ids_limit_ = 0;
+    const std::int64_t ta_lookback_limit_ = detail::ta_lookback_limit();
 };
 
 // The same lazy backing used by RunCommandScratch's Book binding. Kept in

@@ -722,6 +722,12 @@ English it is given, so pass the English without a prefix.
 `live_drawings` identifies an explicit operator capacity for live drawings
 of one type.
 
+For series-length TA, a positive `--limit-ta-lookback N` sets the maximum for
+`max_bars_back`. The adapter raises `pine_runtime_limit` with `max: N` when a
+window asks for more than N bars back. No cap is set by default.
+`--tv-compat` selects 15,000 unless the operator supplies an explicit value;
+`0` selects unlimited.
+
 `pine_limit_stop("live_drawings", N, english)` uses the operator's configured
 capacity `N` as `max` and raises the existing nonretryable
 `pine_runtime_limit`, class `strategy_limit`, with arguments

@@ -144,6 +144,7 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_report_sink_summary_v1",
     "strategy_stream_engine_layout_version", "pf_output_series_limit_set_checked", "pf_output_series_limit_failure",
     "pf_map_pairs_limit_set_checked",
+    "pf_ta_lookback_limit_set_checked",
     # The host's scalar account-currency rate, beside the curve setter above.
     "strategy_set_account_currency_fx_scalar",
 })
@@ -159,13 +160,16 @@ RUNTIME_HEADERS = (
     "report_sink.h",
 )
 
-# Source inventory: pineforge.h 117 + observer 3 + window 3 + sink 5.
+# Source inventory: pineforge.h 118 + observer 3 + window 3 + sink 5.
+# strategy_set_account_currency_fx_scalar brought the counts to 126/106.
 # strategy_release_run_results_v1 brought the counts to 127/107.
 # expectation corrected: 127 -> 128 and 107 -> 108, because pineforge.h declares
 # and c_abi.cpp implements strategy_set_scratch_live_order_ids_limit_v1.
-EXPECTED_PUBLIC_DECLARATIONS = 128
-# c_abi.cpp implements 108 of those declarations; twenty remain generated.
-EXPECTED_RUNTIME_IMPLEMENTATIONS = 108
+# expectation corrected: 128 -> 129 and 108 -> 109, because the C ABI adds
+# pf_ta_lookback_limit_set_checked.
+EXPECTED_PUBLIC_DECLARATIONS = 129
+# c_abi.cpp implements 109 of those declarations; twenty remain generated.
+EXPECTED_RUNTIME_IMPLEMENTATIONS = 109
 
 # Per-module implementations, never static-runtime implementations. The
 # capability has its own declaration in native_module.hpp; the other eight
