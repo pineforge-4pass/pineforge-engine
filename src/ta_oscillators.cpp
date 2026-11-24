@@ -443,7 +443,11 @@ double RCI::calculate() {
         double d = (double)t - price_rank_[t];
         sum_d2 += d * d;
     }
-    double rho = 1.0 - 6.0 * sum_d2 / (n * (n * n - 1));
+    // n * (n * n - 1) leaves the int range from n = 1291. In double every
+    // factor and product is exact while the product fit in an int, so those
+    // windows keep their value.
+    const double nd = static_cast<double>(n);
+    double rho = 1.0 - 6.0 * sum_d2 / (nd * (nd * nd - 1.0));
     return rho * 100.0;
 }
 
