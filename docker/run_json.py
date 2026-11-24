@@ -5130,8 +5130,8 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         """A fresh, fully configured strategy state (the ordinary run's setup without the
         legacy trade-start gate, which selected mode refuses); freed again if it fails."""
         nonlocal syminfo_applied
-        st = create_strategy(lib, checked, getattr(args, "max_output_series", None),
-                             getattr(args, "max_map_pairs", None))
+        st = _create_strategy_with_ta_lookback(
+            lib, checked, args)
         sink = None
         try:
             apply_settings(lib, st, inputs, overrides, checked)
@@ -5745,8 +5745,8 @@ def _main(argv, binary_inputs) -> int:
         Match the validation harness's setup and free a state whose
         configuration fails before propagating its failure."""
         nonlocal syminfo_applied
-        st = create_strategy(lib, checked, getattr(args, "max_output_series", None),
-                             getattr(args, "max_map_pairs", None))
+        st = _create_strategy_with_ta_lookback(
+            lib, checked, args)
         sink = None
         try:
             apply_settings(lib, st, inputs, overrides, checked)
@@ -9615,7 +9615,25 @@ def _live_order_ids_count(text):
     return int(digits)
 
 
+def _ta_lookback_count(text):
+    digits = text.lstrip("0") or "0"
+    if (not re.fullmatch(r"[0-9]+", text) or len(digits) > 19
+            or int(digits) > (1 << 63) - 1):
+        raise argparse.ArgumentTypeError("expected a nonnegative int64 lookback")
+    return int(digits)
+
+
+def tv_compat_from_environment() -> bool:
+    return os.environ.get("PINEFORGE_TV_COMPAT") in ("1", "true", "yes", "on")
+
+
 def _parse_output_series_limit(parser, argv):
+    # The guarded compile path leaves these settings in the inherited environment.
+    # argparse converts string defaults with the option's type; explicit flags win.
+    parser.set_defaults(
+        max_inventory_bytes=os.environ.get("PINEFORGE_MAX_INVENTORY_BYTES"),
+        tv_compat=tv_compat_from_environment(),
+    )
     parser.add_argument(
         "--limit-output-series", dest="max_output_series", type=_output_series_count,
         default=None, metavar="N",
@@ -9625,6 +9643,12 @@ def _parse_output_series_limit(parser, argv):
         default=None, metavar="N",
         help="Maximum distinct pairs per map; 0 or omitted means no limit. "
              "Use 50000 for TradingView parity.")
+    parser.add_argument(
+        "--limit-ta-lookback", dest="ta_lookback", type=_ta_lookback_count,
+        default=os.environ.get("PINEFORGE_LIMIT_TA_LOOKBACK"), metavar="N",
+        help="Maximum bars back for series-length TA windows; 0 means unlimited. "
+             "Defaults to PINEFORGE_LIMIT_TA_LOOKBACK, then 15000 with --tv-compat "
+             "or unlimited without it.")
     return parser.parse_args(argv)
 
 
@@ -9699,6 +9723,33 @@ def create_strategy(lib, checked: bool, max_output_series=None, max_map_pairs=No
     finally:
         # The native consumer and constructor-created maps retain the policy;
         # callbacks reinstall that host's value before creating later maps.
+        setter(None, error, len(error))
+
+
+def _create_strategy_with_ta_lookback(lib, checked, args):
+    maximum = getattr(args, "ta_lookback", None)
+    options = (getattr(args, "max_output_series", None), getattr(args, "max_map_pairs", None))
+    name = "pf_ta_lookback_limit_set_checked"
+    setter = getattr(lib, name, None)
+    if setter is None:
+        if maximum is not None:
+            raise StrategyLibraryError(
+                f"the library lacks {name}; rebuild to configure TA lookback",
+                {"reason": "symbol_missing"})
+        # Older modules already use the original fixed series window limit.
+        return create_strategy(lib, checked, *options)
+    if maximum is None and getattr(args, "tv_compat", False):
+        maximum = 15000
+    setter.argtypes = [ctypes.POINTER(ctypes.c_int64), ctypes.c_char_p, ctypes.c_size_t]
+    setter.restype = ctypes.c_int
+    setting = None if maximum is None else ctypes.byref(ctypes.c_int64(maximum))
+    error = ctypes.create_string_buffer(_SETTINGS_ERROR_CAPACITY)
+    if setter(setting, error, len(error)) != PF_SETTINGS_OK:
+        raise _request_invalid(
+            "error: --limit-ta-lookback: " + _c_text(error.value), "arguments")
+    try:
+        return create_strategy(lib, checked, *options)
+    finally:
         setter(None, error, len(error))
 
 

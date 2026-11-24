@@ -694,16 +694,16 @@ and a native host takes its parameters in C++.
 
 ### Checked EMA-family source adapters {#pine_to_native_checked_ema_family}
 
-`pineforge::source::PineEma` (include/pineforge/source/pine_ta_length.hpp:143),
-`PineTsi` (include/pineforge/source/pine_ta_length.hpp:164), `PineMacd`
-(include/pineforge/source/pine_ta_length.hpp:190), `PineKc`
-(include/pineforge/source/pine_ta_length.hpp:218) and `PineKcw`
-(include/pineforge/source/pine_ta_length.hpp:245) take the arguments of
+`pineforge::source::PineEma` (include/pineforge/source/pine_ta_length.hpp:144),
+`PineTsi` (include/pineforge/source/pine_ta_length.hpp:165), `PineMacd`
+(include/pineforge/source/pine_ta_length.hpp:191), `PineKc`
+(include/pineforge/source/pine_ta_length.hpp:219) and `PineKcw`
+(include/pineforge/source/pine_ta_length.hpp:246) take the arguments of
 `ta::EMA`, `ta::TSI`, `ta::MACD`, `ta::KC` and `ta::KCW` and expose the same
 `compute` and `recompute` with the same results. The constructor only stores
 the lengths and never stops a run. The first `compute` or `recompute` checks
 every length through `simple_ta_length`
-(include/pineforge/source/pine_ta_length.hpp:62) in the signature's order, so
+(include/pineforge/source/pine_ta_length.hpp:63) in the signature's order, so
 an `na`, zero or negative length stops that call with `pine_invalid_argument`
 and TradingView's text; a failed check builds nothing and the next call checks
 again. A passed check builds the `ta::` class, and every call then delegates to
@@ -713,11 +713,10 @@ it, so a valid length gives that class's values. The adapters do not touch
 
 ### Series-length SMA source adapter {#pine_to_native_series_sma}
 
-`pineforge::source::SeriesSma` (include/pineforge/source/pine_ta_length.hpp:520)
+`pineforge::source::SeriesSma` (include/pineforge/source/pine_ta_length.hpp:522)
 provides an SMA with a length supplied on every evaluation in the Pine source
-adapter. Keep one instance per written call site and evaluation context. Its
-public signatures are below. This is an unwired library primitive: codegen
-does not yet map series-length `ta.sma` to it.
+adapter. The paired code generator uses it for series-length `ta.sma`. Keep
+one instance per written call site and evaluation context. Its public signatures are below.
 
 ```cpp
 SeriesSma();
@@ -729,32 +728,35 @@ void observe_owned_storage(OwnedStorage& out) const noexcept;
 
 Both numeric arguments and the result are `double`. The default constructor
 captures the current window cache policy; the explicit constructor takes
-`pineforge::WindowCacheCapacity`. Transport numeric Pine operands through the
-existing `ta_number` overloads (include/pineforge/source/pine_ta_length.hpp:68)
+`pineforge::WindowCacheCapacity`. Both capture the current TA lookback policy.
+Transport numeric Pine operands through the existing `ta_number` overloads
+(include/pineforge/source/pine_ta_length.hpp:69)
 for `double`, `int` and `std::int64_t`, so integer `na` sentinels reach the
 adapter as a double NaN.
 
-`compute` (src/source/pine_ta_length.cpp:528) makes one logical update per call,
+`compute` (src/source/pine_ta_length.cpp:548) makes one logical update per call,
 starting at the site's first execution. A non-`na` source appends one retained
 observation; an `na` source contributes no sample. Each call uses its current
 length to select the last N non-`na` observations and returns `na` while fewer
 than N exist. An `na` update still evaluates the current N rather than returning
 a cached result for an earlier length. Shrinking and later growing N preserves
-access to the retained observations, capped at the last
-`SeriesWindowExtreme::kMaxBarsBack + 1` non-`na` samples (15001). Length changes
-keep the same instance and ring; equal source values on successive calls remain
-distinct observations.
+access to all observations by default. A positive lookback cap L retains the
+most recent L + 1 non-`na` samples regardless of the current length. Length
+changes keep the same instance and ring; equal source values on successive
+calls remain distinct observations.
 
-`checked_length` (src/source/pine_ta_length.cpp:471) validates before either
+`checked_length` (src/source/pine_ta_length.cpp:489) validates before either
 entry point records or replaces an update. Finite fractional lengths truncate
 toward zero. A nonpositive truncated length throws the family's
 `length_not_positive` error for `sma`; `na` and other nonfinite lengths throw
-its `length_na` error. These carry `pine_invalid_argument`. A truncated length
-above 15001 throws the family's `max_bars_back_exceeded` error with
-`pine_runtime_limit`. Invalid calls leave the logical checkpoint unchanged.
+its `length_na` error. These carry `pine_invalid_argument`. With a positive
+cap L, a length of L + 1 fits; a longer window raises `pine_runtime_limit`
+with `limit: max_bars_back` and `max: L`. The Docker runner's `--tv-compat`
+selects 15,000 unless a cap was supplied; `--limit-ta-lookback 0` selects
+unlimited. Invalid calls leave the logical checkpoint unchanged.
 For a valid length, warm-up returns `na` until N non-`na` samples are retained.
 
-`recompute` (src/source/pine_ta_length.cpp:549) replaces the most recent logical
+`recompute` (src/source/pine_ta_length.cpp:571) replaces the most recent logical
 update from its pre-update ring head/count, including the oldest value evicted
 by a full-ring push. Replacing a value with `na` restores that evicted value;
 replacing `na` with a value inserts one observation, evicting the oldest if
@@ -763,7 +765,7 @@ On an unused instance it creates the first logical update. Copy construction
 and assignment preserve the ring, head/count, saved eviction and replacement
 state, with storage detached before mutation.
 
-`mean` (src/source/pine_ta_length.cpp:489) sums the selected window afresh.
+`mean` (src/source/pine_ta_length.cpp:507) sums the selected window afresh.
 For finite sources without intermediate overflow, it rounds the exact sum
 once, then divides by N. When its window is full, fixed SMA subtracts the
 oldest source before adding the incoming source. It accumulates each step's
@@ -771,7 +773,7 @@ rounding error in a separate double and divides the total plus correction by N.
 The two paths can round differently. The finite TradingView clock/source-`na`
 packet supports the non-`na` sample membership correction; its complete prefix
 through bar 16 is embedded in `tv_clock_na_prefix`
-(tests/test_series_sma.cpp:241). This evidence does not qualify runtime
+(tests/test_series_sma.cpp:242). This evidence does not qualify runtime
 overrides, all numeric domains, numerical order, cross-platform precision,
 whole-history parity or rollback in Pine evaluation contexts. Fractional
 transport, infinity, overflow and signed zero remain unqualified. Sparse-call
@@ -783,12 +785,11 @@ continue to use `ta::SMA`. The unit test covers a cancellation where only the
 series-length path retains a tiny addend. Its separate 1441-row feed comparison at N=20 reports
 difference counts and maximum ULP distance against fixed `ta::SMA`.
 
-Storage is one ring of at most 15001 non-`na` observations plus a scalar
-rollback checkpoint; it does not grow with bars or requested N.
-`ensure_capacity` (src/source/pine_ta_length.cpp:481) lazily creates that fixed
-ring. The cache policy controls residency, and summation uses bounded local
-scratch and takes O(N) work. `observe_owned_storage`
-(include/pineforge/source/pine_ta_length.hpp:526) reports owned history through
+`ensure_capacity` (src/source/pine_ta_length.cpp:496) grows the ring as
+non-`na` samples arrive, up to L + 1 when capped. Rollback needs only a
+scalar checkpoint. The cache policy controls residency, and summation uses
+bounded local scratch and takes O(N) work. `observe_owned_storage`
+(include/pineforge/source/pine_ta_length.hpp:528) reports owned history through
 the existing storage accounting. Allocation, capacity and scratch I/O failures
 propagate. Ring/checkpoint fields are published after required writes
 succeed, including restoration of an evicted oldest value.

@@ -197,6 +197,7 @@ void expect_failure(Call&& call, RunFailureCode code, const char* message,
 }
 
 void errors() {
+    const pineforge::detail::TaLookbackScope tv_cap(kMaxBarsBack);
     source::SeriesPercentileNearestRank actual;
     expect_failure(
         [&] { (void)actual.compute(1.0, na<double>(), 50.0); },
@@ -262,6 +263,7 @@ OwnedStorageUsage observed(const source::SeriesPercentileNearestRank& value) {
 }
 
 void memory_is_bounded() {
+    const pineforge::detail::TaLookbackScope tv_cap(kMaxBarsBack);
     source::SeriesPercentileNearestRank actual;
     for (int i = 0; i != static_cast<int>(kBufferCapacity); ++i)
         (void)actual.compute(finite_source(i), 1.0, 50.0);

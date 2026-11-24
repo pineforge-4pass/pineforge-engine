@@ -52,6 +52,7 @@ ENGINE_ENVIRONMENT = (
     "PINEFORGE_BAR_MAGNIFIER", "PINEFORGE_MAGNIFIER_SAMPLES", "PINEFORGE_MAGNIFIER_DIST",
     "PINEFORGE_MAGNIFIER_VOLUME_WEIGHTED", "PINEFORGE_SYMINFO", "PINEFORGE_SYMBOL_FEEDS",
     "PINEFORGE_MAX_SYMBOL_FEEDS", "PINEFORGE_MAX_INVENTORY_BYTES", "PINEFORGE_TV_COMPAT",
+    "PINEFORGE_LIMIT_TA_LOOKBACK",
     "PINEFORGE_TRADE_START_MS", "PINEFORGE_CHART_TZ", "PINEFORGE_BENCH",
     "PINEFORGE_WARMUP", "PINEFORGE_REPEATS", "PINEFORGE_REPORT_POLICY",
     "PINEFORGE_WINDOW_START_MS", "PINEFORGE_WINDOW_END_MS", "PINEFORGE_PREROLL_BARS",
@@ -77,6 +78,7 @@ ALL_OPTIONS = {
     "PINEFORGE_MAX_SYMBOL_FEEDS": "0",
     "PINEFORGE_MAX_INVENTORY_BYTES": "0",
     "PINEFORGE_TV_COMPAT": "true",
+    "PINEFORGE_LIMIT_TA_LOOKBACK": "15001",
     "PINEFORGE_TRADE_START_MS": "60000",
     "PINEFORGE_CHART_TZ": "UTC",
     "PINEFORGE_BENCH": "true",
@@ -318,6 +320,8 @@ def test_manifest_argv_is_the_full_run_argv(tmp_path, shape, options):
     full_work = str(Path(full["argv"][full["argv"].index("--so") + 1]).parent)
     assert full_work != str(box.work)
     assert phase["argv"] == document["argv"]
+    assert phase["environment"].get("PINEFORGE_LIMIT_TA_LOOKBACK") == extra.get(
+        "PINEFORGE_LIMIT_TA_LOOKBACK")
     assert document["cwd"] == str(box.root)
     assert normalize_work(full, full_work) == normalize_work(phase, str(box.work))
     assert not Path(full_work).exists()

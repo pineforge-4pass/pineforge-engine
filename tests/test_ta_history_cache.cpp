@@ -427,6 +427,7 @@ static constexpr std::size_t occurrences(std::size_t count, std::size_t period,
 
 static void semantic_caps(WindowCacheCapacity capacity) {
     WindowCacheScope scope(capacity);
+    const pineforge::detail::TaLookbackScope tv_cap(15000);
     ta::BarContextScope context(16000, 0);
     source::SeriesHighest highest;
     require(bits(highest.compute(7.0, 15001)) == bits(7.0), "15000 bars back stays valid");

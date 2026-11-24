@@ -175,7 +175,7 @@ def _publish(directory: str, out: str, text: str) -> None:
 def main(argv: Optional[List[str]] = None) -> int:
     # Isolated runpy callers do not add this tool's companion directory.
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from run_json import TV_COMPAT_LIMITS, nonnegative_limit
+    from run_json import TV_COMPAT_LIMITS, nonnegative_limit, tv_compat_from_environment
 
     parser = argparse.ArgumentParser(
         prog=PROG, allow_abbrev=False,
@@ -186,9 +186,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--cpp", required=True, help="the C++ file g++ compiled; only read")
     parser.add_argument("--so", required=True, help="the library g++ linked; read, not loaded")
     parser.add_argument("--out", required=True, help="the bound inventory to create")
-    parser.add_argument("--max-inventory-bytes", type=nonnegative_limit, default=None, metavar="N",
+    parser.add_argument("--max-inventory-bytes", type=nonnegative_limit, metavar="N",
+                        default=os.environ.get("PINEFORGE_MAX_INVENTORY_BYTES"),
                         help="Maximum inventory bytes; unset or 0 = unlimited.")
     parser.add_argument("--tv-compat", action="store_true",
+                        default=tv_compat_from_environment(),
                         help="Use the runner's compatibility default unless a limit is explicit.")
     args = parser.parse_args(argv)
     if args.tv_compat and args.max_inventory_bytes is None:

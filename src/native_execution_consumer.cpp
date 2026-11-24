@@ -2314,11 +2314,11 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
         f.s("batch-script-tail/v1");
         f.b(batch_script_tail_);
     }
-    // An explicit creation policy changes future callbacks. The unlimited
-    // default adds no bytes to the historical continuation fold.
-    if (map_pair_limit_ != 0) {
-        f.s("map-pair-limit/v1");
-        f.u(map_pair_limit_);
+    // Only explicit creation policies add fields to the continuation fold.
+    if (map_pair_limit_ != 0) { f.s("map-pair-limit/v1"); f.u(map_pair_limit_); }
+    if (ta_lookback_limit_ != 0) {
+        f.s("ta-lookback-limit/v1");
+        f.i(ta_lookback_limit_);
     }
     f.u(static_cast<uint64_t>(state_.index()));
     if (const auto* running = std::get_if<NativeRunning>(&state_)) {

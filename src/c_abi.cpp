@@ -32,8 +32,8 @@
  *     strategy_initial_capital, strategy_net_profit_sum,
  *     strategy_report_pointvalue, strategy_set_report_replay_v1,
  *     strategy_script_bars_processed), pf_output_series_limit_set_checked/pf_output_series_limit_failure,
- *     pf_map_pairs_limit_set_checked, strategy_set_account_currency_fx_scalar,
- *     pf_version_get/pf_version_string,
+ *     pf_map_pairs_limit_set_checked, pf_ta_lookback_limit_set_checked,
+ *     strategy_set_account_currency_fx_scalar, pf_version_get/pf_version_string,
  *     pf_abi_version, strategy_execution_contract,
  *     strategy_configure_native_v1, strategy_configure_native_fx_curve_v1,
  *     strategy_configure_native_fx_curve_ext_v1,
@@ -1627,8 +1627,8 @@ PF_API int strategy_set_scratch_io_policy_v1(pf_strategy_t s, const pf_scratch_i
 }
 
 PF_API uint32_t strategy_stream_engine_layout_version(void) {
-    static_assert(PF_STREAM_ENGINE_LAYOUT_VERSION == 5u,
-                  "runtime-context live report boundary requires layout stamp 5");
+    static_assert(PF_STREAM_ENGINE_LAYOUT_VERSION == 6u,
+                  "live report consumer with captured TA lookback requires layout stamp 6");
     return PF_STREAM_ENGINE_LAYOUT_VERSION;
 }
 
@@ -1693,3 +1693,17 @@ void note_cabi_run_results_read_refusal(BacktestEngine& engine,
     note_cabi_refusal(&engine, &error);
 }
 } // namespace pineforge::detail
+
+#include <pineforge/checked_settings.hpp>
+#include <pineforge/detail/ta_lookback.hpp>
+
+extern "C" {
+PF_API int pf_ta_lookback_limit_set_checked(
+        const int64_t* maximum, char* error, size_t error_capacity) {
+    return pineforge::checked_settings::boundary(error, error_capacity, [&] {
+        pineforge::checked_settings::require(!maximum || *maximum >= 0,
+                                             "TA lookback limit must not be negative");
+        pineforge::detail::exchange_ta_lookback_limit(maximum ? *maximum : 0);
+    });
+}
+} // extern "C"

@@ -14,12 +14,17 @@ Checklist when touching runtime exports — update ALL of these together:
 2. `include/pineforge/pineforge.h` — the `PF_API` declaration (+ doxygen).
 3. `scripts/check_c_abi_runtime.py` — add the symbol to `EXPECTED_RUNTIME` and
    bump `EXPECTED_PUBLIC_DECLARATIONS` / `EXPECTED_RUNTIME_IMPLEMENTATIONS`
-   (currently 128 declarations across the four runtime inventory headers
-   and 108 definitions in `src/c_abi.cpp`).
+   (currently 129 declarations across the four runtime inventory headers
+   and 109 definitions in `src/c_abi.cpp`).
 4. Python ctypes harnesses if consumers must call it
    (`scripts/run_strategy.py`, `tutorial/run*.py`, `docker/run_json.py`,
    `benchmarks/throughput/grid_search_repro.py`).
 5. README symbol table if it enumerates exports.
+
+Update the independent count assertions in `scripts/test_ci_verify.py` and
+`scripts/test_emit_abi_export_list.py` too. The latter checks the TSV emitted
+from the sources. To write that table as a release artifact, run
+`python3 scripts/emit_abi_export_list.py --output abi-exports.tsv --force`.
 
 Before pushing: `python3 scripts/check_c_abi_runtime.py` (must exit 0).
 Per-strategy symbols (strategy_create, run_backtest, …) are NOT in this list —

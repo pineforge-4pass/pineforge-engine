@@ -2214,7 +2214,7 @@ PF_API int strategy_set_symbol_feed_borrowed_v1(
 
 /** Exact C++ engine layout accepted by the live report accumulator.
  *  Bump whenever that layout changes, independently of #PF_ABI_VERSION. */
-#define PF_STREAM_ENGINE_LAYOUT_VERSION 5u
+#define PF_STREAM_ENGINE_LAYOUT_VERSION 6u
 
 /** Optional module declaration that its strategy handles point directly to
  *  a BacktestEngine with the returned #PF_STREAM_ENGINE_LAYOUT_VERSION.
@@ -2313,6 +2313,19 @@ PF_API int strategy_release_run_results_v1(pf_strategy_t s);
  *  during a batch (including begin callbacks). A refusal keeps the setting. */
 PF_API int strategy_set_scratch_live_order_ids_limit_v1(pf_strategy_t s,
                                                         uint64_t limit);
+
+/** Set this module's series-length TA lookback policy on the calling thread.
+ *  Call before the strategy factory (or C++ construction); the host captures
+ *  the policy and reinstalls it during execution. Standalone source TA
+ *  objects capture it at construction too. Restore NULL afterward.
+ *  NULL or 0 means unlimited, the default. A positive N allows lengths up to
+ *  N + 1; a longer window raises pine_runtime_limit with max_bars_back and N.
+ *  Returns a pf_settings_status_t under the checked-settings buffer protocol.
+ *  A negative value leaves the previous setting intact. */
+PF_API int pf_ta_lookback_limit_set_checked(const int64_t* maximum,
+                                           char* error, size_t error_capacity);
+/** Feature probe for the series-length TA lookback setter. */
+#define PINEFORGE_HAS_TA_LOOKBACK_LIMIT_V1 1
 
 #ifdef __cplusplus
 } /* extern "C" */

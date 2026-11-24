@@ -119,7 +119,8 @@ destruction. NULL is returned only for a NULL handle. Collection failure reads
 `[{"args":{},"code":"run_warnings_unavailable"}]`, never an empty array.
 Warnings do not change values, trades, execution status, failure accessors or
 state hashes. The accessor adds no C struct and changes neither existing C
-layouts nor installed host class layouts; ABI 5 and stream layout 5 stay fixed.
+layouts nor installed host class layouts. In 1.14.0, the accessor left the
+public ABI and the stream layout at 5.
 
 `strategy_set_account_currency_fx_scalar(s, rate)` is an additive runtime
 setter; feature-probe the symbol in older modules. It installs the host's
@@ -147,14 +148,14 @@ broker-state hash folds the mark only when a scalar was supplied: a run that
 supplies none keeps its hash values, and a run that supplies one, through
 either setter, hashes differently from 1.12.0. The setter adds no C struct and
 changes neither existing C layouts nor the size of an installed host class;
-ABI 5 and stream layout 5 stay fixed.
+the public ABI and the 1.14.0 stream layout both remained at 5.
 
 ## Symbol inventory
 
 The counts below describe the current API, including recorded outputs and the report sink; recorded outputs are not part of 1.4.0.
 
-The stable inventory contains 128 compiled-strategy `PF_API` declarations
-(108 implementations in `src/c_abi.cpp` plus twenty generated declarations)
+The stable inventory contains 129 compiled-strategy `PF_API` declarations
+(109 implementations in `src/c_abi.cpp` plus twenty generated declarations)
 and 44 native-host declarations. A module supplies the generated symbols it
 supports; a script that declares
 `use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, and a
@@ -192,6 +193,7 @@ not the complete inventory:
 | `strategy_set_syminfo_metadata` | @ref pf_config |
 | `strategy_set_account_currency_fx_series` | @ref pf_config |
 | `strategy_set_account_currency_fx_scalar` | @ref pf_config |
+| `pf_ta_lookback_limit_set_checked` | Set the series-length TA lookback policy before creating a strategy |
 | `strategy_configure_native_fx_curve_v1` | @ref pf_lifecycle |
 | `strategy_get_last_error` | Diagnostics |
 | `strategy_get_last_error_code` | Diagnostics (@ref run_failure_codes) |
@@ -271,7 +273,7 @@ are unchanged. Uncertified hosts and Off requests do not call admission or
 preparation.
 
 Sixteen per-strategy exports include the five create/run/free lifecycle
-functions. The remaining 108 runtime implementations, including the
+functions. The remaining 109 runtime implementations, including the
 closed-trade incarnation accessor, are force-linked into each strategy library,
 so consumers resolve the same complete ABI from the strategy `.so`. All
 additions remain covered by the minor-version append-only guarantee.
@@ -467,6 +469,16 @@ declares stamp 4. Rebuild such modules against the matching 1.14.0 headers.
 Version 1.13.0 changed the internal layout but kept stamp 4, so its runner
 did not catch the layout mismatch when loading a 1.12.x module. Use matching
 headers and runtime for those releases too. The C ABI remains at version 5.
+
+After 1.14.0, the live layout stamp advances from 5 to 6 because the consumer
+stores each strategy's series-length TA lookback setting. Rebuild modules that
+declare an older nonzero stamp with the matching engine headers. The public
+C ABI remains 5.
+
+Recompile C++ objects that embed a series-length TA adapter or
+`ta::PercentileWindow` as well: the adapters now store the captured cap, and
+the percentile window uses size-based indices. Regenerate and relink strategy
+modules with the paired engine and code generator.
 
 | Matrix role | Internal identity |
 | --- | --- |

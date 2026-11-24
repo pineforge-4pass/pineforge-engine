@@ -74,6 +74,7 @@ void changing_lengths() {
 
 void invalid_length_transport_and_recovery() {
     using pineforge::RunFailureCode;
+    const pineforge::detail::TaLookbackScope tv_cap(15000);
     struct Invalid {
         double length;
         RunFailureCode code;
@@ -321,6 +322,7 @@ void retained_history_and_storage() {
     // mean 2*m-C. More than two full rings must preserve that suffix.
     constexpr std::size_t capacity =
         pineforge::source::SeriesWindowExtreme::kMaxBarsBack + 1;
+    const pineforge::detail::TaLookbackScope tv_cap(capacity - 1);
     constexpr std::size_t updates = 2 * capacity + 1;
     const std::array<std::size_t, 3> capacities{
         pineforge::WindowCacheCapacity::kKeepResident, 0, 1};
