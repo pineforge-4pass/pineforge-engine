@@ -11,6 +11,9 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- The documentation history check reports an unreadable Git page instead of treating it as empty.
+- Replaying a documentation change now adds supplemental messages to the commit messages. A per-commit check accepts only that commit's message, and a quote must fit within one message.
+- The documentation history check reports when it has no commits or pages to compare.
 - The ABI receipt check now refuses an empty CTest registry. The verifier’s private-fixture label comparison now includes tests registered by the CMake glob.
 - The design inventory now reads included CMake test registrations and reports compiled rows in a kernel CTest listing that the inventory missed.
 - The private-file read check now examines Python tests registered in included CMake files and reads their skip properties.
