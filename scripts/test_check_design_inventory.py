@@ -49,6 +49,13 @@ list(REMOVE_ITEM TEST_SOURCES ${LEGACY_TEST_SOURCES})
 add_executable(test_pure_c test_pure_c.c)
 """
 
+INCLUDES = """file(GLOB LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/lanes.d/*.cmake")
+list(SORT LANE_CMAKE)
+foreach(lane_file IN LISTS LANE_CMAKE)
+    include("${lane_file}")
+endforeach()
+"""
+
 HEAD = """## 1. Inventory
 
 Columns: **Feature** · **Native today** · **Class** · **Lane** · **Sources** · **Notes**
@@ -171,6 +178,74 @@ class MustFail(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn('the reach walk calls source-bound', out)
         self.assertIn('test_adapter_one', out)
+
+    def test_included_registration_is_an_inventory_witness(self):
+        row = '| AB | a feature | **no** (`tests/test_clock.cpp`) |'
+        extra = {'tests/test_clock.cpp': KERNEL_TU, 'tests/test_display.cpp': KERNEL_TU,
+                 'tests/python_row.cpp': KERNEL_TU,
+                 'tests/clock.py': "from pathlib import Path\n"
+                                   "assert Path(__file__).with_name('test_clock.cpp').is_file()\n",
+                 'tests/lanes.d/clock.cmake': 'list(APPEND TEST_SOURCES test_clock)\n'
+                                              'pineforge_add_unit_test(test_clock)\n'
+                                              'if(PINEFORGE_BUILD_SOURCE_LAYER)\n'
+                                              '    list(APPEND TEST_SOURCES test_display)\n'
+                                              '    pineforge_add_unit_test(test_display)\nendif()\n'}
+        with tree(design(row), cmake=CMAKE + INCLUDES, extra=extra) as made:
+            code, out = made.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('row AB reads **no** while tests/test_clock.cpp runs', out)
+            (made.root / 'tests/lanes.d/clock.cmake').write_text(
+                'pineforge_add_unit_test(test_clock)\n'
+                'if(PINEFORGE_BUILD_SOURCE_LAYER)\n'
+                '    pineforge_add_unit_test(test_display)\nendif()\n'
+                'add_test(NAME python_row COMMAND ${Python3_EXECUTABLE} '
+                '${CMAKE_CURRENT_SOURCE_DIR}/clock.py)\n')
+            (made.root / guard.DESIGN).write_text(design(row.replace('**no**', '**no** **Closed:**')))
+            listing = made.root / 'listing.txt'
+            listing.write_text('Test #1: test_kernel_one\nTest #2: test_kernel_three\n'
+                               'Test #3: test_pure_c\nTest #4: python_row\n')
+            code, out = made.run('--ctest-list', str(listing))
+            self.assertEqual(code, 1, out)
+            self.assertIn('kernel build did not register (test_clock.cpp)', out)
+            with listing.open('a') as out_file:
+                out_file.write('Test #5: test_clock\n')
+            code, out = made.run('--ctest-list', str(listing))
+            self.assertEqual(code, 0, out)
+
+    def test_ctest_lists_a_compiled_row_missing_from_the_inventory(self):
+        row = '| AB | a feature | **yes** |'
+        listing = ('Test #1: test_kernel_one\nTest #2: test_kernel_three\n'
+                   'Test #3: test_pure_c\nTest #4: test_unmodelled\nTest #5: other_clock\n')
+        extra = {'tests/lanes.d/clock.cmake':
+                 'add_test(NAME other_clock COMMAND test_unmodelled --clock)\n',
+                 'listing.txt': listing, 'tests/test_unmodelled.cpp': KERNEL_TU}
+        with tree(design(row), cmake=CMAKE + INCLUDES, extra=extra) as made:
+            code, out = made.run('--ctest-list', str(made.root / 'listing.txt'))
+        self.assertEqual(code, 1, out)
+        self.assertIn('test_unmodelled', out)
+        self.assertIn('other_clock', out)
+        self.assertIn('missing from the', out)
+
+    def test_listing_checks_each_included_executable_alias(self):
+        extra = {
+            'tests/test_clock.cpp': KERNEL_TU,
+            'tests/lanes.d/clock.cmake': (
+                'list(APPEND TEST_SOURCES test_clock)\n'
+                'add_test(NAME test_clock_first COMMAND test_clock --slice 1/2)\n'
+                'add_test(NAME test_clock_second COMMAND test_clock --slice 2/2)\n'),
+        }
+        with tree(design('| AB | a feature | **yes** |'), cmake=CMAKE + INCLUDES,
+                  extra=extra) as made:
+            listing = made.root / 'listing.txt'
+            listing.write_text('Test #1: test_kernel_one\nTest #2: test_kernel_three\n'
+                               'Test #3: test_pure_c\nTest #4: test_clock_first\n')
+            code, out = made.run('--ctest-list', str(listing))
+            self.assertEqual(code, 1, out)
+            self.assertIn('test_clock_second', out)
+            with listing.open('a') as out_file:
+                out_file.write('Test #5: test_clock_second\n')
+            code, out = made.run('--ctest-list', str(listing))
+            self.assertEqual(code, 0, out)
 
 
 class MustNotFire(unittest.TestCase):
