@@ -971,31 +971,68 @@
 //   Storm22M: digest 0x55344bfb1f88019c -> 0x9126a74be9d38188
 //   Storm23: digest 0xc5fc69d6df7ac30a -> 0x90f6c905c40d7344
 //   Storm23M: digest 0x2c976a105b997525 -> 0xa9e477e1153b33fc
+// expectation corrected (entry records for every declared quantity step, 34 of 156 runs move), because a run that declares a
+// step of 0.25 now keeps and folds the FIFO entry records too. All 34 keep their closed trades, source folds and recorded rows
+// and move only their digest. The tree before the rule passes the table above. Harvested on e56ebcaa:
+//   Config02: digest 0x6185bf7376e2bd20 -> 0x3ce3681391369570
+//   Config02M: digest 0xa7395bd2e72d1b2c -> 0x325053e46390059c
+//   Config03: digest 0xb441839034f1953f -> 0x0a2d990843f93b92
+//   Config03M: digest 0x78a2792dd0b42a96 -> 0x26d55c1f7a1df2c8
+//   Config04: digest 0xfc21bbfbdf3ce0f2 -> 0x99eaeb147526e85c
+//   Config04M: digest 0x7aba10f501deebef -> 0x698f1fef05e55db1
+//   Config05: digest 0x5f3ad561bf9e3368 -> 0xb80d859c01e7e0d6
+//   Config05M: digest 0xc5c50113724e0ad2 -> 0xbee07adb6f2f62ac
+//   Config06: digest 0x97960c0287eef8bf -> 0xdab46ddba1194891
+//   Config06M: digest 0x80906c52bd537497 -> 0x777c07c298fca8fe
+//   Config12: digest 0x4b2aeadb4d4cbfc6 -> 0xb49b7ebc56b53385
+//   Config12M: digest 0xd21447d6edb95eac -> 0x797b81fca60ef0fd
+//   Config13: digest 0x26698ad191149612 -> 0x26374ccb9e6d9d0e
+//   Config13M: digest 0x19c3a71e4e9a8e1e -> 0x9aefe2238798fcba
+//   Config14: digest 0x7900ab84ac061aac -> 0x12d8c9e3bb5e97d3
+//   Config14M: digest 0xf633142793d67f5f -> 0x23078741eace1e49
+//   ConfigFlags105: digest 0xb5310c345237971a -> 0x03d13d0dba4c9a6c
+//   ConfigFlags105M: digest 0xc6cecc192f843779 -> 0xb92f1d65d7e45f86
+//   ConfigFlags106: digest 0x90db63b00ae335b3 -> 0x29720ad14ac5ba65
+//   ConfigFlags106M: digest 0xe3b3b55adc0a32ba -> 0x612ccea50c685727
+//   ConfigFlags110: digest 0x81b586b504520528 -> 0x82c73ed49f723fb3
+//   ConfigFlags110M: digest 0xefc3d2cec331b990 -> 0xf4deb579bedc7f97
+//   ConfigFlags111: digest 0xc4899ef454e541c6 -> 0x2c6c86f1693363a8
+//   ConfigFlags111M: digest 0xa421058ee56d287e -> 0x59c86790e09b1b31
+//   ConfigFlags112: digest 0x48cbfe11283994d7 -> 0x7c2038131e6e5718
+//   ConfigFlags112M: digest 0x4991bad3e270a026 -> 0x1d70dd838f8f8661
+//   ConfigFlags113: digest 0x2dc456611f87a733 -> 0x56cb066298140e47
+//   ConfigFlags113M: digest 0xfbef26fc96f43008 -> 0x552f7d71d1727fe5
+//   ConfigFlags114: digest 0x885a51b123ea20f0 -> 0xc97820007b2d5b94
+//   ConfigFlags114M: digest 0x3a0f8f15e30da36c -> 0x0b14c5a12de12b8e
+//   ConfigFlags115: digest 0xc2ccc3c639558877 -> 0x2c118038eab52b41
+//   ConfigFlags115M: digest 0xf05fb093f1e4c5c3 -> 0xdea4f04f5f697c71
+//   ConfigFlags116: digest 0x0ae98aba51b53286 -> 0xf31fe8b40f25b93f
+//   ConfigFlags116M: digest 0xf72c7811b608605a -> 0xdb8a787342b9430f
 constexpr Pinned kPinned[] = {
     {"Config01", 0x5cd164c7f6bab7f6ull, 144, 44, 144},
     {"ConfigFlags101", 0x7ebdae61786f437bull, 145, 45, 144},
     {"Config01M", 0xaa3ae6962e036080ull, 144, 42, 144},
     {"ConfigFlags101M", 0x034d700a2cd0bf2full, 145, 45, 144},
-    {"Config02", 0x6185bf7376e2bd20ull, 48, 10, 48},
+    {"Config02", 0x3ce3681391369570ull, 48, 10, 48},
     {"ConfigFlags102", 0x8d0b9a6d3546892bull, 144, 49, 144},
-    {"Config02M", 0xa7395bd2e72d1b2cull, 48, 10, 48},
+    {"Config02M", 0x325053e46390059cull, 48, 10, 48},
     {"ConfigFlags102M", 0xa408712c9045710aull, 144, 49, 144},
-    {"Config03", 0xb441839034f1953full, 144, 55, 144},
+    {"Config03", 0x0a2d990843f93b92ull, 144, 55, 144},
     {"ConfigFlags103", 0x8d7ef7f73aed9ee7ull, 182, 62, 144},
-    {"Config03M", 0x78a2792dd0b42a96ull, 144, 55, 144},
+    {"Config03M", 0x26d55c1f7a1df2c8ull, 144, 55, 144},
     {"ConfigFlags103M", 0x354763fa54d56a45ull, 182, 64, 144},
-    {"Config04", 0xfc21bbfbdf3ce0f2ull, 144, 21, 144},
+    {"Config04", 0x99eaeb147526e85cull, 144, 21, 144},
     {"ConfigFlags104", 0x7fbab759a0fec0a6ull, 48, 14, 48},
-    {"Config04M", 0x7aba10f501deebefull, 144, 21, 144},
+    {"Config04M", 0x698f1fef05e55db1ull, 144, 21, 144},
     {"ConfigFlags104M", 0x937347d2331c2a4dull, 48, 14, 48},
-    {"Config05", 0x5f3ad561bf9e3368ull, 48, 12, 48},
-    {"ConfigFlags105", 0xb5310c345237971aull, 48, 12, 48},
-    {"Config05M", 0xc5c50113724e0ad2ull, 48, 12, 48},
-    {"ConfigFlags105M", 0xc6cecc192f843779ull, 48, 12, 48},
-    {"Config06", 0x97960c0287eef8bfull, 48, 5, 48},
-    {"ConfigFlags106", 0x90db63b00ae335b3ull, 48, 6, 48},
-    {"Config06M", 0x80906c52bd537497ull, 48, 5, 48},
-    {"ConfigFlags106M", 0xe3b3b55adc0a32baull, 48, 6, 48},
+    {"Config05", 0xb80d859c01e7e0d6ull, 48, 12, 48},
+    {"ConfigFlags105", 0x03d13d0dba4c9a6cull, 48, 12, 48},
+    {"Config05M", 0xbee07adb6f2f62acull, 48, 12, 48},
+    {"ConfigFlags105M", 0xb92f1d65d7e45f86ull, 48, 12, 48},
+    {"Config06", 0xdab46ddba1194891ull, 48, 5, 48},
+    {"ConfigFlags106", 0x29720ad14ac5ba65ull, 48, 6, 48},
+    {"Config06M", 0x777c07c298fca8feull, 48, 5, 48},
+    {"ConfigFlags106M", 0x612ccea50c685727ull, 48, 6, 48},
     {"Config07", 0xe3ba7c8267aa287bull, 144, 54, 144},
     {"ConfigFlags107", 0x3e11e833a3bf1decull, 48, 21, 48},
     {"Config07M", 0x99092808f1916f13ull, 144, 54, 144},
@@ -1009,33 +1046,33 @@ constexpr Pinned kPinned[] = {
     {"Config09M", 0xf4b6edaf6f3b56e4ull, 144, 66, 144},
     {"ConfigFlags109M", 0xfbc8c748afcdaed3ull, 144, 45, 144},
     {"Config10", 0x698f5cc39e76ef2aull, 48, 17, 48},
-    {"ConfigFlags110", 0x81b586b504520528ull, 48, 12, 48},
+    {"ConfigFlags110", 0x82c73ed49f723fb3ull, 48, 12, 48},
     {"Config10M", 0xe3f8599474753a5bull, 48, 17, 48},
-    {"ConfigFlags110M", 0xefc3d2cec331b990ull, 48, 12, 48},
+    {"ConfigFlags110M", 0xf4deb579bedc7f97ull, 48, 12, 48},
     {"Config11", 0x5c13c7ba4d128489ull, 144, 63, 144},
-    {"ConfigFlags111", 0xc4899ef454e541c6ull, 48, 20, 48},
+    {"ConfigFlags111", 0x2c6c86f1693363a8ull, 48, 20, 48},
     {"Config11M", 0xfc13085f6dd6ab81ull, 144, 63, 144},
-    {"ConfigFlags111M", 0xa421058ee56d287eull, 48, 19, 48},
-    {"Config12", 0x4b2aeadb4d4cbfc6ull, 144, 48, 144},
-    {"ConfigFlags112", 0x48cbfe11283994d7ull, 144, 22, 144},
-    {"Config12M", 0xd21447d6edb95eacull, 144, 48, 144},
-    {"ConfigFlags112M", 0x4991bad3e270a026ull, 144, 22, 144},
-    {"Config13", 0x26698ad191149612ull, 48, 19, 48},
-    {"ConfigFlags113", 0x2dc456611f87a733ull, 48, 19, 48},
-    {"Config13M", 0x19c3a71e4e9a8e1eull, 48, 19, 48},
-    {"ConfigFlags113M", 0xfbef26fc96f43008ull, 48, 19, 48},
-    {"Config14", 0x7900ab84ac061aacull, 144, 40, 144},
-    {"ConfigFlags114", 0x885a51b123ea20f0ull, 144, 66, 144},
-    {"Config14M", 0xf633142793d67f5full, 144, 39, 144},
-    {"ConfigFlags114M", 0x3a0f8f15e30da36cull, 144, 65, 144},
+    {"ConfigFlags111M", 0x59c86790e09b1b31ull, 48, 19, 48},
+    {"Config12", 0xb49b7ebc56b53385ull, 144, 48, 144},
+    {"ConfigFlags112", 0x7c2038131e6e5718ull, 144, 22, 144},
+    {"Config12M", 0x797b81fca60ef0fdull, 144, 48, 144},
+    {"ConfigFlags112M", 0x1d70dd838f8f8661ull, 144, 22, 144},
+    {"Config13", 0x26374ccb9e6d9d0eull, 48, 19, 48},
+    {"ConfigFlags113", 0x56cb066298140e47ull, 48, 19, 48},
+    {"Config13M", 0x9aefe2238798fcbaull, 48, 19, 48},
+    {"ConfigFlags113M", 0x552f7d71d1727fe5ull, 48, 19, 48},
+    {"Config14", 0x12d8c9e3bb5e97d3ull, 144, 40, 144},
+    {"ConfigFlags114", 0xc97820007b2d5b94ull, 144, 66, 144},
+    {"Config14M", 0x23078741eace1e49ull, 144, 39, 144},
+    {"ConfigFlags114M", 0x0b14c5a12de12b8eull, 144, 65, 144},
     {"Config15", 0x100d38b4071a5dc7ull, 144, 48, 144},
-    {"ConfigFlags115", 0xc2ccc3c639558877ull, 48, 6, 48},
+    {"ConfigFlags115", 0x2c118038eab52b41ull, 48, 6, 48},
     {"Config15M", 0x072f8f47292c4eddull, 144, 48, 144},
-    {"ConfigFlags115M", 0xf05fb093f1e4c5c3ull, 48, 6, 48},
+    {"ConfigFlags115M", 0xdea4f04f5f697c71ull, 48, 6, 48},
     {"Config16", 0x6971fa8955904ce5ull, 144, 54, 144},
-    {"ConfigFlags116", 0x0ae98aba51b53286ull, 48, 21, 48},
+    {"ConfigFlags116", 0xf31fe8b40f25b93full, 48, 21, 48},
     {"Config16M", 0xb0dd480f8dce4670ull, 144, 54, 144},
-    {"ConfigFlags116M", 0xf72c7811b608605aull, 48, 21, 48},
+    {"ConfigFlags116M", 0xdb8a787342b9430full, 48, 21, 48},
     {"CloseAllThenEntry", 0x02e260ca681c8565ull, 40, 17, 40},
     {"CloseAllThenEntryM", 0x3265b286d4d80ab9ull, 40, 17, 40},
     {"Reversals", 0xecaf36b336d5c113ull, 40, 16, 40},
