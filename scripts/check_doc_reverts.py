@@ -67,13 +67,15 @@ title and cannot name them again). Where none resolves, the walk starts at
 own tree has no ``scripts/check_doc_reverts.py`` is never judged: the rule binds
 from the commit that introduced it on. At most ``MAX_COMMITS`` commits are walked.
 
-Exit 0 when every revert and deletion is named, 1 when one is not, 2 when
-the revisions or pages cannot be compared.
+Exit 0 when every revert and deletion is named, 1 when one is not, and 2
+when the revisions or pages cannot be compared. An implicit empty comparison
+at main's own tip reports that its commits were judged before merge and exits 77.
 """
 from __future__ import annotations
 
 import argparse
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 import difflib
 import os
@@ -91,6 +93,7 @@ HISTORY_DEPTH = 400
 MAX_COMMITS = 400
 FRAGMENT_WORDS = 6
 SHA_CHARS = 7
+MAIN_TIP_NOTICE = 'NOT COMPARED: HEAD is the tip of main; its commits were judged before the merge'
 
 FENCE = re.compile(r'^\s*(```|~~~)')
 BULLET = re.compile(r'^(?:[-*+]|\d+[.)])\s')
@@ -362,17 +365,22 @@ def resolve(ref: str, root: Path) -> str:
     return out
 
 
-def default_base(root: Path) -> str | None:
-    env = os.environ.get('PINEFORGE_DOC_REVERT_BASE')
-    if env:
-        return resolve(env, root)
+def main_tips(root: Path) -> Iterator[str]:
     for ref in ('refs/remotes/origin/main', 'refs/heads/main'):
         tip = git('rev-parse', '--verify', '--quiet', ref + '^{commit}', root=root,
                   check=False).strip()
         if tip:
-            base = git('merge-base', 'HEAD', tip, root=root, check=False).strip()
-            if base:
-                return base
+            yield tip
+
+
+def default_base(root: Path) -> str | None:
+    env = os.environ.get('PINEFORGE_DOC_REVERT_BASE')
+    if env:
+        return resolve(env, root)
+    for tip in main_tips(root):
+        base = git('merge-base', 'HEAD', tip, root=root, check=False).strip()
+        if base:
+            return base
     return merged_pull_request(root)
 
 
@@ -441,11 +449,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     root = args.root.resolve()
     try:
-        base = resolve(args.base, root) if args.base else default_base(root)
-        if args.head:
-            if base is None:
-                raise GitError('NOT COMPARED: --head needs --base')
-            head = resolve(args.head, root)
+        base = resolve(args.base, root) if args.base is not None else default_base(root)
+        if args.head is not None and base is None:
+            raise GitError('NOT COMPARED: --head needs --base')
+        head = resolve('HEAD' if args.head is None else args.head, root)
+        if (args.base is None and args.head in (None, 'HEAD') and base == head
+                and head in main_tips(root)):
+            print(MAIN_TIP_NOTICE)
+            return 77
+        if args.head is not None:
             if base == head:
                 raise GitError('NOT COMPARED: base and head are the same commit')
             pages = select_pages(root, base, head, args.files)

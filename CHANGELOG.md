@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- Preflight now lists both documentation history checks as skipped when HEAD is the tip of main and there are no commits to compare.
 - The documentation history check reports an unreadable Git page instead of treating it as empty.
 - Replaying a documentation change now adds supplemental messages to the commit messages. A per-commit check accepts only that commit's message, and a quote must fit within one message.
 - The documentation history check reports when it has no commits or pages to compare.
