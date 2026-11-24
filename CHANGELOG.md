@@ -44,6 +44,7 @@ version number follows semantic versioning over the surfaces the
 - When a C++ host makes a global exit leg wait for another order, a Pine entry reversal now cancels the leg even if it is hidden. If cancelling its parent already ended the leg, the reversal no longer records an extra `NotWorking` event.
 - A buy stop accepted while flat that later reverses a short now removes the short’s pending margin call. The same rule applies when a sell reverses a long.
 - Before the Unix epoch, a four-hour bar on `0900-1130,1230-1530` now includes the 12:30–12:59 inputs and completes at 13:00 when the next input is unknown. The fixed completion clock follows the same rule.
+- Before the Unix epoch, a supplied chart close can now complete a sparse intraday bar or an OTC calendar bar on its last input. A zero chart close still means unknown.
 - A partial stop placed after two 50% tick targets on a three-contract market entry can now close the remaining contract on its first crossing.
 - A price stop placed behind waiting percentage targets on a cash-sized market entry now closes the contracts the targets leave after rounding at the fill price.
 - On Hong Kong's `0930-1200,1300-1600` session, the public C++ `TimeframeAggregator` now includes the 11:57 input in the 11:00 hourly bar built from 7-minute inputs starting at 09:30. It previously published after eight inputs at 11:50 because it rounded the number of inputs per hour down.
