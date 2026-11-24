@@ -184,6 +184,8 @@ struct ClipSignal {
 struct ClipObservation {
     ClipSignal signal;
     std::vector<ClipFill> fills;
+    double final_position = kNaN;
+    int closed_trades = -1;
 };
 
 class ClipProbe final : public source::PineNativeHost {
@@ -209,7 +211,8 @@ public:
     }
 
     void on_source_bar(const Bar&) override {
-        if (pine_bar_index() != 0) return;
+        last_bar_ = static_cast<int>(pine_bar_index());
+        if (last_bar_ != 0) return;
         const bool flat_before = physical_position().signed_units == 0.0;
         strategy_entry("Long", true, kNaN, kNaN, qty_of_steps(row_.entry_steps),
                        row_comment(row_, "entry").c_str());
@@ -236,7 +239,12 @@ public:
         observation_.fills.push_back(fill);
     }
 
-    const ClipObservation& observation() const { return observation_; }
+    const ClipObservation& final_observation() {
+        observation_.final_position = physical_position().signed_units;
+        observation_.closed_trades = trade_count();
+        return observation_;
+    }
+    int last_bar() const { return last_bar_; }
 
 private:
     void record_signal(bool flat_before) {
@@ -266,6 +274,7 @@ private:
 
     ClipRow row_;
     ClipObservation observation_;
+    int last_bar_ = -1;
 };
 
 bool near(double left, double right) {
@@ -377,12 +386,32 @@ ClipVerdict fills_on_quantity_step(const ClipObservation& obs, const std::string
     return compared(off == 0, "off_quantity_step", static_cast<double>(off), 0.0);
 }
 
+// The only calls are Long, Half and Later; the feed reaches Later before Half.
+// The individual fill checks bind their comments, bars, prices and quantities.
+ClipVerdict complete_fill_list(const ClipObservation& obs, const std::string& blocked) {
+    constexpr const char* labels[] = {"Long", "Later", "Half"};
+    constexpr std::size_t count = sizeof(labels) / sizeof(labels[0]);
+    if (!blocked.empty()) return {ClipStatus::NotCompared, blocked, kNaN, count};
+    if (obs.fills.size() != count)
+        return compared(false, "wrong_fill_count", obs.fills.size(), count);
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto& fill = obs.fills[i];
+        if (fill.label != labels[i])
+            return {ClipStatus::Fail, "expected_" + std::string(labels[i]) + "_got_" + fill.label,
+                    0.0, 1.0};
+        const double opposite = i == 0 ? fill.closed : fill.opened;
+        if (!near(opposite, 0.0)) return compared(false, "unexpected_opposite_units", opposite, 0);
+    }
+    return compared(true, "wrong_fill_count", obs.fills.size(), count);
+}
+
 ClipVerdict exit_fill_prices(double stop, double limit, const std::string& blocked) {
     const double expected = partial_level();
     if (!blocked.empty()) return {ClipStatus::NotCompared, blocked, limit, expected};
-    if (!std::isfinite(stop) || !std::isfinite(limit))
+    if (!std::isfinite(stop)) return {ClipStatus::NotCompared, "missing_exit_price", stop, kLaterStop};
+    if (!std::isfinite(limit))
         return {ClipStatus::NotCompared, "missing_exit_price", limit, expected};
-    if (!near(stop, kLaterStop)) return compared(false, "wrong_stop_price", limit, expected);
+    if (!near(stop, kLaterStop)) return compared(false, "wrong_stop_price", stop, kLaterStop);
     return compared(near(limit, expected), "wrong_limit_price", limit, expected);
 }
 
@@ -460,8 +489,9 @@ const ClipSelfCheck kSelfChecks[] = {
 };
 
 ClipResult check_observation(const ClipRow& row, const ClipObservation& obs, bool completed,
-                             const ClipSelfCheck* self = nullptr) {
-    const char* mode = self ? self->name : row.name;
+                             const ClipSelfCheck* self = nullptr, ClipVerdict* first_failure = nullptr) {
+    const std::string extra_name = first_failure ? std::string(row.name) + ":extra_fill" : "";
+    const char* mode = self ? self->name : (first_failure ? extra_name.c_str() : row.name);
     const ClipSignal& seen = obs.signal;
     std::printf("SIGNAL mode=%s bar=%.0f flat=%s entry=%s entry_held=%s partial=%s later=%s "
                 "later_qty=%.17g later_percent=%.17g entry_working=%s row=%s "
@@ -484,6 +514,7 @@ ClipResult check_observation(const ClipRow& row, const ClipObservation& obs, boo
         const std::string name = self ? std::string(row.name) + ":" + check : check;
         print_check(mode, name.c_str(), verdict);
         if (!self) {
+            if (first_failure && ok && !verdict.passed()) *first_failure = verdict;
             ok = verdict.passed() && ok;
             return;
         }
@@ -508,7 +539,7 @@ ClipResult check_observation(const ClipRow& row, const ClipObservation& obs, boo
     if (!completed) blocked = "execution_failed";
     else if (!entry.verdict.passed()) blocked = "entry_unbound:" + entry.verdict.reason;
     else if (!form.passed()) blocked = "form_unbound:" + form.reason;
-    if (!self && !wrong_phase_control(row, obs, entry, blocked) && blocked.empty())
+    if (!self && !first_failure && !wrong_phase_control(row, obs, entry, blocked) && blocked.empty())
         return ClipResult::ControlFailed;
 
     const ClipMatch later = match_fill(obs, "Later", row_comment(row, "later"), false, kLaterBar);
@@ -536,6 +567,18 @@ ClipResult check_observation(const ClipRow& row, const ClipObservation& obs, boo
                 partial.fill ? partial.fill->bar : kNaN, kPartialBar, stop, kLaterStop,
                 limit, partial_level());
     report("exit_fill_prices", exit_fill_prices(stop, limit, pair_blocked), want_block);
+    const double remaining = qty_of_steps(row.entry_steps - later_steps(row) - partial_steps(row));
+    const int exits = (later_steps(row) > 0) + (partial_steps(row) > 0);
+    const auto position = !pair_blocked.empty() || !std::isfinite(obs.final_position)
+        ? ClipVerdict{ClipStatus::NotCompared, pair_blocked.empty() ? "missing_position" : pair_blocked,
+                      obs.final_position, remaining}
+        : compared(near(obs.final_position, remaining), "wrong_final_position", obs.final_position, remaining);
+    const auto trades = !pair_blocked.empty() || obs.closed_trades < 0
+        ? ClipVerdict{ClipStatus::NotCompared, pair_blocked.empty() ? "missing_trades" : pair_blocked,
+                      static_cast<double>(obs.closed_trades), static_cast<double>(exits)}
+        : compared(obs.closed_trades == exits, "wrong_closed_trade_count", obs.closed_trades, exits);
+    report("final_position", position, want_block);
+    report("closed_trade_count", trades, want_block);
     return ok ? ClipResult::Pass : ClipResult::Fail;
 }
 
@@ -544,10 +587,13 @@ ClipResult run_row(const ClipRow& row) {
     const auto bars = fixture_bars();
     probe.fixture_retain_all_events();
     probe.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
-    std::printf("EXECUTION mode=%s status=%s last_error=%s\n", row.name,
-                probe.last_error().empty() ? "completed" : "failed",
-                probe.last_error().c_str());
-    const ClipObservation& obs = probe.observation();
+    const int last = static_cast<int>(bars.size()) - 1;
+    const bool completed = probe.last_error().empty()
+        && probe.native_state().kind == NativeLifecycleKind::Completed && probe.last_bar() == last;
+    std::printf("EXECUTION mode=%s status=%s last_error=%s last_bar=%d expected_last_bar=%d\n",
+                row.name, completed ? "completed" : "incomplete", probe.last_error().c_str(),
+                probe.last_bar(), last);
+    const ClipObservation& obs = probe.final_observation();
     for (const auto& fill : obs.fills) {
         std::printf("APPLIED mode=%s label=%s comment=%s bar=%d opened=%.17g closed=%.17g "
                     "price=%.17g phase=%s\n",
@@ -555,10 +601,38 @@ ClipResult run_row(const ClipRow& row) {
                     fill.opened, fill.closed, fill.price, phase_name(fill.phase));
     }
     std::printf("POSITION mode=%s signed_units=%.17g trades=%d\n", row.name,
-                probe.physical_position().signed_units, probe.trade_count());
+                obs.final_position, obs.closed_trades);
     std::printf("REPORT mode=%s broker_state_hash=%llu\n", row.name,
                 static_cast<unsigned long long>(probe.broker_state_hash()));
-    return check_observation(row, obs, probe.last_error().empty());
+    const ClipResult real = check_observation(row, obs, completed);
+    if (real != ClipResult::Pass) {
+        print_check(row.name, "complete_fill_list",
+                    {ClipStatus::NotCompared, "real_fills_not_verified", kNaN, kNaN});
+        std::printf("CONTROL mode=%s name=reject_extra_fill status=NOT COMPARED "
+                    "reason=real row did not pass\n", row.name);
+        return real;
+    }
+    const auto list = complete_fill_list(obs, {});
+    print_check(row.name, "complete_fill_list", list);
+    if (!list.passed()) {
+        std::printf("CONTROL mode=%s name=reject_extra_fill status=NOT COMPARED "
+                    "reason=real fill list did not match\n", row.name);
+        return ClipResult::Fail;
+    }
+
+    // Preserve every real fill and the final position and ledger; append one
+    // differently named opening of one whole step on the final, flat bar.
+    ClipObservation extra = obs;
+    extra.fills.push_back({"Extra", row_comment(row, "extra"), last, NativePathPhase::Close,
+                           kQtyStep, 0.0, bars.back().close});
+    ClipVerdict failure{ClipStatus::Pass, "matched", kNaN, kNaN};
+    const auto result = check_observation(row, extra, completed, nullptr, &failure);
+    const bool rejected = result == ClipResult::Fail && failure.status == ClipStatus::Fail
+        && failure.reason == "wrong_fill_count";
+    std::printf("CONTROL mode=%s name=reject_extra_fill status=%s verdict=%s reason=%s "
+                "actual=%.17g expected=%.17g\n", row.name, rejected ? "PASS" : "FAIL",
+                status_name(failure.status), failure.reason.c_str(), failure.actual, failure.expected);
+    return rejected ? ClipResult::Pass : ClipResult::Fail;
 }
 
 // The observation the rules give for a row, built from the fixture.
@@ -577,6 +651,8 @@ ClipObservation rule_observation(const ClipRow& row) {
                          qty_of_steps(later_steps(row)), kLaterStop});
     obs.fills.push_back({"Half", row_comment(row, "half"), kPartialBar, NativePathPhase::None, 0.0,
                          qty_of_steps(partial_steps(row)), partial_level()});
+    obs.final_position = qty_of_steps(row.entry_steps - later_steps(row) - partial_steps(row));
+    obs.closed_trades = (later_steps(row) > 0) + (partial_steps(row) > 0);
     return obs;
 }
 
