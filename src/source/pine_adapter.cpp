@@ -214,6 +214,18 @@ bool has_requested_units(const PlacementSnapshot& row) noexcept {
             || row.qty_type == static_cast<int>(QtyType::FIXED));
 }
 
+native_order::OrderIntent entry_transaction(const PlacementSnapshot& row, double units) {
+    if (std::isfinite(units))
+        return native_order::Transact{row.is_long ? units : -units};
+    return native_order::HostSized{native_order::HostSizedKind::Open,
+        row.is_long ? native_order::Side::Long : native_order::Side::Short};
+}
+
+native_order::OrderIntent rebuilt_entry_intent(const PlacementSnapshot& row) {
+    return entry_transaction(row, has_requested_units(row) ? row.requested_qty
+                                                           : row.frozen_market_own_units);
+}
+
 // ab9714be pine_strategy_commands.cpp:533-537: a non-NaN limit/stop is a
 // present price level, including 0.0.
 bool price_present(double value) noexcept { return !std::isnan(value); }
@@ -10834,12 +10846,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                 if (result.status == native_order::CancelStatus::Cancelled) {
                     retire(handle);
                     native_order::Request req;
-                    const double target = entry_snapshot.is_long
-                        ? entry_snapshot.requested_qty : -entry_snapshot.requested_qty;
-                    req.intent = std::isnan(target)
-                        ? native_order::OrderIntent{native_order::HostSized{native_order::HostSizedKind::Open,
-                            entry_snapshot.is_long ? native_order::Side::Long : native_order::Side::Short}}
-                        : native_order::OrderIntent{native_order::Transact{target}};
+                    req.intent = rebuilt_entry_intent(entry_snapshot);
                     req.label = entry_snapshot.source_id;
                     req.comment = entry_snapshot.comment;
                     const SourceId replacement_key = entry_snapshot.source_id;
@@ -11614,12 +11621,7 @@ void PineExecutionAdapter::close_all() {
                 if (result.status == native_order::CancelStatus::Cancelled) {
                     retire(handle);
                     native_order::Request req;
-                    const double target = entry_snapshot.is_long
-                        ? entry_snapshot.requested_qty : -entry_snapshot.requested_qty;
-                    req.intent = std::isnan(target)
-                        ? native_order::OrderIntent{native_order::HostSized{native_order::HostSizedKind::Open,
-                            entry_snapshot.is_long ? native_order::Side::Long : native_order::Side::Short}}
-                        : native_order::OrderIntent{native_order::Transact{target}};
+                    req.intent = rebuilt_entry_intent(entry_snapshot);
                     req.label = entry_snapshot.source_id;
                     req.comment = entry_snapshot.comment;
                     const SourceId replacement_key = entry_snapshot.source_id;

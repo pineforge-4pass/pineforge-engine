@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- A market entry queued behind a full close on the same bar now converts its cash or equity percentage at the opening fill.
 - Pending entry orders keep cash and equity percentages in their typed request fields; they no longer report those amounts as fixed contracts before the fill.
 - C/C++ and Python citations must find the claimed code outside comments. A pinned C/C++ citation can still identify a comment explicitly.
 - The documentation anchor check reports when it finds no citations.
