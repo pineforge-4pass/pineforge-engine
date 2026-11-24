@@ -269,7 +269,6 @@ static int64_t calendar_clock_ms(int64_t ts, const std::string& tz) {
     return ts - tz_offset_ms(ts, tz);
 }
 
-static int first_window_length_minutes(const std::string& session);
 static int session_length_minutes(const std::string& session);
 static int64_t floor_div_day(int64_t ms);
 
@@ -301,15 +300,9 @@ static int64_t floor_div_day(int64_t ms);
 /// (where a native 17:00-stamped bar's content lies) and the close
 /// arithmetic (open + length = the next 17:00 stamp). No 1800-1700 bar
 /// trades in the 17:00-18:00 hour the two clocks attribute differently.
-/// The exception reads the literal first window, as it always has: a session
-/// with breaks is not that session.
+/// The lead applies to the complete window list, with or without a day mask.
 static int session_day_stamp_offset_minutes(const std::string& session) {
-    const int open = session_open_offset_minutes(session);
-    if (open != session_grid_policy::metals_open_minutes) return open;
-
-    // Keep the legacy first-window parser, even for noncanonical spellings.
-    return open - session_grid_policy::stamp_lead_minutes(
-        open, (open + first_window_length_minutes(session)) % 1440);
+    return session_open_offset_minutes(session) - session_grid_policy::stamp_lead_minutes(session);
 }
 
 /// Session clock: exchange-tz milliseconds since (local-midnight + the
@@ -1114,7 +1107,7 @@ bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period,
     const int64_t pf_prev_clock = intraday_clock_ms(prev_ms, tz, session);
     const int64_t pf_curr_clock = intraday_clock_ms(curr_ms, tz, session);
     if (security_trace_enabled() && curr_ms - prev_ms <= 3600000
-        && (curr_ms - prev_ms != 0)) {
+        && (curr_ms - prev_ms != 0)) { // PF_SEC_TRACE: show the session clock used for each bar.
         std::fprintf(stderr,
             "[xsb] prev=%lld clock=%lld | curr=%lld clock=%lld\n",
             (long long)prev_ms, (long long)pf_prev_clock,
@@ -1268,15 +1261,15 @@ void TimeframeAggregator::observe_fixed(
     ++clock.observed_count;
 }
 
-// 0 is no successor, on either side of the Unix epoch.
-static std::optional<int64_t> known_successor(int64_t ms) {
+// Only zero means the caller supplied no successor or no chart close.
+static std::optional<int64_t> known_timestamp(int64_t ms) {
     return ms == 0 ? std::nullopt : std::optional<int64_t>{ms};
 }
 
 std::optional<AggregatedBar> TimeframeAggregator::next_fixed_completion(
         FixedPeriodClock& clock, int64_t horizon_ms,
         int64_t input_ms, int64_t next_input) const {
-    const auto next_input_ms = known_successor(next_input);
+    const auto next_input_ms = known_timestamp(next_input);
     if (!supports_fixed_completion() || !clock.cursor_ms) return std::nullopt;
     while (*clock.cursor_ms < horizon_ms) {
         const auto cursor = *clock.cursor_ms;
@@ -1429,7 +1422,7 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
                                int ratio, int64_t target_seconds,
                                int64_t input_seconds,
                                std::optional<int64_t> next_input_ms,
-                               int64_t calling_close_ms) {
+                               std::optional<int64_t> calling_close_ms) {
     AggregatedBar result;
     if (target_seconds > 0 && s.sub_bar_count > 0) {
         // Time-bucket aware ratio mode:
@@ -1576,11 +1569,11 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
             // here. A single-feed run passes no calling close (0) and is
             // bit-identical: its input bar is the chart bar, whose own end
             // the real-end rule already tests.
-            if (!complete && input_seconds > 0 && calling_close_ms > 0
+            if (!complete && input_seconds > 0 && calling_close_ms
                 && has_later_input && s.agg) {
                 const IntradayBucket next_bucket = intraday_bucket(
                     *next_input_ms, target_seconds, atz, asess, s.late_opens, *next_input_ms);
-                if (calling_close_ms >= input_bucket.end_ms
+                if (*calling_close_ms >= input_bucket.end_ms
                     && next_bucket.key != input_bucket.key) {
                     complete = true;
                 }
@@ -1646,12 +1639,12 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
                                   CalendarPeriod cal_period,
                                   int64_t input_seconds,
                                   std::optional<int64_t> next_input_ms,
-                                  int64_t calling_close_ms,
+                                  std::optional<int64_t> calling_close_ms,
                                   const native_calendar::NativeInterval* interval = nullptr,
                                   int64_t input_close_ms = 0, int weeks = 1) {
     AggregatedBar result;
     const bool pf_tr = security_trace_enabled();
-    if (pf_tr) {
+    if (pf_tr) { // PF_SEC_TRACE: show the bucket before consuming this input.
         std::fprintf(stderr,
             "[calmode] ts=%lld first=%lld subs=%d emitted=%d tz='%s' sess='%s'\n",
             (long long)input_bar.timestamp, (long long)s.current_bar.timestamp,
@@ -1706,7 +1699,7 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
             result.bar = s.last_completed_bar;
             result.is_complete = true;
             result.sub_bar_count = completed_subs;
-            if (pf_tr) {
+            if (pf_tr) { // PF_SEC_TRACE: the next bucket triggered completion.
                 std::fprintf(stderr,
                     "[calmode] BOUNDARY-COMPLETE trigger_ts=%lld bucket_first=%lld close=%.6f subs=%d\n",
                     (long long)input_bar.timestamp,
@@ -1825,7 +1818,7 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
     if (!complete && !native_periods
         && has_later_input
         && has_trading_session(asess)
-        && (early_close_completes || calling_close_ms > 0)) {
+        && (early_close_completes || calling_close_ms)) {
         // The nominal rules above end a period at its scheduled close and
         // model neither early closes nor exchange holidays: on NYSE:F the
         // 13:00 ET half-day of Fri 2025-11-28 left the week (and the day)
@@ -1865,7 +1858,7 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
         if (interval ? !in_interval(*next_input_ms)
                      : s.agg->period_changes(input_bar.timestamp, *next_input_ms)) {
             complete = early_close_completes
-                || calling_close_ms >= (interval ? interval->last_traded_close_ms : nominal_close());
+                || *calling_close_ms >= (interval ? interval->last_traded_close_ms : nominal_close());
         }
     }
     if (!complete && native_periods && cal_period == CalendarPeriod::DAY
@@ -1909,7 +1902,7 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
         result.bar = s.last_completed_bar;
         result.is_complete = true;
         result.sub_bar_count = s.sub_bar_count;
-        if (pf_tr) {
+        if (pf_tr) { // PF_SEC_TRACE: this input completed its own bucket.
             std::fprintf(stderr,
                 "[calmode] PROJECTION/EAGER-COMPLETE trigger_ts=%lld bucket_first=%lld close=%.6f subs=%d\n",
                 (long long)input_bar.timestamp,
@@ -1937,8 +1930,9 @@ AggregatedBar TimeframeAggregator::feed(const Bar& input_bar,
 
 AggregatedBar TimeframeAggregator::feed(const Bar& input_bar,
                                         int64_t next_input,
-                                        int64_t calling_close_ms) {
-    const auto next_input_ms = known_successor(next_input);
+                                        int64_t calling_close) {
+    const auto next_input_ms = known_timestamp(next_input);
+    const auto calling_close_ms = known_timestamp(calling_close);
     FeedState s{current_bar_, observed_first_ms_, sub_bar_count_, current_emitted_complete_,
                 last_completed_bar_, has_completed_,
                 &anchor_tz_, &anchor_session_, this, &native_late_opens_};
@@ -1989,8 +1983,8 @@ AggregatedBar TimeframeAggregator::feed(const Bar& input_bar, int64_t next_input
                 last_completed_bar_, has_completed_,
                 &anchor_tz_, &anchor_session_, this, &native_late_opens_};
     return feed_calendar_mode(input_bar, s, cal_period_, input_seconds_,
-                              known_successor(next_input_ms), calling_close_ms, &*target_interval,
-                              input_interval->last_traded_close_ms);
+                              known_timestamp(next_input_ms), known_timestamp(calling_close_ms),
+                              &*target_interval, input_interval->last_traded_close_ms);
 }
 
 Bar TimeframeAggregator::current() const {

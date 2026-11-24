@@ -637,7 +637,7 @@ pump's operation (`Input` or `Stream`) and ordinal 0; until then the run goes on
 with the configuration it wrote, fills and notifications included.
 
 Generated Pine code runs on this same consumer: `source::PineStrategyHost`
-derives from `NativeStrategyHost` (`pine_strategy_host.hpp:418`) and lowers
+derives from `NativeStrategyHost` (`pine_strategy_host.hpp:415`) and lowers
 every `strategy.*` command into the native requests above. What the source
 layer keeps on top of them is TradingView's *policy* — the command batching,
 the priority and activation quirks, the money rounding — never a second
@@ -1518,7 +1518,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:19636-19676`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:19771-19811`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
@@ -4588,7 +4588,7 @@ The standalone native host has no Pine decision path at runtime, and the
 constructor/member cut has since landed: `engine.hpp` has **zero** references to
 `CapAttachment`, `OrderPriority` or `IntradayCap`. `NativeStrategyHost` is
 zero-argument (`native_host.hpp:865`); the `CapAttachment` constructor belongs
-to `source::PineStrategyHost` (`pine_strategy_host.hpp:418-421`), and the cap
+to `source::PineStrategyHost` (`pine_strategy_host.hpp:415-418`), and the cap
 type itself lives in the adapter (`IntradayCap` `intraday_cap.hpp:84`).
 
 Nor is there a build-level one. The two source sets are disjoint:
@@ -4658,7 +4658,7 @@ own features, not only the rows that happened to be source-free.
 `python3 scripts/ci_verify.py kernel` is the profile that verifies the
 kernel-only build (Release, live runner ON, tutorial OFF, source layer OFF);
 CI runs it as the `kernel-only` job. The profile carries a **row floor**, its
-number in the `PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:812 table in
+number in the `PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:815 table in
 `scripts/ci_verify.py`: the count the kernel-only CTest set is
 expected to run with the private overlay present, minus the pinned
 private-fixture rows of `tests/private_fixture_rows.txt` it registers as SKIP

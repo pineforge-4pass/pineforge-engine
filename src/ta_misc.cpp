@@ -86,18 +86,17 @@ double PercentRank::compute(double src) {
     // na current value (nothing is at most it) and an all-na lookback both count
     // none: 0, not na (tests/fixtures/percentile_window).
     buffer_.push_back(src);
-    while ((int)buffer_.size() > length_ + 1) {
+    while (static_cast<long long>(buffer_.size()) > static_cast<long long>(length_) + 1) {
         buffer_.pop_front();
     }
 
-    if ((int)buffer_.size() < length_ + 1) {
+    if (static_cast<long long>(buffer_.size()) < static_cast<long long>(length_) + 1) {
         return na<double>();
     }
 
     double current = buffer_.back();
     int count = 0;
-    int start = (int)buffer_.size() - 1 - length_;
-    for (int i = start; i < (int)buffer_.size() - 1; i++) {
+    for (std::size_t i = 0; i + 1 < buffer_.size(); ++i) {
         if (percentrank_less_equal(buffer_[i], current)) {
             count++;
         }
@@ -131,15 +130,18 @@ double BarsSince::compute(bool condition) {
 // ValueWhen
 // ============================================================================
 
-ValueWhen::ValueWhen(int max_occurrence) : max_occurrence_(std::max(1, max_occurrence + 1)) {}
+ValueWhen::ValueWhen(int max_occurrence)
+    : max_occurrence_(std::max(1LL, static_cast<long long>(max_occurrence) + 1)) {}
 
 double ValueWhen::compute(bool condition, double source, int occurrence) {
     saved_values_ = values_;
     if (condition) {
         values_.push_front(source);
-        if ((int)values_.size() > max_occurrence_) values_.pop_back();
+        if (static_cast<long long>(values_.size()) > max_occurrence_) values_.pop_back();
     }
-    if (occurrence < (int)values_.size()) return values_[occurrence];
+    // Occurrences count from 0 back in time: a negative one does not exist.
+    if (occurrence >= 0 && static_cast<std::size_t>(occurrence) < values_.size())
+        return values_[occurrence];
     return na<double>();
 }
 
@@ -292,12 +294,11 @@ double PercentRank::recompute(double src) {
     if (buffer_.empty()) return compute(src);
     buffer_.back() = src;
 
-    if ((int)buffer_.size() < length_ + 1) return na<double>();
+    if (static_cast<long long>(buffer_.size()) < static_cast<long long>(length_) + 1) return na<double>();
 
     double current = buffer_.back();
     int count = 0;
-    int start = (int)buffer_.size() - 1 - length_;
-    for (int i = start; i < (int)buffer_.size() - 1; i++) {
+    for (std::size_t i = 0; i + 1 < buffer_.size(); ++i) {
         if (percentrank_less_equal(buffer_[i], current)) count++;
     }
     // Denominator is LENGTH, not the non-na count — same TV rule as compute()

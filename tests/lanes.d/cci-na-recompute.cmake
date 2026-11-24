@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_cci_na_recompute)
+pineforge_add_unit_test(test_cci_na_recompute)

@@ -97,9 +97,8 @@ std::array<double, kSeededBars> seeded_series() {
         if (bar < static_cast<int>(prefix.size())) series[bar] = prefix[bar];
     }
     // Surround the first 17*17 scheduled gaps with every ordered finite pair.
-    // At W=3 the NA driver compares [left, NA, right], including distinct
-    // keys sharing a map bucket. This exercises NA-first tie repair without
-    // depending on chance encounters in the PRNG or hardcoding a hash value.
+    // The withdrawn provisional sample must never separate these neighbours,
+    // including when the surrounding values tie for the most occurrences.
     static_assert(kSeededBars > 17 * 17 * kGapPeriod, "finite pair coverage fits the series");
     int pair = 0;
     for (int left = -4; left <= 12; ++left) {
@@ -319,21 +318,6 @@ bool median_selection_changes_zero(const RefMedian& reference, double sorted) {
     const double lower = selected[n / 2 - 1];
     std::nth_element(selected.begin(), selected.begin() + n / 2, selected.end());
     return !exact((lower + selected[n / 2]) / 2.0, sorted);
-}
-
-bool mode_na_tie_repair_is_observable(const RefMode& reference) {
-    if (static_cast<int>(reference.buffer_.size()) < reference.length_) return false;
-    std::unordered_map<double, int> counts;
-    for (double value : reference.buffer_) ++counts[value];
-    if (counts.empty() || !is_na(counts.begin()->first)) return false;
-    bool has_finite = false;
-    for (const auto& entry : counts) {
-        if (entry.second != 1) return false;
-        if (!is_na(entry.first)) has_finite = true;
-    }
-    // The first iterated key is NA and all counts tie at one. Removing the
-    // is_na(mode_value) tie clause leaves NA instead of the finite minimum.
-    return has_finite;
 }
 
 struct RefPercentRank {
@@ -649,55 +633,44 @@ void test_mode_seeded() {
     }
 }
 
-void test_mode_seeded_na_fallback() {
+void test_mode_seeded_withdrawn_values() {
     const auto series = seeded_series();
-    int repair_witnesses = 0;
+    int changed_winners = 0;
     for (int length = 3; length <= 21; ++length) {
         ta::Mode actual(length);
-        RefMode reference(length);
+        RefMode committed(length), provisional(length);
         int compared = 0;
-        int injected = 0;
-        int fallback_compared = 0;
-        int expected_fallback = 0;
-        int ready_bars = 0;
+        int withdrawn = 0;
+        int following = 0;
+        int ready = 0;
         for (int bar = 0; bar < kSeededBars; ++bar) {
-            const bool gap = is_na(series[bar]);
-            // compute(NA) skips the window. To reach the exceptional fallback
-            // state, first advance this bar, then inject NA with recompute.
-            const double src = gap ? 1.0 : series[bar];
-            const double expected = reference.compute(src);
-            check_value(actual.compute(src), expected,
-                        "Mode seeded NA fallback", length, bar);
+            const double src = series[bar];
+            if (is_na(src)) {
+                provisional = committed;
+                check_value(actual.compute(1.0), provisional.compute(1.0),
+                            "Mode provisional bar", length, bar);
+                check_value(actual.recompute(src), committed.compute(src),
+                            "Mode withdrawn bar", length, bar);
+                ++withdrawn;
+            } else {
+                const double expected = committed.compute(src);
+                check_value(actual.compute(src), expected, "Mode final window", length, bar);
+                if (!is_na(expected)) ++ready;
+                if (bar > 0 && is_na(series[bar - 1])) {
+                    if (!exact(expected, provisional.compute(src))) ++changed_winners;
+                    ++following;
+                }
+            }
             ++compared;
-            if (bar >= length - 1) {
-                ++ready_bars;
-                const bool has_na = std::any_of(
-                    reference.buffer_.begin(), reference.buffer_.end(),
-                    [](double value) { return is_na(value); });
-                if (has_na) ++fallback_compared;
-                // An injection at g survives a subsequent compute at b
-                // exactly when b - length < g < b. Gaps are 12, 25, 38, ...
-                const int gap_count = bar / kGapPeriod
-                    - std::max(0, (bar - length + 1) / kGapPeriod);
-                if (gap_count > 0) ++expected_fallback;
-                if (mode_na_tie_repair_is_observable(reference)) ++repair_witnesses;
-            }
-            if (gap) {
-                check_value(actual.recompute(na<double>()),
-                            reference.recompute(na<double>()),
-                            "Mode seeded inject NA", length, bar);
-                ++injected;
-            }
         }
-        check_count(compared, kSeededBars, "Mode seeded NA fallback", length);
-        check_count(injected, kSeededBars / kGapPeriod, "Mode seeded inject NA", length);
-        check_count(ready_bars, kSeededBars - length + 1,
-                    "Mode seeded ready windows", length);
-        check_count(fallback_compared, expected_fallback,
-                    "Mode seeded retained NA windows", length);
+        check_count(compared, kSeededBars, "Mode final bars", length);
+        check_count(withdrawn, kSeededBars / kGapPeriod, "Mode withdrawals", length);
+        check_count(following, (kSeededBars - 1) / kGapPeriod, "Mode bars after withdrawal", length);
+        // expectation corrected: bars-length+1 -> valid bars-length+1, because na takes no slot.
+        check_count(ready, kSeededBars - kSeededBars / kGapPeriod - length + 1,
+                    "Mode final ready windows", length);
     }
-    check_true(repair_witnesses > 0,
-               "Mode seeded compares NA-first tied maps with a finite winner");
+    check_true(changed_winners > 0, "retaining a withdrawn value changes the next mode");
 }
 
 void test_alma_cached_weights() {
@@ -823,6 +796,7 @@ void test_recompute_paths() {
     RefALMA alma_reference(5, 0.73, 5.0, true);
     ta::Mode mode(5);
     RefMode mode_reference(5);
+    RefMode mode_before_last(5);
     int compared = 0;
     for (int bar = 0; bar < static_cast<int>(finite.size()); ++bar) {
         check_value(rci.compute(finite[bar]), rci_reference.compute(finite[bar]),
@@ -831,6 +805,7 @@ void test_recompute_paths() {
                     "Median recompute setup", 5, bar);
         check_value(alma.compute(finite[bar]), alma_reference.compute(finite[bar]),
                     "ALMA recompute setup", 5, bar);
+        if (bar + 1 == static_cast<int>(finite.size())) mode_before_last = mode_reference;
         check_value(mode.compute(finite[bar]), mode_reference.compute(finite[bar]),
                     "Mode recompute setup", 5, bar);
         ++compared;
@@ -843,9 +818,9 @@ void test_recompute_paths() {
                 "ALMA recompute", 5, 8);
     check_value(mode.recompute(9.25), mode_reference.recompute(9.25),
                 "Mode recompute", 5, 8);
-    check_value(mode.recompute(na<double>()), mode_reference.recompute(na<double>()),
+    check_value(mode.recompute(na<double>()), mode_before_last.compute(na<double>()),
                 "Mode recompute NA", 5, 9);
-    check_value(mode.compute(8.5), mode_reference.compute(8.5),
+    check_value(mode.compute(8.5), mode_before_last.compute(8.5),
                 "Mode after recompute NA", 5, 10);
     compared += 2;
     ++compared;
@@ -876,9 +851,8 @@ void test_recompute_paths() {
 // libstdc++ nodes are 512 bytes (64 doubles); libc++ nodes are 4096 bytes
 // (512 doubles). Both obey the conservative ceil(calls/64)+1 node bound here.
 // At these lengths the former vectors (4W/8W bytes) cannot masquerade as a
-// deque node. All measured inputs are finite, so Mode's NA fallback is outside
-// this claim. No reference or assertion runs inside the measured span; only
-// the indicator and the nonallocating size callback do.
+// deque node. All measured inputs are finite. Only the indicator and the
+// nonallocating size callback run inside the measured span.
 // --------------------------------------------------------------------------
 
 #if defined(_LIBCPP_VERSION)
@@ -968,7 +942,7 @@ int main() {
     test_mode();
     test_median_seeded();
     test_mode_seeded();
-    test_mode_seeded_na_fallback();
+    test_mode_seeded_withdrawn_values();
     test_alma_cached_weights();
     test_percent_rank();
     test_percentiles();

@@ -443,9 +443,17 @@ void unbiased_checkpoint_control() {
             }
             same_value(deviation.compute(value), expected(history));
             const auto checkpoint = deviation;
+            // A recalculation replaces this bar's value. An na bar added none,
+            // so its new value joins the window like any new value and the
+            // previous bar's value stays.
             auto replacement = history;
-            if (replacement.empty()) replacement.push_back(source_value(bar + 23));
-            else replacement.back() = source_value(bar + 23);
+            if (is_na(value)) {
+                replacement.push_back(source_value(bar + 23));
+                if (replacement.size() > static_cast<std::size_t>(length))
+                    replacement.erase(replacement.begin());
+            } else {
+                replacement.back() = source_value(bar + 23);
+            }
             same_value(deviation.recompute(replacement.back()), expected(replacement));
             ta::StdDev restored(1); // Restoring also changes from biased to unbiased storage.
             restored = checkpoint;

@@ -62,9 +62,14 @@ failing document, and it must not look like a pass.
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import struct
 import sys
 from pathlib import Path
+
+from check_lanes_cmake_d import _words
+from cmake_test_includes import registration_statements
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -107,78 +112,6 @@ class ShapeError(RuntimeError):
 # Half 1: which test TUs tests/CMakeLists.txt registers
 # --------------------------------------------------------------------------
 
-def _cmake_call(text: str, start: int) -> tuple[str, int]:
-    """The argument text of the balanced-paren call beginning at ``start``."""
-    depth = 0
-    for index in range(start, len(text)):
-        if text[index] == '(':
-            depth += 1
-            if depth == 1:
-                first = index + 1
-        elif text[index] == ')':
-            depth -= 1
-            if depth == 0:
-                return text[first:index], index + 1
-    raise ShapeError('unbalanced parentheses in ' + TESTS_CMAKE)
-
-
-def _tokens(argument_text: str) -> list[str]:
-    """Bare words of a CMake argument list, comments and strings dropped."""
-    out: list[str] = []
-    for line in argument_text.splitlines():
-        line = line.split('#', 1)[0]
-        out.extend(word for word in line.split() if word)
-    return out
-
-
-def registered_tests(cmake_text: str) -> list[str]:
-    """Replay the list operations on ``TEST_SOURCES`` and return its members.
-
-    Only the operations the file actually uses are implemented: ``set``,
-    ``list(APPEND …)`` and ``list(REMOVE_ITEM …)``, the last of which may name
-    a helper list by ``${VAR}``. Anything else on ``TEST_SOURCES`` is a shape
-    error rather than a silent miss.
-    """
-    lists: dict[str, list[str]] = {}
-    call = re.compile(r'\b(set|list)\s*\(', re.IGNORECASE)
-    position = 0
-    while True:
-        found = call.search(cmake_text, position)
-        if not found:
-            break
-        arguments, position = _cmake_call(cmake_text, found.end() - 1)
-        words = _tokens(arguments)
-        if not words:
-            continue
-        if found.group(1).lower() == 'set':
-            lists[words[0]] = list(words[1:])
-            continue
-        operation = words[0].upper()
-        if len(words) < 2:
-            continue
-        name = words[1]
-        if not name.endswith('TEST_SOURCES'):
-            continue
-        items: list[str] = []
-        for word in words[2:]:
-            reference = re.fullmatch(r'\$\{([A-Za-z0-9_]+)\}', word)
-            items.extend(lists.get(reference.group(1), []) if reference else [word])
-        current = lists.setdefault(name, [])
-        if operation == 'APPEND':
-            current.extend(items)
-        elif operation == 'REMOVE_ITEM':
-            lists[name] = [entry for entry in current if entry not in items]
-        else:
-            raise ShapeError(f'unhandled list({operation}) on {name} in {TESTS_CMAKE}')
-    if 'TEST_SOURCES' not in lists:
-        raise ShapeError('TEST_SOURCES is not set in ' + TESTS_CMAKE)
-    return lists['TEST_SOURCES']
-
-
-# --------------------------------------------------------------------------
-# Half 2: the reach predicate, transliterated
-# --------------------------------------------------------------------------
-
 def reaches_source_layer(entry: Path) -> bool:
     """``pineforge_test_reaches_source_layer`` over a TU's include closure."""
     pending = [entry]
@@ -201,57 +134,287 @@ def reaches_source_layer(entry: Path) -> bool:
     return False
 
 
-ADD_EXECUTABLE_RE = re.compile(r'\badd_executable\s*\(', re.IGNORECASE)
+def guarded(commands):
+    """Yield each statement with the conditions selecting its arm at every depth."""
+    stack = []
+    for source, cmd in commands:
+        name = cmd.name.lower()
+        if name == 'if':
+            stack.append([(source, cmd)])
+        elif name in ('else', 'elseif', 'endif'):
+            if not stack or stack[-1][0][0] != source:
+                raise ShapeError(f'{source}:{cmd.line}: {name}() without if()')
+            if name == 'endif':
+                stack.pop()
+            elif stack[-1][-1][1].name.lower() == 'else':
+                raise ShapeError(f'{source}:{cmd.line}: {name}() after else()')
+            else:
+                stack[-1].append((source, cmd))
+        else:
+            # An elseif or else requires every preceding arm to have been false.
+            yield source, cmd, [(path, arm, arm is chain[-1][1])
+                                for chain in stack for path, arm in chain
+                                if arm.name.lower() != 'else']
+    if stack:
+        source, start = stack[-1][0]
+        raise ShapeError(f'{source}:{start.line}: unterminated if()')
 
 
-def explicit_test_targets(cmake_text: str) -> dict[str, list[str]]:
-    """``add_executable(test_x a.cpp b.c)`` targets, name -> source files.
+def _condition(body, root, lists, targets, unit=None):
+    """Kernel Release configuration. None means this condition is not modelled."""
+    body = ' '.join(body.split())
+    if body == 'CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE':
+        return sys.platform.startswith('linux') or sys.platform == 'darwin'
+    if re.search(r'\bOR\b|[()]', body):
+        return None
+    terms = []
+    for term in body.split(' AND '):
+        negate = term.startswith('NOT ')
+        term = term.removeprefix('NOT ')
+        if term in {'TRUE', 'ON', '1', 'PINEFORGE_BUILD_LIVE_RUNNER',
+                    'CMAKE_BUILD_TYPE STREQUAL "Release"'}:
+            value = True
+        elif term in {'FALSE', 'OFF', '0', 'PINEFORGE_BUILD_SOURCE_LAYER',
+                      'PINEFORGE_BUILD_CORPUS_STRATEGIES', 'PINEFORGE_ENABLE_COVERAGE',
+                      'PINEFORGE_ENABLE_SANITIZERS', 'PINEFORGE_BUILD_TUTORIAL',
+                      'PINEFORGE_LAB_ONLY_TESTS', 'PINEFORGE_VALUE_INVALID_FIXTURES',
+                      'CMAKE_BUILD_TYPE STREQUAL "Debug"'}:
+            value = False
+        elif term == 'UNIX':
+            value = os.name == 'posix'
+        elif term == 'CMAKE_SYSTEM_NAME STREQUAL "Linux"':
+            value = sys.platform.startswith('linux')
+        elif term == 'CMAKE_SIZEOF_VOID_P EQUAL 8':
+            value = struct.calcsize('P') == 8
+        elif (unit and (m := re.fullmatch(r'(\w+) STREQUAL "([\w.-]+)"', term))
+              and m[1] == unit[0]):
+            value = unit[1] == m[2]
+        elif m := re.fullmatch(r'EXISTS "\$\{(PROJECT_SOURCE_DIR|CMAKE_CURRENT_SOURCE_DIR)\}/([^"$]+)"', term):
+            value = ((root if m[1] == 'PROJECT_SOURCE_DIR' else root / 'tests') / m[2]).exists()
+        elif m := re.fullmatch(r'EXISTS \$\{(\w+)\}', term):
+            paths = lists.get(m[1], [])
+            value = (_condition(f'EXISTS "{paths[0]}"', root, lists, targets)
+                     if len(paths) == 1 and paths[0].startswith(
+                         ('${PROJECT_SOURCE_DIR}/', '${CMAKE_CURRENT_SOURCE_DIR}/')) else None)
+        elif m := re.fullmatch(r'([\w.-]+) IN_LIST _pf_kernel_absent_rows', term):
+            value = (m[1] in lists.get('_pf_source_bound_private_rows', ()) or
+                     reaches_source_layer(root / 'tests' / (m[1] + '.cpp')))
+        elif m := re.fullmatch(r'TARGET (test_[\w.-]+)', term):
+            value = m[1] in targets
+        else:
+            value = None
+        if value is not None and value == negate:
+            return False
+        terms.append(value)
+    return None if None in terms else True
 
-    A handful of rows are registered this way rather than through
-    ``TEST_SOURCES`` - the pure-C ones, which must be compiled by the C
-    compiler - and they are NOT subject to the reach filter, so they are
-    registered in both profiles and simply have to link against whichever
-    archive the profile built.
-    """
-    out: dict[str, list[str]] = {}
-    position = 0
-    while True:
-        found = ADD_EXECUTABLE_RE.search(cmake_text, position)
-        if not found:
-            return out
-        arguments, position = _cmake_call(cmake_text, found.end() - 1)
-        words = _tokens(arguments)
-        if words and words[0].startswith('test_'):
-            out[words[0]] = [word for word in words[1:]
-                             if word.endswith(('.cpp', '.c'))]
+
+def selected(guards, root, lists, targets, *, unit=None, script_only=False):
+    unknown = None
+    for source, arm, wanted in guards:
+        result = _condition(arm.body, root, lists, targets, unit)
+        if result is None:
+            unknown = f'{source}:{arm.line}: unsupported condition {arm.body.strip()!r}'
+        elif result != wanted:
+            return False
+    if unknown and not script_only:
+        raise ShapeError(unknown)
+    return True
 
 
-def kernel_profile_tests(root: Path) -> set[str]:
-    """Every test TU the ``kernel`` profile registers a row for.
+TARGET_FILE = re.compile(r'\$<TARGET_FILE:([\w.+-]+)>')
 
-    Two registrations, two rules, both the tree's own:
 
-    * a ``TEST_SOURCES`` member is registered unless its include closure
-      reaches the source layer, because that is what
-      ``PINEFORGE_BUILD_SOURCE_LAYER=OFF`` removes;
-    * an ``add_executable`` target is registered unconditionally, so its
-      sources count when none of them reaches the source layer - which is
-      also the condition under which the target can link the kernel-only
-      archive at all.
-    """
+def command_targets(words, source, line):
+    """Keep the executable and any literal target files passed to a launcher."""
+    target, *args = words
+    if '$<' in target:
+        match = TARGET_FILE.fullmatch(target)
+        if not match:
+            raise ShapeError(f'{source}:{line}: unsupported test command {target!r}')
+        target = match[1]
+    result = {target}
+    for arg in args:
+        if '$<TARGET_FILE:' in arg:
+            if '$<TARGET_FILE:' in TARGET_FILE.sub('', arg):
+                raise ShapeError(f'{source}:{line}: unsupported target file {arg!r}')
+            result.update(TARGET_FILE.findall(arg))
+    return result
+
+
+def registrations(root: Path):
+    """Source-list members, executable sources, selected rows and declared commands."""
     cmake = root / TESTS_CMAKE
     if not cmake.is_file():
         raise ShapeError('no such file: ' + TESTS_CMAKE)
-    text = cmake.read_text()
+    lists: dict[str, list[str]] = {}
+    direct: set[str] = set()
+    built: set[str] = set()
+    targets: dict[str, list[str]] = {}
+    commands: dict[str, set[str]] = {}
+    declared: dict[str, set[str]] = {}
+    unit_parameter = None
+    unit_rules = []
+    function = None
+    loops = []
+
+    def register_unit(target):
+        if not re.fullmatch(r'[\w.+-]+', target):
+            raise ShapeError(f'{cmake}: unsupported unit target {target!r}')
+        if target in direct:
+            return
+        direct.add(target)
+        entry = root / 'tests' / (target + '.cpp')
+        if entry.is_file() and not reaches_source_layer(entry):
+            built.add(target)
+        rows = commands.setdefault(target, set())
+        if unit_parameter is None:  # Standalone fragments use the usual primary.
+            rows.add(target)
+        for conditions, row in unit_rules:
+            if selected(conditions, root, lists, built, unit=(unit_parameter, target)):
+                row = row.replace('${' + unit_parameter + '}', target)
+                if not re.fullmatch(r'[\w.+-]+', row):
+                    raise ShapeError(f'unsupported unit row {row!r} for {target}')
+                rows.add(row)
+
+    def row_names(name, source, line):
+        if re.fullmatch(r'[\w.+-]+', name):
+            return [name]
+        for variable, *items in reversed(loops):
+            token = '${' + variable + '}'
+            if token not in name:
+                continue
+            if items[:2] == ['IN', 'ITEMS']:
+                items = items[2:]
+            if items and items[0] not in ('IN', 'RANGE') and all(
+                    re.fullmatch(r'[\w.+-]+', name.replace(token, item)) for item in items):
+                return [name.replace(token, item) for item in items]
+        raise ShapeError(f'{source}:{line}: unsupported compiled row name {name!r}')
+
+    try:
+        for source, cmd, guards in guarded(registration_statements(cmake)):
+            name = cmd.name.lower()
+            words = _words(cmd.body)
+            if name in ('function', 'macro'):
+                function = words[0]
+                if function == 'pineforge_add_unit_test':
+                    if len(words) != 2:
+                        raise ShapeError(f'{source}:{cmd.line}: unsupported unit helper parameters')
+                    unit_parameter = words[1]
+                continue
+            if name in ('endfunction', 'endmacro'):
+                function = None
+                continue
+            if function:
+                if (function == 'pineforge_add_unit_test' and name == 'add_test'
+                        and len(words) >= 4 and words[:3:2] == ['NAME', 'COMMAND']
+                        and words[3] == '${' + unit_parameter + '}'):
+                    unit_rules.append((guards, words[1]))
+                continue
+            if name == 'foreach':
+                loops.append(words)
+                continue
+            if name == 'endforeach':
+                if not loops:
+                    raise ShapeError(f'{source}:{cmd.line}: endforeach() without foreach()')
+                loops.pop()
+                continue
+            if name == 'set' and words:
+                if (words[0].endswith(('TEST_SOURCES', '_command'))
+                        and not selected(guards, root, lists, built)):
+                    continue
+                lists[words[0]] = words[1:]
+            elif (name == 'list' and len(words) >= 2 and words[0] == 'APPEND'
+                  and words[1].endswith('_command')):
+                if selected(guards, root, lists, built):
+                    lists.setdefault(words[1], []).extend(words[2:])
+            elif name == 'list' and len(words) >= 2 and words[1].endswith('TEST_SOURCES'):
+                operation, key = words[:2]
+                if words[2:] == ['${_pf_source_bound_tests}'] and operation == 'REMOVE_ITEM':
+                    continue  # kernel_units applies the include walk.
+                if not selected(guards, root, lists, built):
+                    continue
+                items = []
+                for word in words[2:]:
+                    ref = re.fullmatch(r'\$\{(\w+)\}', word)
+                    if ref and ref[1] not in lists:
+                        raise ShapeError(f'{source}:{cmd.line}: unknown source list {word}')
+                    items.extend(lists[ref[1]] if ref else [word])
+                current = lists.setdefault(key, [])
+                if operation.upper() == 'APPEND':
+                    current.extend(items)
+                elif operation.upper() == 'REMOVE_ITEM':
+                    lists[key] = [entry for entry in current if entry not in items]
+                else:
+                    raise ShapeError(f'{source}:{cmd.line}: unhandled list({operation}) on {key}')
+            elif name == 'pineforge_add_unit_test' and selected(guards, root, lists, built):
+                if words == ['${test_name}']:  # The TEST_SOURCES registration loop.
+                    for target in lists['TEST_SOURCES']:
+                        register_unit(target)
+                elif len(words) == 1 and re.fullmatch(r'[\w.+-]+', words[0]):
+                    register_unit(words[0])
+                else:
+                    raise ShapeError(f'{source}:{cmd.line}: unsupported unit target {cmd.body!r}')
+            elif (name == 'add_executable' and words
+                  and (words[0].startswith('test_') or any(w.startswith('test_') for w in words[1:]))):
+                if selected(guards, root, lists, built):
+                    built.add(words[0])
+                    sources = []
+                    for word in words[1:]:
+                        var = re.fullmatch(r'\$\{(\w+)\}', word)
+                        sources.extend(lists.get(var[1], [word]) if var else [word])
+                    targets[words[0]] = [s for s in sources if s.endswith(('.cpp', '.c'))]
+                    if not targets[words[0]]:
+                        raise ShapeError(f'{source}:{cmd.line}: unmodelled sources of {words[0]}')
+            elif name in ('add_test', 'pineforge_add_twin_test'):
+                if name == 'pineforge_add_twin_test':
+                    row, target = words[:2]
+                    owners = {target}
+                    available = target in built
+                else:
+                    if len(words) < 4 or words[:3:2] != ['NAME', 'COMMAND']:
+                        raise ShapeError(f'{source}:{cmd.line}: unsupported add_test({cmd.body})')
+                    row = words[1]
+                    args = words[3:]
+                    ref = re.fullmatch(r'\$\{(\w+)\}', args[0])
+                    if ref and ref[1] not in ('Python3_EXECUTABLE', 'CMAKE_COMMAND'):
+                        if not selected(guards, root, lists, built):
+                            continue
+                        if not lists.get(ref[1]):
+                            raise ShapeError(f'{source}:{cmd.line}: unsupported command for {row}: {args[0]}')
+                        args = [*lists[ref[1]], *args[1:]]
+                    owners = command_targets(args, source, cmd.line)
+                    available = True
+                # An optional script-only registration cannot supply a TU witness.
+                script_only = not any(t in targets or t in direct or t.startswith(('test_', 'tool_'))
+                                      for t in owners)
+                enabled = available and selected(guards, root, lists, built, script_only=script_only)
+                if '$' in row and (not enabled or script_only):
+                    continue
+                names = row_names(row, source, cmd.line)
+                for owner in owners:
+                    declared.setdefault(owner, set()).update(names)
+                    if enabled:
+                        commands.setdefault(owner, set()).update(names)
+    except ValueError as error:
+        raise ShapeError(str(error)) from error
+    if loops or function:
+        raise ShapeError(f'{cmake}: unterminated registration loop or function')
+    if 'TEST_SOURCES' not in lists:
+        raise ShapeError('TEST_SOURCES is not set in ' + TESTS_CMAKE)
+    return direct.union(lists['TEST_SOURCES']), targets, commands, declared
+
+
+def kernel_units(root: Path, members: set[str], targets: dict[str, list[str]]) -> set[str]:
     out: set[str] = set()
-    for name in registered_tests(text):
+    for name in members:
         for suffix in ('.cpp', '.c'):
             entry = root / 'tests' / (name + suffix)
             if entry.is_file():
                 if not reaches_source_layer(entry):
                     out.add(name + suffix)
                 break
-    for sources in explicit_test_targets(text).values():
+    for sources in targets.values():
         present = [name for name in sources if (root / 'tests' / name).is_file()]
         if present and not any(reaches_source_layer(root / 'tests' / name)
                                for name in present):
@@ -259,6 +422,11 @@ def kernel_profile_tests(root: Path) -> set[str]:
     if not out:
         raise ShapeError('no kernel-profile test TU found; the reach walk is broken')
     return out
+
+
+def kernel_profile_tests(root: Path) -> set[str]:
+    members, targets, _, _ = registrations(root)
+    return kernel_units(root, members, targets)
 
 
 def ctest_rows(listing: str) -> set[str]:
@@ -315,38 +483,64 @@ def check(root: Path, listing: str | None = None) -> tuple[list[str], dict]:
     if not design.is_file():
         raise ShapeError('no such file: ' + DESIGN)
     rows = inventory_rows(design.read_text())
-    kernel = kernel_profile_tests(root)
+    members, targets, commands, declared = registrations(root)
+    kernel = kernel_units(root, members, targets)
     findings: list[str] = []
 
     if listing is not None:
         registered = ctest_rows(listing)
         if not registered:
             raise ShapeError('--ctest-list parsed no rows; expected "Test #N: name" lines')
-        cmake_text = (root / TESTS_CMAKE).read_text()
-        targets = explicit_test_targets(cmake_text)
-        owner = {name: target for target, sources in targets.items()
-                 for name in sources}
-        missing = sorted(name for name in kernel
-                         if owner.get(name, name.rsplit('.', 1)[0]) not in registered)
+        # An explicit add_executable in a selected arm exists even when its TU
+        # has a conditional adapter include. Only TEST_SOURCES goes through the
+        # include filter. Keep TU witnesses conservative, but compare its rows.
+        owners = dict(targets)
+        for source in kernel:
+            target = source.rsplit('.', 1)[0]
+            if target in members:
+                owners.setdefault(target, [source])
+        expected = set()
+        missing = []
+        for target, sources in sorted(owners.items()):
+            names = commands.get(target, {target})
+            expected.update(names)
+            for row in sorted(names - registered):
+                missing.append(sources[0] if row == target else f'{sources[0]}: {row}')
         if missing:
             findings.append(
-                f'{TESTS_CMAKE}: the reach walk calls {len(missing)} TU(s) '
-                f'kernel-profile that the kernel build did not register '
+                f'{TESTS_CMAKE}: {len(missing)} kernel-profile test row(s) '
+                f'that the kernel build did not register '
                 f'({", ".join(missing[:6])}{", …" if len(missing) > 6 else ""}); '
                 'this file has drifted from tests/CMakeLists.txt')
-        # The other direction: a TU the walk called source-bound, for which the
-        # kernel build registered a row of its own name anyway.
-        wrong = sorted(name for name in registered_tests(cmake_text)
-                       if name in registered
-                       and not any(name + suffix in kernel for suffix in ('.cpp', '.c'))
-                       and any((root / 'tests' / (name + suffix)).is_file()
-                               for suffix in ('.cpp', '.c')))
+        # A listed row can name a compiled TU directly or run it under an alias.
+        # A known script command is not a TU, even if a same-named file exists.
+        def compiled_target(name):
+            return (name in targets or name in members or
+                    (re.fullmatch(r'[\w.-]+', name) and
+                     any((root / 'tests' / (name + ext)).is_file() for ext in ('.cpp', '.c'))))
+
+        named = set().union(*declared.values())
+        native_rows = {row for target, names in declared.items() if compiled_target(target)
+                       for row in names}
+        # An active script (including a missing-fixture placeholder) takes
+        # precedence over an alternative compiled registration of the same name.
+        active_names = set().union(*commands.values())
+        active_compiled = {row for target, names in commands.items() if compiled_target(target)
+                           for row in names}
+        native_rows -= active_names - active_compiled
+        compiled = {name for name in registered - expected
+                    if name in native_rows or (name not in named and compiled_target(name))}
+        wrong = sorted(compiled.intersection(members) | compiled.intersection(targets))
         if wrong:
             findings.append(
                 f'{TESTS_CMAKE}: the kernel build registered {len(wrong)} row(s) '
                 f'the reach walk calls source-bound '
                 f'({", ".join(wrong[:6])}{", …" if len(wrong) > 6 else ""}); '
                 'this file has drifted from tests/CMakeLists.txt')
+        extra = sorted(compiled.difference(wrong))
+        if extra:
+            findings.append(f'{TESTS_CMAKE}: compiled CTest rows missing from the '
+                            f'kernel inventory: {", ".join(extra)}')
 
     for row in rows:
         for name in row.tests:
@@ -393,11 +587,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.list_kernel_tests:
             for name in sorted(kernel_profile_tests(root)):
                 print(name)
+            print('CTest registry: NOT COMPARED (source list only)', file=sys.stderr)
             return 0
         listing = args.ctest_list.read_text() if args.ctest_list else None
         findings, summary = check(root, listing)
-    except ShapeError as error:
-        print(f'check_design_inventory: {error}', file=sys.stderr)
+    except (OSError, ValueError, ShapeError) as error:
+        print(f'check_design_inventory: NOT COMPARED: {error}', file=sys.stderr)
         return 2
     print(f'check_design_inventory: {summary["rows"]} inventory rows, '
           f'{summary["marked"]} carrying a closure marker, against '
@@ -406,6 +601,8 @@ def main(argv: list[str] | None = None) -> int:
           + ('' if findings else ' ... OK'))
     for finding in findings:
         print('  ' + finding)
+    if listing is None:
+        print('CTest registry: NOT COMPARED (no --ctest-list supplied)')
     return 1 if findings else 0
 
 

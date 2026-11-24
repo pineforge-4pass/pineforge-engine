@@ -59,7 +59,8 @@ bool opening_qualification(const admission::Draft& d) {
 }
 bool explicit_qualification(const admission::Draft& d) {
     const auto& o=d.observation();return o && o->kind==admission::CommandKind::Entry
-        && unpriced(*o) && !std::isnan(o->requested_quantity) && !std::isnan(o->signal_close)
+        && unpriced(*o) && std::isfinite(o->requested_quantity) && !std::isnan(o->signal_close)
+        && (o->quantity_type < 0 || o->quantity_type == 0)
         && o->placement_side==0 && !(o->prior_close_quantity>qty_epsilon)
         && std::isfinite(o->buy?o->configuration.long_margin:o->configuration.short_margin)
         && (o->buy?o->configuration.long_margin:o->configuration.short_margin)>0.0

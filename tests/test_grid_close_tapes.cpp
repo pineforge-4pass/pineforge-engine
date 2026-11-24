@@ -39,6 +39,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
+#include "entry_fill_tape.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -48,6 +49,7 @@
 #include <map>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -206,7 +208,6 @@ public:
         : probe_(probe) {
         attach_pine_execution_adapter();
         configure_pine_strategy(config);
-        set_syminfo_metadata("qty_step", kLot);
     }
 
     void on_source_bar(const Bar&) override {
@@ -248,19 +249,18 @@ struct Run {
     std::string error;
 };
 
-// The engine's trades closed inside the bars (a position still open at the
-// last bar is closed there by the range end and is not a tape trade).
-Run run(const Probe& probe, std::int64_t end_ms) {
+source::PineStrategyConfig config_for(const Probe& probe) {
     source::PineStrategyConfig config{};
     config.process_orders_on_close = probe.pooc;
     config.initial_capital = 100000.0;
     config.default_qty_type = static_cast<int>(QtyType::FIXED);
     config.default_qty_value = 1.0;
     config.pyramiding = probe.pyramiding;
-    ProbeHost host(probe, config);
-    host.set_trade_start_time(kTradeStartMs);
-    const std::vector<Bar> bars = feed();
-    host.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false);
+    return config;
+}
+
+// Exclude the range-end close, which is not a closed trade on this tape.
+Run closed_rows(const ProbeHost& host, std::int64_t end_ms) {
     Run out;
     out.error = host.last_error();
     for (int i = 0; i < host.trade_count(); ++i) {
@@ -273,6 +273,15 @@ Run run(const Probe& probe, std::int64_t end_ms) {
                                 t.exit_time, ticks(t.exit_price), t.exit_comment);
     }
     return out;
+}
+
+Run run(const Probe& probe, std::int64_t end_ms) {
+    ProbeHost host(probe, config_for(probe));
+    host.set_syminfo_metadata("qty_step", kLot);
+    host.set_trade_start_time(kTradeStartMs);
+    const std::vector<Bar> bars = feed();
+    host.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false);
+    return closed_rows(host, end_ms);
 }
 
 void show(const char* tag, const std::vector<Row>& rows) {
@@ -530,7 +539,29 @@ long long closed_at(const std::vector<Row>& tape, int step) {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc >= 3 && std::string(argv[1]) == "--explicit-entry") {
+        for (const Probe& probe : probes()) {
+            if (std::string_view(probe.tape) != argv[2]) continue;
+            const auto tape = std::string(PINEFORGE_GRID_CLOSE_FIXTURE_DIR) + "/" + probe.tape
+                              + "/tv_trades.csv";
+            const auto tv = entry_fill_tape::recorded_long(tape, "BUY_A");
+            ProbeHost host(probe, config_for(probe));
+            entry_fill_tape::set_eth_symbol(host, kTick, argc - 3, argv + 3);
+            host.set_trade_start_time(kTradeStartMs);
+            const auto bars = feed();
+            host.run(bars.data(), static_cast<int>(bars.size()), "15", "15");
+            if (!entry_fill_tape::matches(host, "A", tv)) return 1;
+            const auto end = bars.back().timestamp;
+            const auto actual = closed_rows(host, end).trades;
+            const auto expected = tape_trades(probe.tape, end);
+            CHECK(actual == expected);
+            if (actual != expected) show("engine", actual);
+            return tests_failed ? 1 : 0;
+        }
+        throw std::runtime_error("explicit-entry probe not found");
+    }
+    if (argc != 1) return 1;
     const std::int64_t end_ms = kEth15[sizeof(kEth15) / sizeof(kEth15[0]) - 1].ts;
 
     std::map<std::string, std::vector<Row>> tapes;

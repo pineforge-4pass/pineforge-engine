@@ -9697,8 +9697,8 @@ finally:
     def guard_witness(self) -> list:
         """A stage that prints the pinned skip literal and exits 77."""
         return [sys.executable, '-c',
-                'import sys; print("SKIP private fixtures not present: '
-                'tests/fixtures/private/witness.csv"); sys.exit(77)']
+                'import sys; print(sys.argv[1]); sys.exit(77)',
+                'SKIP private fixtures not present: tests/fixtures/native_cpp_abi/host-f736676/manifest.json']
 
     def test_a_guard_skip_is_a_skip_only_without_the_overlay(self):
         # R2-F3 (F7): the skip branch. Absent the overlay, exit 77 with the
@@ -9708,44 +9708,46 @@ finally:
         # Each half states the variable itself: the job's own environment (the
         # overlay jobs export PINEFORGE_PRIVATE_FIXTURES) must not decide which
         # world this control asserts.
+        name = 'source-guard-native-versions'
         skipped_console = io.StringIO()
         with mock.patch.dict(os.environ) as own_env:
             own_env.pop('PINEFORGE_PRIVATE_FIXTURES', None)
-            code, summary, logs = self.run_preflight([('guard', self.guard_witness())],
+            code, summary, logs = self.run_preflight([(name, self.guard_witness())],
                                                      console=skipped_console)
         self.assertEqual(code, 0)
         self.assertEqual(summary['stages'][0]['status'], 'skipped')
         self.assertEqual(summary['stages'][0]['exitCode'], 77)
         # The stage's log keeps the guard's own output, literal included.
         self.assertIn('SKIP private fixtures not present:',
-                      (logs / 'guard.log').read_text())
+                      (logs / f'{name}.log').read_text())
         self.assertNotRegex(skipped_console.getvalue(), r'\bFAIL\b')
         failed_console = io.StringIO()
         with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': '1'}):
-            code, summary, _ = self.run_preflight([('guard', self.guard_witness())],
+            code, summary, _ = self.run_preflight([(name, self.guard_witness())],
                                                  console=failed_console)
         self.assertEqual(code, 1)
         self.assertEqual(summary['status'], 'failed')
         self.assertEqual(summary['stages'][0]['status'], 'failed')
         self.assertEqual(summary['stages'][0]['exitCode'], 77)
-        self.assert_named_failures(failed_console.getvalue(), [('guard', 77)])
+        self.assert_named_failures(failed_console.getvalue(), [(name, 77)])
 
     def test_a_bare_77_is_a_failure_in_both_worlds(self):
         # The literal is required: 77 alone is never a skip.
+        name = 'source-guard-native-versions'
         bare = [sys.executable, '-c', 'import sys; sys.exit(77)']
         for flag in ('', '1'):
             with self.subTest(overlay=flag), \
                     mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': flag}):
                 console = io.StringIO()
-                code, summary, logs = self.run_preflight([('guard', bare)], console=console)
+                code, summary, logs = self.run_preflight([(name, bare)], console=console)
                 self.assertEqual(code, 1)
                 self.assertEqual(summary['status'], 'failed')
                 self.assertEqual(summary['stages'][0]['status'], 'failed')
                 self.assertEqual(summary['stages'][0]['exitCode'], 77)
                 self.assertEqual(summary['stages'][0]['argv'], bare)
-                self.assertEqual(summary['stages'][0]['log'], 'guard.log')
-                self.assertEqual((logs / 'guard.log').read_bytes(), b'')
-                self.assert_named_failures(console.getvalue(), [('guard', 77)])
+                self.assertEqual(summary['stages'][0]['log'], f'{name}.log')
+                self.assertEqual((logs / f'{name}.log').read_bytes(), b'')
+                self.assert_named_failures(console.getvalue(), [(name, 77)])
 
     def test_the_skip_literal_has_one_home(self):
         # R2-F7: the branch reads ci_verify's literal, not a second copy.
@@ -9753,6 +9755,58 @@ finally:
                       ci_verify.PRIVATE_FIXTURE_SKIP_LITERAL)
         source = (ROOT / 'scripts' / 'ci_preflight.py').read_text()
         self.assertEqual(source.count('SKIP private fixtures not present: '), 0)
+
+    def test_main_tip_notice_skips_only_the_named_history_stages(self):
+        notice = ('NOT COMPARED: HEAD is the tip of main; '
+                  'its commits were judged before the merge')
+        names = ('doc-reverts', 'doc-reverts-net')
+
+        def command(stdout, stderr, code):
+            return [sys.executable, '-c',
+                    'import sys; sys.stdout.write(sys.argv[1]); sys.stderr.write(sys.argv[2]); '
+                    'sys.exit(int(sys.argv[3]))', stdout, stderr, str(code)]
+
+        console = io.StringIO()
+        code, summary, logs = self.run_preflight([
+            (names[0], command(notice + '\n', '', 77)),
+            (names[1], command('checking history\n', notice + '\n', 77)),
+        ], console=console)
+        with self.subTest(notice='recognized'):
+            self.assertEqual(code, 0, console.getvalue())
+            self.assertEqual([(s['name'], s['status'], s['exitCode']) for s in summary['stages']],
+                             [(name, 'skipped', 77) for name in names])
+            for name in names:
+                self.assertIn(notice, (logs / f'{name}.log').read_text().splitlines())
+                self.assertIn(f"ci_preflight: {name}: skipped (exit 77, main's own tip "
+                              "has nothing to compare)", console.getvalue().splitlines())
+            self.assertIn('skipped: doc-reverts, doc-reverts-net',
+                          console.getvalue().splitlines()[-1])
+
+        private = 'SKIP private fixtures not present: tests/fixtures/private/witness.csv\n'
+        for name, stdout, stderr, exit_code, advisory in (
+                ('doc-reverts', '', '', 77, False),
+                ('doc-reverts-net', 'prefix: ' + notice, '', 77, False),
+                ('doc-reverts', '', notice + ' extra', 77, False),
+                ('doc-reverts-net', notice[:12], notice[12:], 77, False),
+                ('doc-reverts', private, '', 77, False),
+                ('doc-reverts-tests', notice, '', 77, False),
+                ('doc-anchors', private, notice, 77, False),
+                ('doc-anchors', '', notice, 0, False),
+                ('doc-reverts', notice, '', 0, False),
+                ('doc-reverts-net', '', notice, 2, False),
+                ('other', '', '', 77, True),
+                ('other', '', notice, 77, True)):
+            with self.subTest(stage=name, stdout=stdout, stderr=stderr, exit_code=exit_code,
+                              advisory=advisory), \
+                    mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''}):
+                console = io.StringIO()
+                code, summary, _ = self.run_preflight(
+                    [(name, command(stdout, stderr, exit_code), advisory)], console=console)
+                self.assertEqual(code, 1, console.getvalue())
+                self.assertEqual(summary['status'], 'failed')
+                self.assertEqual([(s['status'], s['exitCode']) for s in summary['stages']],
+                                 [('failed', exit_code)])
+                self.assert_named_failures(console.getvalue(), [(name, exit_code)])
 
     def test_empty_check_plan_cannot_pass(self):
         code, summary, _ = self.run_preflight([])

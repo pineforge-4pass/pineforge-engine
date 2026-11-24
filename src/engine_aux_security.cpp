@@ -5,7 +5,7 @@
 
 #include "engine_internal.hpp"
 #include <pineforge/cache_policy.hpp>
-
+#include <pineforge/native_calendar.hpp>
 #include <pineforge/run_failure.hpp>
 #include <pineforge/ta.hpp>
 
@@ -94,11 +94,11 @@ bool BacktestEngine::set_native_security_feed(const std::string& timeframe,
     guard_native_mutation("set_native_security_feed");
     int64_t seconds = 0;
     try {
-        seconds = native_feed_seconds(timeframe);
+        seconds = native_calendar::parse_timeframe(timeframe) ? native_feed_seconds(timeframe) : 0;
     } catch (...) {
         seconds = 0;
     }
-    if (timeframe.empty() || seconds == 0) {
+    if (seconds == 0) {
         note_run_failure(*this,
             "native request.security feed requires a parseable timeframe",
             RunFailureCode::security_feed_refused, {{"reason", "native_feed_timeframe"}});

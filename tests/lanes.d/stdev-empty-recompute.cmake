@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_stdev_empty_recompute)
+pineforge_add_unit_test(test_stdev_empty_recompute)

@@ -122,7 +122,8 @@ Verdicts
 ``NOCLAIM``   a ruling-table anchor, or a symbol-less range anywhere, carries
               no verifiable claim.
 ``COMMENTONLY`` the complete cited C/C++ window is comment-only (a pinned one
-              too, unless the sentence says it cites a comment).
+              too, unless the sentence says it cites a comment). In a mixed
+              window, a code claim found only in comments is ``SYMMISS``.
 ``HASHMISS``  the cited lines no longer hash to the content pin.
 ``PINLINE``   a content pin on a single line: a line is cited by its symbol.
 ``PINEMPTY``  a content pin over blank lines only (the empty string's hash).
@@ -157,8 +158,7 @@ Rewrites only the digits of a BAD anchor, and only when the file resolves and
 the claimed symbol's occurrences in it are unambiguous.  Occurrences are
 counted over the **code** of a C/C++ file - comments stripped - because a page
 citing ``SYM`` at a line means where the code says ``SYM``, not a paragraph of
-prose about it; if the symbol appears only in comments, the raw lines are used
-instead.  Two mechanical rules then apply, in order:
+prose about it. Two mechanical rules then apply, in order:
 
 1. the symbol occurs on exactly one line ``S`` (inside the qualifier's scope,
    when the span names one the file declares);
@@ -179,14 +179,16 @@ anchor is never fixed: its missing claim is an edit to the sentence.
 
 Exit status
 -----------
-0 only when no anchor is BAD on any scanned page.
+0 only when at least one anchor was checked and none is BAD.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import re
 import sys
+import tokenize
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -500,6 +502,15 @@ def collect(page: Path, text: str) -> list[Anchor]:
         return any(lo <= offset < hi for lo, hi in skip)
 
     line_starts = [0] + [m.end() for m in re.finditer('\n', text)]
+    # A delimiter row also identifies tables written without outer pipes.
+    table_rows = set()
+    for line, row in enumerate(text.split('\n'), 1):
+        if '|' not in row:
+            continue
+        if re.fullmatch(r'\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*', row):
+            table_rows.update((line - 1, line))
+        elif row.lstrip().startswith('|') or line - 1 in table_rows:
+            table_rows.add(line)
 
     def doc_line(offset: int) -> int:
         lo, hi = 0, len(line_starts) - 1
@@ -541,9 +552,11 @@ def collect(page: Path, text: str) -> list[Anchor]:
         if fenced(match.start()) or any(lo <= match.start() < hi for lo, hi in taken):
             continue
         line = doc_line(match.start())
-        prior = [a for a in full if a.end <= match.start() and not re.search(
-            r'\n\s*\n|\n\s*#{1,6}\s', text[a.end:match.start()])]
-        prior.sort(key=lambda a: a.end)
+        prior = next((a for a in reversed(full) if a.end <= match.start()), None)
+        if prior and prior.doc_line != line and (
+                any(prior.doc_line <= row <= line for row in table_rows)
+                or re.search(r'\n\s*\n|\n\s*#{1,6}\s', text[prior.end:match.start()])):
+            prior = None
         first = int(match.group('a'))
         last = int(match.group('b') or match.group('a'))
         claim_end, pins = pins_before(text, match.start())
@@ -554,15 +567,15 @@ def collect(page: Path, text: str) -> list[Anchor]:
         if prior and span is not None and ANCHOR_ONLY_RE.match(span):
             # "`sym` x.cpp:1730, `:1755`, `:7695`": the nearest span is the
             # list's previous citation, not a claim; the list shares its head's.
-            symbol, span, mode = prior[-1].symbol, prior[-1].span, prior[-1].mode
+            symbol, span, mode = prior.symbol, prior.span, prior.mode
         anchor = Anchor(page, match.start(), match.end(), line,
-                        prior[-1].path if prior else '', first, last,
+                        prior.path if prior else '', first, last,
                         (match.start() + 1, match.end() - match.start() - 1),
                         symbol, span, mode)
         anchor.pins, anchor.content_hash = pins, (pins[-1] if pins else None)
         anchor.borrowed = borrowed
         anchor.context = text[scope_start(text, claim_end):match.start()]
-        anchor.orphan = not bool(prior)
+        anchor.orphan = prior is None
         found.append(anchor)
     found.sort(key=lambda a: a.start)
     ruling_lines = ruling_table_lines(page, text)
@@ -634,10 +647,18 @@ class Tree:
         return self._lines[path]
 
     def code_lines(self, path: Path) -> list[str]:
-        """The file with C/C++ comments blanked out; other suffixes unchanged."""
+        """The file with C/C++ or Python comments removed, at original line numbers."""
         if path not in self._code:
             raw = self.lines(path)
-            self._code[path] = strip_comments(raw) if path.suffix in CXX_SUFFIXES else raw
+            if path.suffix == '.py':
+                code = raw.copy()
+                for token in tokenize.generate_tokens(io.StringIO('\n'.join(raw)).readline):
+                    if token.type == tokenize.COMMENT:
+                        line, column = token.start
+                        code[line - 1] = raw[line - 1][:column]
+                self._code[path] = code
+            else:
+                self._code[path] = strip_comments(raw) if path.suffix in CXX_SUFFIXES else raw
         return self._code[path]
 
     def scopes(self, path: Path, name: str) -> list[tuple[int, int]]:
@@ -668,32 +689,22 @@ class Tree:
         return out
 
 
+_CPP_TOKEN = re.compile(
+    r'R"(?P<delimiter>[^\s()\\]{0,16})\([\s\S]*?\)(?P=delimiter)"'
+    r"|\b[0-9][\w.']*"                             # number with digit separators
+    r'|"(?:\\[\s\S]|[^"\\\n])*"'                  # string
+    r"|'(?:\\[\s\S]|[^'\\\n])+'"                  # character literal
+    r'|(?P<comment>//(?:\\\n|[^\n])*|/\*[\s\S]*?(?:\*/|\Z))'
+)
+
+
 def strip_comments(lines: list[str]) -> list[str]:
-    """Blank every ``//`` tail and ``/* */`` body, keeping the line numbering."""
-    out, in_block = [], False
-    for line in lines:
-        kept, index = [], 0
-        while index < len(line):
-            if in_block:
-                end = line.find('*/', index)
-                if end < 0:
-                    index = len(line)
-                else:
-                    in_block, index = False, end + 2
-                continue
-            start_block = line.find('/*', index)
-            start_line = line.find('//', index)
-            if start_line >= 0 and (start_block < 0 or start_line < start_block):
-                kept.append(line[index:start_line])
-                break
-            if start_block >= 0:
-                kept.append(line[index:start_block])
-                in_block, index = True, start_block + 2
-                continue
-            kept.append(line[index:])
-            break
-        out.append(''.join(kept))
-    return out
+    """Replace C/C++ comments with whitespace, preserving literals and line numbers."""
+    def replace(match: re.Match) -> str:
+        token = match.group()
+        return ' ' + '\n' * token.count('\n') if match.lastgroup == 'comment' else token
+
+    return _CPP_TOKEN.sub(replace, '\n'.join(lines)).split('\n') if lines else []
 
 
 DECLARES = r'\b(?:struct|class|union|namespace|enum|enum\s+class)\s+{sym}\b|\busing\s+{sym}\s*='
@@ -731,12 +742,19 @@ def judge(anchor: Anchor, tree: Tree) -> None:
     if anchor.first < 1 or anchor.last < anchor.first or anchor.last > len(lines):
         anchor.verdict = 'NOLINE'
         anchor.detail = f'{path.relative_to(tree.root)} has {len(lines)} lines'
+    try:
+        code = tree.code_lines(path)
+    except (tokenize.TokenError, SyntaxError):
+        anchor.verdict, anchor.detail = 'NOT COMPARED', 'cannot tokenize Python source'
+        return
     if anchor.pins and anchor.verdict == 'OK':
         judge_pins(anchor, tree, path)
         if anchor.bad:
             return
+        if (path.suffix in CXX_SUFFIXES
+                and not any(s.strip() for s in code[anchor.first - 1:anchor.last])):
+            code = lines  # judge_pins admitted an explicit citation of a comment
     elif anchor.verdict == 'OK' and path.suffix in CXX_SUFFIXES:
-        code = tree.code_lines(path)
         if not any(line.strip() for line in code[anchor.first - 1:anchor.last]):
             anchor.verdict = 'COMMENTONLY'
             anchor.detail = f'lines {anchor.first}-{anchor.last} contain no C/C++ code'
@@ -754,9 +772,9 @@ def judge(anchor: Anchor, tree: Tree) -> None:
                 anchor.detail = ('a pin is not a claim: a ruling-table anchor names the symbol '
                                  '(or the code fragment) it cites in backticks, pinned or not')
             elif anchor.fragment is not None:
-                judge_fragment(anchor, tree, path)
+                judge_fragment(anchor, code)
         elif anchor.fragment is not None:
-            judge_fragment(anchor, tree, path)
+            judge_fragment(anchor, code)
         elif (anchor.length > 1 and anchor.span is None and anchor.verdict == 'OK'):
             anchor.verdict = 'NOCLAIM'
             anchor.detail = 'a symbol-less range needs a backticked symbol or sha256 content hash'
@@ -765,13 +783,12 @@ def judge(anchor: Anchor, tree: Tree) -> None:
             anchor.detail = ('a ruling-table anchor names nothing to verify: put the symbol '
                              '(or the code fragment) it cites in backticks before it')
         return                                     # no claim to check beyond existence
-    all_hits = occurrences(lines, anchor.symbol, anchor.mode)
+    all_hits = occurrences(code, anchor.symbol, anchor.mode)
     scopes = tree.scopes(path, anchor.qualifier) if anchor.qualifier else []
 
     def scoped(numbers: list[int]) -> list[int]:
         return [n for n in numbers if any(a <= n <= b for a, b in scopes)] if scopes else numbers
 
-    raw_hits = scoped(all_hits) or all_hits
     if anchor.verdict == 'OK':
         window = range(anchor.first, anchor.last + 1)
         if any(n in window for n in scoped(all_hits)):
@@ -784,16 +801,14 @@ def judge(anchor: Anchor, tree: Tree) -> None:
                              f'`{anchor.qualifier}` (lines {shown})')
         else:
             anchor.verdict = 'SYMMISS'
-            anchor.detail = f'`{anchor.symbol}` is not in lines {anchor.first}-{anchor.last}'
-    if not raw_hits:
-        anchor.suggestion = f'{anchor.path}:NONE  (`{anchor.symbol}` is nowhere in the file)'
+            comment_hit = code is not lines and occurrences(lines[anchor.first - 1:anchor.last],
+                                                            anchor.symbol, anchor.mode)
+            reason = 'appears only in a comment' if comment_hit else 'is not'
+            anchor.detail = f'`{anchor.symbol}` {reason} in lines {anchor.first}-{anchor.last}'
+    hits = scoped(all_hits)
+    if not hits:
+        anchor.suggestion = f'{anchor.path}:NONE  (no matching code for `{anchor.symbol}`)'
         return
-    # Where should it point?  Code occurrences only, when the symbol has any,
-    # and only inside the qualifier's scope when the span names one.
-    code = tree.code_lines(path)
-    hits = occurrences(code, anchor.symbol, anchor.mode) or occurrences(lines, anchor.symbol,
-                                                                         anchor.mode)
-    hits = scoped(hits) or hits
 
     def aim(target: int) -> None:
         end = target + anchor.length - 1
@@ -811,7 +826,7 @@ def judge(anchor: Anchor, tree: Tree) -> None:
         anchor.suggestion = f'{anchor.path}:{blocks[0][0]}-{blocks[0][1]}'
         anchor._fix = blocks[0]
         return
-    declared = declarations(code, anchor.symbol)
+    declared = scoped(declarations(code, anchor.symbol))
     if len(declared) == 1:
         aim(declared[0])
         anchor.suggestion += f'  (the one declaration of `{anchor.symbol}`)'
@@ -853,9 +868,8 @@ def judge_pins(anchor: Anchor, tree: Tree, path: Path) -> None:
                              'the sentence does not say it cites a comment')
 
 
-def judge_fragment(anchor: Anchor, tree: Tree, path: Path) -> None:
+def judge_fragment(anchor: Anchor, lines: list[str]) -> None:
     """A ruling row's code fragment must appear, whitespace aside, in the window."""
-    lines = tree.lines(path)
     if anchor.verdict != 'OK':
         return
     needle = ' '.join(anchor.fragment.split())
@@ -957,6 +971,9 @@ def main(argv: list[str] | None = None) -> int:
                   f'{counts["nofile"]:>7} {counts["noline"]:>7}')
     print(f'{"TOTAL":<{width}} {totals["anchors"]:>8} {totals["ok"]:>5} {totals["bad"]:>5} '
           f'{totals["nofile"]:>7} {totals["noline"]:>7}')
+    if not totals['anchors']:
+        print('NOT COMPARED: no documentation anchors found')
+        return 2
 
     if fixed_all:
         print(f'\nre-anchored {len(fixed_all)}:')

@@ -67,13 +67,15 @@ title and cannot name them again). Where none resolves, the walk starts at
 own tree has no ``scripts/check_doc_reverts.py`` is never judged: the rule binds
 from the commit that introduced it on. At most ``MAX_COMMITS`` commits are walked.
 
-Exit 0 when every revert and deletion is named, 1 when one is not, 2 when git
-or a named ref cannot be read.
+Exit 0 when every revert and deletion is named, 1 when one is not, and 2
+when the revisions or pages cannot be compared. An implicit empty comparison
+at main's own tip reports that its commits were judged before merge and exits 77.
 """
 from __future__ import annotations
 
 import argparse
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 import difflib
 import os
@@ -91,6 +93,7 @@ HISTORY_DEPTH = 400
 MAX_COMMITS = 400
 FRAGMENT_WORDS = 6
 SHA_CHARS = 7
+MAIN_TIP_NOTICE = 'NOT COMPARED: HEAD is the tip of main; its commits were judged before the merge'
 
 FENCE = re.compile(r'^\s*(```|~~~)')
 BULLET = re.compile(r'^(?:[-*+]|\d+[.)])\s')
@@ -191,12 +194,19 @@ def doc_paths(ref: str | None, root: Path) -> list[str]:
             elif path.is_dir():
                 found.extend(p.relative_to(root).as_posix() for p in sorted(path.rglob('*.md')))
         return found
-    listed = git('ls-tree', '-r', '--name-only', ref, '--', *DOC_ROOTS, root=root).split('\n')
+    listed = git('ls-tree', '-r', '-z', '--name-only', ref, '--', *DOC_ROOTS, root=root).split('\0')
     return [p for p in listed if p.endswith('.md')]
 
 
 def show(ref: str, path: str, root: Path) -> str:
-    return git('show', f'{ref}:{path}', root=root, check=False)
+    try:
+        return git('cat-file', 'blob', f'{ref}:{path}', root=root)
+    except (GitError, UnicodeDecodeError) as error:
+        # A page can legitimately be absent before its addition or after deletion.
+        if not git('--literal-pathspecs', 'ls-tree', '-z', '--name-only', ref, '--', path,
+                   root=root):
+            return ''
+        raise GitError(f'NOT COMPARED: cannot read {ref[:SHA_CHARS]}:{path}') from error
 
 
 @dataclass
@@ -229,7 +239,7 @@ class History:
     def commits(self) -> list[str]:
         if self._commits is None:
             out = git('rev-list', f'--max-count={HISTORY_DEPTH}', self.tip, '--', self.path,
-                      root=self.root, check=False)
+                      root=self.root)
             self._commits = out.split()
         return self._commits
 
@@ -304,22 +314,22 @@ def named(message: str, finding: Finding, row_key: str) -> bool:
     return False
 
 
-def judge_change(root: Path, parent: str, head_texts: dict[str, str], message: str,
-                 history_tip: str) -> list[Finding]:
-    """The unnamed deletions and reverts of one change parent -> head.
-
-    `head_texts` maps each page to its text at the head (the pages changed);
-    `history_tip` is the commit whose history the introducer and revert
-    questions read (the parent, for a commit)."""
+def judge_change(root: Path, parent: str, head: str, pages: list[tuple[str, str]],
+                 messages: list[str]) -> list[Finding]:
+    """Judge each page at its respective paths in the parent and head."""
     findings: list[Finding] = []
-    for path, head_text in sorted(head_texts.items()):
-        before = units(show(parent, path, root))
+    for parent_path, path in sorted(pages):
+        parent_text = show(parent, parent_path, root)
+        head_text = show(head, path, root)
+        if parent_text == head_text:
+            continue
+        before = units(parent_text)
         after = units(head_text)
         removed = before - after
         if not removed:
             continue
         added_texts = [unit.text for unit in (after - before).elements()]
-        history = History(root, history_tip, path)
+        history = History(root, parent, parent_path)
         for unit in removed.elements():
             partner, ratio = None, 0.0
             for candidate in added_texts:
@@ -340,7 +350,7 @@ def judge_change(root: Path, parent: str, head_texts: dict[str, str], message: s
                               message_of(introduced, root).split('\n', 1)[0] if introduced else '',
                               names_for(introduced, root),
                               partner if kind == 'revert' else '')
-            if not named(message, finding, unit.row_key):
+            if not any(named(message, finding, unit.row_key) for message in messages):
                 findings.append(finding)
     return findings
 
@@ -352,17 +362,22 @@ def resolve(ref: str, root: Path) -> str:
     return out
 
 
-def default_base(root: Path) -> str | None:
-    env = os.environ.get('PINEFORGE_DOC_REVERT_BASE')
-    if env:
-        return resolve(env, root)
+def main_tips(root: Path) -> Iterator[str]:
     for ref in ('refs/remotes/origin/main', 'refs/heads/main'):
         tip = git('rev-parse', '--verify', '--quiet', ref + '^{commit}', root=root,
                   check=False).strip()
         if tip:
-            base = git('merge-base', 'HEAD', tip, root=root, check=False).strip()
-            if base:
-                return base
+            yield tip
+
+
+def default_base(root: Path) -> str | None:
+    env = os.environ.get('PINEFORGE_DOC_REVERT_BASE')
+    if env:
+        return resolve(env, root)
+    for tip in main_tips(root):
+        base = git('merge-base', 'HEAD', tip, root=root, check=False).strip()
+        if base:
+            return base
     return merged_pull_request(root)
 
 
@@ -394,9 +409,56 @@ def judged_commits(root: Path, base: str | None) -> list[str]:
     return kept
 
 
-def changed_pages(root: Path, parent: str, commit: str) -> list[str]:
-    out = git('diff', '--name-only', parent, commit, '--', *DOC_ROOTS, root=root)
-    return [p for p in out.split() if p.endswith('.md')]
+def changed_pages(root: Path, parent: str, commit: str) -> list[tuple[str, str]]:
+    out = git('diff', '--name-status', '--find-renames', '-z', parent, commit, '--',
+              *DOC_ROOTS, root=root)
+    fields = iter(out.split('\0')[:-1])
+    pages = []
+    for status in fields:
+        path = next(fields)
+        if status.startswith('R'):
+            destination = next(fields)
+            if path.endswith('.md') and destination.endswith('.md'):
+                pages.append((path, destination))
+                continue
+            # Moving into or out of the published pages is an addition or deletion.
+            if not path.endswith('.md'):
+                path = destination
+        if path.endswith('.md'):
+            pages.append((path, path))
+    return pages
+
+
+def read_unchanged_pages(root: Path, commit: str, read_blobs: set[str]) -> None:
+    """The diff found no changed page. Read each distinct published blob once."""
+    entries = git('ls-tree', '-r', '-z', commit, '--', *DOC_ROOTS, root=root)
+    for entry in entries.split('\0')[:-1]:
+        metadata, path = entry.split('\t', 1)
+        oid = metadata.split()[2]
+        if path.endswith('.md') and oid not in read_blobs:
+            show(commit, path, root)
+            read_blobs.add(oid)
+
+
+def select_pages(root: Path, base: str, head: str,
+                 selected: list[str] | None) -> list[tuple[str, str]]:
+    if selected == []:
+        raise GitError('NOT COMPARED: no pages to compare')
+    changed = changed_pages(root, base, head)
+    if selected is None and changed:
+        return changed
+    published = set(doc_paths(base, root)) | set(doc_paths(head, root))
+    if selected is not None:
+        for path in selected:
+            if path not in published:
+                raise GitError(f'NOT COMPARED: no published page {path}')
+        wanted = set(selected)
+        matches = [pair for pair in changed if not wanted.isdisjoint(pair)]
+        unchanged = wanted.difference(path for pair in matches for path in pair)
+        return matches + [(path, path) for path in sorted(unchanged)]
+    if not published:
+        raise GitError('NOT COMPARED: no pages to compare')
+    return [(path, path) for path in sorted(published)]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -407,46 +469,57 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--files', nargs='*', default=None,
                         help='with --head: judge only these pages')
     parser.add_argument('--message-from', action='append', default=[],
-                        help='also read this commit\'s message (repeatable)')
+                        help='with --head: also read this commit\'s message (repeatable)')
     parser.add_argument('--message-file', type=Path, default=None,
-                        help='also read this file as message text')
+                        help='with --head: also read this file as message text')
     args = parser.parse_args(argv)
     root = args.root.resolve()
     try:
-        extra = ''.join(message_of(resolve(ref, root), root) + '\n' for ref in args.message_from)
-        if args.message_file is not None:
-            extra += args.message_file.read_text(encoding='utf-8') + '\n'
-        if args.head:
-            base = resolve(args.base, root) if args.base else default_base(root)
-            if base is None:
-                raise GitError('--head needs --base')
-            head = resolve(args.head, root)
-            pages = args.files if args.files is not None else sorted(
-                set(changed_pages(root, base, head)))
-            # The messages that may name a deletion: the ones given, or else
-            # those of every commit the change consists of.
-            messages = extra or ''.join(
-                message_of(c, root) + '\n'
-                for c in git('rev-list', f'{base}..{head}', root=root, check=False).split())
-            texts = {path: show(head, path, root) for path in pages}
-            findings = judge_change(root, base, texts, messages, base)
+        base = resolve(args.base, root) if args.base is not None else default_base(root)
+        if args.head is not None and base is None:
+            raise GitError('NOT COMPARED: --head needs --base')
+        head = resolve('HEAD' if args.head is None else args.head, root)
+        if (args.base is None and args.head in (None, 'HEAD') and base == head
+                and head in main_tips(root)):
+            print(MAIN_TIP_NOTICE)
+            return 77
+        if args.head is not None:
+            if base == head:
+                raise GitError('NOT COMPARED: base and head are the same commit')
+            pages = select_pages(root, base, head, args.files)
+            commits = git('rev-list', f'{base}..{head}', root=root).split()
+            messages = [message_of(c, root) for c in commits]
+            messages.extend(message_of(resolve(ref, root), root) for ref in args.message_from)
+            if args.message_file is not None:
+                try:
+                    messages.append(args.message_file.read_text(encoding='utf-8'))
+                except (OSError, UnicodeError) as error:
+                    raise GitError('NOT COMPARED: cannot read message file') from error
+            findings = judge_change(root, base, head, pages, messages)
             judged = f'{base[:SHA_CHARS]} -> {head[:SHA_CHARS]} ({len(pages)} pages)'
         else:
-            base = resolve(args.base, root) if args.base else default_base(root)
             commits = judged_commits(root, base)
             findings = []
+            compared = []
+            saw_page = False
+            read_blobs: set[str] = set()
             for commit in commits:
                 parents = git('rev-list', '--parents', '-n', '1', commit, root=root).split()[1:]
                 parent = parents[0] if parents else None
                 if parent is None:
                     continue
+                compared.append(commit)
                 pages = changed_pages(root, parent, commit)
                 if not pages:
+                    read_unchanged_pages(root, commit, read_blobs)
                     continue
-                texts = {path: show(commit, path, root) for path in pages}
-                findings += judge_change(root, parent, texts, message_of(commit, root) + extra,
-                                         parent)
-            judged = (f'{len(commits)} commits since '
+                saw_page = True
+                findings += judge_change(root, parent, commit, pages, [message_of(commit, root)])
+            if not compared:
+                raise GitError('NOT COMPARED: no commits to compare')
+            if not saw_page and not read_blobs:
+                raise GitError('NOT COMPARED: no pages to compare')
+            judged = (f'{len(compared)} commits since '
                       + (base[:SHA_CHARS] if base else 'this gate landed'))
     except GitError as error:
         print(f'check_doc_reverts: {error}', file=sys.stderr)

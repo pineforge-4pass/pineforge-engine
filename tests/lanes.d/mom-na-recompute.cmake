@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_mom_na_recompute)
+pineforge_add_unit_test(test_mom_na_recompute)

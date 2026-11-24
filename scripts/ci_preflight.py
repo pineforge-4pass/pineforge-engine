@@ -35,6 +35,7 @@ import threading
 import time
 import unicodedata
 
+from check_doc_reverts import MAIN_TIP_NOTICE
 from ci_verify import (ROOT, PRIVATE_FIXTURE_SKIP_LITERAL, private_fixtures_overlay,
                        source_guard_commands)
 from ci_verifier_classes import verifier_class_tier
@@ -6240,11 +6241,11 @@ def _utc_now() -> str:
 
 
 def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> int:
-    """Run every stage, log it, and answer 0 only when every binding one passed.
+    """Run every stage, log it, and return 0 if a nonempty plan has no failed stage.
 
     A stage may be ``(name, argv)`` or ``(name, argv, advisory)``. An advisory
-    stage still runs and still prints its findings, but its failure is recorded
-    as ``reported`` and does not fail the preflight. Only commands explicitly
+    stage still runs and prints its findings, recording ordinary failures as
+    ``reported``. An invalid skip fails even an advisory stage. Only commands explicitly
     marked ``parallel=True`` join the independent group, after all serial
     stages finish. Plain tuples stay serial and never overlap that group.
     Summary rows retain declaration order, including during the run.
@@ -6268,6 +6269,7 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
         index, entry = item
         name, argv = entry[0], entry[1]
         advisory = bool(entry[2]) if len(entry) > 2 else False
+        history_stage = name in ('doc-reverts', 'doc-reverts-net')
         with record_lock:
             print(f'ci_preflight: {name}: {shlex.join(argv)}'
                   + (' [advisory]' if advisory else ''), flush=True)
@@ -6284,8 +6286,20 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
         try:
             result = subprocess.run(argv, cwd=source, capture_output=True, env=env)
             code, log = result.returncode, result.stdout + result.stderr
+            notice = MAIN_TIP_NOTICE.encode()
+            main_tip = any(notice in stream.splitlines()
+                           for stream in (result.stdout, result.stderr) if notice in stream)
+            private_skip = False
+            if (code == 77 and name == 'source-guard-native-versions' and not advisory
+                    and not main_tip and not private_fixtures_overlay()):
+                from check_native_cpp_versions import missing_private_fixtures
+                reasons = {(PRIVATE_FIXTURE_SKIP_LITERAL + path.relative_to(source).as_posix()).encode()
+                           for path in missing_private_fixtures(source)}
+                private_skip = any(not reasons.isdisjoint(stream.splitlines())
+                                   for stream in (result.stdout, result.stderr))
         except OSError as error:
             code, log = 127, str(error).encode()
+            main_tip = private_skip = False
         seconds = round(time.monotonic() - stage_t0, 3)
         (output / stage['log']).write_bytes(log)
         with record_lock:
@@ -6294,16 +6308,16 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
                 print(f'ci_preflight: {name}: output ({stage["log"]})', flush=True)
                 print(log.decode('utf-8', 'replace'),
                       end='' if log.endswith(b'\n') else '\n', flush=True)
-            if (code == 77 and not advisory and not private_fixtures_overlay()
-                    and PRIVATE_FIXTURE_SKIP_LITERAL.encode() in log):
-                # A source guard whose private fixture input the tree lacks exits
-                # 77 with the pinned literal naming the missing path.  The literal
-                # is required: a bare 77 without it stays a failure -- and so does
-                # the literal itself while PINEFORGE_PRIVATE_FIXTURES is set, when
-                # the input the guard names is in the tree (R2-F3).
+            if private_skip:
                 print(f'ci_preflight: {name}: skipped (exit 77, private fixtures absent)',
                       flush=True)
                 stage.update(status='skipped', exitCode=code)
+            elif main_tip and code == 77 and not advisory and history_stage:
+                print(f"ci_preflight: {name}: skipped (exit 77, main's own tip "
+                      "has nothing to compare)", flush=True)
+                stage.update(status='skipped', exitCode=code)
+            elif main_tip or code == 77:
+                stage.update(status='failed', exitCode=code)
             elif code and advisory:
                 print(f'ci_preflight: {name}: exit {code}, reported only '
                       '(this stage is declared advisory)', flush=True)
@@ -6327,15 +6341,16 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
             # subprocess is a summary row, never a reason to cancel its peers.
             for _ in pool.map(run_stage, parallel):
                 pass
-    passed = bool(commands) and all(stage['exitCode'] == 0 or stage['advisory']
-                                    or stage['status'] == 'skipped'
+    passed = bool(commands) and all(stage['status'] in ('passed', 'reported', 'skipped')
                                     for stage in summary['stages'])
     summary.update(status='passed' if passed else 'failed', exitCode=0 if passed else 1,
                    seconds=round(time.monotonic() - run_t0, 3))
     record()
     failed = [stage['name'] for stage in summary['stages'] if stage['status'] == 'failed']
+    skipped = [stage['name'] for stage in summary['stages'] if stage['status'] == 'skipped']
     print(f'ci_preflight: summary: {summary["status"]}; {len(failed)} failed binding stage(s)'
-          + (': ' + ', '.join(failed) if failed else ''), flush=True)
+          + (': ' + ', '.join(failed) if failed else '')
+          + ('; skipped: ' + ', '.join(skipped) if skipped else ''), flush=True)
     return summary['exitCode']
 
 

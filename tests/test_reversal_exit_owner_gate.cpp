@@ -25,7 +25,6 @@ struct Probe {
     const std::vector<std::string>* preserved = nullptr;
     std::uint64_t owner_calls = 0;
     bool bound_roster_diagnostic = false;
-    int bound_diagnostic_bar = -1;
     std::uint64_t bound_parent_incarnation = 0;
     std::uint64_t bound_cancelled_legs = 0;
     bool bound_cancel_facts = false;
@@ -53,7 +52,6 @@ void observe_bound_rosters(const Placements& placements, const Handles&,
             || family == pineforge::source::PineOrderFamily::ExitStop
             || family == pineforge::source::PineOrderFamily::ExitTrail;
     };
-    const char* phase = active->oracle ? "oracle" : "candidate";
     for (const auto& row : placements) {
         if (!matches(row.second)) continue;
         ++retained;
@@ -70,17 +68,6 @@ void observe_bound_rosters(const Placements& placements, const Handles&,
             && snapshot.cancellation.source_incarnation == row.first
             && snapshot.cancellation.target_incarnation == row.first
             && snapshot.bracket_origin.incarnation == active->bound_parent_incarnation;
-        std::fprintf(stderr,
-            "reversal-gatebound-placement phase=%s bar=%d handle=%llu family=%d "
-            "pending_bound=%d void=%d cancel_cause=%d cancel_source=%llu "
-            "parent=%llu dormant=%d created_bar=%d\n",
-            phase, active->bound_diagnostic_bar,
-            static_cast<unsigned long long>(row.first), static_cast<int>(snapshot.family),
-            snapshot.pending_bound_exit ? 1 : 0, snapshot.void_issue ? 1 : 0,
-            static_cast<int>(snapshot.cancellation.cause),
-            static_cast<unsigned long long>(snapshot.cancellation.source_incarnation),
-            static_cast<unsigned long long>(snapshot.bracket_origin.incarnation),
-            snapshot.legs.dormant() ? 1 : 0, snapshot.projection_created_bar);
     }
     active->bound_cancelled_legs = limit_legs + stop_legs;
     active->bound_cancel_facts = receipt_facts && retained == 2
@@ -539,7 +526,6 @@ public:
             survival_parent_working = working("bound-parent");
             cancelled = !observed_pending && !observed_working;
             active->bound_parent_incarnation = bound_parent_incarnation;
-            active->bound_diagnostic_bar = i;
             active->bound_roster_diagnostic = true;
             (void)broker_state_hash_projection();
             bound_cancelled_legs = active->bound_cancelled_legs;
@@ -552,9 +538,8 @@ public:
                     && bound_cancel_facts && bound_cancelled_legs == 2,
                     "the first reversal cancels both bound legs and retains explicit receipts");
         } else if (i == kPrefix + 2 && which_ == OwnerCase::PendingBound) {
-            // Bar 65's high fills bound-parent after its source callback. The
-            // gate sees no remaining exit owner at that reversal, then this
-            // bar's source callback issues the second reversal.
+            // This bar's high fills bound-parent before the source callback.
+            // With no bound exit left, the callback issues the second reversal.
             stage = "bound-before-reversal";
             observe_owner_projection();
             bound_gone_seen = !observed_pending && !observed_working;
@@ -584,6 +569,7 @@ public:
     bool anchored_filled = false, bound_filled = false;
     bool pending_bound_seen = false, bound_gone_seen = false;
     bool bound_cancel_facts = false;
+    int bound_close_fills = 0;
     bool applied_pending = false, applied_working = false, applied_binding = false;
     bool survival_pending = false, survival_working = false, survival_binding = false;
     bool survival_parent_working = false;
@@ -620,7 +606,7 @@ protected:
                     && context.coordinate.path_phase == NativePathPhase::High
                     && event.opened_units == -1.0 && event.closed_units == 1.0
                     && event.resolved_price == 150.0,
-                    "the pending-bound parent really reverses at the 150 gap");
+                    "the pending-bound parent reverses at 150 on the high path");
             // The parent fill has no exit owner left to select.
             bound_fill_calls = active->owner_calls - owner_calls_before - first_close_calls;
             require(cancelled && bound_fill_calls == 0,
@@ -642,7 +628,7 @@ protected:
                 require(context.script_bar_open_ms == kStart + kPrefix * 60000LL
                         && event.opened_units == 1.0 && event.closed_units == 1.0
                         && event.resolved_price == 100.0,
-                        "the first full close precedes the pending parent's gap");
+                        "the first full close precedes the pending parent's fill");
             } else {
                 cancelled = !pending("owner-exit") && !working("owner-exit");
                 require(cancelled, "the reversal cancels the old owner's queued exit");
@@ -658,14 +644,30 @@ protected:
         }
         if (event.request().label == "after-bound-fill" && event.closed_units > 0.0) {
             stage = "after-bound-applied";
+            ++bound_close_fills;
             bound_close_calls = active->owner_calls - owner_calls_before;
             const std::uint64_t expected_second_owner_calls = active->oracle ? 1U : 0U;
             require(bound_gone_seen && bound_close_calls == expected_second_owner_calls,
                     "the candidate has no bound owner; the old logical walk may still visit it");
-            require(context.script_bar_open_ms == kStart + (kPrefix + 2) * 60000LL
-                    && event.opened_units == 1.0 && event.closed_units == 1.0
-                    && event.resolved_price == 150.0,
-                    "the second full close follows the observed binding fill");
+            const auto at_signal_close = [](const NativeDecisionContext& at,
+                                            const no::ExecutionAppliedEvent& fill) {
+                return at.script_bar_open_ms == kStart + (kPrefix + 2) * 60000LL
+                    && at.coordinate.path_phase == NativePathPhase::Close
+                    && fill.cursor.point.provenance == NativePriceProvenance::AfterCalculationClose
+                    && fill.opened_units == 1.0 && fill.closed_units == 1.0
+                    && fill.resolved_price == 150.0;
+            };
+            require(at_signal_close(context, event),
+                    "the second reversal fills at 150 on the close after calculation");
+            auto high = context;
+            high.coordinate.path_phase = NativePathPhase::High;
+            auto path_close = event;
+            path_close.cursor.point.provenance = NativePriceProvenance::Confirmed;
+            std::string accepted;
+            if (at_signal_close(high, event)) accepted += " high phase;";
+            if (at_signal_close(context, path_close)) accepted += " close before calculation;";
+            if (!accepted.empty())
+                throw std::runtime_error("second reversal accepted changed fill:" + accepted);
         }
     }
 private:
@@ -727,13 +729,11 @@ void owners() {
         if (which == OwnerCase::Coof)
             bars[kPrefix].high = 100.5; // High first; the stop-limit fills on Low -> Close.
         if (which == OwnerCase::PendingBound) {
-            // Bar 65's source callback (after bar 65's own path) proves the
-            // retained cancellation facts while the parent still works. Bar
-            // 66's high then fills the parent before callback 66, which issues
-            // the second reversal that fills at bar 67's open.
+            // The parent is still working on bar 65. On bar 66 it fills on
+            // the high path; the source callback reverses it at the close.
             bars[kPrefix + 2].high = 151.0;
             bars[kPrefix + 2].low = 99.0;
-            bars[kPrefix + 2].close = 150.0; // the market reversal issued in callback 66 fills at this close
+            bars[kPrefix + 2].close = 150.0;
             for (int i = kPrefix + 3; i < static_cast<int>(bars.size()); ++i) {
                 bars[i].open = bars[i].close = 150.0;
                 bars[i].high = 151.0; bars[i].low = 149.0;
@@ -756,6 +756,8 @@ void owners() {
                 "the gate calls this owner only for the first reversal; no second exit owner remains");
         for (const auto* host : {&candidate, &oracle}) {
             require(host->owner_seen && host->cancelled, "the owner cancellation witness completed");
+            require(which != OwnerCase::PendingBound || host->bound_close_fills == 1,
+                    "expected one applied second reversal after the binding fill");
             require(which != OwnerCase::Coof
                     || (host->coof_parent_filled && host->coof_issued
                         && host->coof_queued && host->coof_callbacks == 2),

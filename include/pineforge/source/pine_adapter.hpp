@@ -2240,6 +2240,10 @@ private:
         // entry order was working, which TradingView voids
         // (PlacementSnapshot::void_global_issue): no entry's fill arms it.
         bool void_global = false;
+        // The caller placed these legs as prices beside a waiting tick leg.
+        // Their current levels belong to the standing orders.
+        bool has_priced_limit = false;
+        bool has_priced_stop = false;
         // A queue slot reserved for the definition; zero while it holds none,
         // and the parent's fill then ranks its legs as they are submitted. A
         // partial percentage definition that names no quantity gets its slot
@@ -2276,13 +2280,9 @@ private:
         double installed_level = std::numeric_limits<double>::quiet_NaN();
     };
 
-    // A from_entry "" exit with relative legs that covers the position entry
-    // by entry (ExitBindingRuleSwitches::global_exit_per_entry_levels): kept
-    // from the moment the position it stands on holds a second entry until the
-    // book goes flat. `children` are the entries in fill order, each with the
-    // fill price its bracket's levels come from and the quantity it closes;
-    // `consumed` once a leg of its bracket filled (TradingView never gives that
-    // entry another one).
+    // Children are kept in fill order, with the fill price that sets the
+    // bracket's levels and the units it closes. Reissuing the exit does
+    // not give a consumed opening another bracket.
     struct PerEntryExitChild {
         std::uint64_t origin = 0;
         double fill_price = std::numeric_limits<double>::quiet_NaN();
@@ -2291,6 +2291,9 @@ private:
     };
     struct PerEntryExit {
         SourceId exit_id;
+        SourceId from_entry;
+        // A named exit covers an order at its fill only if the call followed the order.
+        std::uint64_t last_call = 0;
         std::int64_t cycle = 0;
         bool long_side = true;
         double profit_ticks = std::numeric_limits<double>::quiet_NaN();
@@ -2624,6 +2627,7 @@ private:
     // The consumed definitions identify which legs acquired units at this fill.
     std::vector<PendingRelativeExit> materialize_relative_exits(
         PlacementSnapshot, const native_order::ExecutionAppliedEvent&);
+    double standing_exit_price(const PendingRelativeExit&, PineOrderFamily) const;
     void withdraw_anchored_relative_legs(const SourceId* exit_id,
                                          const SourceId* from_entry);
     void withdraw_anchored_relative_readers(const detail::ScratchByteSource* exit_id,
@@ -2808,10 +2812,15 @@ private:
     bool fill_time_global_exit(const PlacementSnapshot&) const;
     // A held global exit with relative legs, entry by entry
     // (ExitBindingRuleSwitches::global_exit_per_entry_levels).
-    bool per_entry_exit_scope() const;
-    detail::ExitScratchRows<PerEntryExitChild> per_entry_open_entries(bool long_side) const;
+    bool per_entry_exit_scope(bool named = false) const;
+    detail::ExitScratchRows<PerEntryExitChild> per_entry_open_entries(
+        bool long_side, const SourceId& from_entry = {}) const;
     detail::ExitScratchRows<native_order::RequestHandle> per_entry_child_legs(
         const SourceId& exit_id, std::uint64_t origin) const;
+    detail::ExitScratchRows<native_order::RequestHandle> scoped_per_entry_child_legs(
+        const SourceId& exit_id, std::uint64_t origin, const SourceId& from_entry) const;
+    bool named_per_entry_scope(const SourceId& exit_id, const SourceId& from_entry) const;
+    void end_named_per_entry_exit(const SourceId& exit_id, const SourceId& from_entry);
     bool per_entry_exit_call(const SourceId& exit_id, const SourceId& from_entry, double limit,
                              double stop, double trail_points, double trail_offset,
                              double trail_price, double qty_percent, const std::string& comment,
@@ -2978,6 +2987,9 @@ private:
     std::unordered_map<SourceId, std::uint64_t> exit_tombstones_;
     std::map<std::uint64_t, CloseCallsiteState> close_batch_callsites_;
     std::int32_t close_batch_bar_ = -1;
+    // Whether a close has booked a pyramiding record while an earlier one kept
+    // units: until then the records are the open lots, oldest first.
+    bool pyramiding_records_diverged_ = false;
     std::uint64_t close_batch_queue_sequence_ = 0;
     double close_batch_pending_debt_ = 0.0;
     double close_batch_admitted_total_ = 0.0;

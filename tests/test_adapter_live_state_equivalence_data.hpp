@@ -470,14 +470,22 @@
 // moves which row was NOT COMPARED: 3 rows change against the table above (brackets seeds 1466207, 2932413 and
 // 3456058), and only their digests (their trades, commands and rows placed are the same: their events differ). Every
 // other row is retained byte for byte. This table is the engine's own transcript, not a TradingView measurement.
+// Re-harvested with PINEFORGE_V19E_HARVEST on a cloud build of 5bf6affa after the commits since the last harvest: 37 rows
+// change against the table above (brackets 16, chains 15, reversals 6), all with pyramiding 2. f50f7844, which measures each
+// entry's named tick bracket from its own fill, changes six chains rows on its own (seeds 733105, 1570937, 1989853, 2408769,
+// 2827685 and 3665517); its parent passes the table above. 017a6233, which keeps the entry records in a run that declares no
+// quantity step, changes 35 rows, 34 of them in their trades: in all 34 the tree without it books the same trades when the run
+// declares a step of 1e-8 (quantities compared to 1e-4, the two other rules that a step switches on held off). 391bb8e9 changes
+// reversals seed 3665515, and only its digest. Every other row is retained byte for byte. This table is the engine's own
+// transcript, not a TradingView measurement.
 constexpr std::uint64_t kTranscriptDigests[] = {
     5688969932745949967ull,  // reversals seed 104729, 113 trades, 388 commands, 427 rows placed
-    323226347481757951ull,  // reversals seed 209458, 123 trades, 379 commands, 415 rows placed
+    6673515823183289519ull,  // reversals seed 209458, 125 trades, 379 commands, 419 rows placed
     14009527213747133101ull,  // reversals seed 314187, 231 trades, 722 commands, 738 rows placed
     14525987028154133345ull,  // reversals seed 418916, 106 trades, 372 commands, 373 rows placed
     13650932494160771170ull,  // reversals seed 523645, 104 trades, 418 commands, 382 rows placed
-    13756642033204331024ull,  // reversals seed 628374, 132 trades, 411 commands, 403 rows placed
-    14008958280188384305ull,  // reversals seed 733103, 137 trades, 387 commands, 411 rows placed
+    8867894807448120702ull,  // reversals seed 628374, 130 trades, 405 commands, 405 rows placed
+    2255124945305405094ull,  // reversals seed 733103, 136 trades, 382 commands, 406 rows placed
     16523966317735459432ull,  // reversals seed 837832, 89 trades, 401 commands, 368 rows placed
     15691394988737352226ull,  // reversals seed 942561, 99 trades, 408 commands, 363 rows placed
     6201856738623516788ull,  // reversals seed 1047290, 137 trades, 390 commands, 398 rows placed
@@ -489,7 +497,7 @@ constexpr std::uint64_t kTranscriptDigests[] = {
     6591784592102870038ull,  // reversals seed 1675664, 118 trades, 404 commands, 436 rows placed
     6832776961458888342ull,  // reversals seed 1780393, 179 trades, 667 commands, 632 rows placed
     17049114443012476413ull,  // reversals seed 1885122, 126 trades, 396 commands, 403 rows placed
-    2334866585867006631ull,  // reversals seed 1989851, 169 trades, 429 commands, 453 rows placed
+    15873875672508980850ull,  // reversals seed 1989851, 170 trades, 429 commands, 454 rows placed
     1211199957711746674ull,  // reversals seed 2094580, 92 trades, 384 commands, 349 rows placed
     1780729747438737047ull,  // reversals seed 2199309, 123 trades, 401 commands, 393 rows placed
     8464594916571686638ull,  // reversals seed 2304038, 162 trades, 409 commands, 437 rows placed
@@ -501,82 +509,82 @@ constexpr std::uint64_t kTranscriptDigests[] = {
     4561210242925110841ull,  // reversals seed 2932412, 93 trades, 366 commands, 328 rows placed
     6035513511839422501ull,  // reversals seed 3037141, 114 trades, 405 commands, 403 rows placed
     15947167675599042119ull,  // reversals seed 3141870, 66 trades, 347 commands, 260 rows placed
-    11200678103066185699ull,  // reversals seed 3246599, 156 trades, 467 commands, 537 rows placed
+    9259221054995340723ull,  // reversals seed 3246599, 157 trades, 467 commands, 538 rows placed
     13075754683373545439ull,  // reversals seed 3351328, 106 trades, 414 commands, 364 rows placed
     8508450364485609766ull,  // reversals seed 3456057, 87 trades, 373 commands, 349 rows placed
     17292637499524731507ull,  // reversals seed 3560786, 154 trades, 403 commands, 453 rows placed
-    2358152503597692905ull,  // reversals seed 3665515, 136 trades, 393 commands, 423 rows placed
+    3655870063686360648ull,  // reversals seed 3665515, 136 trades, 393 commands, 423 rows placed
     7086626550256878961ull,  // reversals seed 3770244, 34 trades, 321 commands, 226 rows placed
     9508054908501193795ull,  // brackets seed 104730, 64 trades, 561 commands, 551 rows placed
-    16256519094653468434ull,  // brackets seed 209459, 77 trades, 581 commands, 659 rows placed
-    11383877264129059324ull,  // brackets seed 314188, 111 trades, 820 commands, 890 rows placed
+    2122332998045040402ull,  // brackets seed 209459, 78 trades, 581 commands, 675 rows placed
+    9258301915159761339ull,  // brackets seed 314188, 132 trades, 838 commands, 1045 rows placed
     890480331724887208ull,  // brackets seed 418917, 82 trades, 510 commands, 570 rows placed
     10275325862120862285ull,  // brackets seed 523646, 70 trades, 527 commands, 502 rows placed
-    3407986015037232593ull,  // brackets seed 628375, 92 trades, 581 commands, 770 rows placed
-    7063640951495545456ull,  // brackets seed 733104, 86 trades, 550 commands, 609 rows placed
+    757676259300722608ull,  // brackets seed 628375, 95 trades, 581 commands, 773 rows placed
+    11591200434426119444ull,  // brackets seed 733104, 84 trades, 576 commands, 672 rows placed
     4817558331581157761ull,  // brackets seed 837833, 68 trades, 551 commands, 570 rows placed
     7041911505253005832ull,  // brackets seed 942562, 92 trades, 543 commands, 593 rows placed
-    10192182522427989836ull,  // brackets seed 1047291, 95 trades, 538 commands, 658 rows placed
-    14267841076960343901ull,  // brackets seed 1152020, 71 trades, 559 commands, 647 rows placed
+    1191439054364122395ull,  // brackets seed 1047291, 81 trades, 538 commands, 649 rows placed
+    5328536027259382407ull,  // brackets seed 1152020, 73 trades, 559 commands, 664 rows placed
     15551067836609675723ull,  // brackets seed 1256749, 65 trades, 514 commands, 421 rows placed
     14999704533833209247ull,  // brackets seed 1361478, 72 trades, 514 commands, 555 rows placed
-    18019327704225896996ull,  // brackets seed 1466207, 87 trades, 544 commands, 632 rows placed
-    11406243035958813001ull,  // brackets seed 1570936, 66 trades, 475 commands, 663 rows placed
+    6810208374227182394ull,  // brackets seed 1466207, 88 trades, 544 commands, 637 rows placed
+    1344000592364960883ull,  // brackets seed 1570936, 67 trades, 475 commands, 604 rows placed
     15452857394145661698ull,  // brackets seed 1675665, 68 trades, 551 commands, 625 rows placed
     3831518412970230480ull,  // brackets seed 1780394, 79 trades, 708 commands, 660 rows placed
-    3822797153776383649ull,  // brackets seed 1885123, 73 trades, 533 commands, 604 rows placed
+    4457749337444632677ull,  // brackets seed 1885123, 71 trades, 533 commands, 678 rows placed
     9004609120607052660ull,  // brackets seed 1989852, 81 trades, 528 commands, 545 rows placed
     8882123206904062422ull,  // brackets seed 2094581, 69 trades, 538 commands, 608 rows placed
     6146492200473991639ull,  // brackets seed 2199310, 66 trades, 465 commands, 566 rows placed
-    12185999566869215241ull,  // brackets seed 2304039, 80 trades, 603 commands, 619 rows placed
-    6788510333546938231ull,  // brackets seed 2408768, 77 trades, 558 commands, 693 rows placed
+    3636707577617913377ull,  // brackets seed 2304039, 85 trades, 597 commands, 683 rows placed
+    8187909537956490379ull,  // brackets seed 2408768, 66 trades, 571 commands, 776 rows placed
     10483945677323692416ull,  // brackets seed 2513497, 79 trades, 517 commands, 527 rows placed
     14203915585453736548ull,  // brackets seed 2618226, 69 trades, 524 commands, 573 rows placed
     6210801563266851763ull,  // brackets seed 2722955, 75 trades, 535 commands, 721 rows placed
-    16917960437887754716ull,  // brackets seed 2827684, 59 trades, 552 commands, 524 rows placed
+    6034528745876809069ull,  // brackets seed 2827684, 63 trades, 552 commands, 509 rows placed
     39206378151905991ull,  // brackets seed 2932413, 75 trades, 529 commands, 571 rows placed
     17565519113189925662ull,  // brackets seed 3037142, 58 trades, 525 commands, 567 rows placed
-    12128260054918584448ull,  // brackets seed 3141871, 100 trades, 534 commands, 638 rows placed
-    14548195767317138154ull,  // brackets seed 3246600, 104 trades, 645 commands, 875 rows placed
+    3349905697280277135ull,  // brackets seed 3141871, 85 trades, 534 commands, 585 rows placed
+    5997068357841426017ull,  // brackets seed 3246600, 110 trades, 637 commands, 875 rows placed
     5966889128617964079ull,  // brackets seed 3351329, 74 trades, 545 commands, 582 rows placed
     2186109644727109599ull,  // brackets seed 3456058, 81 trades, 509 commands, 562 rows placed
-    881410402495682573ull,  // brackets seed 3560787, 76 trades, 508 commands, 589 rows placed
-    6442431096627642486ull,  // brackets seed 3665516, 75 trades, 563 commands, 709 rows placed
+    15123366293397074726ull,  // brackets seed 3560787, 77 trades, 508 commands, 590 rows placed
+    5923979719388882352ull,  // brackets seed 3665516, 80 trades, 559 commands, 732 rows placed
     4880364996188168172ull,  // brackets seed 3770245, 74 trades, 520 commands, 580 rows placed
     3254791467963586893ull,  // chains seed 104731, 67 trades, 318 commands, 348 rows placed
-    663207094553151764ull,  // chains seed 209460, 71 trades, 379 commands, 424 rows placed
-    9283772566969702802ull,  // chains seed 314189, 79 trades, 477 commands, 480 rows placed
+    9800751460692316674ull,  // chains seed 209460, 74 trades, 381 commands, 426 rows placed
+    1653695243317863533ull,  // chains seed 314189, 78 trades, 475 commands, 495 rows placed
     2033162760298087391ull,  // chains seed 418918, 44 trades, 293 commands, 349 rows placed
     12221320464222137166ull,  // chains seed 523647, 47 trades, 314 commands, 327 rows placed
-    2047618321397170201ull,  // chains seed 628376, 73 trades, 342 commands, 350 rows placed
-    921697445748184875ull,  // chains seed 733105, 67 trades, 369 commands, 415 rows placed
+    3066258265832884525ull,  // chains seed 628376, 74 trades, 342 commands, 351 rows placed
+    551603635176773519ull,  // chains seed 733105, 84 trades, 376 commands, 360 rows placed
     17976626526517250951ull,  // chains seed 837834, 60 trades, 368 commands, 418 rows placed
     16934523334156189547ull,  // chains seed 942563, 56 trades, 343 commands, 361 rows placed
-    10373090182271315002ull,  // chains seed 1047292, 35 trades, 363 commands, 402 rows placed
+    10686979679433049454ull,  // chains seed 1047292, 38 trades, 363 commands, 382 rows placed
     16074989119573095012ull,  // chains seed 1152021, 72 trades, 351 commands, 401 rows placed
     2862011423919039425ull,  // chains seed 1256750, 64 trades, 314 commands, 315 rows placed
     6616125162615994474ull,  // chains seed 1361479, 65 trades, 309 commands, 326 rows placed
-    424855751488845231ull,  // chains seed 1466208, 79 trades, 388 commands, 405 rows placed
-    17665150425097115693ull,  // chains seed 1570937, 76 trades, 358 commands, 358 rows placed
+    3831880097590379572ull,  // chains seed 1466208, 82 trades, 386 commands, 420 rows placed
+    4182356457656407103ull,  // chains seed 1570937, 76 trades, 352 commands, 359 rows placed
     12680252031151115087ull,  // chains seed 1675666, 64 trades, 314 commands, 346 rows placed
     11300291163130859423ull,  // chains seed 1780395, 57 trades, 436 commands, 463 rows placed
     4433442514945879207ull,  // chains seed 1885124, 60 trades, 362 commands, 336 rows placed
-    6667986704571303442ull,  // chains seed 1989853, 76 trades, 351 commands, 381 rows placed
+    2355492545502139164ull,  // chains seed 1989853, 75 trades, 352 commands, 337 rows placed
     17468462564703429683ull,  // chains seed 2094582, 37 trades, 310 commands, 353 rows placed
     6883161397953621370ull,  // chains seed 2199311, 56 trades, 321 commands, 328 rows placed
-    17043463892635610333ull,  // chains seed 2304040, 64 trades, 326 commands, 339 rows placed
-    1105769744799573605ull,  // chains seed 2408769, 63 trades, 349 commands, 377 rows placed
+    12623315888950101148ull,  // chains seed 2304040, 64 trades, 345 commands, 358 rows placed
+    8183977422122740697ull,  // chains seed 2408769, 75 trades, 331 commands, 329 rows placed
     2883434956168009346ull,  // chains seed 2513498, 50 trades, 344 commands, 354 rows placed
     14725999688024910753ull,  // chains seed 2618227, 51 trades, 339 commands, 386 rows placed
-    9558404090892926781ull,  // chains seed 2722956, 59 trades, 355 commands, 391 rows placed
-    6376350046543796098ull,  // chains seed 2827685, 74 trades, 341 commands, 400 rows placed
+    7676912308629527529ull,  // chains seed 2722956, 67 trades, 341 commands, 375 rows placed
+    2254639935055991745ull,  // chains seed 2827685, 61 trades, 331 commands, 289 rows placed
     4663592643653421001ull,  // chains seed 2932414, 62 trades, 336 commands, 373 rows placed
     12118628373320771408ull,  // chains seed 3037143, 61 trades, 344 commands, 412 rows placed
-    10452998186580074403ull,  // chains seed 3141872, 64 trades, 366 commands, 416 rows placed
-    16075779900850779479ull,  // chains seed 3246601, 96 trades, 464 commands, 498 rows placed
+    6861284999482153858ull,  // chains seed 3141872, 91 trades, 358 commands, 419 rows placed
+    14560187317634676200ull,  // chains seed 3246601, 83 trades, 450 commands, 478 rows placed
     2759418038614498470ull,  // chains seed 3351330, 45 trades, 301 commands, 354 rows placed
     9300963237862288069ull,  // chains seed 3456059, 43 trades, 310 commands, 268 rows placed
     12230891639422690187ull,  // chains seed 3560788, 61 trades, 363 commands, 426 rows placed
-    15029286602622171676ull,  // chains seed 3665517, 72 trades, 347 commands, 376 rows placed
+    13261576984688577976ull,  // chains seed 3665517, 68 trades, 349 commands, 327 rows placed
     17709499046001609036ull,  // chains seed 3770246, 63 trades, 346 commands, 364 rows placed
 };

@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_variance_na_recompute)
+pineforge_add_unit_test(test_variance_na_recompute)

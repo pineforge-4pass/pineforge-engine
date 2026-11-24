@@ -47,24 +47,34 @@ void PineStrategyHost::prepare_historical_security_lookahead_projections(
     clear_historical_security_lookahead_projections();
     const int input_seconds = tf_to_seconds(effective_input_tf);
     const int script_seconds = script_tf_seconds_;
-    if (!historical_security_lookahead_projection_ || stream_warmup_mode_
-        || effective_input_tf != script_tf_ || input_bars == nullptr || n_input <= 0
-        || input_seconds <= 0 || script_seconds <= 0) {
+    if (stream_warmup_mode_ || effective_input_tf != script_tf_ || input_bars == nullptr
+        || n_input <= 0 || input_seconds <= 0 || script_seconds <= 0) {
         return;
     }
 
-    historical_security_lookahead_projection_active_ = true;
     const std::int64_t input_ms = static_cast<std::int64_t>(input_seconds) * 1000;
     for (auto& state : security_eval_states_) {
+        PineSecurityEvalState& pine = pine_security_state(state.sec_id);
+        if (!historical_security_lookahead_projection_ && !pine.historical_lookahead_projection)
+            continue;
         const int requested_seconds = tf_to_seconds(state.tf);
         const bool calendar_month = requested_seconds == -1
             && calendar_period_for(state.tf) == CalendarPeriod::MONTH;
-        PineSecurityEvalState& pine = pine_security_state(state.sec_id);
         const bool eligible = !pine.lower_tf_requested && !pine.lower_tf_emulation
             && !pine.lower_tf_use_input && pine.lookahead_on && !pine.gaps_on
             && !pine.heikinashi
             && (calendar_month || requested_seconds > script_seconds);
         if (!eligible) continue;
+
+        // Without a native clock, a chart bar straddling two fixed periods cannot
+        // supply their closes. With that clock, a projection fills only missing rows.
+        if (!historical_security_lookahead_projection_
+            && calendar_period_for(state.tf) == CalendarPeriod::NONE
+            && calendar_period_for(script_tf_) == CalendarPeriod::NONE
+            && requested_seconds % script_seconds != 0
+            && !pine_native_fixed_security_clock(state)) {
+            continue;
+        }
 
         auto child_instant_ms = [&](int child) -> std::int64_t {
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
@@ -85,11 +95,14 @@ void PineStrategyHost::prepare_historical_security_lookahead_projections(
             ++projection_begin;
         }
         if (projection_begin >= n_input) continue;
+        historical_security_lookahead_projection_active_ = true;
+        const bool forming_tail = pine.historical_lookahead_projection
+            && (realtime_tail_ || probe_suppress_tail_logic_);
         const int projection_count = n_input - projection_begin;
         const int expected_children = std::max(
             1, (calendar_month ? 31 * 86400 : requested_seconds) / input_seconds);
         pine.historical_projections.reserve(
-            static_cast<std::size_t>(projection_count / expected_children + 1));
+            static_cast<std::size_t>(projection_count / expected_children) + 1 + forming_tail);
         pine.historical_projection_cursor = 0;
         pine.historical_projection_dispatched = false;
 
@@ -118,9 +131,15 @@ void PineStrategyHost::prepare_historical_security_lookahead_projections(
         int group_begin = projection_begin;
         Bar aggregate = input_bars[projection_begin];
         for (int i = projection_begin + 1; i < n_input; ++i) {
-            if (crosses_requested_boundary(aggregate.timestamp, input_bars[i].timestamp)) {
-                publish_group(group_begin, aggregate, true);
+            const bool new_period =
+                crosses_requested_boundary(aggregate.timestamp, input_bars[i].timestamp);
+            // Publish the confirmed prefix before including a forming child. Within the
+            // same period that child's update still needs the prefix's open, range and volume.
+            if (new_period || (forming_tail && i == n_input - 1)) {
+                publish_group(group_begin, aggregate, new_period);
                 group_begin = i;
+            }
+            if (new_period) {
                 aggregate = input_bars[i];
             } else {
                 merge(aggregate, input_bars[i]);
@@ -128,7 +147,7 @@ void PineStrategyHost::prepare_historical_security_lookahead_projections(
         }
         bool final_complete = false;
         const std::int64_t last_timestamp = input_bars[n_input - 1].timestamp;
-        if (last_timestamp <= std::numeric_limits<std::int64_t>::max() - input_ms)
+        if (!forming_tail && last_timestamp <= std::numeric_limits<std::int64_t>::max() - input_ms)
             final_complete = crosses_requested_boundary(last_timestamp, last_timestamp + input_ms);
         publish_group(group_begin, aggregate, final_complete);
     }

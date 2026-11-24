@@ -80,6 +80,13 @@ void ensure_supported_lower_tf_emulation_flags(bool lookahead_on, bool gaps_on) 
 void source::PineStrategyHost::register_security_eval(
         int sec_id, const std::string& requested_tf, const std::string& input_tf,
         bool lookahead_on, bool gaps_on, bool heikinashi) {
+    register_security_eval(sec_id, requested_tf, input_tf, lookahead_on, gaps_on, heikinashi,
+                           false);
+}
+
+void source::PineStrategyHost::register_security_eval(
+        int sec_id, const std::string& requested_tf, const std::string& input_tf,
+        bool lookahead_on, bool gaps_on, bool heikinashi, bool historical_lookahead_projection) {
     const std::string& evaluator_input_tf =
         security_input_tf_.empty() ? input_tf : security_input_tf_;
     // Match the kernel's parse condition. With no input yet, validation
@@ -100,6 +107,7 @@ void source::PineStrategyHost::register_security_eval(
     pine.gaps_on = gaps_on;
     pine.lookahead_on = lookahead_on;
     pine.heikinashi = heikinashi;
+    pine.historical_lookahead_projection = historical_lookahead_projection;
 
     if (evaluator_input_tf.empty()) return;
     int lower_ratio = 0;
@@ -1193,33 +1201,32 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         const auto* projection = projection_at_input();
         state.feed_count++;
         if (!projection || pine.historical_projection_dispatched) {
-            // gaps_off holds the first-child projection unchanged until the
-            // next HTF bucket. No evaluator call means TA/security histories
-            // also advance exactly once per projected bucket.
+            // gaps_off holds the last dispatch until the next entry. This may be a
+            // forming update in the same period. No callback here: histories keep
+            // the slot opened on that period's first retained child.
             return;
         }
         pine.historical_projection_dispatched = true;
 
         Bar projected_bar = projection->bar;
-        // A projected bucket is the exchange's bar wherever a native feed
-        // serves this timeframe -- complete or not. TradingView's
-        // lookahead_on leaks the period's FINAL values from its first chart
-        // bar, so the trailing period still in progress at the range end
-        // carries the whole native period whenever the feed holds it (lab tv
-        // wm-m-f15-jul, 2026-09-05: August's final o/h/l/c 10.92/11.99/
-        // 10.68/11.77 from 08-01 09:30 on a chart ending 08-08). A partial
-        // with no native bar keeps the available aggregate, uncounted as a
-        // miss.
-        substitute_native_security_bar(state, projected_bar,
-                                       /*count_miss=*/projection->is_complete);
+        // On history the exchange bar wins even if the chart ends partway through its
+        // period. On a forming tail its final print is not yet observable, including on
+        // the confirmed children of that period. A missing partial is not a native miss.
+        const bool forming_period = pine.historical_lookahead_projection
+            && (realtime_tail_ || probe_suppress_tail_logic_) && !projection->is_complete;
+        if (!forming_period) {
+            substitute_native_security_bar(state, projected_bar,
+                                           /*count_miss=*/projection->is_complete);
+        }
         if (pine.heikinashi) {
             apply_ha(projected_bar, projection->is_complete);
         }
         state.current_bar = projected_bar;
-        // The projected HTF bucket is introduced on its first chart child, so
-        // generated security series must allocate a fresh history/TA slot even
-        // though projected_bar itself already contains every available child.
-        state.current_sub_bar_count = 1;
+        // A forming child in an already published partial bucket rewrites its history slot.
+        // A new period, even a one-child forming period, opens its own slot.
+        const bool rewrite = forming_period && state.eval_partial_count > 0
+            && state.ta_bar_index == state.eval_complete_count;
+        state.current_sub_bar_count = rewrite ? 2 : 1;
         if (projection->is_complete) {
             state.eval_complete_count++;
         } else {
@@ -1451,6 +1458,13 @@ bool run_in_progress(const NativeStrategyHost& host) {
 }
 
 }  // namespace
+
+void source::PineStrategyHost::register_security_eval(
+        int sec_id, const std::string& symbol, const std::string& requested_tf,
+        const char* input_tf, bool lookahead_on, bool gaps_on, bool ignore_invalid_symbol) {
+    register_security_eval(sec_id, symbol, requested_tf, std::string(input_tf),
+                           lookahead_on, gaps_on, ignore_invalid_symbol);
+}
 
 void source::PineStrategyHost::register_security_eval(
         int sec_id, const std::string& symbol, const std::string& requested_tf,

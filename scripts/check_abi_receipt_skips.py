@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Name the receipt-gated CTest rows of a build tree that will not run, and prepare what they read.
+"""Check the inputs of receipt-gated CTest rows and optionally prepare their providers.
 
 Four CTest rows pair this tree against historical ABI archives:
 test_script_cpp_abi, test_settlement_cpp_abi,
@@ -12,17 +12,17 @@ skipped row as passed, so it still prints "100% tests passed".
 scripts/ci_verify.py prepares its providers itself and configures the option
 ON, where a missing receipt fails the row; this script needs neither.
 
-It reads the rows CTest registered (ctest --show-only=json-v1) and names every
-receipt-gated row that will skip -- or, registered --require-receipts, fail --
-for a missing input receipt. test_l4g_runtime_budget also reads the tree's
+It reads the rows CTest registered (ctest --show-only=json-v1) and reports
+which declared receipt inputs are files, along with the missing-input mode
+for each blocked row. test_l4g_runtime_budget also reads the tree's
 compile_commands.json once its receipt exists, so a tree configured without
 CMAKE_EXPORT_COMPILE_COMMANDS=ON is named too. --prepare first prepares the
 seven providers into the tree with the argv ci_verify uses, reusing a matching
 prepared provider and refusing, without deleting it, one that does not match.
 
-Exit status: 0 when every receipt-gated row runs (or none is registered), 1
-when one will not, 2 when the directory is no configured build tree or ctest
-cannot list its rows.
+Exit status: 0 when a nonempty registry has no blocked receipt-gated rows, 1
+when a gated row lacks an input, 2 when the directory is no configured build
+tree or CTest supplies no usable registry. A listing does not record execution.
 """
 from __future__ import annotations
 
@@ -61,10 +61,8 @@ class GatedRow:
 
     @property
     def verdict(self) -> str:
-        """'runs', 'skips' or 'fails': what the row does in the next ctest run."""
-        if self.missing:
-            return 'skips' if self.mode == 'skip' else 'fails'
-        return 'fails' if self.database is not None else 'runs'
+        """File readiness. Neither a skip nor an execution result is observed here."""
+        return 'inputs missing' if self.missing or self.database is not None else 'inputs present'
 
 
 def registered_tests(build_dir: Path, ctest: str = 'ctest') -> list[dict]:
@@ -74,28 +72,69 @@ def registered_tests(build_dir: Path, ctest: str = 'ctest') -> list[dict]:
     if result.returncode:
         raise RuntimeError(f'ctest could not list the rows of {build_dir}:\n'
                            + result.stdout + result.stderr)
-    return json.loads(result.stdout).get('tests', [])
+    registry = json.loads(result.stdout)
+    tests = registry.get('tests') if isinstance(registry, dict) else None
+    if not isinstance(tests, list) or not tests:
+        raise ValueError(f'{build_dir}: no CTest rows in the test registry')
+    return tests
 
 
 def gated_rows(tests: list[dict]) -> list[GatedRow]:
     """The receipt-gated rows among tests, with the inputs each is missing."""
     rows = []
-    for test in tests:
-        command = test.get('command') or []
-        modes = [MODES[argument] for argument in command if argument in MODES]
+    for index, test in enumerate(tests, 1):
+        name = test.get('name') if isinstance(test, dict) else None
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f'CTest row #{index} has no usable name')
+        command = test.get('command')
+        if (not isinstance(command, list) or not command
+                or not all(isinstance(arg, str) for arg in command)
+                or not command[0].strip()):
+            raise ValueError(f'{name}: CTest did not supply a usable command')
+        executable = Path(command[0])
+        if (command[0] in ('NOT_AVAILABLE', 'NOTFOUND') or command[0].endswith('-NOTFOUND')
+                or (executable.is_absolute() and
+                    (not executable.is_file() or not os.access(executable, os.X_OK)))):
+            raise ValueError(f'{name}: unavailable CTest command {command[0]!r}')
+        modes = [MODES[arg] for arg in command[1:] if arg in MODES]
         if not modes:
             continue
-        pairs = list(zip(command, command[1:]))
-        missing = tuple(Path(value) for flag, value in pairs
-                        if RECEIPT_INPUT.fullmatch(flag) and not Path(value).exists())
-        database = next((Path(value) for flag, value in pairs
-                         if flag == '--compile-commands' and not Path(value).exists()), None)
-        rows.append(GatedRow(test['name'], modes[-1], missing, database))
+        if len(modes) != 1:
+            raise ValueError(f'{name}: expected exactly one receipt mode')
+        inputs = {}
+        for pos, arg in enumerate(command[1:], 1):
+            flag, equals, value = arg.partition('=')
+            if flag not in ('--receipt', '--compile-commands') and not RECEIPT_INPUT.fullmatch(flag):
+                continue
+            if not equals:
+                value = command[pos + 1] if pos + 1 < len(command) else ''
+            if not value.strip() or (not equals and value.startswith('-')):
+                raise ValueError(f'{name}: {flag} needs a path')
+            if flag in inputs:
+                raise ValueError(f'{name}: duplicate {flag}')
+            path = Path(value)
+            if not path.is_absolute() and flag != '--receipt':
+                # Row inputs are relative to CTest's working directory, not ours.
+                properties = test.get('properties', [])
+                if not isinstance(properties, list):
+                    raise ValueError(f'{name}: malformed CTest properties')
+                cwd = next((p.get('value') for p in properties if isinstance(p, dict)
+                            and p.get('name') == 'WORKING_DIRECTORY'), None)
+                if not isinstance(cwd, str) or not Path(cwd).is_absolute():
+                    raise ValueError(f'{name}: {flag} is relative without a CTest working directory')
+                path = Path(cwd) / path
+            inputs[flag] = path
+        receipts = [path for flag, path in inputs.items() if RECEIPT_INPUT.fullmatch(flag)]
+        if not receipts:
+            raise ValueError(f'{name}: receipt mode has no input receipt')
+        database = inputs.get('--compile-commands')
+        rows.append(GatedRow(name, modes[0], tuple(p for p in receipts if not p.is_file()),
+                             database if database and not database.is_file() else None))
     return rows
 
 
 def report(rows: list[GatedRow], build_dir: Path, shown_dir: str) -> int:
-    """Print what every gated row will do; 1 when one will not run."""
+    """Print each row's input status; only CTest results establish execution."""
     def shown(path: Path) -> str:
         try:
             return str(path.resolve().relative_to(build_dir.resolve()))
@@ -104,14 +143,10 @@ def report(rows: list[GatedRow], build_dir: Path, shown_dir: str) -> int:
 
     head = f'check_abi_receipt_skips: {shown_dir}'
     if not rows:
-        print(f'{head} registers no receipt-gated CTest row')
+        print(f'{head} registers no receipt-gated CTest row; execution: NOT COMPARED')
         return 0
-    idle = [row for row in rows if row.verdict != 'runs']
-    if not idle:
-        print(f'{head} registers {len(rows)} receipt-gated CTest rows; every receipt they read '
-              f'is present: all {len(rows)} run')
-        return 0
-    print(f'{head} registers {len(rows)} receipt-gated CTest rows')
+    idle = [row for row in rows if row.missing or row.database is not None]
+    print(f'{head} registers {len(rows)} receipt-gated CTest rows; execution: NOT COMPARED')
     width = max(len(row.name) for row in rows)
     for row in rows:
         reasons = []
@@ -119,11 +154,13 @@ def report(rows: list[GatedRow], build_dir: Path, shown_dir: str) -> int:
             noun = 'receipt' if len(row.missing) == 1 else 'receipts'
             reasons.append(f'{noun} missing: ' + ', '.join(shown(path) for path in row.missing))
         if row.database is not None:
-            reasons.append(('then fails, ' if row.missing else '')
-                           + 'compile database missing: ' + shown(row.database))
-        print(f'  {row.verdict:<5}  {row.name:<{width}}  ' + ('; '.join(reasons) or 'ready'))
-    print(f'{len(idle)} of {len(rows)} receipt-gated rows do not run. CTest counts a skipped '
-          'row as passed, so its "100% tests passed" leaves them out.')
+            reasons.append('compile database missing: ' + shown(row.database))
+        if row.missing:
+            reasons.append(f'receipt mode: {row.mode}')
+        print(f'  {row.verdict}  {row.name:<{width}}' + ('  ' + '; '.join(reasons) if reasons else ''))
+    if not idle:
+        return 0
+    print(f'{len(idle)} of {len(rows)} receipt-gated rows lack required input files.')
     if any(row.missing for row in rows):
         print('Prepare the seven ABI providers in this build tree (once per tree), then re-run '
               'ctest:\n  python3 scripts/check_abi_receipt_skips.py --build-dir '
@@ -227,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     build_dir = args.build_dir.resolve()
     if not (build_dir / 'CMakeCache.txt').is_file():
-        print(f'check_abi_receipt_skips: {args.build_dir} is not a configured CMake build tree',
+        print(f'check_abi_receipt_skips: NOT COMPARED: {args.build_dir} is not a configured CMake build tree',
               file=sys.stderr)
         return 2
     prepared = True
@@ -238,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         rows = gated_rows(registered_tests(build_dir, args.ctest))
     except (OSError, RuntimeError, ValueError) as error:
-        print(f'check_abi_receipt_skips: {error}', file=sys.stderr)
+        print(f'check_abi_receipt_skips: NOT COMPARED: {error}', file=sys.stderr)
         return 2
     code = report(rows, build_dir, str(args.build_dir))
     return code if prepared else 1

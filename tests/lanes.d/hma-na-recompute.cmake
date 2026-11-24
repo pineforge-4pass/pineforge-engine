@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_hma_na_recompute)
+pineforge_add_unit_test(test_hma_na_recompute)

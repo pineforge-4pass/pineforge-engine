@@ -9,8 +9,8 @@ its commit's hash or by its own words; older text restored over newer text is
 a revert and fails the same way; a fresh rewrite and a re-anchor pass without
 a name; a commit that predates the gate is not judged; a checkout with no main
 ref starts after the newest merged pull request, as CI's merge base does, and
-still judges what came after it; and the replay mode the audit's acceptance uses
-reads only the message it is given.
+still judges what came after it. Replay accepts complete commit messages and
+supplemental messages; the walk judges each commit by its own message.
 
 Legacy commit-subject literals below exercise the gate's provenance parser.
 """
@@ -21,6 +21,7 @@ import io
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -209,6 +210,41 @@ class MustFail(unittest.TestCase):
             self.assertIn('V19-D', out)             # the name that would have passed
             self.assertIn(added[:guard.SHA_CHARS], out)
 
+    def test_a_listed_page_with_a_missing_blob_is_not_empty(self) -> None:
+        path = 'docs/pages/guide.md'
+        for side in ('parent', 'head'):
+            with self.subTest(side=side), repo() as r:
+                guide = r.page
+                r.page = r.root / 'README.md'
+                start = r.commit('# Guide\n', 'docs: index')
+                r.page = guide
+                parent = r.commit(KEEP_HANDLE + '\n', 'docs: add guide')
+                self.assertEqual(r.run('--base', start)[0], 0)  # a genuinely new page
+                if side == 'parent':
+                    guide.unlink()
+                    r.page = r.root / 'README.md'
+                    head = r.commit('# Index\n', 'docs: tidy')
+                    ref = parent
+                    code, out = r.run('--base', parent, '--head', head)
+                    self.assertEqual(code, 1, out)  # deleting the file deletes its sentence
+                    self.assertIn(KEEP_HANDLE, out)
+                else:
+                    head = r.commit('# Empty\n', 'docs: keeps its handle keeps its lineage')
+                    ref = head
+                    self.assertEqual(r.run('--base', parent)[0], 0)  # named deletion
+
+                blob = r.git('rev-parse', f'{ref}:{path}')
+                stored = r.root / '.git' / 'objects' / blob[:2] / blob[2:]
+                stored.chmod(stored.stat().st_mode | stat.S_IWRITE)
+                stored.unlink()
+                self.assertEqual(r.git('ls-tree', '--name-only', ref, '--', path), path)
+                for args in (('--base', parent), ('--base', parent, '--head', head)):
+                    with self.subTest(args=args):
+                        code, out = r.run(*args)
+                        self.assertEqual(code, 2, out)
+                        self.assertIn(f'NOT COMPARED: cannot read {ref[:7]}:{path}', out)
+                        self.assertNotIn('... OK', out)
+
     def test_restoring_older_text_is_a_revert(self) -> None:
         """A rebase that kept its own base's page put
         older wording back over newer wording. Similar text, so not a deletion,
@@ -243,20 +279,102 @@ class MustFail(unittest.TestCase):
             self.assertEqual(code, 1, out)
             self.assertIn('unnamed deletion', out)
 
-    def test_replay_reads_only_the_message_it_is_given(self) -> None:
+    def test_a_walk_needs_a_commit_with_a_parent(self) -> None:
         with repo() as r:
-            base, added = self.setup_history(r)
-            tidy = r.commit(BASE_PAGE, 'docs: drop the V19-D keep_handle sentence')
-            message = r.root / 'message.txt'
-            message.write_text('docs: tidy the guide\n')
-            code, out = r.run('--base', added, '--head', tidy, '--message-file', str(message))
+            r.commit(BASE_PAGE, 'docs: first guide')
+            code, out = r.run()
+            self.assertEqual(code, 2, out)
+            self.assertIn('NOT COMPARED: no commits to compare', out)
+            r.commit(with_keep_handle(), 'docs: published guide (#12)')
+            for args in ((), ('--base', 'HEAD')):
+                with self.subTest(args=args):
+                    code, out = r.run(*args)
+                    self.assertEqual(code, 2, out)
+                    self.assertIn('NOT COMPARED: no commits to compare', out)
+            code, out = r.run('--head', 'HEAD', '--files', 'docs/pages/guide.md')
+            self.assertEqual(code, 2, out)
+            self.assertIn('NOT COMPARED: base and head are the same commit', out)
+
+    def test_an_empty_file_selection_cannot_hide_a_deletion(self) -> None:
+        with repo() as r:
+            base = r.commit(with_keep_handle(), 'docs: guide')
+            head = r.commit(BASE_PAGE, 'docs: tidy')
+            code, out = r.run('--base', base, '--head', head, '--files')
+            self.assertEqual(code, 2, out)
+            self.assertIn('NOT COMPARED: no pages to compare', out)
+            code, out = r.run('--base', base, '--head', head, '--files', 'docs/missing.md')
+            self.assertEqual(code, 2, out)
+            self.assertIn('NOT COMPARED: no published page docs/missing.md', out)
+            code, out = r.run('--base', base, '--head', head)
             self.assertEqual(code, 1, out)
-            self.assertIn('unnamed deletion', out)
-            code, out = r.run('--base', added, '--head', tidy)   # its own message names it
-            self.assertEqual(code, 0, out)
+            self.assertIn(KEEP_HANDLE, out)
+
+    def test_a_code_change_needs_published_pages_for_comparison(self) -> None:
+        with repo() as r:
+            r.page = r.root / 'source.txt'
+            base = r.commit('first\n', 'add source')
+            head = r.commit('second\n', 'edit source')
+            for args in (('--base', base), ('--base', base, '--head', head)):
+                with self.subTest(args=args):
+                    code, out = r.run(*args)
+                    self.assertEqual(code, 2, out)
+                    self.assertIn('NOT COMPARED: no pages to compare', out)
+            (r.root / 'README.md').write_text(BASE_PAGE)
+            base = r.commit('third\n', 'publish guide')
+            head = r.commit('fourth\n', 'edit source again')
+            for args in (('--base', base), ('--base', base, '--head', head)):
+                with self.subTest(args=args):
+                    code, out = r.run(*args)
+                    self.assertEqual(code, 0, out)
+                    if '--head' in args:
+                        self.assertIn('(1 pages)', out)  # the README was compared
+
+    def test_a_walk_does_not_lend_a_quote_to_the_deleting_commit(self) -> None:
+        with repo() as r:
+            base = r.commit(with_keep_handle(), 'docs: guide')
+            r.commit(BASE_PAGE, 'docs: tidy')
+            other = r.commit(BASE_PAGE + '\nThe guide now includes separate examples.\n',
+                             'docs: "keeps its handle keeps its lineage"')
+            message = r.root / 'message.txt'
+            message.write_text('keeps its handle keeps its lineage\n')
+            for option in (('--message-file', str(message)), ('--message-from', other)):
+                with self.subTest(option=option):
+                    code, out = r.run('--base', base, *option)
+                    self.assertEqual(code, 1, out)
+                    self.assertIn('unnamed deletion of ' + repr(KEEP_HANDLE), out)
+
+    def test_replay_cannot_join_half_quotes_across_messages(self) -> None:
+        with repo() as r:
+            base = r.commit(with_keep_handle(), 'docs: guide')
+            r.commit(BASE_PAGE, 'keeps its lineage')
+            head = r.commit(BASE_PAGE + '\nThe guide now includes separate examples.\n',
+                            'keeps its handle')
+            code, out = r.run('--base', base, '--head', head)
+            self.assertEqual(code, 1, out)
+            self.assertIn('unnamed deletion of ' + repr(KEEP_HANDLE), out)
 
 
 class MustPass(unittest.TestCase):
+    def test_replay_adds_to_the_range_messages(self) -> None:
+        kernel = 'The kernel books every lot at its fill price and never rounds it.'
+        quote = 'The kernel books every lot at'
+        with repo() as r:
+            base = r.commit(with_keep_handle(), 'docs: ' + quote)
+            head = r.commit(BASE_PAGE.replace(kernel, ''), 'docs: keeps its handle keeps its lineage')
+            message = r.root / 'message.txt'
+            message.write_text(quote)
+            code, out = r.run('--base', base, '--head', head)
+            self.assertEqual(code, 1, out)
+            self.assertIn('unnamed deletion of ' + repr(kernel), out)
+            for option in (('--message-file', str(message)), ('--message-from', base)):
+                with self.subTest(option=option):
+                    code, out = r.run('--base', base, '--head', head, *option)
+                    self.assertEqual(code, 0, out)
+            message.unlink()
+            code, out = r.run('--base', base, '--head', head, '--message-file', str(message))
+            self.assertEqual(code, 2, out)
+            self.assertIn('NOT COMPARED: cannot read message file', out)
+
     def deleted_with(self, message: str) -> tuple[int, str]:
         with repo() as r:
             r.commit(BASE_PAGE, 'docs: the guide')
@@ -507,6 +625,41 @@ class MergeCommits(unittest.TestCase):
             code, out = r.run_ci()
             self.assertEqual(code, shifted_code, out)
             self.assertEqual(out, shifted_out)
+
+
+class MainTip(unittest.TestCase):
+    def test_only_the_implicit_range_at_the_tip_of_main_is_skipped(self) -> None:
+        notice = ('NOT COMPARED: HEAD is the tip of main; '
+                  'its commits were judged before the merge\n')
+        for ref in ('refs/remotes/origin/main', 'refs/heads/main'):
+            with self.subTest(ref=ref), repo() as r:
+                parent = r.commit(BASE_PAGE, 'docs: publish the guide')
+                tip = r.commit(with_keep_handle(), 'docs: revise the guide (#12)')
+                r.git('update-ref', ref, tip)
+                r.git('checkout', '-q', '--detach', tip)
+                modes = (((), 'no commits to compare'),
+                         (('--head', 'HEAD'), 'base and head are the same commit'))
+                for args, reason in modes:
+                    with self.subTest(args=args, base='implicit'):
+                        self.assertEqual(r.run(*args), (77, notice))
+                    with self.subTest(args=args, base='explicit'):
+                        self.assertEqual(r.run('--base', tip, *args),
+                                         (2, f'check_doc_reverts: NOT COMPARED: {reason}\n'))
+
+                r.git('checkout', '-q', '-b', 'edit', tip)
+                r.commit(BASE_PAGE, 'docs: tidy the guide')
+                for args, _ in modes:
+                    with self.subTest(args=args, checkout='above main'):
+                        code, out = r.run(*args)
+                        self.assertEqual(code, 1, out)
+                        self.assertIn('unnamed deletion of ' + repr(KEEP_HANDLE), out)
+
+                # An ancestor of main can also be its own merge base.
+                r.git('checkout', '-q', '--detach', parent)
+                for args, reason in modes:
+                    with self.subTest(args=args, checkout='behind main'):
+                        self.assertEqual(r.run(*args),
+                                         (2, f'check_doc_reverts: NOT COMPARED: {reason}\n'))
 
 
 if __name__ == '__main__':

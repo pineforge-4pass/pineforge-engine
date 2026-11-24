@@ -884,7 +884,7 @@ std::optional<PeriodCore> fixed_day_core(const SessionDay& day, int64_t ms,
 }
 
 FixedGridLeads fixed_grid_leads(const SessionCalendar& cal) {
-    return {session_grid_policy::native_stamp_lead_minutes(cal.literal()) * kMsPerMinute,
+    return {session_grid_policy::stamp_lead_minutes(cal.literal()) * kMsPerMinute,
             session_grid_policy::grid_lead_minutes(cal.literal()) * kMsPerMinute};
 }
 

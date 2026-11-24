@@ -213,6 +213,8 @@ struct PineSecurityEvalState {
     // barmerge.gaps_on: the site reads na on every input that completes no
     // requested bucket (clear_security on the generated series).
     bool gaps_on = false;
+    // Project this site's historical higher-timeframe values from the first chart child.
+    bool historical_lookahead_projection = false;
     // Native fixed-period publication clears once per observable chart,
     // independently of how many finer evaluator inputs that chart contains.
     std::optional<std::int64_t> native_gap_chart_open;
@@ -312,17 +314,12 @@ struct PineSecurityEvalState {
     double ha_prev_open = 0.0;
     double ha_prev_close = 0.0;
     bool ha_seeded = false;
-    // One entry per projected HTF bucket, populated only for an explicitly
-    // opted-in finite historical batch. Empty for every default/streaming
-    // run and for sites outside the narrow HTF lookahead_on+gaps_off
-    // contract. The feed index advances once per retained input bar (bars
-    // before an opt-in security range start are dropped by both producer
-    // and consumer); the projection cursor advances only at the next
-    // bucket's first child.
+    // One entry per retained HTF bucket when the run or the site requests projection.
+    // A forming last child at a site that opted in gets its own partial update.
+    // Stream warmup and continuation never use these entries.
     std::vector<HistoricalSecurityProjection> historical_projections;
     std::size_t historical_projection_cursor = 0;
-    // Which projection (cursor) has already been dispatched: every later
-    // input of the same bucket is a no-op for the evaluator.
+    // Dispatch only on the first input named by each entry.
     bool historical_projection_dispatched = false;
     // request.security_lower_tf emulation: a requested TF finer than the
     // evaluator input is synthesized from each input bar's OHLC path
@@ -971,6 +968,10 @@ protected:
     void register_security_eval(int sec_id, const std::string& requested_tf,
                                 const std::string& input_tf, bool lookahead_on,
                                 bool gaps_on = false, bool heikinashi = false);
+    // A same-symbol site may request the final higher-timeframe value on historical bars.
+    void register_security_eval(int sec_id, const std::string& requested_tf,
+                                const std::string& input_tf, bool lookahead_on, bool gaps_on,
+                                bool heikinashi, bool historical_lookahead_projection);
     // request.security of ANOTHER symbol (lane XSYM-D): `symbol` is the
     // run-time string the script passes. The site reads the feed installed
     // for (symbol, requested_tf) through a kernel InstrumentFeed series: its
@@ -993,6 +994,10 @@ protected:
     void register_security_eval(int sec_id, const std::string& symbol,
                                 const std::string& requested_tf, const char* input_tf,
                                 bool lookahead_on, bool gaps_on = false) = delete;
+    // With all seven foreign arguments a literal input_tf was valid before the site option.
+    void register_security_eval(int sec_id, const std::string& symbol,
+                                const std::string& requested_tf, const char* input_tf,
+                                bool lookahead_on, bool gaps_on, bool ignore_invalid_symbol);
     // The named column (strategy_set_symbol_feed_column) of the context bar a
     // foreign site is evaluating, or last evaluated; NaN when the site, the
     // column or the bar is unknown. Generated payload code reads it.

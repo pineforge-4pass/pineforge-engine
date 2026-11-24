@@ -508,6 +508,11 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         f.s(exit.exit_id); f.s(exit.from_entry); f.d(exit.trail_points); f.d(exit.trail_offset);
         f.d(exit.trail_price); f.d(exit.qty_percent); f.s(exit.comment); f.d(exit.qty);
         f.s(exit.oca_name); f.d(exit.profit_ticks); f.d(exit.loss_ticks);
+        if (exit.has_priced_limit || exit.has_priced_stop) {
+            f.s("relative-exit-prices/v1");
+            f.b(exit.has_priced_limit);
+            f.b(exit.has_priced_stop);
+        }
         // Folded only when set, like PlacementSnapshot::void_global_issue.
         if (exit.void_global) f.u(0x766f6964676cULL);
         if (exit.reservation_sequence != 0) {
@@ -538,14 +543,18 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
             f.b(leg.armed); f.d(leg.installed_level);
         }
     }
-    // Folded only while a global exit covers its position entry by entry
-    // (ExitBindingRuleSwitches::global_exit_per_entry_levels), so every other
-    // run keeps its established hash.
+    // The named definition also remembers which opening orders its last call covered.
+    // Only named exits write that suffix; the global record keeps its original spelling.
     if (!per_entry_exits_.empty()) {
         f.s("pineforge-source-per-entry-exits/v1");
         f.u(per_entry_exits_.size());
         for (const auto& exit : per_entry_exits_) {
             f.s(exit.exit_id); f.i(exit.cycle); f.b(exit.long_side);
+            if (!exit.from_entry.empty()) {
+                f.s("named-per-entry-exit/v1");
+                f.s(exit.from_entry);
+                f.u(exit.last_call);
+            }
             f.d(exit.profit_ticks); f.d(exit.loss_ticks); f.s(exit.comment);
             f.u(exit.children.size());
             for (const auto& child : exit.children) {
@@ -655,7 +664,10 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     }
     // The pyramiding records, unmerged, kept only under pyramiding above one;
     // folded only while there are any, so every other run keeps its digest.
-    if (!pyramiding_records_.empty()) {
+    // Without a declared step they are the open lots until a close books one out
+    // of fill order.
+    if (!pyramiding_records_.empty()
+        && (staged_.quantity_grid.has_value() || pyramiding_records_diverged_)) {
         f.s("pineforge-pyramiding-records/v1");
         f.u(pyramiding_records_.size());
         for (const auto& record : pyramiding_records_) {
@@ -1241,6 +1253,9 @@ void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const
             f.i(sec_id);
             f.b(pine.lookahead_on);
             f.b(pine.gaps_on);
+            if (pine.historical_lookahead_projection) {
+                f.s("historical-lookahead-site/v1");
+            }
             if (pine.native_gap_chart_open) {
                 f.s("native-gap-chart/v1");
                 f.b(pine.native_gap_chart_open.has_value());

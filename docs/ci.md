@@ -961,9 +961,9 @@ the one in `CLAUDE.md` included -- registers the four receipt-gated rows
 `--skip-if-receipt-missing`. Until the seven providers are prepared in that tree,
 each exits 77, and CTest counts a skipped row as passed: `100% tests passed`
 does not include them. `scripts/check_abi_receipt_skips.py --build-dir <dir>`
-names every receipt-gated row that will skip (or, registered
-`--require-receipts`, fail) and exits 1 when there is one. With `--prepare` it
-first prepares the seven providers into the tree with the argv `ci_verify.py`
+names each registered input that is missing and exits 1 if any are missing.
+An unusable registry exits 2. Only CTest results show which rows ran. It does not know every argument that a row's own program requires, and it looks for the program only under an absolute path, so a missing relative program is not refused. With
+`--prepare` it first prepares the seven providers into the tree with the argv `ci_verify.py`
 uses (`ReceiptRecipe` in `scripts/test_ci_verify.py` holds the two equal):
 it fetches a missing pinned commit, reuses a matching provider and refuses a
 mismatched one without deleting it, so a tree prepared this way is one
@@ -977,7 +977,7 @@ cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=O
 cmake --build build -j4
 python3 scripts/check_abi_receipt_skips.py --build-dir build --prepare
 ctest --test-dir build --output-on-failure
-python3 scripts/check_abi_receipt_skips.py --build-dir build   # exits 1 if a gated row skipped
+python3 scripts/check_abi_receipt_skips.py --build-dir build   # exits 1 for missing input files
 ```
 
 The CTest row `test_abi_receipt_skips` (`scripts/test_abi_receipt_skips.py`)
@@ -1281,7 +1281,7 @@ fail-closed from the day it landed: it reads `docs/design/native-feature-parity.
 §1, replays `tests/CMakeLists.txt`'s own decision about which units the kernel
 profile compiles, and fails when an inventory row's closure marker does not
 match what the tests actually drive. `--ctest-list` cross-checks its transliteration
-against real `ctest -N` output in both directions.
+against real `ctest -N` output in both directions. A list variable that is set inside a disabled branch still counts as a closure witness, and preflight passes no `--ctest-list`, so its registry comparison reads `NOT COMPARED`.
 
 The sixth is `scripts/check_pine_to_native_coverage.py` (`doc-pine-coverage`),
 fail-closed from the day it landed as well: it derives the offered Pine set

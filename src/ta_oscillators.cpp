@@ -10,10 +10,10 @@
 #include <pineforge/ta.hpp>
 #include <pineforge/na.hpp>
 #include <pineforge/ta_compare_band.hpp>
+#include "ta_observation_count.hpp"
 
 #include <algorithm>
 #include <cmath>
-#include <numeric>
 #include <string>
 #include <vector>
 
@@ -50,7 +50,7 @@ double RSI::compute(double src) {
 
     if (bar_count == 0) {
         prev_src = src;
-        bar_count++;
+        bar_count = 1;
         return na<double>();
     }
 
@@ -62,7 +62,7 @@ double RSI::compute(double src) {
     double rma_down_val = rma_down.compute(down);
 
     prev_src = src;
-    bar_count++;
+    detail::advance_observation_count(bar_count);
 
     if (is_na(rma_up_val) || is_na(rma_down_val)) {
         return na<double>();
@@ -271,16 +271,8 @@ bool Cross::compute(double a, double b) {
 Mom::Mom(int length) : length_(length) {}
 
 double Mom::compute(double src) {
-    if (is_na(src)) {
-        return na<double>();
-    }
-
-    buffer_.push_back(src);
-    while ((int)buffer_.size() > length_ + 1) {
-        buffer_.pop_front();
-    }
-
-    if ((int)buffer_.size() < length_ + 1) {
+    const long long keep = static_cast<long long>(length_) + 1;
+    if (keep <= 0 || !bar_.push(buffer_, src, keep) || static_cast<long long>(buffer_.size()) < keep) {
         return na<double>();
     }
 
@@ -292,16 +284,8 @@ double Mom::compute(double src) {
 ROC::ROC(int length) : length_(length) {}
 
 double ROC::compute(double src) {
-    if (is_na(src)) {
-        return na<double>();
-    }
-
-    buffer_.push_back(src);
-    while ((int)buffer_.size() > length_ + 1) {
-        buffer_.pop_front();
-    }
-
-    if ((int)buffer_.size() < length_ + 1) {
+    const long long keep = static_cast<long long>(length_) + 1;
+    if (keep <= 0 || !bar_.push(buffer_, src, keep) || static_cast<long long>(buffer_.size()) < keep) {
         return na<double>();
     }
 
@@ -318,21 +302,13 @@ double ROC::compute(double src) {
 Rising::Rising(int length) : length_(length) {}
 
 double Rising::compute(double src) {
-    if (is_na(src)) {
-        return 0.0;
-    }
-
-    buffer_.push_back(src);
-    while ((int)buffer_.size() > length_ + 1) {
-        buffer_.pop_front();
-    }
-
-    if ((int)buffer_.size() < length_ + 1) {
+    const long long keep = static_cast<long long>(length_) + 1;
+    if (!bar_.push(buffer_, src, keep) || static_cast<long long>(buffer_.size()) < keep) {
         return 0.0;
     }
 
     // Check if each consecutive pair is rising
-    for (int i = 1; i < (int)buffer_.size(); i++) {
+    for (std::size_t i = 1; i < buffer_.size(); ++i) {
         if (buffer_[i] <= buffer_[i - 1]) {
             return 0.0;
         }
@@ -345,21 +321,13 @@ double Rising::compute(double src) {
 Falling::Falling(int length) : length_(length) {}
 
 double Falling::compute(double src) {
-    if (is_na(src)) {
-        return 0.0;
-    }
-
-    buffer_.push_back(src);
-    while ((int)buffer_.size() > length_ + 1) {
-        buffer_.pop_front();
-    }
-
-    if ((int)buffer_.size() < length_ + 1) {
+    const long long keep = static_cast<long long>(length_) + 1;
+    if (!bar_.push(buffer_, src, keep) || static_cast<long long>(buffer_.size()) < keep) {
         return 0.0;
     }
 
     // Check if each consecutive pair is falling
-    for (int i = 1; i < (int)buffer_.size(); i++) {
+    for (std::size_t i = 1; i < buffer_.size(); ++i) {
         if (buffer_[i] >= buffer_[i - 1]) {
             return 0.0;
         }
@@ -372,16 +340,7 @@ double Falling::compute(double src) {
 CCI::CCI(int length) : length_(length) {}
 
 double CCI::compute(double src) {
-    if (is_na(src)) {
-        return na<double>();
-    }
-
-    buffer_.push_back(src);
-    while ((int)buffer_.size() > length_) {
-        buffer_.pop_front();
-    }
-
-    if ((int)buffer_.size() < length_) {
+    if (!bar_.push(buffer_, src, length_) || (int)buffer_.size() < length_) {
         return na<double>();
     }
 
@@ -415,9 +374,9 @@ RCI::RCI(int length)
 
 double RCI::calculate() {
     const int n = static_cast<int>(buffer_.size());
-    // Rank the live random-access window directly. Keep the legacy prices_
-    // member empty so the public C++ class layout stays unchanged without a
-    // second length-sized price allocation or a full-window copy per call.
+    // Rank the live window directly. The legacy prices_ member stays empty:
+    // there is no second price allocation or full-window copy. The separate
+    // bar_ member records what to undo on a recalculation.
     for (int i = 0; i < n; i++) {
         order_[i] = i;
     }
@@ -431,7 +390,7 @@ double RCI::calculate() {
         while (j + 1 < n && buffer_[order_[j + 1]] == buffer_[order_[i]]) {
             j++;
         }
-        double avg_rank = (i + j) / 2.0;
+        const double avg_rank = (static_cast<double>(i) + j) / 2.0;
         for (int k = i; k <= j; k++) {
             price_rank_[order_[k]] = avg_rank;
         }
@@ -443,18 +402,16 @@ double RCI::calculate() {
         double d = (double)t - price_rank_[t];
         sum_d2 += d * d;
     }
-    double rho = 1.0 - 6.0 * sum_d2 / (n * (n * n - 1));
+    // n * (n * n - 1) leaves the int range from n = 1291. In double every
+    // factor and product is exact while the product fit in an int, so those
+    // windows keep their value.
+    const double nd = static_cast<double>(n);
+    double rho = 1.0 - 6.0 * sum_d2 / (nd * (nd * nd - 1.0));
     return rho * 100.0;
 }
 
 double RCI::compute(double src) {
-    if (is_na(src)) {
-        return na<double>();
-    }
-    buffer_.push_back(src);
-    while ((int)buffer_.size() > length_) {
-        buffer_.pop_front();
-    }
+    if (!bar_.push(buffer_, src, length_)) return na<double>();
     const int n = (int)buffer_.size();
     if (n < length_ || n < 2) {
         return na<double>();
@@ -487,7 +444,7 @@ double MFI::compute(double src, double vol) {
     saved_bar_count_ = bar_count_;
     saved_pos_buffer_ = pos_buffer_;
     saved_neg_buffer_ = neg_buffer_;
-    bar_count_++;
+    detail::advance_observation_count(bar_count_);
     double pos = 0, neg = 0;
     if (!is_na(prev_src_)) {
         double mf = src * vol;
@@ -499,7 +456,7 @@ double MFI::compute(double src, double vol) {
     prev_src_ = src;
     pos_buffer_.push_front(pos);
     neg_buffer_.push_front(neg);
-    if (bar_count_ < length_ + 1) return na<double>();
+    if (saved_bar_count_ < length_) return na<double>();
     double pos_sum = 0, neg_sum = 0;
     for (std::size_t i = pos_buffer_.size(); i > 0; --i) {
         pos_sum += pos_buffer_[i - 1];
@@ -533,7 +490,7 @@ double CMO::compute(double src) {
     saved_bar_count_ = bar_count_;
     saved_up_buffer_ = up_buffer_;
     saved_down_buffer_ = down_buffer_;
-    bar_count_++;
+    detail::advance_observation_count(bar_count_);
     double up = 0, down = 0;
     if (!is_na(prev_src_)) {
         double diff = src - prev_src_;
@@ -543,7 +500,7 @@ double CMO::compute(double src) {
     prev_src_ = src;
     up_buffer_.push_front(up);
     down_buffer_.push_front(down);
-    if (bar_count_ < length_ + 1) return na<double>();
+    if (saved_bar_count_ < length_) return na<double>();
     double up_sum = 0, down_sum = 0;
     for (std::size_t i = up_buffer_.size(); i > 0; --i) {
         up_sum += up_buffer_[i - 1];
@@ -716,85 +673,38 @@ double Change::recompute(double src, int length) {
 
 // --- Mom ---
 double Mom::recompute(double src) {
-    if (buffer_.empty()) return compute(src);
-    buffer_.back() = src;
-
-    if (is_na(src)) return na<double>();
-    if ((int)buffer_.size() < length_ + 1) return na<double>();
-    return src - buffer_.front();
+    bar_.undo(buffer_);
+    return compute(src);
 }
 
 // --- ROC ---
 double ROC::recompute(double src) {
-    if (buffer_.empty()) return compute(src);
-    buffer_.back() = src;
-
-    if (is_na(src)) return na<double>();
-    if ((int)buffer_.size() < length_ + 1) return na<double>();
-
-    double prev = buffer_.front();
-    if (prev == 0.0) return na<double>();
-    return (src - prev) / prev * 100.0;
+    bar_.undo(buffer_);
+    return compute(src);
 }
 
 // --- Rising ---
 double Rising::recompute(double src) {
-    if (buffer_.empty()) return compute(src);
-    buffer_.back() = src;
-
-    if (is_na(src)) return 0.0;
-    if ((int)buffer_.size() < length_ + 1) return 0.0;
-
-    for (int i = 1; i < (int)buffer_.size(); i++) {
-        if (buffer_[i] <= buffer_[i - 1]) return 0.0;
-    }
-    return 1.0;
+    bar_.undo(buffer_);
+    return compute(src);
 }
 
 // --- Falling ---
 double Falling::recompute(double src) {
-    if (buffer_.empty()) return compute(src);
-    buffer_.back() = src;
-
-    if (is_na(src)) return 0.0;
-    if ((int)buffer_.size() < length_ + 1) return 0.0;
-
-    for (int i = 1; i < (int)buffer_.size(); i++) {
-        if (buffer_[i] >= buffer_[i - 1]) return 0.0;
-    }
-    return 1.0;
+    bar_.undo(buffer_);
+    return compute(src);
 }
 
 // --- CCI ---
 double CCI::recompute(double src) {
-    if (buffer_.empty()) return compute(src);
-    buffer_.back() = src;
-
-    if (is_na(src)) return na<double>();
-    if ((int)buffer_.size() < length_) return na<double>();
-
-    double sum = 0.0;
-    for (double v : buffer_) sum += v;
-    double mean = sum / length_;
-
-    double md_sum = 0.0;
-    for (double v : buffer_) md_sum += std::abs(v - mean);
-    double mean_dev = md_sum / length_;
-
-    if (mean_dev == 0.0) return 0.0;
-    return (src - mean) / (0.015 * mean_dev);
+    bar_.undo(buffer_);
+    return compute(src);
 }
 
 // --- RCI ---
 double RCI::recompute(double src) {
-    if (buffer_.empty()) return compute(src);
-    buffer_.back() = src;
-
-    if (is_na(src)) return na<double>();
-    const int n = (int)buffer_.size();
-    if (n < length_ || n < 2) return na<double>();
-
-    return calculate();
+    bar_.undo(buffer_);
+    return compute(src);
 }
 
 // --- MFI ---

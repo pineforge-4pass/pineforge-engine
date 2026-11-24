@@ -482,12 +482,16 @@ public:
 
 class WMA {
     int length_;
+    bool pushed_ = false;
     // Ring buffer (capacity == length_) instead of std::deque to avoid
     // per-bar node allocation. Newest sample at offset 0, oldest at
     // offset length_-1. The per-bar O(length) weighted-sum recompute is
     // unchanged — see WMA::compute for the oldest→newest weight 1..length
     // accumulation order that parity depends on.
     DynamicRingBuffer<double> buffer_;
+    double evicted_ = na<double>();
+
+    double weighted_mean() const;
 
 public:
     explicit WMA(int length, WindowCacheCapacity cache = window_cache_capacity());
@@ -534,10 +538,15 @@ public:
 class StdDev {
     int length_;
     bool biased_;
+    // Unbiased path: what the current bar's compute() did to buffer_, so that
+    // recompute() can undo it before running the bar again.
+    bool pushed_ = false;
+    bool evicted_ = false;
     std::optional<OwnedDeque<double>> buffer_; // materialized only for the unbiased path
     // The later November captures checked these compensated sums separately, not the final deviation.
     KahanWindowSum sum_x_;           // src
     KahanWindowSum sum_xx_;          // src * src
+    double evicted_value_ = 0.0;     // the value the current bar pushed out
 
 public:
     explicit StdDev(int length, bool biased = true);
@@ -774,9 +783,14 @@ public:
 
 class VWMA {
     int length_;
+    bool pushed_ = false;
+    bool evicted_ = false;
+    bool saw_na_ = false;
     OwnedDeque<double> sv_buffer_;
     OwnedDeque<double> v_buffer_;
     double sv_sum_, v_sum_;
+    double saved_sv_sum_ = 0.0, saved_v_sum_ = 0.0;
+    double evicted_sv_ = 0.0, evicted_v_ = 0.0;
 
 public:
     explicit VWMA(int length);
@@ -788,11 +802,47 @@ public:
     }
 };
 
+// Undo just the last bar of a window of non-missing samples. No evicted
+// sample can itself be na, so na marks the absence of an eviction.
+class ValidWindowBar {
+    bool pushed_ = false;
+    double evicted_ = na<double>();
+
+public:
+    bool push(OwnedDeque<double>& window, double src, long long limit) {
+        const bool present = !is_na(src);
+        if (!present || limit <= 0) {
+            pushed_ = false;
+            evicted_ = na<double>();
+            return present && limit == 0; // An empty span can still be evaluated.
+        }
+        window.push_back(src);
+        pushed_ = true;
+        evicted_ = na<double>();
+        if (static_cast<long long>(window.size()) > limit) {
+            evicted_ = window.front();
+            window.pop_front();
+        }
+        return true;
+    }
+
+    void undo(OwnedDeque<double>& window) {
+        if (!pushed_) return;
+        if (!is_na(evicted_)) window.push_front(evicted_);
+        window.pop_back();
+        pushed_ = false;
+    }
+
+    bool pushed() const { return pushed_; }
+    double evicted() const { return evicted_; }
+};
+
 // --- Mom (Momentum) ---
 
 class Mom {
     int length_;
     OwnedDeque<double> buffer_;
+    ValidWindowBar bar_;
 
 public:
     explicit Mom(int length);
@@ -809,6 +859,7 @@ public:
 class ROC {
     int length_;
     OwnedDeque<double> buffer_;
+    ValidWindowBar bar_;
 
 public:
     explicit ROC(int length);
@@ -825,6 +876,7 @@ public:
 class Rising {
     int length_;
     OwnedDeque<double> buffer_;
+    ValidWindowBar bar_;
 
 public:
     explicit Rising(int length);
@@ -841,6 +893,7 @@ public:
 class Falling {
     int length_;
     OwnedDeque<double> buffer_;
+    ValidWindowBar bar_;
 
 public:
     explicit Falling(int length);
@@ -857,6 +910,7 @@ public:
 class CCI {
     int length_;
     OwnedDeque<double> buffer_;
+    ValidWindowBar bar_;
 
 public:
     explicit CCI(int length);
@@ -926,6 +980,7 @@ class RCI {
     std::vector<double> prices_;
     std::vector<int> order_;
     std::vector<double> price_rank_;
+    ValidWindowBar bar_;
 
     double calculate();
 
@@ -945,6 +1000,7 @@ class Variance {
     int length_;
     bool biased_;
     OwnedDeque<double> buffer_;
+    ValidWindowBar bar_;
 
 public:
     explicit Variance(int length, bool biased = true);
@@ -962,6 +1018,7 @@ class Median {
     int length_;
     OwnedDeque<double> buffer_;
     std::vector<double> scratch_;
+    ValidWindowBar bar_;
 
     double calculate();
 
@@ -1203,7 +1260,7 @@ public:
 
 class ValueWhen {
     OwnedDeque<double> values_;
-    int max_occurrence_;
+    long long max_occurrence_; // occurrences kept: max_occurrence + 1, at least 1
 
     OwnedDeque<double> saved_values_;
 
@@ -1620,6 +1677,7 @@ class Mode {
     int length_;
     OwnedDeque<double> buffer_;
     std::vector<CountEntry> counts_;
+    ValidWindowBar bar_;
 
     void add_count(double value);
     void remove_count(double value);
@@ -1651,6 +1709,7 @@ public:
 class Dev {
     int length_;
     OwnedDeque<double> buffer_;
+    ValidWindowBar bar_;
 public:
     explicit Dev(int length) : length_(length) {}
     double compute(double src);

@@ -87,15 +87,15 @@ class GatedRows(unittest.TestCase):
         # --receipt is the row's own output, never an input.
         self.assertEqual((skipping.mode, skipping.missing, skipping.database),
                          ('skip', (absent,), None))
-        self.assertEqual(skipping.verdict, 'skips')
+        self.assertEqual(skipping.verdict, 'inputs missing')
         self.assertEqual((required.mode, required.missing), ('require', ()))
         self.assertEqual(required.database, build / 'compile_commands.json')
-        self.assertEqual(required.verdict, 'fails')
+        self.assertEqual(required.verdict, 'inputs missing')
 
     def test_a_missing_receipt_fails_a_row_registered_to_require_it(self):
         row = skips.GatedRow('required', 'require', (Path('/nowhere/receipt.json'),))
-        self.assertEqual(row.verdict, 'fails')
-        self.assertEqual(skips.GatedRow('ready', 'skip', ()).verdict, 'runs')
+        self.assertEqual(row.verdict, 'inputs missing')
+        self.assertEqual(skips.GatedRow('ready', 'skip', ()).verdict, 'inputs present')
 
 
 class AgainstRealCTest(unittest.TestCase):
@@ -171,11 +171,11 @@ class AgainstRealCTest(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn('registers 3 receipt-gated CTest rows', out)
         for name in ('test_gated_pair', 'test_gated_settlement', 'test_gated_budget'):
-            self.assertRegex(out, rf'\n  skips +{name} +receipts? missing: ')
+            self.assertRegex(out, rf'\n  inputs missing +{name} +receipts? missing: .*receipt mode: skip')
         self.assertIn('settlement-abi-base/receipt.json, native-abi-v16-frozen/receipt.json', out)
         self.assertNotIn('test_plain_python_row', out)
         self.assertNotIn('pair-receipt.json', out)
-        self.assertIn('3 of 3 receipt-gated rows do not run', out)
+        self.assertIn('3 of 3 receipt-gated rows lack required input files', out)
         self.assertIn('--prepare', out)
 
     def test_with_every_receipt_present_every_gated_row_runs(self):
@@ -183,9 +183,11 @@ class AgainstRealCTest(unittest.TestCase):
         self.receipts(build)
         code, out = self.check(build)
         self.assertEqual(code, 0, out)
-        self.assertIn('every receipt they read is present: all 3 run', out)
+        for name in self.GATED:
+            self.assertRegex(out, rf'inputs present +{name}\b')
         run = subprocess.run([CTEST, '--test-dir', str(build)], capture_output=True, text=True)
-        self.assertNotIn('Skipped', run.stdout)
+        self.assertEqual(run.returncode, 0, run.stdout)
+        self.assertEqual(ctest_rows(run.stdout.encode()).ran, 1 + len(self.GATED), run.stdout)
 
     def test_a_tree_without_a_compile_database_fails_the_budget_row_once_it_runs(self):
         # test_l4g_runtime_budget reads compile_commands.json after its receipt
@@ -195,7 +197,7 @@ class AgainstRealCTest(unittest.TestCase):
         self.receipts(build)
         code, out = self.check(build)
         self.assertEqual(code, 1, out)
-        self.assertRegex(out, r'\n  fails +test_gated_budget +compile database missing: '
+        self.assertRegex(out, r'\n  inputs missing +test_gated_budget +compile database missing: '
                               r'compile_commands\.json')
         self.assertIn('-DCMAKE_EXPORT_COMPILE_COMMANDS=ON', out)
         self.assertNotIn('--prepare', out)
@@ -207,6 +209,16 @@ class AgainstRealCTest(unittest.TestCase):
         code, out = self.check(build)
         self.assertEqual(code, 0, out)
         self.assertIn('registers no receipt-gated CTest row', out)
+
+    def test_empty_ctest_registry_cannot_establish_receipt_readiness(self):
+        build = self.build_tree(export_compile_commands=True)
+        (build / 'CTestTestfile.cmake').write_text('')
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code, out = self.check(build)
+        self.assertEqual(code, 2, out + err.getvalue())
+        self.assertIn('no CTest rows', err.getvalue())
+        self.assertNotIn('registers no receipt-gated', out)
 
     def test_a_directory_that_is_no_build_tree_is_refused(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -289,11 +301,10 @@ class PrivateFixtureManifests(unittest.TestCase):
         manifest = self.manifest(role)
         return ['cmake', '-E', 'echo', 'SKIP private fixtures not present: ' + manifest]
 
-    def gated(self, role, build, *, mode='--require-receipts'):
-        """The row dict the real registration gives provider `role`."""
+    def receipt_args(self, role, build):
+        """The input flag and path for one provider in the real command."""
         stem = {'e60': 'base', '0e': 'prior'}.get(role, role)
-        return [sys.executable, 'check.py', f'--{stem}-receipt',
-                str(build / PROVIDERS[role]['default_output'] / 'receipt.json'), mode]
+        return [f'--{stem}-receipt', str(build / PROVIDERS[role]['default_output'] / 'receipt.json')]
 
     def test_absent_manifests_make_the_four_rows_pinned_skips_not_failures(self):
         # Every manifest the tree would need is absent: each of the four rows
@@ -327,10 +338,7 @@ class PrivateFixtureManifests(unittest.TestCase):
                 self.assertIn(f'  {role}: skipped (exit 77): {literal}', out)
             self.assertNotIn('refused', out)
 
-    def test_present_manifests_leave_all_four_rows_running(self):
-        # Every manifest and every provider receipt present: the four rows are
-        # receipt-gated exactly as before and every one runs -- exit 0, four
-        # rows named, none skipped or failed.
+    def test_present_receipts_make_all_four_rows_ready(self):
         with tempfile.TemporaryDirectory() as temporary:
             build = Path(temporary)
             for role in PROVIDERS:
@@ -338,16 +346,17 @@ class PrivateFixtureManifests(unittest.TestCase):
                 receipt.parent.mkdir(parents=True, exist_ok=True)
                 receipt.write_text('{}\n')
             tests = [{'name': row,
-                      'command': [flag
-                                  for role in self.ROW_PROVIDERS[row]
-                                  for flag in self.gated(role, build)]}
+                      'command': [sys.executable, 'check.py', '--require-receipts',
+                                  *(arg for role in self.ROW_PROVIDERS[row]
+                                    for arg in self.receipt_args(role, build))]}
                      for row in self.ROWS]
             rows = skips.gated_rows(tests)
             self.assertEqual([row.name for row in rows], list(self.ROWS))
-            self.assertEqual([row.verdict for row in rows], ['runs'] * 4)
+            self.assertEqual([row.verdict for row in rows], ['inputs present'] * 4)
             code, out = self.report(rows, build)
         self.assertEqual(code, 0, out)
-        self.assertIn('every receipt they read is present: all 4 run', out)
+        for name in self.ROWS:
+            self.assertRegex(out, rf'inputs present +{name}\b')
 
     def test_a_bare_77_from_the_preparer_is_still_a_failure(self):
         # The skip is bought by the literal, never by the exit code alone.

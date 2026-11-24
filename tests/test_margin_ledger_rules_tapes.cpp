@@ -35,6 +35,7 @@
 #include <pineforge/bar.hpp>
 #include <pineforge/source/pine_adapter.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
+#include "entry_fill_tape.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -145,7 +146,7 @@ struct Case {
     std::vector<Event> events;
 };
 
-std::vector<Case> load_cases() {
+std::vector<Case> load_cases(const std::string& selected_tape = {}) {
     std::ifstream in(fixture("cases.tsv"));
     CHECK(in.good());
     std::string line;
@@ -165,6 +166,7 @@ std::vector<Case> load_cases() {
         CHECK(cell.size() == header.size());
         if (cell.size() != header.size()) continue;
         auto at = [&](const char* name) -> const std::string& { return cell[column[name]]; };
+        if (!selected_tape.empty() && at("tape") != selected_tape) continue;
         auto number = [&](const char* name) { return std::strtod(at(name).c_str(), nullptr); };
         Case c;
         c.name = at("name");
@@ -286,8 +288,8 @@ std::vector<Row> tape_rows(const Case& c) {
 
 // The probe's script, configured from one cases.tsv row: strategy() with the
 // row's initial capital and margins, 100 % of equity by default, no
-// commission, no slippage; the symbol's mintick and quantity step, and for
-// the stocks the exchange's time zone and regular session.
+// commission, no slippage; the symbol's mintick, and for the stocks the
+// exchange's time zone and regular session. The caller supplies any lot step.
 class LedgerHost final : public source::PineStrategyHost {
 public:
     explicit LedgerHost(const Case& c) : c_(c) {
@@ -303,7 +305,6 @@ public:
         configuration.default_qty_value = 100.0;
         configure_pine_strategy(configuration);
         set_syminfo_mintick(c.tick);
-        set_syminfo_metadata("qty_step", c.step);
         if (c.symbol.rfind("NYSE:", 0) == 0 || c.symbol.rfind("NASDAQ:", 0) == 0) {
             set_syminfo_timezone("America/New_York");
             set_syminfo_session("0930-1600");
@@ -347,6 +348,7 @@ struct Outcome {
 
 Outcome replay(const Case& c, const std::vector<Bar>& bars) {
     LedgerHost host(c);
+    host.set_syminfo_metadata("qty_step", c.step);
     host.run(bars.data(), static_cast<int>(bars.size()), c.timeframe, c.timeframe);
     Outcome outcome;
     outcome.error = host.last_error();
@@ -414,7 +416,24 @@ pineforge::source::detail::MarginRuleSwitches all_rules_on() {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc >= 3 && std::string(argv[1]) == "--equity-entry") {
+        const auto cases = load_cases(argv[2]);
+        if (cases.size() != 1 || tests_failed) throw std::runtime_error("invalid equity-entry case");
+        const auto& c = cases.front();
+        if (c.symbol != "BINANCE:ETHUSDT.P" || c.events.size() != 2 ||
+            c.events[0].op != Op::Entry || !c.events[0].is_long || !std::isnan(c.events[0].qty) ||
+            c.events[1].op != Op::CloseAll)
+            throw std::runtime_error("expected one default long from flat and a close");
+        const auto tv = entry_fill_tape::recorded_long(fixture(c.tape));
+        const auto bars = load_bars(c.bars);
+        if (bars.empty() || tests_failed) throw std::runtime_error("invalid equity-entry feed");
+        LedgerHost host(c);
+        entry_fill_tape::set_eth_symbol(host, c.tick, argc - 3, argv + 3);
+        host.run(bars.data(), static_cast<int>(bars.size()), c.timeframe, c.timeframe);
+        return entry_fill_tape::matches(host, c.events[0].id, tv) ? 0 : 1;
+    }
+    if (argc != 1) return 1;
     std::printf("=== margin_ledger_rules: TradingView tapes of event-ledger margin, sizing and admission probes ===\n");
     const std::vector<Case> cases = load_cases();
     CHECK(cases.size() == kTapes);
