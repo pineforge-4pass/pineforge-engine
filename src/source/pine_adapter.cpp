@@ -12873,10 +12873,10 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
             || parent.projection_over_pyramiding) {
             return;
         }
-        const double units = finite_positive(parent.requested_qty)
+        const bool fixed_qty = parent.qty_type < 0 || parent.qty_type == static_cast<int>(QtyType::FIXED);
+        const double units = fixed_qty && finite_positive(parent.requested_qty)
             ? std::abs(parent.requested_qty) : parent.frozen_market_own_units;
-        // Only a single named market entry from flat supplies a known basis.
-        // Multiple parents need not open the sum of their quantities at once.
+        // One market parent supplies the basis; per-call cash and percentages still need its fill price.
         if (size_waiting_shares) {
             pending_market_units = (pending_market_units == 0.0 && source_market_entry(parent)
                                     && finite_positive(units)) ? units : kNaN;
