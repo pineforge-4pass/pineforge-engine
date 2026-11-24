@@ -543,14 +543,18 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
             f.b(leg.armed); f.d(leg.installed_level);
         }
     }
-    // Folded only while a global exit covers its position entry by entry
-    // (ExitBindingRuleSwitches::global_exit_per_entry_levels), so every other
-    // run keeps its established hash.
+    // The named definition also remembers which opening orders its last call covered.
+    // Only named exits write that suffix; the global record keeps its original spelling.
     if (!per_entry_exits_.empty()) {
         f.s("pineforge-source-per-entry-exits/v1");
         f.u(per_entry_exits_.size());
         for (const auto& exit : per_entry_exits_) {
             f.s(exit.exit_id); f.i(exit.cycle); f.b(exit.long_side);
+            if (!exit.from_entry.empty()) {
+                f.s("named-per-entry-exit/v1");
+                f.s(exit.from_entry);
+                f.u(exit.last_call);
+            }
             f.d(exit.profit_ticks); f.d(exit.loss_ticks); f.s(exit.comment);
             f.u(exit.children.size());
             for (const auto& child : exit.children) {

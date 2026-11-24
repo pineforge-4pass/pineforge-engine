@@ -2280,13 +2280,9 @@ private:
         double installed_level = std::numeric_limits<double>::quiet_NaN();
     };
 
-    // A from_entry "" exit with relative legs that covers the position entry
-    // by entry (ExitBindingRuleSwitches::global_exit_per_entry_levels): kept
-    // from the moment the position it stands on holds a second entry until the
-    // book goes flat. `children` are the entries in fill order, each with the
-    // fill price its bracket's levels come from and the quantity it closes;
-    // `consumed` once a leg of its bracket filled (TradingView never gives that
-    // entry another one).
+    // Children are kept in fill order, with the fill price that sets the
+    // bracket's levels and the units it closes. Reissuing the exit does
+    // not give a consumed opening another bracket.
     struct PerEntryExitChild {
         std::uint64_t origin = 0;
         double fill_price = std::numeric_limits<double>::quiet_NaN();
@@ -2295,6 +2291,9 @@ private:
     };
     struct PerEntryExit {
         SourceId exit_id;
+        SourceId from_entry;
+        // A named exit covers an order at its fill only if the call followed the order.
+        std::uint64_t last_call = 0;
         std::int64_t cycle = 0;
         bool long_side = true;
         double profit_ticks = std::numeric_limits<double>::quiet_NaN();
@@ -2813,10 +2812,15 @@ private:
     bool fill_time_global_exit(const PlacementSnapshot&) const;
     // A held global exit with relative legs, entry by entry
     // (ExitBindingRuleSwitches::global_exit_per_entry_levels).
-    bool per_entry_exit_scope() const;
-    detail::ExitScratchRows<PerEntryExitChild> per_entry_open_entries(bool long_side) const;
+    bool per_entry_exit_scope(bool named = false) const;
+    detail::ExitScratchRows<PerEntryExitChild> per_entry_open_entries(
+        bool long_side, const SourceId& from_entry = {}) const;
     detail::ExitScratchRows<native_order::RequestHandle> per_entry_child_legs(
         const SourceId& exit_id, std::uint64_t origin) const;
+    detail::ExitScratchRows<native_order::RequestHandle> scoped_per_entry_child_legs(
+        const SourceId& exit_id, std::uint64_t origin, const SourceId& from_entry) const;
+    bool named_per_entry_scope(const SourceId& exit_id, const SourceId& from_entry) const;
+    void end_named_per_entry_exit(const SourceId& exit_id, const SourceId& from_entry);
     bool per_entry_exit_call(const SourceId& exit_id, const SourceId& from_entry, double limit,
                              double stop, double trail_points, double trail_offset,
                              double trail_price, double qty_percent, const std::string& comment,
