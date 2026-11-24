@@ -208,6 +208,16 @@ class AgainstRealCTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn('registers no receipt-gated CTest row', out)
 
+    def test_empty_ctest_registry_cannot_establish_receipt_readiness(self):
+        build = self.build_tree(export_compile_commands=True)
+        (build / 'CTestTestfile.cmake').write_text('')
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code, out = self.check(build)
+        self.assertEqual(code, 2, out + err.getvalue())
+        self.assertIn('no CTest rows', err.getvalue())
+        self.assertNotIn('registers no receipt-gated', out)
+
     def test_a_directory_that_is_no_build_tree_is_refused(self):
         with tempfile.TemporaryDirectory() as temporary:
             err = io.StringIO()

@@ -5076,6 +5076,25 @@ class PrivateFixtureFloors(unittest.TestCase):
         self.assertEqual(len(pinned), ci_verify.PRIVATE_FIXTURE_ROW_COUNT - 1 + len(probes))
         self.assertEqual(pinned, labelled)
 
+    def test_private_label_in_a_globbed_registration_is_compared(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tests = Path(directory) / 'tests'
+            fragments = tests / 'lanes.d'
+            fragments.mkdir(parents=True)
+            main = tests / 'CMakeLists.txt'
+            main.write_text(
+                'set(row test_example)\n'
+                'file(GLOB LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/lanes.d/*.cmake")\n'
+                'list(SORT LANE_CMAKE)\nforeach(lane_file IN LISTS LANE_CMAKE)\n'
+                '    include("${lane_file}")\nendforeach()\n')
+            part = fragments / 'example.cmake'
+            part.write_text('add_test(NAME test_example COMMAND example)\n'
+                            'set_tests_properties(${row} PROPERTIES LABELS private_fixtures)\n')
+            self.assertEqual(labelled_private_fixture_rows(main), {'test_example'},
+                             'private_fixtures comparison omitted an included registration')
+            part.write_text(part.read_text().replace('LABELS private_fixtures', 'LABELS slow'))
+            self.assertEqual(labelled_private_fixture_rows(main), set())
+
     def test_red_the_comparison_fails_on_a_real_mismatch(self):
         # RED control for the test above: the same reader over tampered copies.
         # A labelled row the pin does not carry, a pinned row whose label is
