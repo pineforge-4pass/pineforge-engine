@@ -962,7 +962,7 @@ the one in `CLAUDE.md` included -- registers the four receipt-gated rows
 each exits 77, and CTest counts a skipped row as passed: `100% tests passed`
 does not include them. `scripts/check_abi_receipt_skips.py --build-dir <dir>`
 names each registered input that is missing and exits 1 if any are missing.
-An unusable registry exits 2. Only CTest results show which rows ran. With
+An unusable registry exits 2. Only CTest results show which rows ran. It does not know every argument that a row's own program requires. With
 `--prepare` it first prepares the seven providers into the tree with the argv `ci_verify.py`
 uses (`ReceiptRecipe` in `scripts/test_ci_verify.py` holds the two equal):
 it fetches a missing pinned commit, reuses a matching provider and refuses a
