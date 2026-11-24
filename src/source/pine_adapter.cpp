@@ -20268,11 +20268,11 @@ bool PineExecutionAdapter::unified_admission_terms(
 
 // The instruments these rules are pinned on: a lot grid that is a power
 // of ten (every tape's -- 1, 0.01, 0.0001, 1e-05 -- and every population
-// member's). A continuous quantity or another grid keeps the engine's earlier
-// rules: no tape decides there, and the synthetic fuzz batteries that run
-// there (tests/test_publication_witness.cpp's 0.25 lot,
-// test_adapter_live_state_equivalence's continuous one) book their trades as
-// before.
+// member's). Another grid keeps the engine's earlier rules, and so does a
+// continuous quantity except for the entry records
+// (ledger_records_configured_), which the script recorded for #694 decides
+// there. The synthetic fuzz batteries (tests/test_publication_witness.cpp's
+// 0.25 lot, test_adapter_live_state_equivalence's continuous one) pin both.
 // Formed once per staged configuration (set_staged_configuration).
 [[gnu::always_inline]] inline bool PineExecutionAdapter::pinned_lot_grid() const {
     return lot_grid_pinned_;
