@@ -12488,6 +12488,7 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
     const double tick = staged_.syminfo.mintick;
     bool parent_long = physical.signed_units > 0.0;
     bool known_parent_level = physical.signed_units != 0.0;
+    bool waiting_market_entry = false;
     // ab9714be src/source/pine_fills.cpp:4560-4564 (pending_order_level_resolved)
     // and 7208-7229: an exit's relative operands resolve against the LIVE
     // position once its from_entry filled this cycle (W23b); an empty from_entry
@@ -12534,6 +12535,7 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
             && ((physical.signed_units > 0.0) == parent.is_long)) {
             return;
         }
+        if (source_market_entry(parent)) waiting_market_entry = true;
         parent_long = parent.is_long;
         known_parent_level = finite_positive(parent.exit_levels.limit);
         if (known_parent_level) entry_price = parent.exit_levels.limit;
@@ -12639,15 +12641,38 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
         (!finite_positive(limit_price) && finite_positive(profit_ticks))
         || (!finite_positive(stop_price) && finite_positive(loss_ticks));
     const bool unresolved_relative = unresolved_trail || unresolved_ticks;
+    const bool waiting_price = !known_parent_level && !has_trail_request && !materializing_relative_
+        && (std::isfinite(limit_price) || std::isfinite(stop_price));
+    // A delayed market entry has no level to supply, but the price issued
+    // beside it must still be available to its fill.
+    if (waiting_price && !waiting_market_entry && !delayed_market_orders_.empty()) {
+        waiting_market_entry = std::any_of(delayed_market_orders_.begin(),
+            delayed_market_orders_.end(), [&](const DelayedMarketOrder& delayed) {
+                const auto& parent = delayed.snapshot;
+                return source_market_entry(parent)
+                    && (from_entry.empty() || parent.source_id == from_entry);
+            });
+    }
+    const bool mixed_market_exit = waiting_market_entry && waiting_price && unresolved_ticks;
     // A void call leaves no relative leg for the entry's fill to resolve.
     if (unresolved_relative && !void_issue) {
         PendingRelativeExit pending;
-        pending.exit_id = exit_id; pending.from_entry = from_entry;
-        pending.trail_points = source_trail_points; pending.trail_offset = source_trail_offset;
-        pending.trail_price = source_trail_price; pending.qty_percent = qty_percent;
-        pending.comment = comment; pending.qty = qty; pending.oca_name = oca_name;
-        pending.profit_ticks = profit_ticks; pending.loss_ticks = loss_ticks;
+        pending.exit_id = exit_id;
+        pending.from_entry = from_entry;
+        pending.trail_points = source_trail_points;
+        pending.trail_offset = source_trail_offset;
+        pending.trail_price = source_trail_price;
+        pending.qty_percent = qty_percent;
+        pending.comment = comment;
+        pending.qty = qty;
+        pending.oca_name = oca_name;
+        pending.profit_ticks = profit_ticks;
+        pending.loss_ticks = loss_ticks;
         pending.void_global = void_global_issue;
+        if (mixed_market_exit) {
+            pending.has_priced_limit = std::isfinite(limit_price);
+            pending.has_priced_stop = std::isfinite(stop_price);
+        }
         auto existing = std::find_if(pending_relative_exits_.begin(), pending_relative_exits_.end(),
             [&](const PendingRelativeExit& value) {
                 return value.exit_id == exit_id && value.from_entry == from_entry;
@@ -12674,9 +12699,27 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
                 && same(existing->loss_ticks, pending.loss_ticks)
                 && existing->comment == pending.comment
                 && existing->oca_name == pending.oca_name;
-            // The kernel child carries the definition it was anchored from.
+            // The anchored child carries the relative operands; the caller's
+            // priced sibling is replaced separately by this call.
             if (!unchanged) withdraw_anchored_relative_legs(&exit_id, &from_entry);
             *existing = std::move(pending);
+        }
+    } else if (waiting_market_entry && waiting_price && !unresolved_relative
+               && !only_opening && !void_issue && !pending_relative_exits_.empty()) {
+        // A later priced call replaces the waiting mixed bracket too. Keep its
+        // place in the reservation queue, but do not replay its old ticks.
+        const auto old = std::find_if(
+            pending_relative_exits_.begin(), pending_relative_exits_.end(),
+            [&](const PendingRelativeExit& value) {
+                return value.exit_id == exit_id && value.from_entry == from_entry
+                    && (value.has_priced_limit || value.has_priced_stop);
+            });
+        if (old != pending_relative_exits_.end()) {
+            if (old->reservation_sequence != 0) {
+                reservation_sequence = old->reservation_sequence;
+            }
+            withdraw_anchored_relative_legs(&exit_id, &from_entry);
+            pending_relative_exits_.erase(old);
         }
     }
     if (unresolved_relative) {
@@ -12687,37 +12730,36 @@ void PineExecutionAdapter::exit_with_reservation_sequence(
                         && row.snapshot.from_entry == from_entry;
                 }),
             source_shadow_pending_.end());
-        // A known absolute sibling remains executable while the relative
-        // trail/profit/loss component waits for its MARKET parent's fill.
-        // ab9714be pine_strategy_commands.cpp:533-537: 0.0 is a present level.
-        // Kernel validate_levels still refuses non-finite and negative
-        // levels (A43); those stay command projections.
-        if (finite_non_negative(limit_price) || finite_non_negative(stop_price)) {
-            // Continue below and submit the known absolute sibling.
-        } else {
-        if (void_issue) return;
-        PlacementSnapshot shadow;
-        shadow.family = has_trail_request ? PineOrderFamily::ExitTrail
-            : (finite_positive(loss_ticks) ? PineOrderFamily::ExitStop
-                                           : PineOrderFamily::ExitLimit);
-        shadow.source_id = exit_id;
-        shadow.from_entry = from_entry;
-        shadow.comment = comment;
-        shadow.oca_name = oca_name;
-        shadow.requested_qty = qty;
-        shadow.qty_percent = qty_percent;
-        shadow.command_sequence = command_sequence;
-        // Each call's projection takes the next source sequence, as the
-        // request a resolved call submits does; a reserved slot rides beside it.
-        shadow.source_sequence = next_queue_sequence();
-        shadow.chain_origin_sequence = reservation_sequence;
-        shadow.projection_position_side = static_cast<std::int32_t>(PositionSide::FLAT);
-        shadow.exit_levels = {limit_price, stop_price, source_trail_points,
-                              source_trail_offset, source_trail_price,
-                              profit_ticks, loss_ticks};
-        shadow.sizing = sizing_snapshot();
-        pending_write(source_shadow_pending_).push_back({std::move(shadow), exit_id});
-        return;
+        // A negative stop or buy limit can rest at the native zero threshold.
+        // A negative sell limit has no executable order while flat; keep its
+        // sibling's tick definition until the opening supplies the basis.
+        const bool rests_below_zero = mixed_market_exit
+            && (stop_price < 0.0 || (!parent_long && limit_price < 0.0));
+        if (!rests_below_zero && !finite_non_negative(limit_price)
+            && !finite_non_negative(stop_price)) {
+            if (void_issue) return;
+            PlacementSnapshot shadow;
+            shadow.family = has_trail_request ? PineOrderFamily::ExitTrail
+                : (finite_positive(loss_ticks) ? PineOrderFamily::ExitStop
+                                               : PineOrderFamily::ExitLimit);
+            shadow.source_id = exit_id;
+            shadow.from_entry = from_entry;
+            shadow.comment = comment;
+            shadow.oca_name = oca_name;
+            shadow.requested_qty = qty;
+            shadow.qty_percent = qty_percent;
+            shadow.command_sequence = command_sequence;
+            // Each call's projection takes the next source sequence, as the
+            // request a resolved call submits does; a reserved slot rides beside it.
+            shadow.source_sequence = next_queue_sequence();
+            shadow.chain_origin_sequence = reservation_sequence;
+            shadow.projection_position_side = static_cast<std::int32_t>(PositionSide::FLAT);
+            shadow.exit_levels = {limit_price, stop_price, source_trail_points,
+                                  source_trail_offset, source_trail_price,
+                                  profit_ticks, loss_ticks};
+            shadow.sizing = sizing_snapshot();
+            pending_write(source_shadow_pending_).push_back({std::move(shadow), exit_id});
+            return;
         }
     }
     if (std::isnan(qty) && qty_percent == 100.0) {
@@ -15626,6 +15668,29 @@ bool PineExecutionAdapter::PendingRelativeExit::has_ranked_share(const SourceId&
         && qty_percent < 100.0 - internal::kFullPercentEps;
 }
 
+double PineExecutionAdapter::standing_exit_price(const PendingRelativeExit& value,
+                                                 PineOrderFamily family) const {
+    double price = kNaN;
+    std::uint64_t sequence = 0;
+    const auto consider = [&](const PlacementSnapshot& row) {
+        if (row.family == family && row.source_id == value.exit_id
+            && row.from_entry == value.from_entry && !row.void_issue && !row.void_global_issue
+            && !std::isfinite(row.trail_activation_level) && row.command_sequence >= sequence) {
+            sequence = row.command_sequence;
+            price = family == PineOrderFamily::ExitLimit ? row.exit_levels.limit
+                                                        : row.exit_levels.stop;
+        }
+    };
+    for (const auto& handle : live_handles_) {
+        const auto row = placement_.find(handle.incarnation);
+        if (row != placement_.end()) consider(row->second);
+    }
+    for (const auto& leg : pending_bracket_legs_) consider(leg.snapshot);
+    for (const auto& leg : pending_coof_requests_) consider(leg.snapshot);
+    for (const auto& leg : delayed_market_orders_) consider(leg.snapshot);
+    return price;
+}
+
 std::vector<PineExecutionAdapter::PendingRelativeExit>
 PineExecutionAdapter::materialize_relative_exits(
         PlacementSnapshot opening, const native_order::ExecutionAppliedEvent& event) {
@@ -15696,6 +15761,17 @@ PineExecutionAdapter::materialize_relative_exits(
                     EngineValueStage::relative_price, EngineValueReason::numeric_overflow);
             }
         }
+        // The fill prices the tick distances. Submit the caller's price
+        // beside them as one bracket. Where both operands name the same leg,
+        // keep the level reached first from the entry.
+        if (market_fill && value.has_priced_limit) {
+            const double price = standing_exit_price(value, PineOrderFamily::ExitLimit);
+            limit = opening.is_long ? std::fmin(limit, price) : std::fmax(limit, price);
+        }
+        if (market_fill && value.has_priced_stop) {
+            const double price = standing_exit_price(value, PineOrderFamily::ExitStop);
+            stop = opening.is_long ? std::fmax(stop, price) : std::fmin(stop, price);
+        }
         // An omitted trail_offset is a one-shot activation leg in Pine.  Do
         // not synthesize a trailing distance from trail_points here; an
         // explicit zero/sub-tick offset remains distinguishable and is
@@ -15706,8 +15782,10 @@ PineExecutionAdapter::materialize_relative_exits(
             exit_with_reservation_sequence(
                 value.exit_id, value.from_entry, limit, stop, value.trail_points, offset,
                 value.trail_price, value.qty_percent, value.comment, resolved_qty, value.oca_name,
-                value.from_entry.empty() ? value.profit_ticks : kNaN,
-                value.from_entry.empty() ? value.loss_ticks : kNaN,
+                value.from_entry.empty() && !(market_fill && value.has_priced_limit)
+                    ? value.profit_ticks : kNaN,
+                value.from_entry.empty() && !(market_fill && value.has_priced_stop)
+                    ? value.loss_ticks : kNaN,
                 value.reservation_sequence);
         } catch (...) {
             materializing_relative_ = false;

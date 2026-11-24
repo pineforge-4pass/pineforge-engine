@@ -508,6 +508,11 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         f.s(exit.exit_id); f.s(exit.from_entry); f.d(exit.trail_points); f.d(exit.trail_offset);
         f.d(exit.trail_price); f.d(exit.qty_percent); f.s(exit.comment); f.d(exit.qty);
         f.s(exit.oca_name); f.d(exit.profit_ticks); f.d(exit.loss_ticks);
+        if (exit.has_priced_limit || exit.has_priced_stop) {
+            f.s("relative-exit-prices/v1");
+            f.b(exit.has_priced_limit);
+            f.b(exit.has_priced_stop);
+        }
         // Folded only when set, like PlacementSnapshot::void_global_issue.
         if (exit.void_global) f.u(0x766f6964676cULL);
         if (exit.reservation_sequence != 0) {

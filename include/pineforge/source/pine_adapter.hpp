@@ -2240,6 +2240,10 @@ private:
         // entry order was working, which TradingView voids
         // (PlacementSnapshot::void_global_issue): no entry's fill arms it.
         bool void_global = false;
+        // The caller placed these legs as prices beside a waiting tick leg.
+        // Their current levels belong to the standing orders.
+        bool has_priced_limit = false;
+        bool has_priced_stop = false;
         // A queue slot reserved for the definition; zero while it holds none,
         // and the parent's fill then ranks its legs as they are submitted. A
         // partial percentage definition that names no quantity gets its slot
@@ -2624,6 +2628,7 @@ private:
     // The consumed definitions identify which legs acquired units at this fill.
     std::vector<PendingRelativeExit> materialize_relative_exits(
         PlacementSnapshot, const native_order::ExecutionAppliedEvent&);
+    double standing_exit_price(const PendingRelativeExit&, PineOrderFamily) const;
     void withdraw_anchored_relative_legs(const SourceId* exit_id,
                                          const SourceId* from_entry);
     void withdraw_anchored_relative_readers(const detail::ScratchByteSource* exit_id,
