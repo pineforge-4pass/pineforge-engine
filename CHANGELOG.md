@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- A bare `:line` citation in a Markdown table now needs a file in its own row. A citation in the preceding row can no longer supply it.
 - A code-only commit with an unreadable published page now makes the documentation history walk report `NOT COMPARED`, even when another page can be read.
 - The documentation history check now compares a renamed page with its source and reports any unnamed sentence it lost.
 - The private-fixture checker now scans Python `-c` test commands for absent files and accepts launchers that only forward their arguments.

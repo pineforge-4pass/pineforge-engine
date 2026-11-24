@@ -502,6 +502,15 @@ def collect(page: Path, text: str) -> list[Anchor]:
         return any(lo <= offset < hi for lo, hi in skip)
 
     line_starts = [0] + [m.end() for m in re.finditer('\n', text)]
+    # A delimiter row also identifies tables written without outer pipes.
+    table_rows = set()
+    for line, row in enumerate(text.split('\n'), 1):
+        if '|' not in row:
+            continue
+        if re.fullmatch(r'\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*', row):
+            table_rows.update((line - 1, line))
+        elif row.lstrip().startswith('|') or line - 1 in table_rows:
+            table_rows.add(line)
 
     def doc_line(offset: int) -> int:
         lo, hi = 0, len(line_starts) - 1
@@ -543,9 +552,11 @@ def collect(page: Path, text: str) -> list[Anchor]:
         if fenced(match.start()) or any(lo <= match.start() < hi for lo, hi in taken):
             continue
         line = doc_line(match.start())
-        prior = [a for a in full if a.end <= match.start() and not re.search(
-            r'\n\s*\n|\n\s*#{1,6}\s', text[a.end:match.start()])]
-        prior.sort(key=lambda a: a.end)
+        prior = next((a for a in reversed(full) if a.end <= match.start()), None)
+        if prior and prior.doc_line != line and (
+                any(prior.doc_line <= row <= line for row in table_rows)
+                or re.search(r'\n\s*\n|\n\s*#{1,6}\s', text[prior.end:match.start()])):
+            prior = None
         first = int(match.group('a'))
         last = int(match.group('b') or match.group('a'))
         claim_end, pins = pins_before(text, match.start())
@@ -556,15 +567,15 @@ def collect(page: Path, text: str) -> list[Anchor]:
         if prior and span is not None and ANCHOR_ONLY_RE.match(span):
             # "`sym` x.cpp:1730, `:1755`, `:7695`": the nearest span is the
             # list's previous citation, not a claim; the list shares its head's.
-            symbol, span, mode = prior[-1].symbol, prior[-1].span, prior[-1].mode
+            symbol, span, mode = prior.symbol, prior.span, prior.mode
         anchor = Anchor(page, match.start(), match.end(), line,
-                        prior[-1].path if prior else '', first, last,
+                        prior.path if prior else '', first, last,
                         (match.start() + 1, match.end() - match.start() - 1),
                         symbol, span, mode)
         anchor.pins, anchor.content_hash = pins, (pins[-1] if pins else None)
         anchor.borrowed = borrowed
         anchor.context = text[scope_start(text, claim_end):match.start()]
-        anchor.orphan = not bool(prior)
+        anchor.orphan = prior is None
         found.append(anchor)
     found.sort(key=lambda a: a.start)
     ruling_lines = ruling_table_lines(page, text)
