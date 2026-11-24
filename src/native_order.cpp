@@ -1079,8 +1079,8 @@ inline std::size_t book_position(const std::vector<LiveRequest>& live, uint64_t 
 // deferred chains' id lists keep a fixed resident part and write the rest to
 // run-owned scratch files: detail::ScratchFile, an unlinked close-on-exec file
 // read and written by position. A store that outgrows its resident part spills;
-// a failed write/read, an oversized serialized journal event or a journal page
-// that does not read back as written is a ScratchIoError. Spill preparation can
+// a failed write/read or a journal page that does not read back as written
+// is a ScratchIoError. One event can span several transfers. Preparation can
 // open the journal files before the first spill; a run whose reservation stays
 // resident never touches them. Every spill is made where the caller may still
 // throw (reserve_plan, seal_direct), never in commit.
@@ -1120,6 +1120,20 @@ public:
         const uint64_t at = end_;
         write(at, data, length);
         return at;
+    }
+    // A failed series of writes leaves its physical prefix available for a
+    // retry at the same offset. No reader sees it until the whole append lands.
+    template<class Emit>
+    uint64_t append(Emit&& emit) {
+        file_.open("pineforge-o1e2");
+        const uint64_t start = end_;
+        uint64_t offset = start;
+        emit([&](const void* bytes, std::size_t length) {
+            file_.write(offset, bytes, length);
+            offset += length;
+        });
+        end_ = offset;
+        return start;
     }
     // Forgets everything written and closes the file; the next write opens a
     // fresh one (in the same directory).
@@ -1294,19 +1308,41 @@ private:
 class ByteReader {
 public:
     ByteReader(const unsigned char* data, std::size_t length) noexcept
-        : at_(data), end_(data + length) {}
+        : cursor_(data), end_(data + length) {}
+    using Refill = std::size_t (*)(void*);
+    ByteReader(const unsigned char* window, uint64_t length, void* source, Refill refill) noexcept
+        : cursor_(window), end_(window), transfer_(window), unread_(length),
+          source_(source), refill_(refill) {}
     void raw(void* out, std::size_t length) {
-        if (static_cast<std::size_t>(end_ - at_) < length) {
+        if (length > remaining()) {
             throw detail::ScratchIoError(EIO, "native o1 store record is truncated");
         }
-        if (length != 0) std::memcpy(out, at_, length);
-        at_ += length;
+        auto* dest = static_cast<unsigned char*>(out);
+        while (length != 0) {
+            if (cursor_ == end_) {
+                const std::size_t next = refill_(source_);
+                unread_ -= next;
+                cursor_ = transfer_;
+                end_ = transfer_ + next;
+            }
+            const auto n = std::min(length, static_cast<std::size_t>(end_ - cursor_));
+            std::memcpy(dest, cursor_, n);
+            dest += n;
+            cursor_ += n;
+            length -= n;
+        }
     }
-    std::size_t remaining() const noexcept { return static_cast<std::size_t>(end_ - at_); }
+    uint64_t remaining() const noexcept {
+        return unread_ + static_cast<std::size_t>(end_ - cursor_);
+    }
 
 private:
-    const unsigned char* at_;
+    const unsigned char* cursor_;
     const unsigned char* end_;
+    const unsigned char* transfer_ = nullptr;
+    uint64_t unread_ = 0;
+    void* source_ = nullptr;
+    Refill refill_ = nullptr;
 };
 
 // One field list per type serves both directions, so what a spill writes and
@@ -1331,7 +1367,7 @@ struct LoadAr {
     // external openings come back as they were journaled, never frozen.
     bool openings_as_stored = false;
     void raw(void* data, std::size_t length) { in.raw(data, length); }
-    std::size_t remaining() const noexcept { return in.remaining(); }
+    uint64_t remaining() const noexcept { return in.remaining(); }
     template <class T>
     void operator()(T& item);
 };
@@ -1379,7 +1415,7 @@ void archive_string(Ar& ar, std::string& text) {
     if constexpr (Ar::saving) {
         ar.raw(text.data(), text.size());
     } else {
-        if (length > ar.remaining()) {
+        if (length > ar.remaining() || length > text.max_size()) {
             throw detail::ScratchIoError(EIO, "native o1 store string is truncated");
         }
         text.resize(static_cast<std::size_t>(length));
@@ -1408,7 +1444,8 @@ void archive_vector(Ar& ar, std::vector<Item>& items) {
     uint64_t count = items.size();
     ar.raw(&count, sizeof count);
     if constexpr (!Ar::saving) {
-        if (count > ar.remaining()) {
+        constexpr std::size_t min_bytes = std::is_trivially_copyable_v<Item> ? sizeof(Item) : 1;
+        if (count > ar.remaining() / min_bytes || count > items.max_size()) {
             throw detail::ScratchIoError(EIO, "native o1 store vector is truncated");
         }
         items.clear();
@@ -1491,6 +1528,51 @@ void LoadAr::operator()(T& item) {
     archive_value(*this, item);
 }
 
+// Only an event that did not fit the normal page writer comes here. Reuse
+// its buffer and the same archive field lists, including for nested vectors.
+template<class Write>
+struct SpanningSaveAr {
+    static constexpr bool saving = true;
+    Write& write;
+    unsigned char* window;
+    std::size_t capacity;
+    std::size_t used = 0;
+
+    template<class T>
+    void operator()(const T& item) { archive_value(*this, const_cast<T&>(item)); }
+    void raw(const void* data, std::size_t length) {
+        const auto* bytes = static_cast<const unsigned char*>(data);
+        while (length != 0) {
+            const auto n = std::min(length, capacity - used);
+            std::memcpy(window + used, bytes, n);
+            used += n;
+            bytes += n;
+            length -= n;
+            if (used == capacity) flush();
+        }
+    }
+    void flush() {
+        if (used != 0) write(window, used);
+        used = 0;
+    }
+};
+
+// The seal starts with the complete page record, including its physical length.
+// Only a spanning event needs a size pass; count its archive fields without
+// copying them or treating the in-memory sizeof(CommandEvent) as a wire size.
+struct JournalSizeAr {
+    static constexpr bool saving = true;
+    uint64_t length = 0;
+
+    template<class T>
+    void operator()(const T& item) { archive_value(*this, const_cast<T&>(item)); }
+    void raw(const void*, std::size_t n) {
+        if (n > std::numeric_limits<uint64_t>::max() - length)
+            throw detail::ScratchIoError(EFBIG, "native o1 journal extent exhausted");
+        length += n;
+    }
+};
+
 // The external openings of a request the core refused, read back as it
 // journaled them: in their order, whatever the handles are (a refusal can be
 // for those very handles: one named twice, a zero incarnation, another run).
@@ -1565,9 +1647,8 @@ void archive_refused(Ar& ar, T& item) {
 // bytes, so a resident definition is reused only when its list is this one.
 // A refused request's list was never frozen and is read back as stored; it
 // was copied when its event was built (snapshot_refused_openings), so what is
-// written here is never read through a caller's cursor. Each opening takes
-// 24 bytes inline: see JournalStore::kSpillPageBytes for the list length past
-// which an event cannot be paged.
+// written here is never read through a caller's cursor. The handles are
+// written inline even when the list crosses a journal transfer boundary.
 template <class Ar>
 void archive_external_openings(Ar& ar, std::shared_ptr<const OpeningReadback>& external) {
     std::uint64_t count = 0;
@@ -1588,12 +1669,12 @@ void archive_external_openings(Ar& ar, std::shared_ptr<const OpeningReadback>& e
             external.reset();
             return;
         }
-        // Every handle takes at least a byte: a count past the bytes left is
-        // a damaged record, never an allocation.
-        if (count > ar.remaining()) {
+        // The archive copies each handle as a fixed-width leaf.
+        std::vector<RequestHandle> openings;
+        if (count > ar.remaining() / sizeof(RequestHandle) || count > openings.max_size()) {
             throw detail::ScratchIoError(EIO, "native o1 store record is truncated");
         }
-        std::vector<RequestHandle> openings(static_cast<std::size_t>(count));
+        openings.resize(static_cast<std::size_t>(count));
         for (auto& opening : openings) ar(opening);
         if (ar.openings_as_stored) {
             external = std::make_shared<StoredOpenings>(std::move(openings));
@@ -1805,8 +1886,8 @@ struct WorkingRequestCore::JournalStore {
         codec_positions[slot] = position;
         return *codec_values[slot];
     }
-    // A page holds a contiguous prefix of one chunk, bounded by bytes as well
-    // as kChunk events. Before appending a command's events, make_room spills
+    // A page holds a contiguous prefix of one chunk, up to kChunk events.
+    // Before appending a command's events, make_room spills
     // while resident_count() + incoming exceeds kMaxResident and the existing
     // resident count exceeds kKeepResident. The final chunk prefix can take
     // that count below kKeepResident by up to kChunk - 1 events; this is a
@@ -1814,25 +1895,9 @@ struct WorkingRequestCore::JournalStore {
     static constexpr std::size_t kChunk = 32;
     static constexpr std::size_t kMaxResident = 2048;
     static constexpr std::size_t kKeepResident = 128;
-    // Page layout: concatenated events, each starting with a uint32_t
-    // alternative and a uint64_t ordinal, followed by its fields; the page's
-    // seal (below) follows the last event. The events' 32,768 B bound is the
-    // largest serialized CommandEvent we admit: above it, ScratchIoError(EFBIG). Request
-    // label/comment, BindOpenings/OpeningsClose opening vectors,
-    // SelectedExposure incarnations and TermsResolvedEvent/QuantityBoundEvent
-    // adjustment-id vectors have no finite schema bound. A full page closes
-    // before the next event; no per-event size estimate is used.
-    // The external openings of a BindOpenings/OpeningsClose are written inline
-    // too (archive_external_openings): 8 bytes of count, then 24 per opening
-    // (sizeof(RequestHandle)). So an event whose request or definition names
-    // about 1,360 or more external openings, accepted or refused, cannot be
-    // paged: the spill below refuses it with that EFBIG, typed, in the
-    // throwing phase of the command that needs the room (make_room, from
-    // reserve_plan and seal_direct), and nothing changes; the event stays
-    // resident, so every later command that must page past it is refused the
-    // same way. The per-event byte limit applies only when paging is required:
-    // an event the journal never pages is never refused, so a journal that
-    // stays within kMaxResident events behaves exactly as before.
+    // Each event starts with a uint32_t alternative and a uint64_t ordinal.
+    // Pack whole events into one transfer. An event larger than an empty
+    // transfer gets its own page record covering as many transfers as it needs.
     static constexpr std::size_t kSpillPageBytes = 32768;
     static_assert(sizeof(uint32_t) == 4 && sizeof(uint64_t) == 8,
                   "journal event tag/ordinal byte widths");
@@ -1844,9 +1909,9 @@ struct WorkingRequestCore::JournalStore {
     // differ. So a page that reads back zeroed, partly overwritten, from
     // another place in the file, or under a record that no longer describes
     // it is a typed read failure, never events. The seal is counted in
-    // JournalPage::length and not in kSpillPageBytes: the per-event limit
-    // above is what it was, and a page takes kPageSealBytes more in the file
-    // and in each of the five buffers.
+    // JournalPage::length, not in kSpillPageBytes. A spanning page also
+    // stores a seal at each transfer boundary so the decoder can recheck
+    // the exact bytes in its buffer after the full-page check.
     static constexpr std::size_t kPageSealBytes = sizeof(uint64_t);
     static constexpr std::size_t kSealedPageBytes = kSpillPageBytes + kPageSealBytes;
     // FNV-1a's offset and prime, one word at a time: a bijection of the
@@ -1865,15 +1930,17 @@ struct WorkingRequestCore::JournalStore {
     // zeros (the length is folded with the record). Bit 0 of a seal is always
     // set: no seal is zero, so bytes that read back as zeros never hold the
     // seal of any page.
-    static uint64_t page_seal(const JournalPage& page, const unsigned char* events,
-                              std::size_t length) noexcept {
+    static uint64_t page_seal(const JournalPage& page) noexcept {
         uint64_t seal = kSealSeed;
         seal = seal_word(seal, page.first_position);
         seal = seal_word(seal, page.count);
         seal = seal_word(seal, page.first_ordinal);
         seal = seal_word(seal, page.last_ordinal);
         seal = seal_word(seal, page.offset);
-        seal = seal_word(seal, page.length);
+        return seal_word(seal, page.length);
+    }
+    static uint64_t seal_events(uint64_t seal, const unsigned char* events,
+                                std::size_t length) noexcept {
         std::size_t at = 0;
         for (; length - at >= sizeof(uint64_t); at += sizeof(uint64_t)) {
             uint64_t word = 0;
@@ -1885,8 +1952,36 @@ struct WorkingRequestCore::JournalStore {
             std::memcpy(&word, events + at, length - at);
             seal = seal_word(seal, word);
         }
-        return seal | 1u;
+        return seal;
     }
+    static_assert(kSpillPageBytes % sizeof(uint64_t) == 0, "only the last word needs padding");
+    [[noreturn]] static void refuse_seal() {
+        throw detail::ScratchIoError(EIO, "native o1 journal page does not read back as written");
+    }
+    // Each checkpoint is also a word in the next fold. The last seal covers
+    // the directory record and every preceding physical byte of the page.
+    struct SealedPageReader {
+        const ExtFile& data;
+        unsigned char* bytes;
+        uint64_t offset;
+        uint64_t left;
+        uint64_t seal;
+
+        std::size_t read() {
+            const auto length = static_cast<std::size_t>(std::min<uint64_t>(left, kSealedPageBytes));
+            if (length <= kPageSealBytes) refuse_seal();
+            data.read(offset, bytes, length);
+            const auto payload = length - kPageSealBytes;
+            seal = seal_events(seal, bytes, payload);
+            uint64_t stored;
+            std::memcpy(&stored, bytes + payload, kPageSealBytes);
+            if (stored != (seal | 1u)) refuse_seal();
+            if (length < left) seal = seal_word(seal, stored);
+            offset += length;
+            left -= length;
+            return payload;
+        }
+    };
     struct Chunk {
         std::array<std::optional<CommandEvent>, kChunk> slot;
     };
@@ -2036,8 +2131,7 @@ struct WorkingRequestCore::JournalStore {
         const uint64_t chunk_end = std::min<uint64_t>(end, chunk0_base + kChunk);
         if (chunk_end <= first) return;
         if (!spill) prepare_spill();
-        // The events take at most kSpillPageBytes of the buffer; the seal's
-        // bytes follow them.
+        // Try packing complete events first, leaving space for the seal.
         ByteWriter out(spill->write.data(), kSpillPageBytes);
         SaveAr ar{out};
         uint64_t page_end = first;
@@ -2047,26 +2141,55 @@ struct WorkingRequestCore::JournalStore {
                 ar(resident_at(page_end));
             } catch (const ByteWriter::CapacityExceeded&) {
                 out.rewind(event_start);
-                if (page_end == first) {
-                    throw detail::ScratchIoError(
-                            EFBIG, "native o1 journal event exceeds the spill page byte bound");
-                }
                 break;
             }
         }
+        const bool spanning = page_end == first;
+        if (spanning) ++page_end; // the first event needs the whole extent to itself
         JournalPage page;
         page.first_position = first;
         page.count = page_end - first;
         page.first_ordinal = event_ordinal(resident_at(first));
         page.last_ordinal = event_ordinal(resident_at(page_end - 1));
-        // The page goes to the end of the file. The record is complete before
-        // the seal is folded, so the seal covers every field of it.
         page.offset = data.size();
-        page.length = out.size() + kPageSealBytes;
-        const uint64_t seal = page_seal(page, out.data(), out.size());
-        std::memcpy(spill->write.data() + out.size(), &seal, kPageSealBytes);
+        uint64_t payload = out.size();
+        if (spanning) {
+            JournalSizeAr size;
+            size(resident_at(first));
+            payload = size.length;
+        }
+        const uint64_t transfers = payload / kSpillPageBytes + (payload % kSpillPageBytes != 0);
+        if (transfers > (std::numeric_limits<uint64_t>::max() - payload) / kPageSealBytes)
+            throw detail::ScratchIoError(EFBIG, "native o1 journal extent exhausted");
+        page.length = payload + transfers * kPageSealBytes;
+        uint64_t seal = page_seal(page);
+        auto seal_transfer = [&](unsigned char* bytes, std::size_t n, bool last) {
+            seal = seal_events(seal, bytes, n);
+            const uint64_t stored = seal | 1u;
+            std::memcpy(bytes + n, &stored, kPageSealBytes);
+            if (!last) seal = seal_word(seal, stored);
+        };
         pages.make_room();
-        data.append(spill->write.data(), static_cast<std::size_t>(page.length));
+        if (spanning) {
+            data.append([&](auto write) {
+                uint64_t left = payload;
+                auto flush = [&](unsigned char* bytes, std::size_t n) {
+                    if (n > left)
+                        throw detail::ScratchIoError(EIO, "native o1 journal size changed");
+                    seal_transfer(bytes, n, n == left);
+                    write(bytes, n + kPageSealBytes);
+                    left -= n;
+                };
+                SpanningSaveAr<decltype(flush)> stream{flush, spill->write.data(), kSpillPageBytes};
+                stream(resident_at(first));
+                stream.flush();
+                if (left != 0)
+                    throw detail::ScratchIoError(EIO, "native o1 journal size changed");
+            });
+        } else {
+            seal_transfer(spill->write.data(), out.size(), true);
+            data.append(out.data(), static_cast<std::size_t>(page.length));
+        }
         pages.push(page);
         // drop_front keeps a partly occupied chunk and its original slot base;
         // the next spill starts at page_end, even when it is not aligned.
@@ -2110,8 +2233,12 @@ struct WorkingRequestCore::JournalStore {
         for (const Cached& slot : cache) {
             if (slot.valid && slot.page_no == page_no) return slot.events;
         }
-        if (!spill || page.length > kSealedPageBytes || page.count > kChunk) {
+        if (!spill || page.count > kChunk || (page.length > kSealedPageBytes && page.count != 1)) {
             throw detail::ScratchIoError(EFBIG, "native o1 journal page exceeds byte bound");
+        }
+        if (page.count == 0 || page.length == 0 || page.offset > data.size()
+            || page.length > data.size() - page.offset) {
+            throw detail::ScratchIoError(EIO, "native o1 journal page has invalid extent");
         }
         Cached& slot = cache[cache_next];
         auto& bytes = spill->read[cache_next];
@@ -2119,26 +2246,23 @@ struct WorkingRequestCore::JournalStore {
         // leave a partially replaced event vector under its old cache key.
         slot.valid = false;
         slot.events.clear();
-        // The seal is checked against this record and the bytes just read
-        // before any of them is decoded. A page that does not hold the seal
-        // it was written with, or a record too short to hold one, is refused
-        // here: nothing is decoded from it and no cache slot keeps it.
-        const std::size_t length = static_cast<std::size_t>(page.length);
-        bool intact = length >= kPageSealBytes;
-        if (intact) {
-            data.read(page.offset, bytes.data(), length);
-            uint64_t stored = 0;
-            std::memcpy(&stored, bytes.data() + (length - kPageSealBytes), kPageSealBytes);
-            intact = stored == page_seal(page, bytes.data(), length - kPageSealBytes);
-        }
-        if (!intact) {
-            throw detail::ScratchIoError(
-                    EIO, "native o1 journal page does not read back as written");
-        }
-        ByteReader in(bytes.data(), length - kPageSealBytes);
+        SealedPageReader source{data, bytes.data(), page.offset, page.length, page_seal(page)};
+        auto verify = source;
+        uint64_t payload = 0;
+        while (verify.left != 0) payload += verify.read();
+        // A normal page is still in this slot's buffer. For a spanning page
+        // recheck every refill before exposing its event bytes to the archive.
+        ByteReader in = page.length <= kSealedPageBytes
+            ? ByteReader(bytes.data(), static_cast<std::size_t>(payload))
+            : ByteReader(bytes.data(), payload, &source, [](void* state) {
+                  return static_cast<SealedPageReader*>(state)->read();
+              });
         LoadAr ar{in};
         slot.events.resize(static_cast<std::size_t>(page.count));
         for (CommandEvent& event : slot.events) ar(event);
+        if (in.remaining() != 0) {
+            throw detail::ScratchIoError(EIO, "native o1 journal page has trailing bytes");
+        }
         cache_next = (cache_next + 1) % cache.size();
         slot.page_no = page_no;
         slot.first_position = page.first_position;
