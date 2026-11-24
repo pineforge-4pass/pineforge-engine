@@ -56,7 +56,7 @@ does not make its sequence available again. An unfinished allocation is abandone
 by its call frame, and reset refuses outstanding operations.
 
 The C++ journal checks stored order births on append and decode (`Schema::birth`
-at `src/source/admission_journal_codec.cpp:241`). For `Unattributed`,
+at `src/source/admission_journal_codec.cpp:298`). For `Unattributed`,
 `DirectCommand` and `ChartEvaluation`, the cursor domain and position must both
 be `None`, the index must be −1 and the count must be zero. The cursor price must
 have the exact bits of the factory's absent price (a quiet NaN); both fill
