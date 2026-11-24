@@ -469,7 +469,6 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         hash_native_request(f, order.request); hash_placement(f, order.snapshot);
         f.s(order.replacement_key); f.u(order.release_open_epoch);
         f.b(order.execute_at_open);
-        if (order.release_priced_at_open) f.s("priced-stop-at-open/v1");
     }
     f.u(deferred_open_marketable_sells_.size());
     for (const auto& sell : deferred_open_marketable_sells_) {
@@ -513,9 +512,6 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         if (exit.void_global) f.u(0x766f6964676cULL);
         if (exit.reservation_sequence != 0) {
             f.s("relative-exit-reservation/v1"); f.u(exit.reservation_sequence);
-        }
-        if (exit.following_stop_incarnation != 0) {
-            f.s("relative-exit-following-stop/v1"); f.u(exit.following_stop_incarnation);
         }
     }
     // The anchored-leg integration: folded only while a leg is anchored, so every run that

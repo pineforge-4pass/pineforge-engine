@@ -2165,8 +2165,6 @@ private:
         SourceId replacement_key;
         std::uint64_t release_open_epoch = 0;
         bool execute_at_open = false;
-        // Release this still-priced stop before matching the next opening.
-        bool release_priced_at_open = false;
     };
 
     // A sell-side stop that is already marketable at the open, while
@@ -2248,9 +2246,7 @@ private:
         // when a later exit of the same entry, neither void nor made at the
         // fill, is sized: it then holds a share and ranks those legs.
         std::uint64_t reservation_sequence = 0;
-        // Exact accepted stop placed behind this definition. Replacing or
-        // cancelling the stop invalidates it; this queue is local to one run.
-        std::uint64_t following_stop_incarnation = 0;
+        bool has_ranked_share(const SourceId& entry) const;
     };
 
     // One relative leg of a queued strategy.exit, spelled as the
@@ -2402,7 +2398,8 @@ private:
                                   double percentage_basis,
                                   double& reserved_qty,
                                   std::uint64_t& reservation_sequence,
-                                  bool whole_position_percent = false) const;
+                                  bool whole_position_percent,
+                                  double pending_market_units) const;
     void reconcile_deferred_exit_reservations(const SourceId& from_entry,
                                                double live_basis);
     void reconcile_exit_reservations_after_margin();
@@ -2624,8 +2621,9 @@ private:
     void retire_in_position_exits_at_flat(bool preserve_pending_parents,
                                           bool dormant_rows_only,
                                           const PlacementSnapshot* paired_close);
-    void materialize_relative_exits(PlacementSnapshot,
-                                   const native_order::ExecutionAppliedEvent&);
+    // The consumed definitions identify which legs acquired units at this fill.
+    std::vector<PendingRelativeExit> materialize_relative_exits(
+        PlacementSnapshot, const native_order::ExecutionAppliedEvent&);
     void withdraw_anchored_relative_legs(const SourceId* exit_id,
                                          const SourceId* from_entry);
     void withdraw_anchored_relative_readers(const detail::ScratchByteSource* exit_id,
