@@ -536,7 +536,7 @@ double TSI::compute(double src) {
     ema_short_.save();
     ema_abs_long_.save();
     ema_abs_short_.save();
-    bar_count_++;
+    detail::advance_observation_count(bar_count_);
     if (is_na(prev_src_)) { prev_src_ = src; return na<double>(); }
     double pc = src - prev_src_;
     prev_src_ = src;

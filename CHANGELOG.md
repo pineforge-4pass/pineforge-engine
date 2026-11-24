@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- The observation counters in `ta.atr`, `ta.tr` and `ta.tsi` now stop at 2147483647 instead of overflowing on the next increment.
 - When the 2147483647-sample window of `ta.stdev(..., biased = false)` is full, the next valid input evicts the oldest sample. The window stays seeded when that input is recalculated with another valid value or followed by `na`.
 - The ABI receipt check now names a missing required option or an unavailable relative command before reporting receipt and compile database files as present.
 - The design inventory ignores disabled writes to source lists and names a list it cannot resolve instead of accepting it as evidence of closure.
