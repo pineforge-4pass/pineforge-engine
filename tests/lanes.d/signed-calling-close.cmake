@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_signed_calling_close)
+pineforge_add_unit_test(test_signed_calling_close)
