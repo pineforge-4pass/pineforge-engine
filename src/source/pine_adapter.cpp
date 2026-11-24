@@ -10564,10 +10564,12 @@ std::optional<std::size_t> PineExecutionAdapter::held_ledger_records() const {
     return pyramiding_records_.size();
 }
 
-// Whether the records are the open lots, one for one: no close has booked
-// another opening than the one it drained.
+// The state digest folds the records of a declared step whenever there are
+// any, and the others once they are not the open lots, one for one: until a
+// close books another opening than the one it drained, the lots say it all.
 [[gnu::noinline]]
-bool PineExecutionAdapter::records_are_open_lots() const {
+bool PineExecutionAdapter::folds_pyramiding_records() const {
+    if (pyramiding_records_.empty() || lot_grid_pinned_) return !pyramiding_records_.empty();
     struct Walk {
         const std::vector<PyramidingRecord>& records;
         std::size_t next = 0;
@@ -10582,7 +10584,7 @@ bool PineExecutionAdapter::records_are_open_lots() const {
             ++at.next;
             return at.same;
         });
-    return walk.same && walk.next == pyramiding_records_.size();
+    return !walk.same || walk.next != pyramiding_records_.size();
 }
 
 // The incarnation of the newest opening of `from_entry` this cycle, 0 when
