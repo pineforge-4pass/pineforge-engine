@@ -196,36 +196,19 @@ TRACE_PRIVATE_OPEN_EXIT = 3
 TRACE_RAISED_EXIT = 4
 
 
-def row_argv(kernel, row: str) -> tuple:
-    """The extra argv tests/CMakeLists.txt passes the row's script.
-
-    The trace reproduces the row's own invocation, never a bare run: the
-    two-world row registers `check_two_world_registration.py --both`, and the
-    ROW is what an exemption is about.  Read from the same file the checker
-    parses (its own statement split), so a registration that grows an
-    argument is followed here without a second list to keep in step."""
-    text = (REPO / 'tests' / 'CMakeLists.txt').read_text()
-    for _line, statement in kernel.statements(text):
-        head = kernel.CMAKE_HEAD.match(statement)
-        if not head or head.group(1) != 'add_test':
-            continue
-        name = kernel.ADD_TEST.search(statement)
-        if not name or name.group(1) != row:
-            continue
-        match = re.search(r'[\w${}/.-]+\.py\b', statement)
-        if match is None:
-            raise AssertionError(f'{row}: the registration names no .py script')
-        argv = []
-        for token in statement[match.end():].split():
-            token = token.rstrip(')').strip('"')  # the closing paren rides it
-            if not token:
-                continue
+def row_argv(statement: str, row: str) -> tuple:
+    """The script arguments from this row's own registration."""
+    match = re.search(r'[\w${}/.-]+\.py\b', statement)
+    if match is None:
+        raise AssertionError(f'{row}: the registration names no .py script')
+    argv = []
+    for token in statement[match.end():].split():
+        token = token.rstrip(')').strip('"')
+        if token:
             if '${' in token:
-                raise AssertionError(
-                    f'{row}: unexpanded registration argument {token!r}')
+                raise AssertionError(f'{row}: unexpanded registration argument {token!r}')
             argv.append(token)
-        return tuple(argv)
-    raise AssertionError(f'{row}: no add_test() registration names it')
+    return tuple(argv)
 
 
 def run_sweep(root: Path) -> subprocess.CompletedProcess:
@@ -660,6 +643,8 @@ class KernelPythonSweepControls(unittest.TestCase):
         (self.root / 'tests').mkdir(parents=True)
         (self.root / 'scripts').mkdir(parents=True)
         shutil.copy(KERNEL_SWEEP, self.root / 'scripts')
+        for module in ('cmake_test_includes.py', 'check_lanes_cmake_d.py'):
+            shutil.copy(REPO / 'scripts' / module, self.root / 'scripts')
         self.script = self.root / 'scripts' / 'check_kernel_python_private_reads.py'
         self.cmake = self.root / 'tests' / 'CMakeLists.txt'
         self.addCleanup(self._tmp.cleanup)
@@ -774,13 +759,18 @@ class ExemptRowTraceControls(unittest.TestCase):
         kernel = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(kernel)
         self.assertTrue(kernel.EXEMPT, 'no exempt row: the control is vacuous')
-        rows = {name: script for name, script, _line in
-                kernel.python_rows(REPO / 'tests' / 'CMakeLists.txt')}
         scripts = {}
-        for row in kernel.EXEMPT:
-            self.assertIn(row, rows,
-                          f'{row} is exempt but registers no Python row')
-            scripts[row] = (rows[row], row_argv(kernel, row))
+        for source, cmd in kernel.registration_statements(REPO / 'tests' / 'CMakeLists.txt'):
+            if cmd.name.lower() == 'add_test':
+                statement = f'add_test({cmd.body})'
+                match = kernel.ADD_TEST.search(statement)
+                if match and match[1] in kernel.EXEMPT:
+                    row = kernel.python_row(source, cmd.line, statement)
+                    if row is not None:
+                        name, script = row
+                        scripts[name] = (script, row_argv(statement, name))
+        self.assertEqual(set(scripts), set(kernel.EXEMPT),
+                         'every exemption must name a registered Python row')
         return scripts
 
     def assertTraceCompleted(self, result, where: str) -> None:
