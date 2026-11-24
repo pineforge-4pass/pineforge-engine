@@ -9090,6 +9090,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
             break;
         }
     }
+    const bool opens_after_flatten = preceding_close_all.incarnation != 0;
     const bool sequenced_close_entry = pure_stop_entry
         || (!priced && (!staged_.quantity_grid || *staged_.quantity_grid < 1.0));
     if (preceding_close_all.incarnation == 0 && sequenced_close_entry
@@ -9904,7 +9905,10 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         }
         return;
     }
-    if (same_bar_market_candidate) {
+    // The full close owns the held units. Release this market entry from
+    // flat behind that close, with its own size, even if later commands
+    // join the batch. A partial close still leaves a reversal to size.
+    if (same_bar_market_candidate && !opens_after_flatten) {
         // Default percent/cash commands are already frozen at their source
         // call boundary.  The batch's topology must use that physical own
         // size, never the public percentage/cash scalar, just as the fixed
@@ -15870,7 +15874,18 @@ void PineExecutionAdapter::flush_pending_same_bar_commands(
         && std::count_if(queued.begin(), queued.end(), [](const auto& command) {
             return command.snapshot.frozen_market_targeted_close;
         }) == 1;
-    double simulated = batch_start;
+    // The full close is already on the broker book, ahead of every request
+    // this batch will publish. Walk from its result: a named close of the
+    // retired side cannot reduce the new lot. A canceled close has no effect.
+    const auto script_open = queued.front().snapshot.placement_script_open_ms;
+    const bool opens_after_flatten = batch_start != 0.0
+        && close_all_pending_script_bar_ == script_open
+        && any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) {
+            return row.family == PineOrderFamily::CloseAll && !row.immediately
+                && !row.crosses_zero
+                && row.placement_script_open_ms == script_open;
+        });
+    double simulated = opens_after_flatten ? 0.0 : batch_start;
     std::optional<native_order::RequestHandle> short_seed_long;
     std::optional<native_order::RequestHandle> short_seed_materialize;
     std::optional<native_order::RequestHandle> short_seed_final;
