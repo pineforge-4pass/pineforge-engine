@@ -19,9 +19,9 @@ version number follows semantic versioning over the surfaces the
 - The documentation history check now compares a renamed page with its source and reports any unnamed sentence it lost.
 - The private-fixture checker now scans Python `-c` test commands for absent files and accepts launchers that only forward their arguments.
 - At a bar close, only entries that name contracts enter the fixed-quantity market-pair check. A cash or equity amount no longer inflates the pair's margin cost or its transactions.
-- A stop entry deferred behind a marketable buy or rearmed after another entry was stopped out now keeps its cash or equity sizing at the eventual fill.
-- With an intraday filled-order limit, an opposite entry that follows a full close at the same price now spends its cash or equity budget on the new position.
-- A market entry queued behind a full close on the same bar now converts its cash or equity percentage at the opening fill.
+- A stop entry deferred behind a marketable buy or rearmed after another entry was stopped out now converts a cash or percent-of-equity amount named in its call at the eventual fill. An entry sized by the strategy declaration keeps the quantity it froze when it was placed, at the signal price or, when it was not yet marketable, at its stop price.
+- With an intraday filled-order limit, an opposite entry that follows a full close at the same price now spends the cash or percent-of-equity amount named in its call on the new position. An entry sized by the strategy declaration keeps its frozen quantity.
+- A market entry queued behind a full close on the same bar now converts a cash or percent-of-equity amount named in its call at the opening fill. An entry sized by the strategy declaration keeps the quantity it froze at the signal.
 - Pending entry orders keep cash and equity percentages in their typed request fields; they no longer report those amounts as fixed contracts before the fill.
 - C/C++ and Python citations must find the claimed code outside comments. A pinned C/C++ citation can still identify a comment explicitly.
 - The documentation anchor check reports when it finds no citations.
