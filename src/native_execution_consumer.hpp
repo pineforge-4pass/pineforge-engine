@@ -1462,6 +1462,7 @@ private:
         int64_t ordinal = 0;
         // native_calendar::fixed_bucket_ms(script_tf_).
         int64_t bucket_ms = 0;
+        int64_t stamp_lead_ms = 0;
         std::vector<std::pair<int64_t, int64_t>> spans;
     };
     // The certified cycle holding `ms`, or nullptr when it is not certified:
@@ -1473,11 +1474,9 @@ private:
         return certify_cycle(ms);
     }
     const CertifiedCycle* certify_cycle(int64_t ms) const;
-    // The session point present_session_day reads for `ms` on its certified
-    // cycle, into `point`, when the cycle alone decides it: in session in a
-    // span, out of session when the script interval holding `ms` meets none.
-    // false for an interval that reaches a span from outside every span: the
-    // calendar then answers.
+    // The cycle alone answers for points in its spans and for cells wholly
+    // outside them. A cell reaching a span, or a point in the pre-open part
+    // of the next stamp day, defers to the exact calendar lookup.
     bool certified_point(const CertifiedCycle& cycle, int64_t ms, SessionPoint& point) const {
         for (const auto& span : cycle.spans) {
             if (span.first <= ms && ms < span.second) {
@@ -1485,6 +1484,8 @@ private:
                 return true;
             }
         }
+        if (cycle.stamp_lead_ms != 0 && ms >= cycle.next_origin_ms - cycle.stamp_lead_ms)
+            return false;
         if (certified_interval_meets_span(cycle, ms)) return false;
         point = {false, cycle.ordinal};
         return true;

@@ -166,8 +166,8 @@ TimeframeCompatibility stream_compatibility(const Timeframe& input, const Timefr
 // (open <= query < next_period_open). A DST gap that maps both ends of one
 // instance to the same epoch omits that instance only.
 //
-// Native origin is that first-window start. Pine's 17:00 day stamp on an
-// 1800-1700 session is a compatibility label, not this component's default.
+// The trading-day origin is that first-window start. The fixed grid can use
+// an earlier stamp; for 1800-1700 the fixed stamp is 17:00 (see NativeInterval).
 //
 // Fold tie-break (civil -> epoch): a repeated local civil time maps to the
 // earlier UTC occurrence (first time through). Adjacent intervals that share
@@ -459,8 +459,8 @@ std::optional<NativeSessionDay> session_day_at(const SessionCalendar& calendar, 
 // ---------------------------------------------------------------------------
 //
 // open_ms                  nominal origin of this interval (session origin or fixed-grid anchor
-//                          from the declared first-window origin; one recorded session's fixed grid
-//                          leads its origin, see below). A split-session reopen can fall after this
+//                          from the declared first-window origin, with the exceptions below).
+//                          A split-session reopen can fall after this
 //                          anchor (hourly grid 12:30 vs 13:00 lunch reopen).
 // eligible_open_ms         first in-session instant of this interval; equal to
 //                          open_ms when the nominal anchor is itself eligible.
@@ -478,12 +478,12 @@ std::optional<NativeSessionDay> session_day_at(const SessionCalendar& calendar, 
 // fields. Fixed buckets add elapsed UTC seconds/minutes from the session-day
 // origin and clip to the union of windows. Calendar periods use civil
 // session-day / week / month boundaries and every session window.
-// One recorded session leads that origin: the fixed buckets of
-// "0930-1200,1300-1600", alone or before a day mask, count from thirty minutes
-// before the first window's open. The day's first bucket opens at the origin
-// itself and the closed bucket before the next origin ends there, so its
-// 60-minute intervals open 09:30, 10:00, 11:00, 13:00, 14:00, 15:00 and its
-// 240-minute intervals 09:30 and 13:00.
+// Two recorded session texts, alone or before a day mask, lead that origin.
+// On "0930-1200,1300-1600" the grid starts at 09:00, but the first bucket is
+// clipped to the 09:30 stamp. On "1800-1700" the grid and stamp both start
+// at 17:00. The closed hour is then part of the upcoming stamp day, while
+// eligible trading still starts at 18:00. Fixed buckets with a lead end no
+// later than the next stamp.
 //
 // A timestamp in a declared closed gap still belongs to the period whose
 // [open, next period open) covers it; last_traded_close may then precede it.

@@ -169,24 +169,24 @@ bool utc_calendar(const SessionCalendar& calendar, SessionDayMemo& memo);
 // The session day holding `ms` as this memo's lookups resolve it -- its cycle
 // [origin_ms, next_origin_ms), the ordinal its instants key to and its
 // in-session spans -- when that cycle is CERTIFIED: every lookup of every
-// instant of the cycle (session_day_at, interval_containing for fixed
-// timeframes, in_session) is this day, no other day holds any of its
-// instants, and the calendar resolves every civil time within 22 days of it
-// the same way whatever it was asked before. A UTC or fixed-offset zone
-// certifies every cycle; a TZif zone under glibc or macOS, every cycle whose
+// instant of the trading cycle (session_day_at, in_session) is this day, no
+// other trading day holds any instant, and the calendar resolves every civil
+// time within 22 days of it the same way whatever it was asked before. A UTC
+// or fixed-offset zone certifies every cycle; a TZif zone under glibc or macOS, every cycle whose
 // reach its table covers with transitions that are small, far apart and never
 // a backward move that keeps the daylight-saving flag, each read back from
 // libc (native_calendar.cpp, "Certified session-day cycles"). nullopt
 // otherwise -- the zone alone decided that, and nothing was resolved -- and
-// when no session day holds `ms`. nullopt too for the one calendar whose
-// fixed buckets lead its origin (native_calendar.cpp, recorded_grid_lead_ms):
-// a holder's own bucket arithmetic over a certified cycle counts from the
-// origin.
+// when no session day holds `ms`. A grid lead relative to the stamp still
+// uses exact lookup. A stamp lead is reported separately: a fixed cell uses
+// the earlier origin and the hour before the next trading cycle may need
+// that next cycle's spans.
 struct CycleCertificate {
     int64_t origin_ms = 0;
     int64_t next_origin_ms = 0;
     int64_t ordinal = 0;
     std::vector<std::pair<int64_t, int64_t>> spans;
+    int64_t stamp_lead_ms = 0;
 };
 std::optional<CycleCertificate> cycle_certificate(const SessionCalendar& calendar,
                                                   int64_t ms,

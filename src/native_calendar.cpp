@@ -2,6 +2,7 @@
 #include <pineforge/run_failure.hpp>
 
 #include "native_calendar_memo.hpp"
+#include "session_grid_policy.hpp"
 #include "timezone.hpp"
 
 #include <algorithm>
@@ -68,6 +69,11 @@ struct PeriodCore {
     int64_t eligible_open_ms = 0;
     int64_t last_traded_close_ms = 0;
     int64_t next_period_open_ms = 0;
+};
+
+struct FixedGridLeads {
+    int64_t stamp_ms;
+    int64_t grid_ms;  // Relative to the stamp.
 };
 
 bool mul_ok(int64_t a, int64_t b, int64_t& out) {
@@ -856,23 +862,30 @@ std::optional<PeriodCore> calendar_core(const SessionCalendar& cal,
     return core;
 }
 
-// One recorded session divides its day on a grid that leads the day's origin.
-// The fixed buckets of "0930-1200,1300-1600", alone or before a day mask, count
-// from thirty minutes before the first window's open: 09:00 for the 09:30
-// open. The day's first bucket opens at the origin itself, and the closed
-// bucket before the next origin ends there. So that session's 60-minute
-// intervals open 09:30, 10:00, 11:00, 13:00, 14:00, 15:00 and its 240-minute
-// intervals 09:30 and 13:00, where a count from the origin opens 09:30, 10:30
-// .. 15:30 and 09:30, 13:30. The lead is read off the session text as given,
-// as the timeframe aggregator reads its own (timeframe.cpp,
-// session_grid_lead_ms), so the two divide the day alike. Every other
-// session: 0.
-int64_t recorded_grid_lead_ms(const SessionCalendar& cal) {
-    static constexpr char kWindows[] = "0930-1200,1300-1600";
-    constexpr std::size_t kLength = sizeof(kWindows) - 1;
-    const std::string& given = cal.literal();
-    if (given.compare(0, kLength, kWindows) != 0) return 0;
-    return (given.size() == kLength || given[kLength] == ':') ? 30 * kMsPerMinute : 0;
+// A symbol's fixed cells count from its grid and are clipped to its stamp
+// day. The trading day still starts at the first window and supplies the
+// spans. For 1800-1700 the closed hour before the open belongs to the next
+// stamp day; a cell there is tradable only if it extends into the real
+// session. For 0930-1200,1300-1600 only the grid leads the open.
+std::optional<PeriodCore> fixed_day_core(const SessionDay& day, int64_t ms,
+                                         int64_t bucket, FixedGridLeads leads) {
+    const int64_t stamp = day.origin_ms - leads.stamp_ms;
+    const int64_t next_stamp = day.next_origin_ms - leads.stamp_ms;
+    const int64_t grid = stamp - leads.grid_ms;
+    const int64_t idx = floor_div(ms - grid, bucket);
+    int64_t offset = 0, open = 0, raw_end = 0;
+    if (!mul_ok(idx, bucket, offset) || !add_ok(grid, offset, open)
+        || !add_ok(open, bucket, raw_end)) return std::nullopt;
+    const bool led = (leads.stamp_ms != 0 || leads.grid_ms != 0) && stamp <= ms && ms < next_stamp;
+    const int64_t cell_open = led ? std::max(open, stamp) : open;
+    const int64_t cell_end = led ? std::min(raw_end, next_stamp) : raw_end;
+    return PeriodCore{cell_open, first_overlap_open(cell_open, cell_end, day.spans),
+                      overlap_end(day.spans, cell_open, cell_end), cell_end};
+}
+
+FixedGridLeads fixed_grid_leads(const SessionCalendar& cal) {
+    return {session_grid_policy::native_stamp_lead_minutes(cal.literal()) * kMsPerMinute,
+            session_grid_policy::grid_lead_minutes(cal.literal()) * kMsPerMinute};
 }
 
 std::optional<PeriodCore> fixed_core(const SessionCalendar& cal,
@@ -882,28 +895,12 @@ std::optional<PeriodCore> fixed_core(const SessionCalendar& cal,
     if (!tf.valid() || !mul_ok(tf.count(), unit_ms(tf.unit()), bucket) || bucket <= 0) {
         return std::nullopt;
     }
-    auto day = session_day_containing(cal, ms);
+    const auto leads = fixed_grid_leads(cal);
+    int64_t day_query = 0;
+    if (!add_ok(ms, leads.stamp_ms, day_query)) return std::nullopt;
+    auto day = session_day_containing(cal, day_query);
     if (!day) return std::nullopt;
-    const int64_t lead = recorded_grid_lead_ms(cal);
-    const int64_t elapsed = ms - day->origin_ms + lead;
-    const int64_t idx = floor_div(elapsed, bucket);
-    int64_t offset = 0;
-    if (!mul_ok(idx, bucket, offset)) return std::nullopt;
-    int64_t open = 0;
-    if (!add_ok(day->origin_ms - lead, offset, open)) return std::nullopt;
-    int64_t raw_end = 0;
-    if (!add_ok(open, bucket, raw_end)) return std::nullopt;
-    // Under a recorded lead the day's first bucket opens at its origin, and
-    // the closed bucket before the next origin ends there.
-    const bool led = lead != 0 && ms >= day->origin_ms && ms < day->next_origin_ms;
-    const int64_t cell_open = led ? std::max(open, day->origin_ms) : open;
-    const int64_t cell_end = led ? std::min(raw_end, day->next_origin_ms) : raw_end;
-    PeriodCore core;
-    core.open_ms = cell_open;
-    core.last_traded_close_ms = overlap_end(day->spans, cell_open, cell_end);
-    core.eligible_open_ms = first_overlap_open(cell_open, cell_end, day->spans);
-    core.next_period_open_ms = cell_end;
-    return core;
+    return fixed_day_core(*day, ms, bucket, leads);
 }
 
 std::optional<PeriodCore> core_containing(const SessionCalendar& cal,
@@ -2060,6 +2057,7 @@ struct SessionDayMemo::State {
 
     bool valid = false;
     bool utc = false;
+    FixedGridLeads leads{};
     std::array<DaySlot, kDaySlots> days{};
     std::array<LocalSlot, kLocalSlots> locals{};
     std::size_t next_local = 0;
@@ -2367,28 +2365,11 @@ std::optional<PeriodCore> memo_fixed_core(const SessionCalendar& cal,
     if (!tf.valid() || !mul_ok(tf.count(), unit_ms(tf.unit()), bucket) || bucket <= 0) {
         return std::nullopt;
     }
-    const SessionDay* day = memo_session_day_containing(cal, ms, m);
+    int64_t day_query = 0;
+    if (!add_ok(ms, m.leads.stamp_ms, day_query)) return std::nullopt;
+    const SessionDay* day = memo_session_day_containing(cal, day_query, m);
     if (!day) return std::nullopt;
-    const int64_t lead = recorded_grid_lead_ms(cal);
-    const int64_t elapsed = ms - day->origin_ms + lead;
-    const int64_t idx = floor_div(elapsed, bucket);
-    int64_t offset = 0;
-    if (!mul_ok(idx, bucket, offset)) return std::nullopt;
-    int64_t open = 0;
-    if (!add_ok(day->origin_ms - lead, offset, open)) return std::nullopt;
-    int64_t raw_end = 0;
-    if (!add_ok(open, bucket, raw_end)) return std::nullopt;
-    // Under a recorded lead the day's first bucket opens at its origin, and
-    // the closed bucket before the next origin ends there.
-    const bool led = lead != 0 && ms >= day->origin_ms && ms < day->next_origin_ms;
-    const int64_t cell_open = led ? std::max(open, day->origin_ms) : open;
-    const int64_t cell_end = led ? std::min(raw_end, day->next_origin_ms) : raw_end;
-    PeriodCore core;
-    core.open_ms = cell_open;
-    core.last_traded_close_ms = overlap_end(day->spans, cell_open, cell_end);
-    core.eligible_open_ms = first_overlap_open(cell_open, cell_end, day->spans);
-    core.next_period_open_ms = cell_end;
-    return core;
+    return fixed_day_core(*day, ms, bucket, m.leads);
 }
 
 std::optional<PeriodCore> memo_core_containing(const SessionCalendar& cal,
@@ -2821,6 +2802,7 @@ SessionDayMemo::State& SessionDayMemo::bind(const SessionCalendar& calendar) {
     auto fresh = std::make_unique<State>();
     fresh->valid = calendar.valid();
     fresh->utc = is_utc_zone(calendar.timezone());
+    fresh->leads = fixed_grid_leads(calendar);
     // Every day slot's span buffer, now and for good (State::DaySlot): what
     // the memo owns is the same after its first lookup as after its millionth.
     const std::size_t spans = session_day_span_bound(calendar);
@@ -2927,10 +2909,9 @@ std::optional<CycleCertificate> cycle_certificate(const SessionCalendar& calenda
                                                   SessionDayMemo& memo) {
     MemoState& m = memo.state(calendar);
     if (!m.valid) return std::nullopt;
-    // A recorded grid lead: the day's fixed buckets do not count from its
-    // origin, which a holder's own bucket arithmetic over a certified cycle
-    // assumes. Such a calendar certifies nothing and is read the exact way.
-    if (recorded_grid_lead_ms(calendar) != 0) return std::nullopt;
+    // Preserve the split-session grid-only exception. A stamp lead keeps
+    // the trading-cycle certificate and is carried separately to its reader.
+    if (m.leads.grid_ms != 0) return std::nullopt;
     // The zone first, over the reach of every cycle within two days of `ms`:
     // where it holds, the cycle holding `ms` is one of them (it spans a day
     // and at most a step). Nothing is resolved for an instant it refuses.
@@ -2943,6 +2924,7 @@ std::optional<CycleCertificate> cycle_certificate(const SessionCalendar& calenda
     out.ordinal = days_from_civil(day->trading_date.year,
                                   static_cast<unsigned>(day->trading_date.month),
                                   static_cast<unsigned>(day->trading_date.day));
+    out.stamp_lead_ms = m.leads.stamp_ms;
     out.spans.reserve(day->spans.size());
     for (const EpochSpan& span : day->spans) out.spans.emplace_back(span.start_ms, span.end_ms);
     return out;

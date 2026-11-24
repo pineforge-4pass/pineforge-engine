@@ -2,6 +2,7 @@
 #include <pineforge/session_time.hpp>
 #include <pineforge/native_calendar.hpp>
 #include <pineforge/run_failure.hpp>
+#include "session_grid_policy.hpp"
 #include "runtime_ambient.hpp"
 #include <cctype>
 #include <ctime>
@@ -15,7 +16,6 @@
 #include <limits>
 #include "timezone.hpp"
 namespace pineforge {
-
 // ─── Auto-detect timeframe from bar timestamps ────────────────────────────────
 
 std::string detect_timeframe(const Bar* bars, int n, int max_samples) {
@@ -305,11 +305,11 @@ static int64_t floor_div_day(int64_t ms);
 /// with breaks is not that session.
 static int session_day_stamp_offset_minutes(const std::string& session) {
     const int open = session_open_offset_minutes(session);
-    if (open == 18 * 60
-        && (open + first_window_length_minutes(session)) % 1440 == 17 * 60) {
-        return 17 * 60;
-    }
-    return open;
+    if (open != session_grid_policy::metals_open_minutes) return open;
+
+    // Keep the legacy first-window parser, even for noncanonical spellings.
+    return open - session_grid_policy::stamp_lead_minutes(
+        open, (open + first_window_length_minutes(session)) % 1440);
 }
 
 /// Session clock: exchange-tz milliseconds since (local-midnight + the
@@ -2295,14 +2295,10 @@ bool SessionDaySchedule::parse_many(const std::string& session) {
 // thirty minutes follows the same grid by extension. The entry reads the
 // literal windows, alone or before a ":days" list, as the 1800-1700 day stamp
 // reads its own: any other spelling, and every other session with a break,
-// keeps its grid at the day stamp. native_calendar.cpp
-// (recorded_grid_lead_ms) keeps the kernel calendar's fixed buckets on the
-// same grid.
+// keeps its grid at the day stamp. The native calendar uses the same
+// session_grid_policy entry for its fixed buckets.
 int64_t session_grid_lead_ms(const std::string& session) {
-    static constexpr char kWindows[] = "0930-1200,1300-1600";
-    constexpr std::size_t kLength = sizeof(kWindows) - 1;
-    if (session.compare(0, kLength, kWindows) != 0) return 0;
-    return (session.size() == kLength || session[kLength] == ':') ? 30 * 60000 : 0;
+    return session_grid_policy::grid_lead_minutes(session) * 60000;
 }
 
 }  // namespace
