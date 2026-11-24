@@ -62,7 +62,7 @@
 ## Public C ABI
 
 `<pineforge/pineforge.h>` is the **single canonical consumer header**. It has
-exactly 115 public `PF_API` declarations: 95 of the 106 runtime implementations (the other eleven are declared in `execution_observer.h`, `selected_window.h` and `report_sink.h`) and twenty
+exactly 118 public `PF_API` declarations: 98 of the 109 runtime implementations (the other eleven are declared in `execution_observer.h`, `selected_window.h` and `report_sink.h`) and twenty
 per-strategy generated exports. Every compiled PineForge strategy `.so` exports
 that public set, except that `strategy_declares_bar_magnifier` is exported only
 by a script that declares `use_bar_magnifier = true` and the three [outputs](outputs.md) exports only by a module that records outputs; older modules lack the six
@@ -133,7 +133,7 @@ single `.hpp`):
 
 | Module             | Header                   | Source                                                                                                                                                                                                                                   | Pine-facing role                                                                                                                                              |
 | ------------------ | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Public C ABI       | `pineforge.h`            | `c_abi.cpp` (+ layout `static_assert`s)                                                                                                                                                                                                                       | 115 public `PF_API` declarations: 95 of the 106 runtime implementations plus twenty per-strategy generated exports. `strategy_set_account_currency_fx_scalar` installs the host-supplied scalar account-currency rate. `strategy_configure_native_fx_curve_v1` stages the additive native FX curve. `strategy_set_scratch_tables_v1` selects the scratch-table backend. `strategy_set_cache_policy_v1` selects optional resident cache allowances. `report_sink.h` adds the T-summary query `strategy_report_sink_summary_v1`. `pf_report_cache_stats` reads run-wide command-cache and ledger diagnostics. `pf_output_series_limit_set_checked` and `pf_output_series_limit_failure` configure and report the creation-time recorded-series limit. |
+| Public C ABI       | `pineforge.h`            | `c_abi.cpp` (+ layout `static_assert`s)                                                                                                                                                                                                                       | 118 public `PF_API` declarations: 98 of the 109 runtime implementations plus twenty per-strategy generated exports. `strategy_set_account_currency_fx_scalar` installs the host-supplied scalar account-currency rate. `strategy_configure_native_fx_curve_v1` stages the additive native FX curve. `strategy_set_scratch_tables_v1` selects the scratch-table backend. `strategy_set_scratch_live_order_ids_limit_v1` (`include/pineforge/pineforge.h:2314`) optionally limits active order IDs in bounded scratch; zero sets no separate limit. `strategy_release_run_results_v1` (`include/pineforge/pineforge.h:2304`) releases completed-run scratch after the last result read. `strategy_set_cache_policy_v1` selects optional resident cache allowances. `report_sink.h` adds the T-summary query `strategy_report_sink_summary_v1`. `pf_report_cache_stats` reads run-wide command-cache and ledger diagnostics. `pf_output_series_limit_set_checked` and `pf_output_series_limit_failure` configure and report the creation-time recorded-series limit. `pf_ta_lookback_limit_set_checked` (`include/pineforge/pineforge.h:2325`) sets the maximum bars back for series-length TA before the strategy is created. |
 | Engine             | `engine.hpp`             | `engine_run.cpp`, `engine_stream.cpp`, `engine_execution.cpp`, `engine_orders.cpp`, `engine_path_resolve.cpp`, `engine_trade_accessors.cpp`, `engine_security.cpp`, `engine_lower_tf.cpp`, `engine_report.cpp`, `native_execution_consumer.cpp` | One-shot and continuous lifecycle, native request matching/settlement, orders, reports, inputs / syminfo, magnifier, TF aggregation, and `request.security` plumbing.                  |
 | Engine internals   | `engine_internal.hpp`    | (private cross-TU header)                                                                                                                                                                                                                | `pineforge::internal::*` types and helpers shared between engine `.cpp` partitions; not part of the public ABI.                                               |
 | Technical analysis | `ta.hpp`                 | `ta_moving_averages.cpp`, `ta_oscillators.cpp`, `ta_volatility_trend.cpp`, `ta_extremes_volume.cpp`, `ta_misc.cpp`                                                                                                                       | Official `ta.*` functions and series variables backed by stateful runtime classes with `compute` / `recompute`, plus `pivot_point_levels(...)` free function. |
@@ -563,7 +563,7 @@ part of the runtime API — the consumer compiler emits those inline.
 
 Inputs are stored as `std::unordered_map<std::string, std::string>` on
 the engine. Generated strategy code reads them through typed getters
-that fall back to the Pine default on missing key or parse failure:
+that use the Pine default when no override was supplied:
 
 ```cpp
 double  get_input_double(const std::string& key, double  default_val) const;
@@ -575,10 +575,11 @@ const Series<double>& get_input_source(const std::string& key,
                                        const Series<double>& default_series) const;
 ```
 
-`get_input_bool` accepts `"true" / "1"` and `"false" / "0"` (anything
-else returns the default). `get_input_double` / `_int` / `_int64` route
-through `std::stod` / `std::stoi` / `std::stoll` with a try / catch
-around parse errors. `get_input_int64` backs 64-bit input payloads such
+`get_input_bool` accepts `"true" / "1"` and `"false" / "0"`.
+The numeric getters require a complete number in range: a decimal integer
+for `get_input_int` and `get_input_int64`, or a finite number for
+`get_input_double`. Malformed overrides stop the run with `setting_rejected`
+and an error naming the input. `get_input_int64` backs 64-bit input payloads such
 as `input.color` (packed ARGB). `get_input_source` backs `input.source`
 runtime overrides: it resolves a native source name (`"open"`, `"high"`,
 `"low"`, `"close"`, `"volume"`, `"hl2"`, `"hlc3"`, `"ohlc4"`, `"hlcc4"`)

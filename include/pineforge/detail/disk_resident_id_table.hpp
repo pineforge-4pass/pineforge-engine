@@ -1,7 +1,6 @@
 #pragma once
 
 #include <pineforge/detail/disk_id_table.hpp>
-#include <pineforge/detail/scratch_defaults.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -302,29 +301,31 @@ public:
     // writeback: refusal must precede table AND kernel mutation.
     void require_insert(const std::string& key) const {
         index_.require_insert(key);
-        if (!index_.bounded_cohorts()) return;
+        const auto limit = index_.live_order_ids_limit();
+        if (limit == 0) return;
         const auto found = find_resident(key);
-        if (found == end() || found->second.spillable()) require_live_growth(1);
+        if (found == end() || found->second.spillable()) require_live_growth(1, limit);
     }
     template<class Enumerate> void require_inserts(Enumerate&& enumerate) const {
         index_.require_inserts(std::forward<Enumerate>(enumerate));
-        if (!index_.bounded_cohorts()) return;
-        std::size_t ordinal = 0, extra = 0;
+        const auto limit = index_.live_order_ids_limit();
+        if (limit == 0) return;
+        std::uint64_t ordinal = 0, extra = 0;
         enumerate([&](const std::string& key) {
             const auto current = ordinal++;
             const auto found = find_resident(key);
             if (found != end() && !found->second.spillable()) return;
             bool repeated = false;
-            std::size_t prior = 0;
+            std::uint64_t prior = 0;
             enumerate([&](const std::string& other) {
                 if (prior++ < current && other == key) repeated = true;
             });
             if (!repeated) {
-                if (extra == kMaxResidentCohorts) require_live_growth(extra + 1);
+                if (extra == limit) refuse_live_limit(limit);
                 ++extra;
             }
         });
-        require_live_growth(extra); // At most one dry resident pass for the whole ticket.
+        require_live_growth(extra, limit); // At most one dry resident pass for the ticket.
     }
     void clear() noexcept {
         held_.clear();
@@ -454,12 +455,13 @@ public:
         // A refused new logical row must not first overwrite/evict an eligible
         // resident row. This search reads index bytes only, without restoring.
         index_.require_insert(key);
-        std::size_t extra = 0;
-        if (index_.bounded_cohorts() && !spillable && !index_.find(key)) {
+        const auto limit = index_.live_order_ids_limit();
+        std::uint64_t extra = 0;
+        if (limit != 0 && !spillable && !index_.find(key)) {
             extra = 1; // An existing logical row ignores the incoming value.
-            require_live_growth(extra);
+            require_live_growth(extra, limit);
         }
-        spill_before_admission(extra);
+        spill_before_admission(extra, limit);
         spill_implicitly();
         index_.open_for_insert();
     }
@@ -520,26 +522,26 @@ public:
     }
 
 private:
-    void require_live_growth(std::size_t extra) const {
-        if (extra == 0 || !index_.bounded_cohorts()) return;
-        if (resident_.size() <= kMaxResidentCohorts
-            && extra <= kMaxResidentCohorts - resident_.size()) return;
+    [[noreturn]] static void refuse_live_limit(std::uint64_t limit) {
+        throw ScratchCapacityError(ScratchResource::cohort_orders_live,
+                                   scratch_resident_cohort_limit_message(limit));
+    }
+    void require_live_growth(std::uint64_t extra, std::uint64_t limit) const {
+        if (extra == 0 || limit == 0) return;
+        if (resident_.size() <= limit && extra <= limit - resident_.size()) return;
         // Admission's O(R) dry pass must finish before spill can write any
-        // bytes. It is at most one such pass per spill, never a per-ticket
-        // scan: callers batch the ticket's extra rows before reaching here.
+        // bytes. Callers batch the ticket's extra rows before reaching here.
         // Counting physical rows here would falsely refuse deferred empties
         // (including empty rows pinned by an enclosing iterator).
-        std::size_t live = 0;
+        std::uint64_t live = 0;
         for (const auto& row : resident_) {
             ++work_.rows_visited_by_capacity;
             if (!row.second.owner->second.spillable()) ++live;
         }
-        if (live > kMaxResidentCohorts || extra > kMaxResidentCohorts - live)
-            throw ScratchCapacityError(ScratchResource::cohort_orders_live,
-                scratch_resident_cohort_limit_message(kMaxResidentCohorts));
+        if (live > limit || extra > limit - live) refuse_live_limit(limit);
     }
-    void spill_before_admission(std::size_t extra) const {
-        if (extra != 0 && index_.bounded_cohorts() && resident_.size() >= kMaxResidentCohorts)
+    void spill_before_admission(std::uint64_t extra, std::uint64_t limit) const {
+        if (extra != 0 && limit != 0 && resident_.size() >= limit)
             spill(); // The read-only ticket has already proved this can fit.
     }
     void insert_resident(Offset at, const std::shared_ptr<Row>& row) const {
@@ -597,9 +599,10 @@ private:
         const auto found = resident_.find(at);
         if (found != resident_.end()) return found->second.owner;
         auto value = restore_record(index_.get(at), 0);
-        const std::size_t extra = value.spillable() ? 0 : 1;
-        require_live_growth(extra);
-        spill_before_admission(extra);
+        const std::uint64_t extra = value.spillable() ? 0 : 1;
+        const auto limit = index_.live_order_ids_limit();
+        require_live_growth(extra, limit);
+        spill_before_admission(extra, limit);
         auto row = std::make_shared<Row>(index_.key(at), std::move(value));
         insert_resident(at, row);
         ++work_.rows_restored;

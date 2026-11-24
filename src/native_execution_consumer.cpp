@@ -18,6 +18,7 @@
 #include "command_scratch_production.hpp"
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cmath>
 #include <cassert> // assert
 #include <cstddef>
@@ -33,10 +34,10 @@
 #include <utility>
 #include <variant>
 #include "native_cohort_target_work.hpp"
+#include "native_opening_membership.hpp"
 namespace pineforge {
 inline namespace engine_script_run_v20 {
 namespace {
-
 template<class T>
 void reserve_next(std::vector<T>& values) {
     if (values.size() == values.max_size())
@@ -706,11 +707,21 @@ const native_order::ScopeFraction* scope_fraction_intent(
     return reduce ? std::get_if<native_order::ScopeFraction>(&reduce->size) : nullptr;
 }
 
+// Only installed membership is read here. A failed read cannot stand in for
+// a different opening, or for an opening that is no longer live.
+native_order::RequestHandle frozen_opening_at(const native_order::OpeningReadback& roster,
+                                              std::uint64_t index) {
+    native_order::RequestHandle handle;
+    if (roster.opening_at(index, handle) != detail::ScratchStatus::ok)
+        throw detail::ReportScratchIoError(EIO, "native opening readback");
+    return handle;
+}
+
 // Two reduces share a scope when their authorities name the same physical
 // target. The keys are opaque request/cohort handles and position cycles,
 // never source identifiers. An unbound book close already names the book.
 bool same_reduction_scope(const native_order::Authority& left,
-                          const native_order::Authority& right) noexcept {
+                          const native_order::Authority& right) {
     const auto book = [](const native_order::Authority& value) {
         return std::holds_alternative<native_order::UnboundBookClose>(value)
             || std::holds_alternative<native_order::BookClose>(value);
@@ -729,7 +740,18 @@ bool same_reduction_scope(const native_order::Authority& left,
     }
     if (const auto* a = std::get_if<native_order::OpeningsClose>(&left)) {
         const auto& b = std::get<native_order::OpeningsClose>(right);
-        return a->cycle == b.cycle && a->openings == b.openings;
+        if (a->cycle != b.cycle) return false;
+        const native_order::OpeningMembership left_members(*a);
+        const native_order::OpeningMembership right_members(b);
+        if (left_members.is_inline() && right_members.is_inline())
+            return a->openings == b.openings;
+        const auto count = left_members.size();
+        if (count != right_members.size()) return false;
+        // Both spellings are canonical at enrollment; an unreadable handle is an error.
+        for (std::uint64_t i = 0; i < count; ++i) {
+            if (left_members[i] != right_members[i]) return false;
+        }
+        return true;
     }
     if (const auto* a = std::get_if<native_order::CohortClose>(&left)) {
         return a->cohort == std::get<native_order::CohortClose>(right).cohort;
@@ -788,22 +810,17 @@ void hash_capacity(F& f, const native_order::Capacity& capacity) noexcept {
     if (const auto* budget = std::get_if<native_order::PointBudget>(&capacity)) f.d(budget->units);
 }
 
-template <class F>
-void hash_owner(F& f, const native_order::Owner& owner) noexcept {
+void hash_owner(OpeningMembershipFold<StateFold>& f, const native_order::Owner& owner) noexcept {
     f.u(owner.index());
     std::visit([&](const auto& value) {
         using T = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<T, native_order::Independent>) {
         } else if constexpr (std::is_same_v<T, native_order::WaitForApplied>) {
             hash_handle(f, value.parent);
-            // Visibility is request state: folded only when set, so every
-            // Working child keeps the digest it had before the knob existed.
+            // Default visibility, first match and scope contribute no words.
             if (value.visibility != native_order::NativeArmVisibility::Working) {
                 f.u(static_cast<uint64_t>(value.visibility));
             }
-            // Likewise the first-match rule, under its own tag so it can
-            // never read as a visibility: every AtArmPrint child keeps the
-            // digest it had before the knob existed.
             if (value.first_match != native_order::NativeArmFirstMatch::AtArmPrint) {
                 f.s("first_match");
                 f.u(static_cast<uint64_t>(value.first_match));
@@ -816,8 +833,14 @@ void hash_owner(F& f, const native_order::Owner& owner) noexcept {
             hash_handle(f, value.opening);
             f.i(value.cycle);
         } else if constexpr (std::is_same_v<T, native_order::BindOpenings>) {
-            f.i(value.cycle); f.u(value.openings.size());
-            for (const auto& handle : value.openings) hash_handle(f, handle);
+            f.i(value.cycle);
+            if (value.external_openings) {
+                f.hash_external(*value.external_openings,
+                    [&](const auto& member) noexcept { hash_handle(f, member); });
+            } else {
+                f.u(value.openings.size());
+                for (const auto& handle : value.openings) hash_handle(f, handle);
+            }
         } else if constexpr (std::is_same_v<T, native_order::BindCohort>) {
             hash_cohort_handle(f, value.cohort);
         } else {
@@ -836,8 +859,7 @@ void hash_group(F& f, const native_order::Group& group) noexcept {
     }
 }
 
-template <class F>
-void hash_request(F& f, const native_order::Request& request) noexcept {
+void hash_request(OpeningMembershipFold<StateFold>& f, const native_order::Request& request) noexcept {
     hash_intent(f, request.intent);
     f.s(request.label);
     f.s(request.comment);
@@ -845,9 +867,7 @@ void hash_request(F& f, const native_order::Request& request) noexcept {
     hash_capacity(f, request.capacity);
     hash_owner(f, request.owner);
     hash_group(f, request.group);
-    // Folded only when the request is anchored, so every absolute request
-    // keeps its prior digest; the rounding folds only when set, so every
-    // Raw anchor keeps the digest it had before the rounding existed.
+    // Absolute requests contribute no anchor; Raw rounding contributes no word.
     if (const auto* anchor = std::get_if<native_order::FromOwnerFill>(&request.anchor)) {
         f.d(anchor->offset);
         f.b(anchor->ticks);
@@ -871,8 +891,7 @@ void hash_remaining_projection(F& f, const native_order::RemainingProjection& re
     }
 }
 
-template <class F>
-void hash_authority(F& f, const native_order::Authority& authority) noexcept {
+void hash_authority(OpeningMembershipFold<StateFold>& f, const native_order::Authority& authority) noexcept {
     f.u(authority.index());
     const auto hash_enrollment = [&](const native_order::Enrollment& enrollment) {
         f.u(enrollment.index());
@@ -910,8 +929,13 @@ void hash_authority(F& f, const native_order::Authority& authority) noexcept {
             hash_enrollment(value.enrollment);
         } else if constexpr (std::is_same_v<T, native_order::OpeningsClose>) {
             f.i(value.cycle); f.u(static_cast<uint64_t>(value.side));
-            f.u(value.openings.size());
-            for (const auto& handle : value.openings) hash_handle(f, handle);
+            if (value.external_openings) {
+                f.hash_external(*value.external_openings,
+                    [&](const auto& member) noexcept { hash_handle(f, member); });
+            } else {
+                f.u(value.openings.size());
+                for (const auto& handle : value.openings) hash_handle(f, handle);
+            }
             hash_enrollment(value.enrollment);
         } else if constexpr (std::is_same_v<T, native_order::CohortClose>) {
             hash_cohort_handle(f, value.cohort);
@@ -921,9 +945,8 @@ void hash_authority(F& f, const native_order::Authority& authority) noexcept {
     }, authority);
 }
 
-// The cohort rosters: live matching authority, walked at every read. Their
-// receipts are append-only history of the roster commands and fold through a
-// running digest instead, one receipt at its commit (hash_cohort_receipt).
+// Rosters are live matching authority, walked at each read. Their append-only
+// receipts fold separately, once per commit.
 template <class F>
 void hash_cohorts(F& f, const native_order::WorkingRequestCore& requests) noexcept {
     const auto& cohorts = requests.cohorts();
@@ -1033,8 +1056,9 @@ void hash_pending(F& f, const native_order::PendingAdjustments& pending) noexcep
     }
 }
 
-template <class F>
-void hash_definition(F& f, const native_order::DefinitionRef& definition) noexcept {
+void hash_definition(
+        OpeningMembershipFold<StateFold>& f,
+        const native_order::DefinitionRef& definition) noexcept {
     f.b(static_cast<bool>(definition));
     if (!definition) return;
     hash_handle(f, definition->handle);
@@ -1383,6 +1407,7 @@ void NativeExecutionConsumer::fail(BacktestEngine& engine, NativeFailure failure
 
 void NativeExecutionConsumer::store_rendered(BacktestEngine& engine, const char* text,
                                              RunFailureValue value) const {
+    cabi_run_results_release_refused_ = false;
     if (setup_failure_pending_) return;
     engine.last_error_ = text ? text : "";
     run_failure_.code = value.code;
@@ -1407,6 +1432,7 @@ void NativeExecutionConsumer::render_unclassified(BacktestEngine& engine,
 }
 
 void NativeExecutionConsumer::clear_rendered(BacktestEngine& engine) const noexcept {
+    cabi_run_results_release_refused_ = false;
     if (setup_failure_pending_) return;
     engine.last_error_.clear();
     run_failure_.code = RunFailureCode::none;
@@ -1417,6 +1443,7 @@ void NativeExecutionConsumer::clear_rendered(BacktestEngine& engine) const noexc
 void NativeExecutionConsumer::note_failure_record(BacktestEngine& engine, std::string text,
                                                   RunFailureValue value) {
     NativeExecutionConsumer& consumer = bound(engine);
+    consumer.cabi_run_results_release_refused_ = false;
     if (consumer.setup_failure_pending_) return;
     engine.last_error_ = std::move(text);
     consumer.run_failure_.code = value.code;
@@ -1433,6 +1460,7 @@ void NativeExecutionConsumer::latch_void_setter_refusal(
         if (consumer.failed() || consumer.in_attempt_call_
             || std::holds_alternative<NativeRunning>(consumer.state_)
             || consumer.setup_failure_pending_) return;
+        consumer.cabi_run_results_release_refused_ = false;
         const auto value = error ? classify_run_failure(*error)
             : RunFailureValue{RunFailureCode::engine_unclassified_error, nullptr};
         engine.last_run_status_ = 1;
@@ -1468,6 +1496,28 @@ void NativeExecutionConsumer::clear_failure_record(BacktestEngine& engine) noexc
     } else {
         engine.last_error_.clear();
     }
+}
+
+bool NativeExecutionConsumer::cabi_run_results_release_refused(
+        const BacktestEngine& engine) noexcept {
+    const auto* consumer =
+        static_cast<const NativeExecutionConsumer*>(engine.execution_consumer_slot_.ptr.get());
+    return consumer && consumer->cabi_run_results_release_refused_;
+}
+
+void NativeExecutionConsumer::note_cabi_run_results_release_refusal(
+        BacktestEngine& engine) noexcept {
+    try {
+        bound(engine).cabi_run_results_release_refused_ = true;
+    } catch (...) {
+    }
+}
+
+void NativeExecutionConsumer::clear_cabi_run_results_release_refusal(
+        const BacktestEngine& engine) noexcept {
+    if (auto* consumer =
+            static_cast<NativeExecutionConsumer*>(engine.execution_consumer_slot_.ptr.get()))
+        consumer->cabi_run_results_release_refused_ = false;
 }
 
 const char* NativeExecutionConsumer::failure_code_of(const BacktestEngine& engine) noexcept {
@@ -1898,17 +1948,15 @@ bool NativeExecutionConsumer::admit_public_begin(BacktestEngine& engine, const c
 }
 
 bool NativeExecutionConsumer::apply_staged_ingress(BacktestEngine& engine) {
-    // BacktestEngine owns the copied C/C++ FX arrays while a host is not yet
-    // running.  Applying them here makes staging independent of whether the
-    // provider configured the host before or during this begin call.
-    // A provider may intentionally leave an unconfigured/completed host for
-    // admit_public_begin to diagnose.  Do not turn that ordinary lifecycle
-    // refusal into a mutation failure merely because old staged bytes exist.
-    if (!std::holds_alternative<NativeReady>(state_)
-        || (engine.account_currency_fx_timestamps_.empty()
-        && engine.account_currency_fx_rates_.empty())) {
+    if (!std::holds_alternative<NativeReady>(state_)) return true;
+    // Keep the installed inputs on the handle. Only the curve in use belongs
+    // in the execution clock; the next provider begin can use the inputs again.
+    if (engine.account_fx_identity_) {
+        staged_fx_curve_.reset();
         return true;
     }
+    if (engine.account_currency_fx_timestamps_.empty() && engine.account_currency_fx_rates_.empty())
+        return true;
     NativeFxCurve curve;
     curve.effective_from_ms = engine.account_currency_fx_timestamps_;
     curve.account_per_quote = engine.account_currency_fx_rates_;
@@ -1959,7 +2007,7 @@ bool NativeExecutionConsumer::prepare_public_begin(
                     static_cast<std::uint64_t>(args.n));
             // Invalid negative batch n keeps its existing input-validation path.
         }
-        engine.prepare_scratch_table_run(config);
+        engine.prepare_scratch_table_run(config, scratch_live_order_ids_limit_);
     } catch (const std::exception& e) {
         render_exception(engine, e);
         return false;
@@ -2251,7 +2299,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
         std::abort();
     }
 #endif
-    StateFold f;
+    OpeningMembershipFold<StateFold> f;
     f.run_base = requests_.identity().run_number;
     f.s(kNativeConsumerSemanticVersion);
     f.s(kNativeDriverSemanticVersion);
@@ -2266,11 +2314,15 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
         f.s("batch-script-tail/v1");
         f.b(batch_script_tail_);
     }
-    // An explicit creation policy changes future callbacks. The unlimited
-    // default adds no bytes to the historical continuation fold.
-    if (map_pair_limit_ != 0) {
-        f.s("map-pair-limit/v1");
-        f.u(map_pair_limit_);
+    // Only explicit creation policies add fields to the continuation fold.
+    if (map_pair_limit_ != 0) { f.s("map-pair-limit/v1"); f.u(map_pair_limit_); }
+    if (ta_lookback_limit_ != 0) {
+        f.s("ta-lookback-limit/v1");
+        f.i(ta_lookback_limit_);
+    }
+    if (run_live_order_ids_limit_ != 0) {
+        f.s("live-order-ids-limit/v1");
+        f.u(run_live_order_ids_limit_);
     }
     f.u(static_cast<uint64_t>(state_.index()));
     if (const auto* running = std::get_if<NativeRunning>(&state_)) {
@@ -2405,15 +2457,15 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     hash_tz_identity(f, tz_identity_);
     f.s(requests_.identity().session_key);
     f.u(requests_.live().size());
-    // A row outside the heap is read back for this fold, and that read can
-    // fail; the hash cannot throw. The core carries the failure, the fold
-    // stops at the row it could not read, and the next read of the book --
-    // native_continuation_hash's own, before it answers -- throws it again.
+    // A resident opening list can require scratch I/O just like a spilled row.
+    // Stop at the first failure, even if the authority shares the owner's reader.
     try {
         for (const auto& live : requests_.live()) {
             hash_definition(f, live.definition);
+            if (f.read_failure) break;
             hash_remaining(f, live.remaining);
             hash_authority(f, live.authority);
+            if (f.read_failure) break;
             hash_trigger_state(f, live.trigger_state);
             hash_allowance(f, live.allowance);
             hash_pending(f, live.pending);
@@ -2425,13 +2477,12 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
             if (live.sizing_price) { f.u(3); f.d(*live.sizing_price); }
         }
     } catch (...) {
-        // A book that never spilled reads nothing back: nothing else here
-        // throws, and what would is left to noexcept as before.
-        if (!requests_.carry_book_read_failure(std::current_exception())) std::terminate();
+        f.read_failure = std::current_exception();
     }
-    // The host-maintained roster is durable matching authority.  Fold it
-    // immediately after the request table so a membership-only change cannot
-    // share a continuation identity with an otherwise identical run.
+    if (f.read_failure) {
+        requests_.carry_live_read_failure(std::move(f.read_failure));
+        return 0;
+    }
     hash_cohorts(f, requests_);
     f.u(cohort_receipts_.count);
     f.u(cohort_receipts_.h);
@@ -2839,13 +2890,15 @@ bool NativeExecutionConsumer::validate_undetected_begin(
 bool NativeExecutionConsumer::apply_spec(BacktestEngine& engine, const NativeRunSpec& spec) {
     engine.initial_capital_ = spec.initial_capital;
     engine.syminfo_.pointvalue = spec.point_value;
-    engine.account_currency_fx_ = spec.account_fx;
-    if (staged_fx_curve_) {
-        engine.account_currency_fx_timestamps_ = staged_fx_curve_->effective_from_ms;
-        engine.account_currency_fx_rates_ = staged_fx_curve_->account_per_quote;
-    } else {
-        engine.account_currency_fx_timestamps_.clear();
-        engine.account_currency_fx_rates_.clear();
+    if (!engine.account_fx_identity_) {
+        engine.account_currency_fx_ = spec.account_fx;
+        if (staged_fx_curve_) {
+            engine.account_currency_fx_timestamps_ = staged_fx_curve_->effective_from_ms;
+            engine.account_currency_fx_rates_ = staged_fx_curve_->account_per_quote;
+        } else {
+            engine.account_currency_fx_timestamps_.clear();
+            engine.account_currency_fx_rates_.clear();
+        }
     }
     engine.syminfo_.mintick = spec.price_tick;
     engine.syminfo_mintick_ = spec.price_tick;
@@ -2941,16 +2994,16 @@ bool NativeExecutionConsumer::projection_ok(const BacktestEngine& engine) const 
     if (!spec) return false;
     if (engine.initial_capital_ != spec->initial_capital) return false;
     if (engine.syminfo_.pointvalue != spec->point_value) return false;
-    if (engine.account_currency_fx_ != spec->account_fx) return false;
-    if (staged_fx_curve_) {
-        if (engine.account_currency_fx_timestamps_ != staged_fx_curve_->effective_from_ms
-            || engine.account_currency_fx_rates_ != staged_fx_curve_->account_per_quote) {
-            return false;
-        }
-    } else if (!engine.account_currency_fx_timestamps_.empty()
-               || !engine.account_currency_fx_rates_.empty()) {
+    if (engine.account_fx_identity_) {
+        if (spec->account_fx != 1.0 || staged_fx_curve_) return false;
+    } else if (engine.account_currency_fx_ != spec->account_fx) return false;
+    else if (staged_fx_curve_) {
+        if (engine.account_currency_fx_timestamps_ != staged_fx_curve_->effective_from_ms ||
+            engine.account_currency_fx_rates_ != staged_fx_curve_->account_per_quote) return false;
+    } else if (!engine.account_currency_fx_timestamps_.empty() || !engine.account_currency_fx_rates_.empty()) {
         return false;
     }
+
     if (engine.syminfo_.mintick != spec->price_tick) return false;
     if (engine.commission_type_ != fee_to_commission(spec->fee_kind)) return false;
     if (engine.commission_value_ != spec->fee_value) return false;
@@ -3275,7 +3328,9 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         cache_policy_run_.successor_root_pages,
         cache_policy_run_.receipt_tail_pages,
         cache_policy_run_.chain_segment_pages);
-    requests_.bind_scratch_slab(engine.scratch_table_run_.slab);
+    const auto& slab = engine.scratch_table_run_.slab;
+    run_live_order_ids_limit_ = slab ? slab->live_order_ids_limit() : 0;
+    requests_.bind_scratch_slab(slab);
     host_cache_.reset();
     clear_cohort_target_cache();
     terminal_receipt_high_water_ = 0;
@@ -3855,7 +3910,8 @@ void NativeExecutionConsumer::read_target_into(
     if (const auto* opening = std::get_if<native_order::OpeningClose>(&live->authority)) {
         out.opening = read_opening(engine, opening->opening, opening->cycle);
     } else if (const auto* openings = std::get_if<native_order::OpeningsClose>(&live->authority)) {
-        read_openings_into(engine, openings->openings, openings->cycle, out.openings);
+        read_openings_into(engine, openings->openings, openings->cycle, out.openings,
+                           openings->external_openings.get());
     } else if (const auto* cohort = std::get_if<native_order::CohortClose>(&live->authority)) {
         const auto cohort_handle = cohort->cohort; const auto* position = std::get_if<native_order::PositionNonflat>(&out.current_position);
         if (!position || read_indexed_cohort_target(engine, cohort_handle, *position, out.openings)) return;
@@ -3878,7 +3934,8 @@ void NativeExecutionConsumer::read_target_into(
                                        }),
                            out.openings.end());
     } else if (const auto* bind = std::get_if<native_order::BindOpenings>(&live->request().owner)) {
-        read_openings_into(engine, bind->openings, bind->cycle, out.openings);
+        read_openings_into(engine, bind->openings, bind->cycle, out.openings,
+                           bind->external_openings.get());
     } else if (const auto* bind = std::get_if<native_order::BindOpening>(&live->request().owner)) {
         out.opening = read_opening(engine, bind->opening, bind->cycle);
     }
@@ -3969,9 +4026,35 @@ bool NativeExecutionConsumer::request_is_buy(
     return requests_.working_is_buy(live);
 }
 
+// The command core may reread a member while validating and freezing the
+// selection. This view belongs to that submit/replace call, including nested
+// calls; it never becomes part of the accepted definition or a match target.
+class NativeExecutionConsumer::CommandOpeningObservations final
+        : public native_order::OpeningObservationReadback {
+public:
+    CommandOpeningObservations(const NativeExecutionConsumer& consumer, const BacktestEngine& engine,
+                               const native_order::Request& request)
+        : consumer_(consumer), engine_(engine),
+          bind_(std::get_if<native_order::BindOpenings>(&request.owner)) {}
+
+    std::uint64_t count() const noexcept override { return bind_->external_openings->count(); }
+    detail::ScratchStatus observation_at(std::uint64_t i, native_order::OpeningObservation& out)
+            const noexcept override {
+        native_order::RequestHandle handle;
+        const auto status = bind_->external_openings->opening_at(i, handle);
+        if (status == detail::ScratchStatus::ok)
+            out = consumer_.read_opening(engine_, handle, bind_->cycle);
+        return status;
+    }
+private:
+    const NativeExecutionConsumer& consumer_;
+    const BacktestEngine& engine_;
+    const native_order::BindOpenings* bind_;
+};
+
 native_order::CommandContext NativeExecutionConsumer::make_command_context(
         const BacktestEngine& engine, const native_order::Request& request,
-        native_order::CommandSurface surface) const {
+        native_order::CommandSurface surface, CommandOpeningObservations& external) const {
     native_order::CommandContext ctx;
     // A request submitted by the generic pre-open provider is born at this
     // open rather than at the prior decision floor.  Its one-point delivery
@@ -4049,7 +4132,8 @@ native_order::CommandContext NativeExecutionConsumer::make_command_context(
     if (const auto* bind = std::get_if<native_order::BindOpening>(&request.owner)) {
         ctx.opening = read_opening(engine, bind->opening, bind->cycle);
     } else if (const auto* bind = std::get_if<native_order::BindOpenings>(&request.owner)) {
-        ctx.openings = read_openings(engine, bind->openings, bind->cycle);
+        if (bind->external_openings) ctx.external_openings = &external;
+        else ctx.openings = read_openings(engine, bind->openings, bind->cycle);
     }
     return ctx;
 }
@@ -5696,8 +5780,24 @@ std::vector<native_order::OpeningObservation> NativeExecutionConsumer::read_open
 // a merge buffer on every call; a long one keeps std::stable_sort.
 void NativeExecutionConsumer::read_openings_into(
         const BacktestEngine& engine, const std::vector<native_order::RequestHandle>& handles,
-        int64_t cycle, std::vector<native_order::OpeningObservation>& out) const {
+        int64_t cycle, std::vector<native_order::OpeningObservation>& out,
+        const native_order::OpeningReadback* frozen) const {
     out.clear();
+    if (frozen) {
+        const auto count = frozen->count();
+        if (count > out.max_size()) throw std::length_error("native opening observations too large");
+        out.reserve(static_cast<std::size_t>(count));
+        // The freeze already sorted the handles. Keep one owned observation
+        // per member so prepare and the post-settlement refresh see the same set.
+        for (std::uint64_t i = 0; i != count; ++i) {
+            native_order::OpeningObservation row;
+            row.queried_opening = frozen_opening_at(*frozen, i);
+            row.queried_cycle = cycle;
+            out.push_back(std::move(row));
+        }
+        refresh_openings(engine, out);
+        return;
+    }
     out.reserve(handles.size());
     for (const auto& handle : handles) {
         native_order::OpeningObservation row;
@@ -5983,32 +6083,20 @@ NativeExecutionConsumer::ResolvedCandidate NativeExecutionConsumer::inspect_cand
 }
 
 double NativeExecutionConsumer::sibling_claimed_units(
-        const native_order::LiveRequest& live) const noexcept {
+        const native_order::LiveRequest& live) const {
     double claimed = 0.0;
-    // A row outside the heap is read back for the walk, and that read can
-    // fail; this fold cannot throw. The core carries the failure and the next
-    // read of the book throws it again -- resolve_sized_units, the caller,
-    // reads it at once -- and the claim answered meanwhile is NaN, which no
-    // caller sizes from.
-    try {
-        // `live` may itself be a spilled row's copy that the book's small
-        // ring of recent reads lets go while the walk reads the rows after
-        // it, so what the walk compares is copied first.
-        const native_order::RequestHandle handle = live.handle();
-        const native_order::Authority authority = live.authority;
-        for (const auto& other : requests_.live()) {
-            if (other.handle() == handle) continue;
-            if (!same_reduction_scope(authority, other.authority)) continue;
-            const auto* units = std::get_if<native_order::RemainingUnits>(&other.remaining);
-            if (!units || !std::isfinite(units->q) || units->q <= 0.0) continue;
-            claimed += units->q;
-            if (!std::isfinite(claimed)) return std::numeric_limits<double>::quiet_NaN();
-        }
-    } catch (...) {
-        // A book that never spilled reads nothing back: nothing else here
-        // throws, and what would is left to noexcept as before.
-        if (!requests_.carry_book_read_failure(std::current_exception())) std::terminate();
-        return std::numeric_limits<double>::quiet_NaN();
+    // A spilled row can leave the book's ring during this walk. Keep what
+    // we compare, and let either a row or a frozen membership read fail the
+    // candidate before the caller sees any part of the claim.
+    const native_order::RequestHandle handle = live.handle();
+    const native_order::Authority authority = live.authority;
+    for (const auto& other : requests_.live()) {
+        if (other.handle() == handle) continue;
+        const auto* units = std::get_if<native_order::RemainingUnits>(&other.remaining);
+        if (!units || !std::isfinite(units->q) || units->q <= 0.0) continue;
+        if (!same_reduction_scope(authority, other.authority)) continue;
+        claimed += units->q;
+        if (!std::isfinite(claimed)) return std::numeric_limits<double>::quiet_NaN();
     }
     return claimed;
 }
@@ -6040,6 +6128,20 @@ double NativeExecutionConsumer::sizing_point_price(
     return grid_fill_basis(spec, slipped, buy, /*limit_governed=*/false);
 }
 
+// A placement-time readback need not be sorted yet. The core checks the run,
+// uniqueness and every member's liveness before it accepts this measurement.
+// An unreadable member cannot establish a sizing or grid boundary.
+static std::optional<bool> external_selects_lot(const native_order::OpeningReadback& openings,
+                                                std::uint64_t incarnation) {
+    const auto count = openings.count();
+    for (std::uint64_t i = 0; i != count; ++i) {
+        native_order::RequestHandle handle;
+        if (openings.opening_at(i, handle) != detail::ScratchStatus::ok) return std::nullopt;
+        if (handle.incarnation == incarnation) return true;
+    }
+    return false;
+}
+
 // The exposure a ScopeBasis::AtAcceptance fraction freezes. It mirrors the
 // scope build_terms_facts measures at the candidate, derived from the owner
 // the request declares because acceptance has not bound an authority yet.
@@ -6066,7 +6168,16 @@ std::optional<double> NativeExecutionConsumer::placement_scope_units(
             if (lot.entry_incarnation == bind->opening.incarnation) units += lot.qty;
         }
     } else if (const auto* bind = std::get_if<native_order::BindOpenings>(&request.owner)) {
-        units = sum_incarnations(read_openings(engine, bind->openings, bind->cycle));
+        if (bind->external_openings) {
+            if (bind->cycle != engine.position_cycle_seq_) return 0.0;
+            for (const auto& lot : engine.pyramid_entries_) {
+                const auto selected = external_selects_lot(*bind->external_openings, lot.entry_incarnation);
+                if (!selected) return std::nullopt;
+                if (*selected) units += lot.qty;
+            }
+        } else {
+            units = sum_incarnations(read_openings(engine, bind->openings, bind->cycle));
+        }
     } else if (const auto* bind = std::get_if<native_order::BindCohort>(&request.owner)) {
         const auto position = read_position(engine);
         const auto* nonflat = std::get_if<native_order::PositionNonflat>(&position);
@@ -6133,7 +6244,7 @@ bool NativeExecutionConsumer::grid_boundary_holds(const BacktestEngine& engine,
 
 bool NativeExecutionConsumer::scope_boundary_units(const BacktestEngine& engine,
                                                    const native_order::Request& request,
-                                                   double units, bool or_whole_scope) noexcept {
+                                                   double units, bool or_whole_scope) {
     const auto* one = std::get_if<native_order::BindOpening>(&request.owner);
     const auto* many = std::get_if<native_order::BindOpenings>(&request.owner);
     if (!one && !many && !std::holds_alternative<native_order::Independent>(request.owner)) {
@@ -6147,7 +6258,14 @@ bool NativeExecutionConsumer::scope_boundary_units(const BacktestEngine& engine,
     for (const auto& lot : engine.pyramid_entries_) {
         const std::uint64_t incarnation = lot.entry_incarnation;
         if (one && incarnation != one->opening.incarnation) continue;
-        if (many && std::none_of(many->openings.begin(), many->openings.end(),
+        if (many && many->external_openings) {
+            const auto selected = external_selects_lot(*many->external_openings, incarnation);
+            if (!selected) {
+                if (or_whole_scope) throw detail::ReportScratchIoError(EIO, "native opening readback");
+                return false;
+            }
+            if (!*selected) continue;
+        } else if (many && std::none_of(many->openings.begin(), many->openings.end(),
                                  [&](const native_order::RequestHandle& opening) {
                                      return opening.incarnation == incarnation;
                                  })) {
@@ -6196,14 +6314,11 @@ std::optional<double> NativeExecutionConsumer::resolve_sized_units(
         scope = *live.sizing_scope;
     }
     if (fraction->claim == native_order::ScopeClaim::NetOfSiblings) {
-        scope -= sibling_claimed_units(live);
-        // A failed read of the book inside that noexcept walk is thrown here.
         requests_.rethrow_book_read_failure();
+        scope -= sibling_claimed_units(live);
     }
     if (!std::isfinite(scope) || scope <= 0.0) return std::nullopt;
-    // units = scope * fraction, one binary64 multiplication. A percent-spelled
-    // caller converts percent -> fraction itself, so no second rounding step
-    // enters here.
+    // The caller converts percent to a fraction; one binary64 multiplication sizes it.
     const double units = scope * fraction->fraction;
     // A fraction whose product is its scope's own held total -- fraction 1,
     // "close it all", of the gross scope as it stands -- resolves to that
@@ -10496,66 +10611,125 @@ const Bar& NativeExecutionConsumer::auxiliary_bar(std::size_t at) const noexcept
     return at < declared.size() ? declared[at] : auxiliary_appended_[at - declared.size()];
 }
 
-// One input's slice of the auxiliary feed for one series: every feed bar that
-// opened before the input's period ended, in feed order, through the same
-// evaluator step a series built from the input takes. The feed bar's own
-// successor plays the part the next input's stamp plays there (a calendar
-// bucket may complete on the period's actual last bar), and a stream knows it
-// only for bars it has already been handed. `completed(bucket, first_index,
-// first_ms, kind)` receives each completed bucket with the input index and
-// the timestamp of its first contributing feed bar; the bucket bookkeeping is
-// the input pump's.
+// Check only the primary input. Auxiliary bars have their own labels and indexes.
+bool NativeExecutionConsumer::check_fixed_subscription_input(
+        BacktestEngine& engine, int index) {
+    const bool indexed = subscription_input_bars_ != nullptr;
+    if (!indexed || (index >= 0 && index < subscription_input_n_)) {
+        if (!accepted_input_) return true;  // begin-time projection
+        const auto& accepted = *accepted_input_;
+        const auto stamp = indexed ? subscription_input_bars_[index].timestamp
+                                   : accepted.bar.timestamp;
+        const auto& interval = accepted.interval;
+        // Calendar aliases name the same slot. A provider stamp outside
+        // those aliases must match the stamp actually accepted.
+        if (accepted.context.input_index == index
+            && (stamp == accepted.stamp
+                || (native_confirmed_bar_label_admitted(interval, accepted.stamp)
+                    && native_confirmed_bar_label_admitted(interval, stamp)))) return true;
+    }
+    fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Input});
+    render(engine, "native timeframe subscription input identity mismatch");
+    return false;
+}
+
+// The completion callback receives the bucket, the primary index and clock
+// instant of its first feed contribution, and the kind of completion.
 template <typename Completed>
 bool NativeExecutionConsumer::feed_fixed_subscription(
         BacktestEngine& engine, TimeframeSubscription& subscription, int index,
-        const Bar* feed_bar, std::int64_t horizon_ms, std::int64_t next_feed_ms,
-        Completed&& completed) {
+        const Bar* feed_bar, std::int64_t eligible_open_ms,
+        std::int64_t horizon_ms, std::int64_t next_feed_ms, Completed&& completed) {
+    if (!check_fixed_subscription_input(engine, index)) return false;
     auto& state = engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
     auto& clock = state.fixed_clock;
-    if (!clock.cursor_ms) {
-        if (!feed_bar || horizon_ms <= feed_bar->timestamp) return true;
-        clock.cursor_ms = feed_bar->timestamp;
+    // A label in a break can name an interval that still has traded time.
+    // Use that time on the clock; delivery keeps the accepted primary label.
+    const auto feed_stamp = feed_bar && accepted_input_ && feed_bar == &accepted_input_->bar
+        ? accepted_input_->stamp : feed_bar ? feed_bar->timestamp : horizon_ms;
+    auto observed_ms = feed_stamp;
+    if (observed_ms < horizon_ms) {
+        observed_ms = std::min(horizon_ms, std::max(observed_ms, eligible_open_ms));
+        if (observed_ms < horizon_ms && !calendar_.all_day()
+            && !native_calendar::in_session(calendar_, observed_ms, calendar_memo_)) {
+            const auto day = native_calendar::session_day_at(calendar_, observed_ms, calendar_memo_);
+            const auto stamp = observed_ms;
+            observed_ms = horizon_ms;
+            if (day) {
+                for (const auto& span : day->spans) {
+                    if (span.first <= stamp) continue;
+                    observed_ms = std::min(horizon_ms, span.first);
+                    break;
+                }
+            }
+        }
     }
-    const auto drain = [&](std::int64_t horizon, std::int64_t observed_ms = 0,
+    if (!clock.cursor_ms) {
+        if (!feed_bar || horizon_ms <= observed_ms) return true;
+        clock.cursor_ms = observed_ms;
+    }
+    // Completion only needs to know whether an input is present.
+    // The delivery callback supplies the actual primary bar's timestamp.
+    const bool has_completion_input =
+        feed_bar || accepted_input_ || subscription_input_bars_;
+
+    const auto drain = [&](std::int64_t horizon, bool contributed = false,
+                           std::int64_t input_ms = 0,
                            std::int64_t next_ms = 0) {
-        while (auto bucket = engine.next_native_fixed_security_bar(
-                   state, horizon, observed_ms, next_ms)) {
+        while (true) {
+            if (!check_fixed_subscription_input(engine, index)) return false;
+            auto bucket = engine.next_native_fixed_security_bar(
+                state, horizon, input_ms, next_ms);
+            if (!bucket) return true;
             const int first_index = subscription.bucket_first_index;
             const auto first_ms = first_index >= 0
                 ? subscription.bucket_first_ms : bucket->bar.timestamp;
+            // The bar just added reaches this horizon. It closes the bucket it
+            // joined and every later row of this drain that no feed bar can
+            // join (a session-end sliver); a drain before it only reveals.
+            const bool own_close = contributed;
+            const auto kind = own_close || !has_completion_input
+                ? NativeCompletionKind::Confirmed : NativeCompletionKind::LazyComplete;
+            input_ms = next_ms = 0;
             subscription.bucket_first_index = -1;
             subscription.bucket_first_ms = 0;
             state.current_bar = bucket->bar;
             state.current_sub_bar_count = 1;
             ++state.eval_complete_count;
             engine.dispatch_security_eval(state, bucket->bar, true, state.eval_complete_count - 1);
-            if (!completed(bucket->bar, first_index, first_ms,
-                           NativeCompletionKind::Confirmed)) return false;
+            if (!check_fixed_subscription_input(engine, index)
+                || !completed(bucket->bar, first_index, first_ms, kind)) {
+                return false;
+            }
         }
-        return true;
     };
     if (feed_bar) {
-        if (!drain(std::min(feed_bar->timestamp, horizon_ms))) return false;
-        if (feed_bar->timestamp < horizon_ms) {
+        if (!drain(std::min(observed_ms, horizon_ms))) return false;
+        if (observed_ms < horizon_ms) {
             const int before = clock.observed_count;
-            state.aggregator.observe_fixed(clock, *feed_bar);
+            Bar observation = *feed_bar;
+            observation.timestamp = observed_ms;
+            state.aggregator.observe_fixed(clock, observation);
             ++state.feed_count;
-            if (before == 0 && clock.observed_count > 0) {
+            const bool contributed = clock.observed_count > before;
+            if (before == 0 && contributed) {
                 // FIRST CONTRIBUTING FEED bar: a primary slice can start
                 // before this requested period and still contain that bar.
                 subscription.bucket_first_index = index;
-                subscription.bucket_first_ms = feed_bar->timestamp;
+                subscription.bucket_first_ms = observed_ms;
             }
             // Only a feed bar just observed carries the early-close context:
             // with its accepted successor (0: not known) it says whether it
             // was its session-day's last, as the aggregating step is told
             // through security_next_input_ms_.
-            return drain(horizon_ms, feed_bar->timestamp, next_feed_ms) && !failed();
+            return drain(horizon_ms, contributed, contributed ? observed_ms : 0,
+                         contributed ? next_feed_ms : 0) && !failed();
         }
     }
     return drain(horizon_ms) && !failed();
 }
 
+// Feed this input's auxiliary slice in order through the same evaluator.
 template <typename Completed>
 bool NativeExecutionConsumer::feed_auxiliary_slice(
         BacktestEngine& engine, TimeframeSubscription& subscription, int index,
@@ -10585,7 +10759,7 @@ bool NativeExecutionConsumer::feed_auxiliary_slice(
             // The feed bar's own successor, the one the aggregating step
             // below is told: 0 when the feed does not hold it yet.
             if (!feed_fixed_subscription(
-                    engine, subscription, index, &feed_bar, close,
+                    engine, subscription, index, &feed_bar, feed_interval->eligible_open_ms, close,
                     at + 1 < total ? auxiliary_bar(at + 1).timestamp : 0, completed))
                 return false;
             continue;
@@ -10619,7 +10793,7 @@ bool NativeExecutionConsumer::feed_auxiliary_slice(
         }
     }
     if (fixed && accepted)
-        return feed_fixed_subscription(engine, subscription, index, nullptr, horizon, 0, completed);
+        return feed_fixed_subscription(engine, subscription, index, nullptr, 0, horizon, 0, completed);
     return !failed();
 }
 
@@ -10682,8 +10856,8 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
             auto horizon = std::min(interval->last_traded_close_ms, interval->next_period_open_ms);
             const auto next = subscription_next_input_ms(i);
             if (next > input_bars[i].timestamp) horizon = std::min(horizon, next);
-            if (!feed_fixed_subscription(engine, subscription, i, &input_bars[i], horizon, next,
-                                         record))
+            if (!feed_fixed_subscription(engine, subscription, i, &input_bars[i],
+                                         interval->eligible_open_ms, horizon, next, record))
                 return false;
         }
         return !failed();
@@ -10751,17 +10925,24 @@ bool NativeExecutionConsumer::pump_timeframe_subscriptions(
                 return false;
             continue;
         }
+        auto& state =
+            engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
+        const bool fixed = engine.native_fixed_security_clock(state);
+        if (fixed && !check_fixed_subscription_input(engine, index)) return false;
+        const auto delivered_at = fixed && accepted_input_ ? accepted_input_->stamp : bar.timestamp;
         bool delivered = false;
         if (subscription.lookahead) {
             while (subscription.projected_cursor < subscription.projected_bars.size()
                    && subscription.projected_first_index[subscription.projected_cursor]
                           == index) {
+                if (fixed && !check_fixed_subscription_input(engine, index)) return false;
                 const std::size_t at = subscription.projected_cursor++;
                 if (!deliver_timeframe_bar(engine, subscription,
                                            subscription.projected_bars[at],
                                            subscription.projected_first_ms[at],
-                                           bar.timestamp,
-                                           subscription.projected_completion[at])) {
+                                           delivered_at,
+                                           subscription.projected_completion[at])
+                    || (fixed && !check_fixed_subscription_input(engine, index))) {
                     return false;
                 }
                 delivered = true;
@@ -10783,7 +10964,7 @@ bool NativeExecutionConsumer::pump_timeframe_subscriptions(
                                      NativeCompletionKind completion) {
                 delivered = true;
                 return deliver_timeframe_bar(engine, subscription, bucket, first_ms,
-                                             bar.timestamp, completion);
+                                             fixed ? delivered_at : bar.timestamp, completion);
             };
             if (!feed_auxiliary_slice(engine, subscription, index, input_interval,
                                       deliver)) {
@@ -10792,22 +10973,20 @@ bool NativeExecutionConsumer::pump_timeframe_subscriptions(
             if (!delivered) clear_if_gapped(subscription);
             continue;
         }
-        auto& state =
-            engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
-        if (engine.native_fixed_security_clock(state)) {
+        if (fixed) {
             const auto interval = completion_input_interval(input_interval);
             if (interval) {
                 auto horizon = std::min(interval->last_traded_close_ms, interval->next_period_open_ms);
                 const auto next = subscription_next_input_ms(index);
-                if (next > bar.timestamp) horizon = std::min(horizon, next);
+                if (next > delivered_at) horizon = std::min(horizon, next);
                 const auto deliver = [&](const Bar& bucket, int, std::int64_t first_ms,
                                          NativeCompletionKind completion) {
                     delivered = true;
                     return deliver_timeframe_bar(engine, subscription, bucket, first_ms,
-                                                 bar.timestamp, completion);
+                                                 delivered_at, completion);
                 };
-                if (!feed_fixed_subscription(engine, subscription, index, &bar, horizon, next,
-                                             deliver))
+                if (!feed_fixed_subscription(engine, subscription, index, &bar,
+                                             interval->eligible_open_ms, horizon, next, deliver))
                     return false;
             }
             if (!delivered) clear_if_gapped(subscription);
@@ -11161,7 +11340,13 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
                     expected_label += step;
                 }
             }
-            if (bar.timestamp != expected_label) {
+            // A calendar successor can be spelled at either of its admitted
+            // opens. The raw fallback above still requires its exact label.
+            const bool clipped_successor = !uses_raw_label_partition()
+                && bar.timestamp == interval->open_ms
+                && interval->open_ms < interval->eligible_open_ms
+                && interval->eligible_open_ms == expected_label;
+            if (bar.timestamp != expected_label && !clipped_successor) {
                 processing_input_ = false;
                 present_refusal(engine, "native stream has an in-session gap",
                                 RunFailureCode::stream_input_rejected);
@@ -11181,15 +11366,16 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
     input_context.input_index = index;
     input_context.completes_script_interval =
         interval->next_period_open_ms >= script_interval->next_period_open_ms;
+    const AcceptedInput accepted{input_context, bar, bar.timestamp, *interval};
     struct AcceptedInputScope {
         NativeExecutionConsumer& consumer;
-        const NativeInputContext* previous;
-        AcceptedInputScope(NativeExecutionConsumer& value, const NativeInputContext& context)
-            : consumer(value), previous(value.accepted_input_context_) {
-            consumer.accepted_input_context_ = &context;
+        const AcceptedInput* previous;
+        AcceptedInputScope(NativeExecutionConsumer& value, const AcceptedInput& input)
+            : consumer(value), previous(value.accepted_input_) {
+            consumer.accepted_input_ = &input;
         }
-        ~AcceptedInputScope() { consumer.accepted_input_context_ = previous; }
-    } accepted_scope(*this, input_context);
+        ~AcceptedInputScope() { consumer.accepted_input_ = previous; }
+    } accepted_scope(*this, accepted);
     // The accepted pre-roll horizon of a selected batch: the first input at or
     // after T finds the last pre-T bucket still pending when its own inputs
     // stopped short of the script interval's end. It is completed here, ahead
@@ -12017,6 +12203,10 @@ bool NativeExecutionConsumer::finalize_observed_tick_slot(
         }
         has_forming_ = false;
         forming_tick_volume_ = TickVolume{};
+        // A calculation like the others: the report policy decides what is recorded.
+        if (equal && !failed()) {
+            record_script_report_point(engine, interval.open_ms);
+        }
         return !failed();
     }
     const Bar formed = forming_;
@@ -12327,11 +12517,11 @@ native_order::SubmitResult NativeExecutionConsumer::submit_with_surface(
     if (!commands_allowed()) {
         throw std::runtime_error("native submit refused outside allowed phase");
     }
-    native_order::CommandContext ctx;
     native_order::PreparedSubmit prepared;
     native_order::CommandInstalled<native_order::SubmitResult> ok;
     try {
-        ctx = make_command_context(engine, request, surface);
+        CommandOpeningObservations external(*this, engine, request);
+        const auto ctx = make_command_context(engine, request, surface, external);
         if (direct_mutation_) {
             ok = requests_.apply_submit(
                 request, ctx, engine.next_order_incarnation_, next_timeline_ordinal_);
@@ -12380,11 +12570,11 @@ native_order::ReplaceResult NativeExecutionConsumer::replace_with_surface(
     if (!commands_allowed()) {
         throw std::runtime_error("native replace refused outside allowed phase");
     }
-    native_order::CommandContext ctx;
     native_order::PreparedReplace prepared;
     native_order::CommandInstalled<native_order::ReplaceResult> ok;
     try {
-        ctx = make_command_context(engine, request, surface);
+        CommandOpeningObservations external(*this, engine, request);
+        const auto ctx = make_command_context(engine, request, surface, external);
         if (direct_mutation_) {
             ok = requests_.apply_replace(
                 target, request, ctx, engine.next_order_incarnation_, next_timeline_ordinal_,
@@ -12699,11 +12889,11 @@ double NativeExecutionConsumer::marked(const BacktestEngine& engine, double pric
     return engine.marked_equity(price);
 }
 
-std::size_t NativeExecutionConsumer::first_command_after(uint64_t after_ordinal) const noexcept {
+std::size_t NativeExecutionConsumer::first_command_after(uint64_t after_ordinal) const {
     const auto& history = requests_.history();
     if (history.empty() || command_ordinal(history.back()) <= after_ordinal) return history.size();
-    // A reader's cursor is usually a few events behind the tail: walk back
-    // from it, and bisect only a long suffix.
+    // A reader's cursor is usually a few events behind the tail: walk back from it, and bisect only
+    // a long suffix. The bisection reads spill pages back; a failed read throws to the caller.
     auto it = history.end();
     while (it != history.begin()) {
         auto prev = std::prev(it);
@@ -12720,7 +12910,16 @@ std::size_t NativeExecutionConsumer::first_command_after(uint64_t after_ordinal)
     return static_cast<std::size_t>(std::distance(history.begin(), it));
 }
 
+void NativeExecutionConsumer::release_run_results() noexcept {
+    requests_.release_run_history();
+    std::vector<NativeDriverPoint>().swap(driver_log_);
+    std::vector<NativeAccountObservation>().swap(account_log_);
+    drop_presentation();
+    if (host_results_release_) host_results_release_(host_cleanup_owner_);
+}
+
 std::vector<NativeMarketEvent> NativeExecutionConsumer::events_after(uint64_t after_ordinal) const {
+    requests_.check_history_available();
     const auto& history = requests_.history();
     const auto command_begin = history.begin()
         + static_cast<std::ptrdiff_t>(first_command_after(after_ordinal));
@@ -14930,7 +15129,7 @@ std::int64_t NativeExecutionConsumer::subscription_next_input_ms(int index) cons
 // before its first cache or provider mutation. The caller snapshots policy
 // once; this helper never reads configuration or an environment variable.
 // Old backend bindings retain their owner until reset/readers retire.
-void BacktestEngine::prepare_scratch_table_run(const detail::ScratchTableConfig& config) {
+void BacktestEngine::prepare_scratch_table_run(const detail::ScratchTableConfig& config, std::uint64_t live_order_ids_limit) {
     std::shared_ptr<detail::ScratchSlab> next;
     switch (config.backend) {
     case detail::ScratchTableBackend::disk_scratch:
@@ -14940,12 +15139,21 @@ void BacktestEngine::prepare_scratch_table_run(const detail::ScratchTableConfig&
         // The constructor rechecks standalone callers and zeroes the backing
         // allocation before publication. bad_alloc remains out_of_memory.
         (void)detail::compute_layout(config.manifest);
-        next = std::make_shared<detail::ScratchSlab>(config.manifest);
+        next = std::make_shared<detail::ScratchSlab>(config.manifest, live_order_ids_limit);
         break;
     default:
         throw detail::ScratchCapacityError(detail::ScratchResource::layout);
     }
     scratch_table_run_.slab = std::move(next);
+}
+
+int BacktestEngine::set_scratch_live_order_ids_limit(std::uint64_t limit) {
+    const int status = report_sink_setter_status();
+    if (status != 0) return status;
+    auto& consumer = as_native_consumer(execution_consumer());
+    if (consumer.scratch_policy_setter_busy()) return -3;
+    consumer.set_scratch_live_order_ids_limit(limit);
+    return 0;
 }
 
 }  // inline namespace engine_script_run_v20
@@ -15483,6 +15691,34 @@ bool NativeExecutionConsumer::applied_open_is_current(const NativeCoordinate& co
     return coordinate.effective_time_ms >= decision_floor()
         || (aggregates_input()
             && modeled_open_of_floored_bucket(coordinate, decision_floor()));
+}
+
+// The placement feed_fixed_subscription makes for its own observations, statement for
+// statement, for a host whose own series keep a fixed clock: a label in a break can name an
+// interval that still has traded time. A label before its slot's first traded instant moves
+// onto that instant, an instant inside a break onto the next span start of its session day,
+// and neither passes the horizon. A change to either copy must be made to both. At the end
+// of the file, like the definition above, so that no cited line moves.
+std::int64_t NativeExecutionConsumer::fixed_clock_seat(
+        std::int64_t stamp_ms, std::int64_t eligible_open_ms, std::int64_t horizon_ms) const {
+    auto observed_ms = stamp_ms;
+    if (observed_ms < horizon_ms) {
+        observed_ms = std::min(horizon_ms, std::max(observed_ms, eligible_open_ms));
+        if (observed_ms < horizon_ms && !calendar_.all_day()
+            && !native_calendar::in_session(calendar_, observed_ms, calendar_memo_)) {
+            const auto day = native_calendar::session_day_at(calendar_, observed_ms, calendar_memo_);
+            const auto stamp = observed_ms;
+            observed_ms = horizon_ms;
+            if (day) {
+                for (const auto& span : day->spans) {
+                    if (span.first <= stamp) continue;
+                    observed_ms = std::min(horizon_ms, span.first);
+                    break;
+                }
+            }
+        }
+    }
+    return observed_ms;
 }
 
 }  // namespace pineforge::engine_script_run_v20

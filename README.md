@@ -33,7 +33,7 @@ The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pinefo
 - **Open runtime.** The engine and native live runner are Apache-2.0. The separately distributed [PineForge compiler](https://github.com/pineforge-4pass/pineforge-codegen-oss/blob/main/LICENSE) is source-available under the PineForge Source License 1.2 from its release 1.3.0 (release 1.2.0 keeps the PineForge Source License 1.1, and releases up to 1.1.0 keep the PolyForm Noncommercial terms they shipped with); personal trading is free, and commercial use requires a separate license; the capital in an account a proprietary-trading firm or funded-trader program provides or allocates, including a challenge, evaluation or simulated account, is investment capital. Public reference strategies, benchmarks and validation tooling are available in their respective repositories; the community-script test set is not redistributed.
 - **Fast.** In-process, no interpreter: median **36× faster than PyneCore** on the 200 strategies both engines time (100 corpus probes and 100 held-out private strategies), measured at engine `35db01c8` on 2026-09-29 on an AWS c7a.8xlarge with PyneCore timed as a subprocess, its interpreter start-up included (PineForge runs a median 807k bars/s per strategy over its 201 slots with the bar magnifier on; [method](benchmarks/results/speed.md)). Parameter sweeps re-run a loaded `.so` with new inputs — no recompile, no fork.
 - **Deterministic to the bit.** Two runs with the same inputs produce identical trade lists.
-- **Yours to embed.** 172 `PF_API` declarations across six installed headers — `pineforge.h`'s 115 (95 of the 106 runtime exports and up to 20 per-strategy functions a generated module defines), eleven more runtime declarations in `execution_observer.h`, `selected_window.h` and `report_sink.h` (three, three and five), `native_c_api.h`'s 44 native-host declarations and `selected_window_plan.h`'s two planner declarations — an ABI that is append-only within a major version from 1.0 on. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
+- **Yours to embed.** 175 `PF_API` declarations across six installed headers — `pineforge.h`'s 118 (98 of the 109 runtime exports and up to 20 per-strategy functions a generated module defines), eleven more runtime declarations in `execution_observer.h`, `selected_window.h` and `report_sink.h` (three, three and five), `native_c_api.h`'s 44 native-host declarations and `selected_window_plan.h`'s two planner declarations — an ABI that is append-only within a major version from 1.0 on. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
 
 Recorded outputs and their additional API declarations described here are
 part of **1.5.0**.
@@ -198,6 +198,11 @@ python3 scripts/run_strategy.py . --ohlcv tutorial/data/btcusdt_15m_7d.csv --no-
 ```
 
 Run it from the engine checkout, with `strategy.pine` there, after the `cmake --install` above (with a prebuilt tarball instead, add `-I<its directory>/include` and link its `lib/libpineforge.a`). Engine v1.3.0 pairs with pineforge-codegen 1.3.0, as v1.2.0 does with 1.2.0, v1.1.0 with 1.1.0, v1.0.1 with 1.0.1 and v1.0.0 with 1.0.0; codegen 0.10.4 emits C++ for engine v0.13.1, which the headers of v1.0.0, v1.0.1, v1.1.0, v1.2.0 and v1.3.0 no longer compile. No codegen release has a command-line entry point, so transpile through `transpile()`. The compile line above is for Linux; with Clang, add `-fbracket-depth=1024`. A macOS/Clang source build instead links `-Wl,-force_load,/usr/local/lib/libpineforge.a`. Linking the whole archive is what puts the runtime's C exports (`pf_abi_version`, the `strategy_stream_*` family) in the module; a script that uses `matrix.*` also needs Eigen's include directory.
+
+With this checkout's `scripts/run_strategy.py`, set Pine inputs by name in
+`inputs.json` in the strategy directory, or use `--inputs-json <path>` to select
+another file. For a boolean input, use JSON `true` or `false`, for example
+`{"Long only": true}`.
 
 ### 2. C++, against the kernel
 
@@ -554,11 +559,11 @@ is in [CHANGELOG.md](CHANGELOG.md).
 
 The counts below describe the current API, including recorded outputs, the report sink and scratch-table selection; recorded outputs are not part of 1.4.0.
 
-A newly generated strategy `.so` exposes 122 compiled-strategy `PF_API` declarations
-(106 runtime implementations plus sixteen generated exports) plus 44 native-host
-declarations: 166 `PF_API` exports in total; `use_bar_magnifier = true` adds
+A newly generated strategy `.so` exposes 125 compiled-strategy `PF_API` declarations
+(109 runtime implementations plus sixteen generated exports) plus 44 native-host
+declarations: 169 `PF_API` exports in total; `use_bar_magnifier = true` adds
 `strategy_declares_bar_magnifier` and a module that records [outputs](docs/outputs.md) its
-three outputs exports, bringing the inventories to at most 126 and 170. Older modules lack the six opt-in
+three outputs exports, bringing the inventories to at most 129 and 173. Older modules lack the six opt-in
 [checked-settings exports](docs/checked-settings.md). Older modules can also lack
 the two opt-in [execution-capability exports](docs/strategy-capabilities.md).
 In an optimized build `nm -gU` also shows libc++'s
@@ -572,6 +577,7 @@ inventories are pinned by `scripts/check_c_abi_runtime.py`:
 | `strategy_confirmed_bar_api_version` / `strategy_confirmed_bar_receipt` | Optional versioned metadata for proven confirmed-bar admission (since 1.3.0); legacy capability exports remain unchanged |
 | `run_backtest` / `run_backtest_full` | Run with auto-detected timeframe / with timeframe + magnifier configuration |
 | `report_free` | Free arrays inside a filled `pf_report_t` |
+| `strategy_release_run_results_v1` | Close run result scratch after the last read and keep the closed trade count |
 | `strategy_closed_trade_entry_incarnation` | Per-run physical entry provenance of a closed trade |
 | `strategy_set_input` / `strategy_set_override` | Override a Pine `input.*()` value / a `strategy(...)` declaration parameter |
 | `strategy_set_magnifier_volume_weighted` | Toggle the volume-weighted magnifier |
@@ -586,7 +592,7 @@ inventories are pinned by `scripts/check_c_abi_runtime.py`:
 | `strategy_set_native_security_feed` / `strategy_set_aux_security_feed` | Feed `request.security()` from a native higher-timeframe series / an auxiliary bar-aligned feed |
 | `strategy_set_symbol_feed` / `strategy_set_symbol_feed_borrowed_v1` / `_feed_column` / `strategy_set_symbol_facts` / `strategy_set_recorded_series` | Another symbol's data for `request.security()` of that symbol: its own copied or borrowed bars (each with its close) and named columns, its `syminfo.*` facts, and recorded request values per chart bar (each behind its own `PINEFORGE_HAS_…_V1` probe; historical runs only) |
 | `strategy_set_account_currency_fx_series` | Effective-time quote-to-account FX |
-| `strategy_set_account_currency_fx_scalar` | Host-supplied scalar quote-to-account FX rate; an explicit 1.0 is host data, the default 1.0 is not. A script's account-currency conversions read only a supplied rate and stop the run with `currency_conversion_rate_unavailable` without one |
+| `strategy_set_account_currency_fx_scalar` | Host-supplied scalar quote-to-account FX rate; an explicit 1.0 is host data, the default 1.0 is not. See [ABI stability](docs/pages/abi-stability.md) for how conversions handle a missing rate |
 | `strategy_get_last_error` | The latest runtime error |
 | `strategy_get_last_error_code` / `strategy_get_last_error_args` | The latest failure's stable code from the closed [run-failure vocabulary](docs/pages/run-failure-codes.md) (`""` when the run succeeded) and its typed arguments as canonical JSON; behind `PINEFORGE_HAS_RUN_FAILURE_CODES_V1` |
 | `strategy_get_run_warnings` | Canonical JSON array of observational run warnings, including the requested/feed timeframes and stable site identity of a non-multiple `request.security` site; behind `PINEFORGE_HAS_RUN_WARNINGS_V1` |
@@ -596,13 +602,15 @@ inventories are pinned by `scripts/check_c_abi_runtime.py`:
 | `strategy_report_sink_diagnostics_v1` | Fixed-size presented equity endpoints and first-bar trade provenance after a completed sink; stdout annualization needs no sink read-back |
 | `pf_version_get` / `pf_version_string` / `pf_abi_version` | Runtime version, version string, module compatibility version (`PF_ABI_VERSION == 5`) |
 | `strategy_execution_contract` / `strategy_configure_native_v1` / `strategy_configure_native_fx_curve_v1` / `_fx_curve_ext_v1` | Query Legacy vs NativeMarketV1; apply the versioned native run specification (an invalid or refused base call returns `-1` and leaves the handle Failed; a cooperative `Aborted` handle may be reused with the same key and a higher run number); stage or clear an immutable native FX curve, `_fx_curve_ext_v1` also writing the typed refusal (`pf_native_fx_curve_error_e`) and the offending point's index |
-| `strategy_request_abort` / `strategy_last_run_status` | Cooperative abort of a run in progress; `0`=completed, `1`=aborted |
+| `strategy_request_abort` / `strategy_last_run_status` | Cooperative abort of a run in progress; status `0`=completed, `1`=`NOT_COMPLETED` (failed, aborted, or void setter failure), `-1`=NULL handle. A zero status alone does not establish success; read `strategy_get_last_error` and `strategy_get_last_error_code` after every start. |
 | `strategy_set_scratch_tables_v1` | Copy disk-scratch or bounded-memory table policy and its eleven admission maxima while idle; NULL restores disk defaults (since 1.7.0) |
+| `strategy_set_scratch_live_order_ids_limit_v1` | Set an optional active order ID limit for bounded scratch runs while idle; zero sets no separate live-ID limit |
 | `pf_map_pairs_limit_set_checked` | Set the calling thread's creation-time limit for distinct pairs in each map before the strategy factory; NULL or zero selects unlimited. Restore NULL after the factory; existing hosts retain their captured policy |
+| `pf_ta_lookback_limit_set_checked` | Set the calling thread's maximum bars back for series-length TA before creating a strategy. NULL or zero selects unlimited; restore NULL after the factory |
 | `strategy_set_cache_policy_v1` | Copy optional per-kind resident cache bytes before run admission; omitted kinds use internal defaults, zero bypasses, and idle changes apply to the next run. See [memory controls](docs/pages/memory-management.md#memory_controls) for supported kinds |
 | `pf_run_abort_install_sigterm_v1` / `pf_run_abort_requested_v1` / `pf_run_abort_restore_sigterm_v1` | Opt-in child invocation SIGTERM flag; stop after a completed input bar, retaining typed progress and an incomplete sink; install/restore with SIGTERM blocked |
 | `strategy_set_realtime_tail` | Live-runtime surface (ABI v4): the array's last bar is a still-forming tail — `barstate.islast=false`, `last_bar_index`/`last_bar_time` frozen at the horizon bar, no range-end row |
-| `strategy_set_probe_suppress_tail_logic` | ABI v4: the last bar runs only the broker's pre-`on_bar` steps (pending-order settlement, intraday-cap/loss checks) and returns — no `on_bar`, no margin-call / `process_orders_on_close` second pass / bracket-reissue processing (the range-end row is `strategy_set_realtime_tail`'s to skip; the flags are independent) |
+| `strategy_set_probe_suppress_tail_logic` | ABI v4: the last bar is matched and settled without calling `on_bar`; broker settlement and adapter risk checks, including any margin call or intraday-cap/loss close due on the bar, still run, while `process_orders_on_close`'s second pass and bracket-reissue processing do not (the range-end row is `strategy_set_realtime_tail`'s to skip; the flags are independent) |
 | `strategy_set_path_order` / `strategy_last_bar_dual_entry_path` | ABI v4: force the intrabar O→H/L→C leg order (`AUTO`/`HIGH_FIRST`/`LOW_FIRST`) for path-dependent fill probing; read which side won a same-bar dual-entry-stop arbitration |
 | `strategy_set_broker_state_hash_recording` / `strategy_broker_state_hash` | ABI v4: toggle a 64-bit broker-state hash appended at report points to `pf_report_t::broker_state_hash` (a bare host uses `KernelRecorded`); read the final state's hash |
 | `strategy_pending_orders_len` / `strategy_pending_order_get` / `strategy_pending_order_layout` | ABI v4: the resting pending-order book after the most recent run — count, a POD snapshot per order (`pf_pending_order_v1_t`), and the snapshot's self-describing field layout |

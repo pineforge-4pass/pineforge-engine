@@ -131,6 +131,7 @@ struct Reader {
     }
     template<class T> void integer(T& out) noexcept {
         const auto value = word();
+        if (status != ScratchStatus::ok) return;
         if constexpr (std::is_signed_v<T>) {
             const auto maximum = static_cast<std::uint64_t>(std::numeric_limits<T>::max());
             const auto minimum = static_cast<std::uint64_t>(std::numeric_limits<T>::min());
@@ -148,6 +149,14 @@ struct Reader {
             }
             out = static_cast<T>(value);
         }
+    }
+    template<class E, class Declared> void enumeration(E& out, Declared declared) noexcept {
+        std::underlying_type_t<E> raw{};
+        integer(raw);
+        if (status != ScratchStatus::ok) return;
+        const auto candidate = static_cast<E>(raw);
+        if (declared(candidate)) out = candidate;
+        else status = ScratchStatus::corrupt;
     }
     void real(double& out) noexcept {
         const auto value = word();
@@ -228,6 +237,21 @@ inline ScratchStatus finish(CommandScratchStore& store, ScratchStatus status) no
     }
     return status;
 }
+
+// Join the caller's transaction. Validate the value and length at the returned
+// handle while rollback is still possible; the caller's source is no longer read.
+template<class Validate>
+ScratchStatus put_checked(CommandScratchStore& store, std::uint64_t key,
+                         const ScratchByteSource& value, Validate validate) noexcept {
+    ScratchHandle handle = scratch_no_handle;
+    auto status = store.put(WordSource(key), value, handle);
+    if (status != ScratchStatus::ok) return status;
+    ScratchRecordInfo info;
+    status = store.point(handle, info);
+    if (status != ScratchStatus::ok) return status;
+    return validate(StoreSource(store, handle, info.value_bytes));
+}
+
 inline ScratchStatus put(CommandScratchStore& store, std::uint64_t key,
                          const ScratchByteSource& value) noexcept {
     auto status = store.begin();

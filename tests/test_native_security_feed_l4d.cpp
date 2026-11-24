@@ -778,6 +778,231 @@ void test_native_fixed_period_grid_and_session_controls() {
     }
 }
 
+// A 180-minute request on a 0930-1200,1300-1600 session, 60-minute input, 120-minute
+// chart. The row [12:30, 15:30) is complete when the 14:30 input closes, and the 14:30
+// input also seals the chart bar that opened at 13:30: that bar reads the row. The chart
+// bar is picked by its open; its close is not asserted.
+std::int64_t break_session_at(int hour, int minute) {
+    return tv_fixed_period_75_fact::kOriginMs
+        + (hour * 60 + minute) * tv_fixed_period_75_fact::kMinuteMs;
+}
+
+void check_row_across_a_break(const std::vector<Bar>& bars) {
+    const auto at = break_session_at;
+    const std::vector<Bar> rows = {
+        {1000.5, 1004.5, 996.5, 1002.5, 11.0, at(9, 30)},
+        {2000.5, 2004.5, 1996.5, 2002.5, 12.0, at(12, 30)},
+        {3000.5, 3004.5, 2996.5, 3002.5, 13.0, at(15, 30)},
+    };
+    FixedPeriodProbe host;
+    host.requested = "180";
+    host.set_syminfo_timezone("UTC");
+    host.set_syminfo_session("0930-1200,1300-1600");
+    install_fixed_native(host, rows);
+    host.run(bars.data(), static_cast<int>(bars.size()), "60", "120",
+             false, 4, MagnifierDistribution::ENDPOINTS);
+    FIXED_CHECK(host.last_error().empty());
+    FIXED_CHECK(std::count_if(host.evaluated_bars.begin(), host.evaluated_bars.end(),
+                              [at](const Bar& bar) { return bar.timestamp == at(12, 30); }) == 1);
+    std::size_t chart = 0;
+    while (chart < host.charts.size() && host.charts[chart].timestamp != at(13, 30)) ++chart;
+    FIXED_CHECK(chart < host.reads.size());
+    if (chart >= host.reads.size()) return;
+    const auto& read = host.reads[chart];
+    FIXED_CHECK(read.present);
+    if (!read.present) return;
+    FIXED_CHECK(read.bar.timestamp == at(12, 30));
+    FIXED_CHECK(read.bar.close == rows[1].close);
+    FIXED_CHECK(read.requested_close == at(15, 30));
+}
+
+// A provider label inside a break must not stop the request site's clock. The control
+// has the same inputs without the label in the break and reads the same row.
+void test_native_fixed_period_provider_label_inside_a_break() {
+    const auto at = break_session_at;
+    const std::vector<Bar> control = {
+        {110, 111, 109, 110, 1, at(13, 30)},
+        {120, 121, 119, 120, 1, at(14, 30)},
+        {130, 131, 129, 130, 1, at(15, 30)},
+    };
+    std::vector<Bar> inside_break = control;
+    inside_break.insert(inside_break.begin(), Bar{100, 101, 99, 100, 1, at(12, 31)});
+    check_row_across_a_break(control);
+    check_row_across_a_break(inside_break);
+}
+
+// The nominal label of a slot a break clips (12:30 for [12:30, 13:30), traded from 13:00)
+// must not stop it either.
+void test_native_fixed_period_nominal_label_of_a_clipped_slot() {
+    const auto at = break_session_at;
+    check_row_across_a_break({
+        {100, 101, 99, 100, 1, at(12, 30)},
+        {110, 111, 109, 110, 1, at(13, 30)},
+        {120, 121, 119, 120, 1, at(14, 30)},
+        {130, 131, 129, 130, 1, at(15, 30)},
+    });
+}
+
+// A request of 75 or 105 minutes on chart = input = 60 and the session 0930-1200,1300-1600: the
+// bars its site evaluated, in order. `rows` is the native feed; `run` names the run on a failure.
+// Another session with a break, or a chart coarser than the 60-minute input, can be named.
+std::vector<Bar> published_across_a_break(const char* requested, const std::vector<Bar>& rows,
+                                          const std::vector<Bar>& bars, const char* run,
+                                          const char* session = "0930-1200,1300-1600",
+                                          const char* chart = "60") {
+    FixedPeriodProbe host;
+    host.requested = requested;
+    host.set_syminfo_timezone("UTC");
+    host.set_syminfo_session(session);
+    install_fixed_native(host, rows);
+    host.run(bars.data(), static_cast<int>(bars.size()), "60", chart,
+             false, 4, MagnifierDistribution::ENDPOINTS);
+    if (!host.last_error().empty()) {
+        ++fixed_failures;
+        std::fprintf(stderr, "fixed-period run '%s': %s\n", run, host.last_error().c_str());
+    }
+    return host.evaluated_bars;
+}
+
+std::vector<std::int64_t> stamps_of(const std::vector<Bar>& published) {
+    std::vector<std::int64_t> stamps;
+    for (const Bar& bar : published) stamps.push_back(bar.timestamp);
+    return stamps;
+}
+
+// FIXED_CHECK names only the line: say which run of a test failed.
+void name_failed_run(int failures_before, const char* run, std::size_t published) {
+    if (fixed_failures != failures_before)
+        std::fprintf(stderr, "fixed-period run '%s' failed (%zu rows evaluated)\n", run, published);
+}
+
+Bar break_session_row(int minute) {  // a native row that opens `minute` minutes into the day
+    const double value = 7000.5 + minute;
+    return Bar{value - 1.0, value + 1.0, value - 2.0, value, 50.0,
+               break_session_at(minute / 60, minute % 60)};
+}
+
+Bar break_session_bar(double value, int hour, int minute) {
+    return Bar{value, value + 1.0, value - 1.0, value + 0.5, 1.0, break_session_at(hour, minute)};
+}
+
+// Two inputs inside the break, both before their slot's first traded instant (13:00). The input
+// after 12:31 arrives before that instant, so 12:31 neither starts the clock nor is observed. The
+// input after 12:45 is 13:30, so 12:45 is seated at 13:00, starts the clock there and is observed
+// into [12:00, 13:15): the site publishes that row first, then the rows the control publishes.
+void test_native_fixed_period_two_inputs_inside_a_break() {
+    const auto at = break_session_at;
+    std::vector<Bar> rows;
+    for (const int minute : {570, 645, 720, 795, 870, 945}) rows.push_back(break_session_row(minute));
+    const std::vector<Bar> control = {break_session_bar(130.5, 13, 30), break_session_bar(140.5, 14, 30),
+                                      break_session_bar(150.5, 15, 30)};
+    std::vector<Bar> tape = {break_session_bar(120.5, 12, 31), break_session_bar(125.5, 12, 45)};
+    tape.insert(tape.end(), control.begin(), control.end());
+
+    int before = fixed_failures;
+    const auto from_control = stamps_of(published_across_a_break("75", rows, control, "control"));
+    const std::vector<std::int64_t> want_control = {at(13, 15), at(14, 30), at(15, 45)};
+    FIXED_CHECK(from_control == want_control);
+    name_failed_run(before, "control", from_control.size());
+
+    before = fixed_failures;
+    const char* run = "two inputs inside the break";
+    const auto from_tape = stamps_of(published_across_a_break("75", rows, tape, run));
+    std::vector<std::int64_t> want_tape = {at(12, 0)};
+    want_tape.insert(want_tape.end(), want_control.begin(), want_control.end());
+    FIXED_CHECK(from_tape == want_tape);
+    name_failed_run(before, run, from_tape.size());
+}
+
+// An input inside the break that ends before its slot's first traded instant (13:00) has no
+// traded time, so its bar must not enter the bucket that opens at 13:00. That bucket's native
+// row is absent, so the site publishes the aggregate of the bars from 13:00 on, which opens with
+// the 13:00 bar, as it does on the control without the 12:31 bar.
+void test_native_fixed_period_break_input_is_not_folded_into_the_next_bucket() {
+    const auto at = break_session_at;
+    std::vector<Bar> rows;
+    for (const int minute : {570, 675, 885}) rows.push_back(break_session_row(minute));
+    const std::vector<Bar> control = {
+        break_session_bar(100.5, 9, 30), break_session_bar(200.5, 10, 30),
+        break_session_bar(300.5, 11, 30), break_session_bar(613.5, 13, 0),
+        break_session_bar(700.5, 13, 30), break_session_bar(800.5, 14, 30)};
+    std::vector<Bar> tape = control;
+    tape.insert(tape.begin() + 3, break_session_bar(512.5, 12, 31));
+    const std::vector<std::int64_t> want = {at(9, 30), at(11, 15), at(13, 0)};
+    const auto check = [&](const char* run, const std::vector<Bar>& bars) {
+        const int before = fixed_failures;
+        const auto published = published_across_a_break("105", rows, bars, run);
+        FIXED_CHECK(stamps_of(published) == want);
+        if (published.size() == want.size()) {
+            // The aggregate of the bars 13:00, 13:30 and 14:30, and nothing of the 12:31 bar.
+            FIXED_CHECK(published.back().open == 613.5);
+            FIXED_CHECK(published.back().high == 801.5);
+            FIXED_CHECK(published.back().low == 612.5);
+            FIXED_CHECK(published.back().close == 801.0);
+            FIXED_CHECK(published.back().volume == 3.0);
+        }
+        name_failed_run(before, run, published.size());
+    };
+    check("control", control);
+    check("bar inside the break", tape);
+}
+
+// A first input labelled inside a break AFTER traded time of its slot (10:05 in the slot
+// [09:30, 10:30) of 0930-1000,1010-1600, which trades to 10:00 and again from 10:10) is seated on
+// the next traded instant, so the clock goes on. Seated on its label, the clock never moved again
+// and the site published nothing. The tape is the control with that bar in front, and both runs
+// must publish `want`. Minutes are minutes into the day.
+void check_first_label_in_a_break(const char* session, const char* requested, const char* chart,
+                                  const std::vector<int>& row_minutes, int label_minute,
+                                  const std::vector<int>& control_minutes,
+                                  const std::vector<std::int64_t>& want,
+                                  const char* control_run, const char* tape_run) {
+    std::vector<Bar> rows;
+    for (const int minute : row_minutes) rows.push_back(break_session_row(minute));
+    std::vector<Bar> control;
+    for (const int minute : control_minutes)
+        control.push_back(break_session_bar(100.5 + minute, minute / 60, minute % 60));
+    std::vector<Bar> tape = control;
+    tape.insert(tape.begin(), break_session_bar(50.5, label_minute / 60, label_minute % 60));
+    for (const bool with_label : {false, true}) {
+        const int before = fixed_failures;
+        const char* run = with_label ? tape_run : control_run;
+        const auto published = stamps_of(published_across_a_break(
+            requested, rows, with_label ? tape : control, run, session, chart));
+        FIXED_CHECK(published == want);
+        name_failed_run(before, run, published.size());
+    }
+}
+
+// On an aggregated chart: input 60, chart 120, a 180-minute request (rows 09:30, 12:30, 15:30).
+void test_native_fixed_period_first_label_in_a_break_on_an_aggregated_chart() {
+    const auto at = break_session_at;
+    check_first_label_in_a_break(
+        "0930-1000,1010-1600", "180", "120", {570, 750, 930}, 10 * 60 + 5,
+        {630, 690, 750, 810, 870, 930}, {at(9, 30), at(12, 30), at(15, 30)},
+        "aggregated chart, control", "aggregated chart, first label in a break after traded time");
+}
+
+// On a chart of the input's own timeframe: chart = input = 60, a 75-minute request.
+void test_native_fixed_period_first_label_in_a_break_on_the_input_timeframe() {
+    const auto at = break_session_at;
+    check_first_label_in_a_break(
+        "0930-1000,1010-1600", "75", "60", {570, 645, 720, 795, 870, 945}, 10 * 60 + 5,
+        {630, 690, 750, 810, 870, 930},
+        {at(9, 30), at(10, 45), at(12, 0), at(13, 15), at(14, 30), at(15, 45)},
+        "input timeframe, control", "input timeframe, first label in a break after traded time");
+}
+
+// Two breaks in one day: the label 11:05 lies in the second one, after traded time of its slot
+// [10:30, 11:30), and its seat is the start of the span after it (11:10), not of an earlier span.
+void test_native_fixed_period_first_label_in_the_second_break_of_a_day() {
+    const auto at = break_session_at;
+    check_first_label_in_a_break(
+        "0930-1000,1010-1100,1110-1600", "180", "120", {570, 750, 930}, 11 * 60 + 5,
+        {690, 750, 810, 870, 930}, {at(9, 30), at(12, 30), at(15, 30)},
+        "two breaks, control", "two breaks, first label in the second break");
+}
+
 // ── an exchange session-day that closes early ────────────────────────────────
 //
 // Native engine controls over supplied bars (native_fixed_period_fixture::
@@ -1605,6 +1830,115 @@ void test_native_fixed_period_feed_shifted_during_run() {
         FEED_SHIFT_CHECK(error.find("native security feeds changed during the run") != std::string::npos);
     }
 }
+
+void test_native_fixed_lookahead_missing_row() {
+    using tv_fixed_period_75_fact::kOriginMs;
+    constexpr int chart_minutes = 60;
+    constexpr int fine_minutes = 5;
+    constexpr int requested_minutes = 75;
+    const auto missing_open = kOriginMs + requested_minutes * kMinute;
+    const auto next_open = missing_open + requested_minutes * kMinute;
+    const auto chart = native_fixed_period_fixture::input(chart_minutes, 4 * chart_minutes);
+    const auto dense = native_fixed_period_fixture::input(fine_minutes, 4 * chart_minutes);
+    const std::vector<Bar> native{
+        {800, 820, 790, 810, 42, kOriginMs},
+        {900, 920, 890, 910, 84, next_open},
+    };
+    const auto in_missing_period = [=](const Bar& bar) {
+        return missing_open <= bar.timestamp && bar.timestamp < next_open;
+    };
+    auto sparse = dense;
+    sparse.erase(std::remove_if(sparse.begin(), sparse.end(), in_missing_period),
+                 sparse.end());
+
+    // Independently roll up the real inputs of the missing period. Its first
+    // children belong to the preceding chart bar and the chart selecting it
+    // also contains children from the next requested period.
+    Bar aggregate{};
+    int contributors = 0;
+    for (const Bar& child : dense) {
+        if (!in_missing_period(child)) continue;
+        if (contributors++ == 0) aggregate = child;
+        else {
+            aggregate.high = std::max(aggregate.high, child.high);
+            aggregate.low = std::min(aggregate.low, child.low);
+            aggregate.close = child.close;
+            aggregate.volume += child.volume;
+        }
+    }
+    FIXED_CHECK(contributors == requested_minutes / fine_minutes);
+    const auto matches = [](const Bar& actual, const Bar& expected) {
+        return actual.timestamp == expected.timestamp && actual.open == expected.open
+            && actual.high == expected.high && actual.low == expected.low
+            && actual.close == expected.close && actual.volume == expected.volume;
+    };
+    const auto run = [&](FixedPeriodProbe& host, const std::vector<Bar>& aux, bool gaps) {
+        host.requested = std::to_string(requested_minutes);
+        host.ahead = true;
+        host.gaps = gaps;
+        install_fixed_native(host, native);
+        FIXED_CHECK(strategy_set_aux_security_feed(
+            static_cast<pf_strategy_t>(&host),
+            reinterpret_cast<const pf_bar_t*>(aux.data()), static_cast<int>(aux.size()),
+            std::to_string(fine_minutes).c_str()) == 0);
+        const auto chart_tf = std::to_string(chart_minutes);
+        host.run(chart.data(), static_cast<int>(chart.size()), chart_tf, chart_tf);
+        FIXED_CHECK(host.last_error().empty());
+        FIXED_CHECK(host.native_security_substitutions()
+                    == static_cast<std::int64_t>(native.size()));
+        FIXED_CHECK(host.reads.size() == chart.size());
+    };
+
+    for (const bool gaps : {false, true}) {
+        for (const bool observed : {false, true}) {
+            FixedPeriodProbe host;
+            run(host, observed ? dense : sparse, gaps);
+            FIXED_CHECK(host.native_security_misses() == (observed ? 1 : 0));
+            if (host.reads.size() != chart.size()) continue;
+
+            const auto& selected = host.reads[2];
+            FIXED_CHECK(selected.present == (observed || !gaps));
+            if (selected.present)
+                FIXED_CHECK(matches(selected.bar, observed ? aggregate : native.front()));
+            FIXED_CHECK(host.reads.front().present
+                        && matches(host.reads.front().bar, native.front()));
+            FIXED_CHECK(host.reads[1].present == !gaps);
+            if (host.reads[1].present)
+                FIXED_CHECK(matches(host.reads[1].bar, native.front()));
+            FIXED_CHECK(host.reads.back().present
+                        && matches(host.reads.back().bar, native.back()));
+
+            // Missing periods never allocate a history slot without inputs,
+            // and the next native row cannot be evaluated one chart early.
+            std::vector<Bar> completed;
+            for (std::size_t i = 0; i < host.evaluated_bars.size(); ++i) {
+                FIXED_CHECK(host.deliveries[i].requested_slot
+                            == static_cast<std::int64_t>(completed.size()));
+                if (host.deliveries[i].actual_complete)
+                    completed.push_back(host.evaluated_bars[i]);
+                FIXED_CHECK(observed || !in_missing_period(host.evaluated_bars[i]));
+            }
+            FIXED_CHECK(completed.size() == native.size() + (observed ? 1 : 0));
+            if (completed.size() == native.size() + (observed ? 1 : 0)) {
+                FIXED_CHECK(matches(completed.front(), native.front()));
+                if (observed) FIXED_CHECK(matches(completed[1], aggregate));
+                FIXED_CHECK(matches(completed.back(), native.back()));
+            }
+        }
+    }
+
+    // In projection mode the chart itself is the source of the fallback.
+    // There is one chart child in this period, and no finer input opens there.
+    FixedPeriodProbe projected;
+    projected.set_syminfo_metadata("historical_security_lookahead_projection", 1.0);
+    run(projected, sparse, false);
+    if (projected.reads.size() == chart.size()) {
+        FIXED_CHECK(projected.reads[2].present
+                    && matches(projected.reads[2].bar, chart[2]));
+        FIXED_CHECK(projected.reads.back().present
+                    && matches(projected.reads.back().bar, native.back()));
+    }
+}
 #undef FEED_SHIFT_CHECK
 #undef REPORTED_QUANTITY_CHECK
 #undef FIXED_CHECK
@@ -1624,6 +1958,13 @@ int main() {
     test_native_fixed_period_tick_admission_and_reset();
     test_native_fixed_period_unbacked_and_divisible_controls();
     test_native_fixed_period_grid_and_session_controls();
+    test_native_fixed_period_provider_label_inside_a_break();
+    test_native_fixed_period_nominal_label_of_a_clipped_slot();
+    test_native_fixed_period_two_inputs_inside_a_break();
+    test_native_fixed_period_break_input_is_not_folded_into_the_next_bucket();
+    test_native_fixed_period_first_label_in_a_break_on_an_aggregated_chart();
+    test_native_fixed_period_first_label_in_a_break_on_the_input_timeframe();
+    test_native_fixed_period_first_label_in_the_second_break_of_a_day();
     test_native_fixed_period_exchange_early_close();
     test_native_fixed_period_early_close_gate();
     test_native_fixed_period_session_hole_is_not_a_close();
@@ -1632,6 +1973,7 @@ int main() {
     test_native_fixed_period_reported_entry_quantities();
     test_native_fixed_period_feed_removed_during_run();
     test_native_fixed_period_feed_shifted_during_run();
+    test_native_fixed_lookahead_missing_row();
     return fixed_failures == 0 ? 0 : 1;
 }
 

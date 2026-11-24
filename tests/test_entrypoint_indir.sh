@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Verifies entrypoint honors PINEFORGE_IN_DIR and uses a per-run work dir
-# (no fixed /tmp/strategy.* collisions). Stubs g++/python so the test needs
+# (no fixed /tmp/strategy.* collisions). Stubs g++, codegen and the runner so it needs
 # no real toolchain — it only exercises the path/work-dir logic of the script.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -11,7 +11,13 @@ trap 'rm -rf "$work"' EXIT
 
 # Fake prefix + toolchain. g++ writes the .so it is told to (-o arg);
 # run_json.py prints a sentinel JSON. Put stubs first on PATH.
-mkdir -p "$work/bin" "$work/prefix/bin" "$work/prefix/lib" "$work/prefix/include"
+mkdir -p "$work/bin" "$work/prefix/bin" "$work/prefix/lib" "$work/prefix/include" \
+    "$work/packages/pineforge_codegen"
+: > "$work/packages/pineforge_codegen/__init__.py"
+cat > "$work/packages/pineforge_codegen/cpp_allowlist.py" <<'PY'
+def check_generated_cpp(text):
+    return [] if text == "int main(){}\n" else [object()]
+PY
 cat > "$work/bin/g++" <<'SH'
 #!/usr/bin/env bash
 out=""; prev=""
@@ -31,6 +37,7 @@ echo "int main(){}" > "$indir/strategy.cpp"
 echo "timestamp,open,high,low,close,volume" > "$indir/ohlcv.csv"
 
 out="$(PATH="$work/bin:$PATH" \
+     PYTHONPATH="$work/packages" \
      PINEFORGE_PREFIX="$work/prefix" \
      PINEFORGE_IN_DIR="$indir" \
      PINEFORGE_ALLOW_UNATTESTED_CPP=1 \

@@ -267,6 +267,15 @@ void ReportReplay::finish(double net, std::string_view base_sha256) {
     trades_.clear();
     points_.clear();
 }
+
+void ReportReplay::release() noexcept {
+    trades_.clear();
+    points_.clear();
+    if (writer_) {
+        if (complete_) writer_->release();
+        else writer_.reset();
+    }
+}
 } // namespace report
 
 int BacktestEngine::set_report_replay_v1(const char* path, const char* run_id) {

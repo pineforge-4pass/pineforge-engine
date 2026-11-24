@@ -450,7 +450,7 @@ void capacity_text(const char* resource, const std::string& expected, F&& operat
 
 void resident_cap_is_active_only_and_read_only() {
     auto manifest = detail::default_scratch_manifest(0);
-    auto slab = std::make_shared<ScratchSlab>(manifest);
+    auto slab = std::make_shared<ScratchSlab>(manifest, 4096);
     LiveTable table;
     table.bind_scratch(slab, ScratchResource::cohort);
     for (std::size_t i = 0; i < 5000; ++i) {

@@ -46,7 +46,15 @@ Normal success is serialized completely before publication and native cleanup pr
 
 The native writer bounds each sink line to 1 MiB including LF and exact JSON integers to ±(2^53−1). Its header, records and trailer are multiple JSON values, not one report document. The shown append/count checks do not impose a total-byte limit. Stream writes retry positive partial writes and EINTR, use `MSG_NOSIGNAL` for sockets, and wait on EAGAIN using `poll(..., -1)`. A blocking write also has no timeout in this loop. (`src/report_sink_writer.cpp`.)
 
-A successful native trailer follows checked flush/synchronization. Abandonment flushes retained records and fails without a trailer; destruction does not synthesize completion. The strict reader requires the trailer's counts/digest and EOF immediately after it. These are content-completion conditions, not proof that the subsequent Python JSON or host publication succeeded. (`src/report_sink_writer.cpp`, `docker/pf_sink.py`.)
+The native path sink flushes the trailer and checks synchronization before
+publishing a completed receipt. If writing or syncing the trailer fails, the
+writer tries to truncate the file back to the end of the records. Callers
+should require a successful run and completed receipt, since truncation can
+also fail. Abandonment flushes retained records and fails without a trailer;
+destruction does not synthesize completion. The strict reader requires the
+trailer's counts/digest and EOF immediately after it. These are
+content-completion conditions, not proof that the subsequent Python JSON or
+host publication succeeded. (`src/report_sink_writer.cpp`, `docker/pf_sink.py`.)
 
 The separate finalizer already has a bounded stream mode: `--out -` requires positive `--max-bytes B`, reads at most B+1, never forwards the overflow byte, and returns 8 with `complete=false`, `reason=sink_exhausted`, `sink_bytes=B+1`, `cap_bytes=B`. Its stdout remains provisional until exit 0 and receipt completion; receipt/cleanup failures can instead return 5. File mode permits an omitted cap, and a supplied zero is an actual zero-byte cap. Stream mode rejects zero. None of these meanings matches the proposed byte-cap convention in which zero means no caller limit. (`docker/pineforge_sink_finalize.py`.)
 

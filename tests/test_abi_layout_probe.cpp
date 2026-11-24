@@ -78,7 +78,9 @@ static_assert(sizeof(Adapter) == 90760, "PineExecutionAdapter size changed");
 // passing ABI gate.
 static_assert(sizeof(Host) == 109840, "PineStrategyHost size changed; measure and pin the final layout");
 #endif
-static_assert(PF_STREAM_ENGINE_LAYOUT_VERSION == 5u, "runtime contexts require layout stamp 5");
+// expectation corrected: 5 -> 6, because the live reader shares the consumer
+// layout, which now stores the strategy's TA lookback policy.
+static_assert(PF_STREAM_ENGINE_LAYOUT_VERSION == 6u, "TA lookback requires layout stamp 6");
 static_assert(!HasRosterRoots<Scratch>::value,
               "RetiredRowScratch::roster_roots must be absent");
 #endif

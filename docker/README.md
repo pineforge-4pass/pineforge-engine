@@ -63,6 +63,14 @@ startup from `--profile` or `PINEFORGE_RUN_JSON_PROFILE` (CLI wins; default
 the host used the jailed profile and native arena admission succeeded;
 unjailed runs report `false` even with an attached arena.
 
+In the jailed profile, `--limit-live-order-ids N` sets an optional maximum
+for simultaneously active order IDs. Zero removes the separate live-ID
+limit; the historical ID count and byte budgets still apply. To keep the
+former live limit, pass `--limit-live-order-ids 4096`. Passing this option,
+including zero, requires a strategy library that exports
+`strategy_set_scratch_live_order_ids_limit_v1`. Omitting it uses the library's
+default: no separate limit in the new runtime, 4,096 in the previous one.
+
 `diagnostics.warnings` is present only when the library's optional
 `strategy_get_run_warnings` getter returns a nonempty list of objects with
 `code` (string) and `args` (object). It includes
@@ -100,16 +108,39 @@ Mount points (provide exactly one of `strategy.pine` / `strategy.cpp`):
 | Host path        | Container path        | Required | Notes                             |
 | ---------------- | --------------------- | :------: | --------------------------------- |
 | `strategy.pine`  | `/in/strategy.pine`   | preferred | PineScript v6 source; transpiled in-container |
-| `strategy.cpp`   | `/in/strategy.cpp`    | back-compat | Pre-transpiled PineForge translation unit (used only if no `.pine`). Refused unless `PINEFORGE_STRATEGY_CPP_SHA256` holds the sha256 of exactly these bytes, or `PINEFORGE_ALLOW_UNATTESTED_CPP=1` (local trust only; a hosted caller must never set it) |
+| `strategy.cpp`   | `/in/strategy.cpp`    | back-compat | Pre-transpiled PineForge translation unit (used only if no `.pine`). Must pass the bundled codegen allowlist. The host must set `PINEFORGE_STRATEGY_CPP_SHA256` to the SHA-256 of those exact bytes unless `PINEFORGE_ALLOW_UNATTESTED_CPP=1` (local trust only; a hosted caller must never set it). |
 | `ohlcv.csv`      | `/in/ohlcv.csv`       | yes      | `timestamp,open,high,low,close,volume` |
+
+The entrypoint copies mounted C++ into its work directory. It verifies that
+copy against the host's digest, checks it with the same allowlist used for
+Pine translation, and compiles the copy. The local opt-out skips only the
+digest check. Empty or whitespace-only source, a finding from the allowlist,
+or an allowlist check that cannot run stops the request before compilation.
+
+### Check the compiled strategy before loading
+
+A trusted parent can set `PINEFORGE_STRATEGY_SO_SHA256` in the engine
+process's environment to the expected SHA-256 of `strategy.so`, as 64
+hexadecimal digits. `run_json.py` checks it before opening the library,
+including for a `--capabilities-json` probe. A mismatch or unreadable,
+empty or nonregular file returns `strategy_library_incompatible` with
+`reason: load_failed`. An empty or malformed digest returns
+`run_request_invalid` with `option: arguments`. Omit the variable to use the
+usual loader and ABI checks.
+
+For a two-phase run, supply the expected digest from the trusted wrapper
+when launching phase 2. Keep the library and its path stable through the
+load, for example with the read-only work directory described below. The
+digest check covers the strategy file; process isolation remains the primary
+boundary.
 
 ### Two-phase run
 
 Set `PINEFORGE_BUILD_ONLY` to exactly `1` or `true` and
 `PINEFORGE_WORK_DIR` to the absolute path of an existing empty directory
 created by the caller. Phase 1 performs the normal source resolution,
-attestation, translation, compilation and selected-window inventory binding,
-then writes `engine-step.json` and exits 0. Its stdout is empty; stderr ends
+attestation, C++ allowlist checking, translation, compilation and selected-window
+inventory binding, then writes `engine-step.json` and exits 0. Its stdout is empty; stderr ends
 with `[pineforge] build complete; engine step not started`. The engine has
 not run. The caller owns this directory and its eventual cleanup. The
 build-only checks and manifest publication live inside `entrypoint.sh`,
@@ -134,8 +165,8 @@ is the single Bash array assembled for the ordinary engine invocation.
 phase 2 performs no interpreter lookup through `PATH`. An interpreter
 resolution that is relative, or a manifest publication failure, returns
 status 4 with `harness_internal_error`. Other phase-1 failures retain their
-ordinary statuses: missing input or C++ attestation 2, compilation or binding
-3, compile-guard refusal 4, translation 5.
+ordinary statuses: missing input or C++ attestation or allowlist refusal 2,
+copying, compilation or binding 3, compile-guard refusal 4, translation 5.
 
 The caller must execute **every element of the manifest's `argv`, in order**,
 without shell splitting, adding flags or reconstructing the command.
@@ -154,7 +185,7 @@ is authoritative.
 | `--magnifier-volume-weighted` | `PINEFORGE_MAGNIFIER_VOLUME_WEIGHTED` is `1`, `true`, `yes` or `on` |
 | `--syminfo`, `--symbol-feeds` | Nonempty `PINEFORGE_SYMINFO`, `PINEFORGE_SYMBOL_FEEDS`, in that order |
 | `--max-symbol-feeds` | `PINEFORGE_MAX_SYMBOL_FEEDS` is set, including empty or `0` |
-| `--tv-compat`, `--max-inventory-bytes` | On the plain g++ branch (including zero-only compile-guard settings), compatibility flag when `PINEFORGE_TV_COMPAT` is `1`, `true`, `yes` or `on`; then the inventory value when `PINEFORGE_MAX_INVENTORY_BYTES` is set, including empty or `0`. Neither flag is forwarded on the compile-guard branch |
+| `--tv-compat`, `--max-inventory-bytes` | Compatibility flag when `PINEFORGE_TV_COMPAT` is `1`, `true`, `yes` or `on`; then the inventory value when `PINEFORGE_MAX_INVENTORY_BYTES` is set, including empty or `0`. Neither flag is forwarded on the compile-guard branch; the runner reads those settings from the inherited environment when the flags are absent |
 | `--report-sink-fd`, `--run-id` | Corresponding `PINEFORGE_REPORT_SINK_FD`, `PINEFORGE_RUN_ID` is set; empty strings are retained |
 | `--bench`, `--warmup`, `--repeats` | `PINEFORGE_BENCH` is `1`, `true`, `yes` or `on`; warmup/repeats use `PINEFORGE_WARMUP`/`PINEFORGE_REPEATS`, with unset or empty values defaulting to `3`/`20` |
 | `--report-policy`, window arguments | Nonempty `PINEFORGE_REPORT_POLICY`, followed by each nonempty `PINEFORGE_WINDOW_START_MS`, `PINEFORGE_WINDOW_END_MS`, `PINEFORGE_PREROLL_BARS`, `PINEFORGE_FED_START_MS` as `--window-start-ms`, `--window-end-ms`, `--preroll-bars`, `--fed-start-ms` |
@@ -163,7 +194,9 @@ is authoritative.
 Run phase 2 in the manifest's `cwd`, the entrypoint's working directory.
 In particular, relative syminfo and symbol-feed index paths resolve there.
 Preserve the phase-1 environment unchanged, as `inherits.environment` states.
-The engine reads `PINEFORGE_RUN_JSON_PROFILE`,
+The runner reads `PINEFORGE_LIMIT_TA_LOOKBACK` from that environment and uses
+it as the default for `--limit-ta-lookback`. The engine also reads
+`PINEFORGE_RUN_JSON_PROFILE`,
 `PINEFORGE_COMMAND_SCRATCH_MAX_BYTES`, `PINEFORGE_COMMAND_SCRATCH_DIR`,
 `TMPDIR`, `PF_SCRATCH_ARENA_FD`, `PF_SCRATCH_ARENA_BYTES`,
 `PF_SCRATCH_ARENA_JAILED`, `PF_SCRATCH_WINDOW_BYTES`, `PATH` and locale
@@ -216,21 +249,21 @@ completed; 1 means a failed run, harness fault or report that could not be
 written whole; 2 means argparse refused the command line or explicit request
 validation failed. The module describes failures and incomplete publication
 at `docker/run_json.py:117` and `docker/run_json.py:136`; `main()` describes
-its status contract at `docker/run_json.py:5314` and propagates typed failure
-statuses at `docker/run_json.py:5336` and `docker/run_json.py:5345`.
-The argparse error exits 2 at `docker/run_json.py:4583`; explicit sink-option
-refusals also use 2 at `docker/run_json.py:6040`. The standalone `csv2bin`
-refusal returns 2 at `docker/run_json.py:5304`, but the entrypoint never
+its status contract at `docker/run_json.py:5406` and propagates typed failure
+statuses at `docker/run_json.py:5424` and `docker/run_json.py:5433`.
+The argparse error exits 2 at `docker/run_json.py:4668`; explicit sink-option
+refusals also use 2 at `docker/run_json.py:6147`. The standalone `csv2bin`
+refusal returns 2 at `docker/run_json.py:5392`, but the entrypoint never
 selects that subcommand. `_host_main()` returns 1 on report-channel setup
-failure at `docker/run_json.py:8718`, propagates the run status at
-`docker/run_json.py:8751`, and the process exits through
-`sys.exit(_host_main())` at `docker/run_json.py:9582`.
+failure at `docker/run_json.py:8825`, propagates the run status at
+`docker/run_json.py:8858`, and the process exits through
+`sys.exit(_host_main())` at `docker/run_json.py:9814`.
 
 Statuses 3 (compile or bind failure) and 5 (transpile failure) are
 build-phase-only; the engine step never returns them. Status 4 is only the
 entrypoint's mapping, or a usage/limit failure of an opt-in compile guard or
 of build-only (including a manifest publication failure). The entrypoint's
-2 means missing input or C++ attestation failure; the engine step's argparse
+2 means missing input or a C++ attestation or allowlist refusal; the engine step's argparse
 2 has a different meaning despite sharing the number.
 The entrypoint maps **every nonzero engine status to 4**, with
 `[pineforge] backtest failed` on stderr. The manifest's structured
@@ -251,12 +284,9 @@ not hashed by the build. `artifacts.request_feed_inventory` is null when no
 inventory was bound. Keep these inputs and the installation's interpreter,
 modules and native dependencies readable until the engine exits.
 
-The library, inventory files and manifest persist in `work_dir`, as does
-the compiled source except on the non-selected path with
-`PINEFORGE_ALLOW_UNATTESTED_CPP=1`: that path leaves the source at
-`/in/strategy.cpp` (or the configured input directory), so `artifacts.cpp`
-and `--generated-cpp` refer to the caller-mutable input mount. Keep that
-source readable and verify its hash before phase 2 too. The existing
+The library, inventory files, manifest and compiled source persist in `work_dir`.
+For mounted C++ this source is the private copy used for the allowlist and
+compilation, including with `PINEFORGE_ALLOW_UNATTESTED_CPP=1`. The existing
 inventory binder may also retain its temporary publication file.
 Phase 2 must finish before the caller removes these files. Engine writes go
 to stdout, the inherited report descriptor when selected, and temporary
@@ -639,6 +669,13 @@ docker run --rm \
   timeframe, and `strategy_set_symbol_feed` installs the bars as given. A `240`
   feed does not serve a `D` request, and a `1` feed serves only a request at
   `1`, so give each requested timeframe its own bars.
+- Series-length TA windows keep their full history by default. Set
+  `PINEFORGE_LIMIT_TA_LOOKBACK` to cap them at N bars back; a length of N + 1
+  fits. An explicit `--limit-ta-lookback N` passed to `run_json.py` takes
+  precedence over the environment. `PINEFORGE_TV_COMPAT=1` selects 15,000
+  when neither is supplied.
+  An explicit `0` means unlimited; empty, negative and non-integer values
+  are usage errors.
 - An index or feed the harness cannot install (for example: not JSON, a bad
   timeframe spelling, two feeds at one timeframe, a CSV without `close`,
   timestamps that do not strictly increase, a close after the next bar's open,
@@ -1127,8 +1164,8 @@ directly (for example `base64 -d | shasum -a 256`).
 | Code | Meaning |
 | ---: | ------- |
 |  `0` | Success — JSON report, C++ in transpile-only mode, or empty stdout after a build-only run |
-|  `2` | Missing input mount (`/in/strategy.pine` or `/in/strategy.cpp`, and `/in/ohlcv.csv`), or a mounted `strategy.cpp` the host did not vouch for (one typed `run_request_invalid` line on stdout) |
-|  `3` | `g++` compile or selected inventory binding failed, including a stop by a limit the host applied (no cause is inferred) |
+|  `2` | Missing input mount, or a mounted `strategy.cpp` refused by attestation or the allowlist (one `run_request_invalid` line on stdout for either C++ refusal) |
+|  `3` | Copy of `strategy.cpp`, `g++` compile or selected inventory binding failed, including a stop by a limit the host applied (no cause is inferred) |
 |  `4` | Backtest aborted at runtime, a compile guard refused its settings or stopped compilation, or a build-only request or manifest failed |
 |  `5` | Transpile failed (unsupported Pine construct or syntax error) |
 

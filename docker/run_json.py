@@ -2961,7 +2961,7 @@ _REQUIRED_EXPORTS = ("strategy_create", "strategy_set_input", "strategy_set_over
 
 def load_strategy(so_path: Path) -> ctypes.CDLL:
     try:
-        lib = ctypes.CDLL(str(so_path))
+        lib = ctypes.CDLL(_strategy_load_path(so_path))
     except OSError as e:
         raise StrategyLibraryError(f"cannot load the strategy library: {e}",
                                    {"reason": "load_failed"}) from None
@@ -3155,6 +3155,10 @@ def _bind_scratch_tables(lib) -> None:
         lib.strategy_set_scratch_tables_v1.argtypes = [
             ctypes.c_void_p, ctypes.POINTER(ScratchTablesC)]
         lib.strategy_set_scratch_tables_v1.restype = ctypes.c_int
+    setter = getattr(lib, "strategy_set_scratch_live_order_ids_limit_v1", None)
+    if setter is not None:
+        setter.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
+        setter.restype = ctypes.c_int
 
 
 def default_scratch_manifest(bars: int | None) -> ScratchTablesC:
@@ -3176,7 +3180,8 @@ def default_scratch_manifest(bars: int | None) -> ScratchTablesC:
         262144, 25165824, 32768, 4227072, 65536, 4194304, 27, 6912, roots)
 
 
-def apply_scratch_tables(lib, state, manifest: ScratchTablesC) -> None:
+def apply_scratch_tables(lib, state, manifest: ScratchTablesC,
+                         live_order_ids_limit: int | None = None) -> None:
     """Install this run/trial's admission before its first execution; no fallback."""
     setter = getattr(lib, "strategy_set_scratch_tables_v1", None)
     if setter is None:
@@ -3185,6 +3190,14 @@ def apply_scratch_tables(lib, state, manifest: ScratchTablesC) -> None:
             {"reason": "setter_missing"})
     if setter(state, ctypes.byref(manifest)) != 0:
         raise _engine_invariant("the fresh strategy refused its scratch-table manifest")
+    if live_order_ids_limit is not None:
+        set_limit = getattr(lib, "strategy_set_scratch_live_order_ids_limit_v1", None)
+        if set_limit is None:
+            raise StrategyLibraryError(
+                "--limit-live-order-ids requires strategy_set_scratch_live_order_ids_limit_v1",
+                {"reason": "setter_missing"})
+        if set_limit(state, live_order_ids_limit) != 0:
+            raise _engine_invariant("the fresh strategy refused its live order ID limit")
 
 
 def _bind_outputs(lib) -> None:
@@ -5117,8 +5130,8 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         """A fresh, fully configured strategy state (the ordinary run's setup without the
         legacy trade-start gate, which selected mode refuses); freed again if it fails."""
         nonlocal syminfo_applied
-        st = create_strategy(lib, checked, getattr(args, "max_output_series", None),
-                             getattr(args, "max_map_pairs", None))
+        st = _create_strategy_with_ta_lookback(
+            lib, checked, args)
         sink = None
         try:
             apply_settings(lib, st, inputs, overrides, checked)
@@ -5136,7 +5149,8 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             if args.outputs:
                 enable_outputs(lib, st)
             if args.profile == "jailed":
-                apply_scratch_tables(lib, st, default_scratch_manifest(fed_count))
+                apply_scratch_tables(lib, st, default_scratch_manifest(fed_count),
+                                     getattr(args, "live_order_ids_limit", None))
                 args._scratch_arena_admitted = _require_jailed_arena(lib, st)
             sink = _new_report_sink(lib, st, args)
             if getattr(args, "report_replay", False) or getattr(args, "report_replay_sink", None):
@@ -5606,6 +5620,10 @@ def _main(argv, binary_inputs) -> int:
     ap._legacy_usage = ap.format_usage()
     ap.add_argument("--metrics-only", nargs="?", const="auto", choices=("auto", "legacy"),
                     default=None, help="Omit trade/curve arrays and volatile counters; bare = auto.")
+    ap.add_argument("--limit-live-order-ids", dest="live_order_ids_limit", type=_live_order_ids_count,
+                    default=None, metavar="N",
+                    help="Jailed profile: maximum simultaneously active order IDs. Zero removes "
+                         "the separate live limit; omission uses the loaded library's default.")
     all_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
     argv = _legacy_abbreviations(argv, legacy_long, all_long)
     argv = _legacy_abbreviations(argv, pre_profile_long, all_long)
@@ -5619,6 +5637,8 @@ def _main(argv, binary_inputs) -> int:
                 setattr(args, name, limit)
     if args.profile not in ("unjailed", "jailed"):
         raise _request_invalid("PINEFORGE_RUN_JSON_PROFILE must be unjailed or jailed", "arguments")
+    if args.live_order_ids_limit is not None and args.profile != "jailed":
+        raise _request_invalid("--limit-live-order-ids requires the jailed profile", "arguments")
     missing = []
     if args.so is None:
         missing.append("--so")
@@ -5725,8 +5745,8 @@ def _main(argv, binary_inputs) -> int:
         Match the validation harness's setup and free a state whose
         configuration fails before propagating its failure."""
         nonlocal syminfo_applied
-        st = create_strategy(lib, checked, getattr(args, "max_output_series", None),
-                             getattr(args, "max_map_pairs", None))
+        st = _create_strategy_with_ta_lookback(
+            lib, checked, args)
         sink = None
         try:
             apply_settings(lib, st, inputs, overrides, checked)
@@ -5746,7 +5766,7 @@ def _main(argv, binary_inputs) -> int:
             if args.outputs:
                 enable_outputs(lib, st)
             if args.profile == "jailed":
-                apply_scratch_tables(lib, st, default_scratch_manifest(n))
+                apply_scratch_tables(lib, st, default_scratch_manifest(n), args.live_order_ids_limit)
                 args._scratch_arena_admitted = _require_jailed_arena(lib, st)
             sink = _new_report_sink(lib, st, args, body=body)
             if body and (getattr(args, "report_replay", False)
@@ -9587,7 +9607,33 @@ def _map_pairs_count(text):
     return int(text)
 
 
+def _live_order_ids_count(text):
+    digits = text.lstrip("0") or "0"
+    if (not re.fullmatch(r"[0-9]+", text) or len(digits) > 20
+            or int(digits) > (1 << 64) - 1):
+        raise argparse.ArgumentTypeError("expected a nonnegative uint64 order ID count")
+    return int(digits)
+
+
+def _ta_lookback_count(text):
+    digits = text.lstrip("0") or "0"
+    if (not re.fullmatch(r"[0-9]+", text) or len(digits) > 19
+            or int(digits) > (1 << 63) - 1):
+        raise argparse.ArgumentTypeError("expected a nonnegative int64 lookback")
+    return int(digits)
+
+
+def tv_compat_from_environment() -> bool:
+    return os.environ.get("PINEFORGE_TV_COMPAT") in ("1", "true", "yes", "on")
+
+
 def _parse_output_series_limit(parser, argv):
+    # The guarded compile path leaves these settings in the inherited environment.
+    # argparse converts string defaults with the option's type; explicit flags win.
+    parser.set_defaults(
+        max_inventory_bytes=os.environ.get("PINEFORGE_MAX_INVENTORY_BYTES"),
+        tv_compat=tv_compat_from_environment(),
+    )
     parser.add_argument(
         "--limit-output-series", dest="max_output_series", type=_output_series_count,
         default=None, metavar="N",
@@ -9597,6 +9643,12 @@ def _parse_output_series_limit(parser, argv):
         default=None, metavar="N",
         help="Maximum distinct pairs per map; 0 or omitted means no limit. "
              "Use 50000 for TradingView parity.")
+    parser.add_argument(
+        "--limit-ta-lookback", dest="ta_lookback", type=_ta_lookback_count,
+        default=os.environ.get("PINEFORGE_LIMIT_TA_LOOKBACK"), metavar="N",
+        help="Maximum bars back for series-length TA windows; 0 means unlimited. "
+             "Defaults to PINEFORGE_LIMIT_TA_LOOKBACK, then 15000 with --tv-compat "
+             "or unlimited without it.")
     return parser.parse_args(argv)
 
 
@@ -9674,6 +9726,33 @@ def create_strategy(lib, checked: bool, max_output_series=None, max_map_pairs=No
         setter(None, error, len(error))
 
 
+def _create_strategy_with_ta_lookback(lib, checked, args):
+    maximum = getattr(args, "ta_lookback", None)
+    options = (getattr(args, "max_output_series", None), getattr(args, "max_map_pairs", None))
+    name = "pf_ta_lookback_limit_set_checked"
+    setter = getattr(lib, name, None)
+    if setter is None:
+        if maximum is not None:
+            raise StrategyLibraryError(
+                f"the library lacks {name}; rebuild to configure TA lookback",
+                {"reason": "symbol_missing"})
+        # Older modules already use the original fixed series window limit.
+        return create_strategy(lib, checked, *options)
+    if maximum is None and getattr(args, "tv_compat", False):
+        maximum = 15000
+    setter.argtypes = [ctypes.POINTER(ctypes.c_int64), ctypes.c_char_p, ctypes.c_size_t]
+    setter.restype = ctypes.c_int
+    setting = None if maximum is None else ctypes.byref(ctypes.c_int64(maximum))
+    error = ctypes.create_string_buffer(_SETTINGS_ERROR_CAPACITY)
+    if setter(setting, error, len(error)) != PF_SETTINGS_OK:
+        raise _request_invalid(
+            "error: --limit-ta-lookback: " + _c_text(error.value), "arguments")
+    try:
+        return create_strategy(lib, checked, *options)
+    finally:
+        setter(None, error, len(error))
+
+
 def _write_run_failure(failure):
     cause = getattr(failure, "cause", None)
     if cause is None:
@@ -9700,6 +9779,35 @@ def _output_series_resources(sink, series):
 
 def _report_series_count(document):
     return len((document.get("outputs") or {}).get("series", ()))
+
+
+def _strategy_load_path(so_path: Path) -> str:
+    """When requested, verify the file before giving its path to the loader."""
+    expected = os.environ.get("PINEFORGE_STRATEGY_SO_SHA256")
+    if expected is None:
+        return str(so_path)
+    if re.fullmatch(r"[0-9a-fA-F]{64}", expected) is None:
+        raise _request_invalid("error: PINEFORGE_STRATEGY_SO_SHA256 must be 64 hexadecimal digits",
+                               "arguments")
+    # A bare filename means a loader search, not the file in cwd. The caller
+    # keeps this path and its contents stable until the loader opens it.
+    path = Path(so_path).absolute()
+    digest = hashlib.sha256()
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("SHA-256 verification requires a nonempty regular file")
+        chunk = os.read(fd, 64 * 1024)
+        if not chunk:
+            raise OSError("SHA-256 verification requires a nonempty regular file")
+        while chunk:
+            digest.update(chunk)
+            chunk = os.read(fd, 64 * 1024)
+    finally:
+        os.close(fd)
+    if digest.hexdigest() != expected.lower():
+        raise OSError("SHA-256 mismatch")
+    return str(path)
 
 
 if __name__ == "__main__":

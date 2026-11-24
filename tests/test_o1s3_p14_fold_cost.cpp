@@ -4,6 +4,7 @@
 #include <pineforge/detail/journal_codec.hpp>
 #include <pineforge/run_failure.hpp>
 #include "../src/source/admission_journal_codec.hpp"
+#include "admission_legacy_fold.hpp"
 
 #include <array>
 #include <cstdio>
@@ -220,7 +221,7 @@ void fixed_fold_work() {
             auto legacy_digest = expected;
             fold_cost::work = {};
             ok(ad::scan_journal_record(legacy, {page.data(), page.size()}, summary));
-            ok(ad::fold_journal_record(legacy, {page.data(), page.size()}, legacy_digest));
+            ok(admission_test::fold_after_scan(legacy, {page.data(), page.size()}, legacy_digest));
             CHECK(legacy.reads == 2 * pages);
             CHECK(fold_cost::work.words == 2 * pass_words);
             CHECK(fold_cost::work.checks == 2 * pass_checks);

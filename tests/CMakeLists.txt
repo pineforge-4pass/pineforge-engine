@@ -1329,6 +1329,7 @@ list(APPEND TEST_SOURCES test_native_tick_volume)
 # live deferred group-adjustment chain pinning the window. Source-free, so it
 # also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_journal_window)
+list(APPEND TEST_SOURCES test_native_history_at_failure_orders)
 # R5 V19-B: what a run keeps of its event record (NativeRunSpec::
 # event_retention) and the host acknowledgement that closes a polling host's
 # window. Source-free, so it also runs in the kernel-only profile.
@@ -1931,7 +1932,7 @@ list(APPEND TEST_SOURCES
 )
 
 find_package(Threads REQUIRED)
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
+# The parent selects Python3_EXECUTABLE before probing optional Python test dependencies.
 
 # === Kernel-only registration =========================================
 # With PINEFORGE_BUILD_SOURCE_LAYER=OFF libpineforge.a holds the kernel
@@ -7681,6 +7682,10 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     set_target_properties(test_heap_census_unique_ids PROPERTIES ENABLE_EXPORTS ON)
 endif()
 
+# Broker-state hash sink string writer: appended here so that no line-pinned registration above moves.
+list(APPEND TEST_SOURCES test_broker_state_sink_string_view)
+pineforge_add_unit_test(test_broker_state_sink_string_view)
+
 # O(1) seam 3 journal-codec red clauses: eleven executables over one test file, one clause each.
 # They link the source layer (pine_adapter.hpp, pine_command_scratch_production.hpp), so a
 # kernel-only configure must not create them.
@@ -7863,6 +7868,21 @@ list(SORT LANE_CMAKE)
 foreach(lane_file IN LISTS LANE_CMAKE)
     include("${lane_file}")
 endforeach()
+
+# --- lane issue-920 begin ---
+if(TARGET test_issue_920_bool_input)
+    target_compile_definitions(test_issue_920_bool_input PRIVATE
+        PINEFORGE_ISSUE_920_PYTHON="${Python3_EXECUTABLE}"
+        PINEFORGE_ISSUE_920_RUNNER="${PROJECT_SOURCE_DIR}/scripts/run_strategy.py")
+endif()
+# --- lane issue-920 end ---
+# --- lane issue-956 begin ---
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    target_compile_definitions(test_run_json_strategy_digest PRIVATE
+        "PF_ISSUE_956_PYTHON=\"${Python3_EXECUTABLE}\""
+        "PF_ISSUE_956_TEST=\"${CMAKE_CURRENT_SOURCE_DIR}/test_run_json_strategy_digest.py\"")
+endif()
+# --- lane issue-956 end ---
 
 # --- lane scratch-directory-resolution-and-fallback begin ---
 # Scratch resolution: only these opted-in existing targets need the interposer's linkage.
@@ -8316,6 +8336,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 # --- lane deferred-sink-sync end ---
 
+# --- lane issue-921 begin ---
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(test_issue_921_report_sink_sync PRIVATE "-Wl,--wrap=fdatasync")
+endif()
+# --- lane issue-921 end ---
+
 # --- lane resident-command-scratch begin ---
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
     target_link_options(test_command_scratch_spill PRIVATE
@@ -8610,6 +8636,43 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND
     target_compile_options(entry_quantity_explicit PRIVATE -ffp-contract=off)
 endif()
 # --- lane entry-quantity-callers end ---
+
+# --- lane issue-934 begin ---
+# Read the live source file from any build directory; do not copy it at configure time.
+target_compile_definitions(test_changelog_release_sections PRIVATE
+    "PINEFORGE_CHANGELOG_PATH=\"${PROJECT_SOURCE_DIR}/CHANGELOG.md\"")
+# --- lane issue-934 end ---
+# --- lane issue-959 begin ---
+target_compile_definitions(test_eigen_fallback_archive_hash PRIVATE
+    PINEFORGE_ISSUE959_PYTHON="${Python3_EXECUTABLE}"
+    PINEFORGE_ISSUE959_SCRIPT="${CMAKE_CURRENT_SOURCE_DIR}/test_eigen_fallback_archive_hash.py"
+    PINEFORGE_ISSUE959_CMAKE="${CMAKE_COMMAND}"
+    PINEFORGE_ISSUE959_CMAKELISTS="${PROJECT_SOURCE_DIR}/CMakeLists.txt")
+# --- lane issue-959 end ---
+# --- lane issue-962 begin ---
+if(TARGET test_map_scratch_buffered_io)
+    target_compile_definitions(test_map_scratch_buffered_io PRIVATE
+        PINEFORGE_ISSUE_962_FEED="${PROJECT_SOURCE_DIR}/tutorial/data/btcusdt_15m_7d.csv")
+    target_link_options(test_map_scratch_buffered_io PRIVATE
+        "-Wl,--wrap=pread" "-Wl,--wrap=pwrite" "-Wl,--wrap=fdatasync"
+        "-Wl,--wrap=fsync" "-Wl,--wrap=posix_fadvise")
+endif()
+# --- lane issue-962 end ---
+# --- lane issue-958 begin ---
+if(UNIX)
+    target_compile_definitions(test_issue_958 PRIVATE
+        PF_ISSUE_958_PYTHON="${Python3_EXECUTABLE}"
+        PF_ISSUE_958_TEST="${CMAKE_CURRENT_SOURCE_DIR}/test_issue_958.py")
+endif()
+# --- lane issue-958 end ---
+
+# --- lane issue-937 begin ---
+if(TARGET test_issue_937_journal_comment)
+    add_test(NAME test_issue_937_spanning_page_seal
+        COMMAND test_issue_937_journal_comment --damage-spanning)
+    set_tests_properties(test_issue_937_spanning_page_seal PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+# --- lane issue-937 end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))

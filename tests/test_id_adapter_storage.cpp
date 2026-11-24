@@ -930,6 +930,8 @@ public:
             descriptor.version = 1;
             descriptor.backend = PF_SCRATCH_TABLE_BOUNDED_MEMORY;
             require(set_scratch_tables_v1(&descriptor) == 0, "select jailed cohort table");
+            if (cap_probe_)
+                require(set_scratch_live_order_ids_limit(4096) == 0, "select the finite live cap");
         }
     }
     void on_source_bar(const pineforge::Bar&) override {

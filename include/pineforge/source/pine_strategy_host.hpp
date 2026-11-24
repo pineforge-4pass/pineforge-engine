@@ -1071,8 +1071,20 @@ private:
     // insertion with different fixed fields splits an existing run.
     class RequestCallerIds {
     public:
+        // Rows leave a catalog only through clear() and its destructor. clear()
+        // and the next catalog built retire every position hint (see Hint).
+        RequestCallerIds() noexcept { retire(); }
+        RequestCallerIds(const RequestCallerIds&) = delete;
+        RequestCallerIds& operator=(const RequestCallerIds&) = delete;
+
         std::optional<std::uint64_t> find(const RequestCallerKey&) const noexcept;
         void emplace(const RequestCallerKey&, std::uint64_t caller);
+        // Gives a static site's next slot the next caller in its last run,
+        // exactly when find() would miss and emplace() would extend that run
+        // by one. Otherwise it changes nothing and returns false.
+        bool append_static_next(int sec_id, std::int64_t slot, std::int64_t phase,
+                                std::uint64_t caller) noexcept;
+
         bool empty() const noexcept { return runs_.empty(); }
         std::size_t size() const noexcept {
             std::size_t rows = 0;
@@ -1083,7 +1095,10 @@ private:
             }
             return rows;
         }
-        void clear() noexcept { runs_.clear(); }
+        void clear() noexcept {
+            retire();
+            runs_.clear();
+        }
 
         template <typename Visit>
         void for_each(Visit&& visit) const {
@@ -1105,6 +1120,13 @@ private:
             std::int64_t last = 0;
             std::uint64_t stride = 0;
         };
+        // One thread's last position per key kind. It only shortens a search:
+        // every use is checked against the live rows, so it cannot change a
+        // caller or a row. It is not state of the run and is never hashed.
+        struct Hint;
+        static Hint& hint() noexcept;
+        static void retire() noexcept;
+        Hint* bracket(const RequestCallerKey&) const noexcept;
         static bool same_series(const RequestCallerKey&, const RequestCallerKey&) noexcept;
         static std::uint64_t caller_at(const RequestCallerKey&, const Run&,
                                         std::int64_t second) noexcept;

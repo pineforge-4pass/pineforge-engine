@@ -27,12 +27,13 @@
  *     strategy_position_avg_price, strategy_position_cycle_seq,
  *     strategy_closed_trade_entry_id, strategy_closed_trade_exit_id,
  *     strategy_closed_trade_exit_comment, strategy_closed_trade_close_cause,
+ *     strategy_release_run_results_v1 (completed run scratch release),
  *     strategy_position_size, strategy_current_equity,
  *     strategy_initial_capital, strategy_net_profit_sum,
  *     strategy_report_pointvalue, strategy_set_report_replay_v1,
  *     strategy_script_bars_processed), pf_output_series_limit_set_checked/pf_output_series_limit_failure,
- *     pf_map_pairs_limit_set_checked, strategy_set_account_currency_fx_scalar,
- *     pf_version_get/pf_version_string,
+ *     pf_map_pairs_limit_set_checked, pf_ta_lookback_limit_set_checked,
+ *     strategy_set_account_currency_fx_scalar, pf_version_get/pf_version_string,
  *     pf_abi_version, strategy_execution_contract,
  *     strategy_configure_native_v1, strategy_configure_native_fx_curve_v1,
  *     strategy_configure_native_fx_curve_ext_v1,
@@ -40,8 +41,8 @@
  *     strategy_execution_observation_v1, pf_selected_window_version, pf_report_sink_version,
  *     strategy_set_selected_window_v1, strategy_selected_window_counts_v1,
  *     strategy_set_report_sink_v1, strategy_set_report_sink_fd_v1, strategy_report_sink_receipt_v1,
- *     strategy_set_scratch_tables_v1, strategy_report_sink_summary_v1,
- *     strategy_set_cache_policy_v1, strategy_set_scratch_io_policy_v1,
+ *     strategy_set_scratch_tables_v1, strategy_set_scratch_live_order_ids_limit_v1,
+ *     strategy_report_sink_summary_v1, strategy_set_cache_policy_v1, strategy_set_scratch_io_policy_v1,
  *     pf_report_scratch_arena_stats, pf_report_cache_stats,
  *     strategy_require_report_scratch_arena_v1,
  *     strategy_report_sink_diagnostics_v1,
@@ -80,6 +81,8 @@
 #include <signal.h>
 #include "run_abort.hpp"
 #include "retired_trade_history_read.hpp"
+#include "native_execution_consumer.hpp"
+#include "run_results_errors.hpp"
 namespace pineforge {
 void clear_native_c_host_refusal_error(BacktestEngine* engine) noexcept;
 bool native_c_host_in_postrun_hook_frame(BacktestEngine* engine) noexcept;
@@ -459,11 +462,11 @@ PF_API uint64_t strategy_closed_trade_entry_incarnation(
  * range-end rows) already declared with these exact names, so a same-name
  * report-row overload is not possible.
  *
- * Returned pointers are valid until the next run() (or stream call) on this
- * handle, like strategy_get_last_error. This legacy pointer API explicitly
+ * Returned pointers are valid until the next run(), stream call, or
+ * strategy_release_run_results_v1 on this handle. This legacy pointer API
  * materializes each requested row; value/page readers use bounded storage.
- * NULL on a NULL handle or an
- * out-of-range/policy-erased row; retained sealed rows remain readable. */
+ * NULL on a NULL handle, out-of-range, policy-erased or released row; retained
+ * sealed rows are readable until release. Released rows set the last error. */
 PF_API const char* strategy_closed_trade_entry_id(pf_strategy_t s, int trade_index) {
     if (!s) return nullptr;
     const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
@@ -607,7 +610,10 @@ PF_API void strategy_set_trace_enabled(pf_strategy_t s, int on) {
  */
 PF_API const char* strategy_get_last_error(pf_strategy_t s) {
     if (!s) return nullptr;
-    return static_cast<pineforge::BacktestEngine*>(s)->last_error().c_str();
+    const auto& engine = *static_cast<const pineforge::BacktestEngine*>(s);
+    if (pineforge::NativeExecutionConsumer::cabi_run_results_release_refused(engine))
+        return pineforge::detail::ActiveRunResultsRelease::message;
+    return engine.last_error().c_str();
 }
 
 /* The stable code of the failure strategy_get_last_error reports, and its
@@ -617,12 +623,17 @@ PF_API const char* strategy_get_last_error(pf_strategy_t s) {
  * setter, like the text. */
 PF_API const char* strategy_get_last_error_code(pf_strategy_t s) {
     if (!s) return nullptr;
-    return pineforge::run_failure_code_of(*static_cast<pineforge::BacktestEngine*>(s));
+    const auto& engine = *static_cast<const pineforge::BacktestEngine*>(s);
+    if (pineforge::NativeExecutionConsumer::cabi_run_results_release_refused(engine))
+        return pineforge::run_failure_code_name(pineforge::RunFailureCode::setting_rejected);
+    return pineforge::run_failure_code_of(engine);
 }
 
 PF_API const char* strategy_get_last_error_args(pf_strategy_t s) {
     if (!s) return nullptr;
-    return pineforge::run_failure_args_of(*static_cast<pineforge::BacktestEngine*>(s));
+    const auto& engine = *static_cast<const pineforge::BacktestEngine*>(s);
+    if (pineforge::NativeExecutionConsumer::cabi_run_results_release_refused(engine)) return "{}";
+    return pineforge::run_failure_args_of(engine);
 }
 
 PF_API const char* strategy_get_run_warnings(pf_strategy_t s) {
@@ -1616,8 +1627,8 @@ PF_API int strategy_set_scratch_io_policy_v1(pf_strategy_t s, const pf_scratch_i
 }
 
 PF_API uint32_t strategy_stream_engine_layout_version(void) {
-    static_assert(PF_STREAM_ENGINE_LAYOUT_VERSION == 5u,
-                  "runtime-context live report boundary requires layout stamp 5");
+    static_assert(PF_STREAM_ENGINE_LAYOUT_VERSION == 6u,
+                  "live report consumer with captured TA lookback requires layout stamp 6");
     return PF_STREAM_ENGINE_LAYOUT_VERSION;
 }
 
@@ -1649,6 +1660,50 @@ PF_API int strategy_set_account_currency_fx_scalar(pf_strategy_t s, double rate)
         return static_cast<pineforge::BacktestEngine*>(s)
                        ->set_account_currency_fx_scalar(rate)
             ? 0 : -1;
+    });
+}
+
+PF_API int strategy_release_run_results_v1(pf_strategy_t s) {
+    if (!s) return -1;
+    auto& engine = *static_cast<pineforge::BacktestEngine*>(s);
+    return pf_cabi_int(s, [&] {
+        try {
+            if (pineforge::native_c_host_in_postrun_hook_frame(&engine))
+                throw pineforge::detail::ActiveRunResultsRelease();
+            engine.release_run_results();
+            return 0;
+        } catch (const pineforge::detail::ActiveRunResultsRelease&) {
+            pineforge::NativeExecutionConsumer::note_cabi_run_results_release_refusal(engine);
+            return -1;
+        }
+    });
+}
+
+PF_API int strategy_set_scratch_live_order_ids_limit_v1(pf_strategy_t s, uint64_t limit) {
+    return pf_cabi_int(s, [&] {
+        if (!s) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)->set_scratch_live_order_ids_limit(limit);
+    });
+}
+} // extern "C"
+
+namespace pineforge::detail {
+void note_cabi_run_results_read_refusal(BacktestEngine& engine,
+                                       const std::exception& error) noexcept {
+    note_cabi_refusal(&engine, &error);
+}
+} // namespace pineforge::detail
+
+#include <pineforge/checked_settings.hpp>
+#include <pineforge/detail/ta_lookback.hpp>
+
+extern "C" {
+PF_API int pf_ta_lookback_limit_set_checked(
+        const int64_t* maximum, char* error, size_t error_capacity) {
+    return pineforge::checked_settings::boundary(error, error_capacity, [&] {
+        pineforge::checked_settings::require(!maximum || *maximum >= 0,
+                                             "TA lookback limit must not be negative");
+        pineforge::detail::exchange_ta_lookback_limit(maximum ? *maximum : 0);
     });
 }
 } // extern "C"

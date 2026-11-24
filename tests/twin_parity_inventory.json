@@ -1,5 +1,8 @@
 {
   "base": "ab9714beccb62b796c122cf68986ec9e7dbf4a67",
+  "baseRefreshNotes": {
+    "test_run_inputs_overrides": "#918 corrects seven fallback assertions in the base source and its required L4d twin. Appendix 6 of tests/twin_parity_ledger.md records the corrections; ordinary literal matching still applies to all 70 assertions."
+  },
   "families": {
     "L4a risk/cap/margin/day": [
       "test_aapl15_margin_brackets",

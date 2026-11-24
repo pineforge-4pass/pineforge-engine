@@ -10,6 +10,60 @@ namespace {
 namespace jc = detail::journal_codec;
 using Status = detail::ScratchStatus;
 
+// No default cases: extending an enum must prompt a review of its wire values.
+constexpr bool declared(CommandKind x) {
+    switch (x) {
+    case CommandKind::Entry: case CommandKind::Raw: case CommandKind::Cancel:
+    case CommandKind::CancelAll: return true;
+    }
+    return false;
+}
+constexpr bool declared(Outcome x) {
+    switch (x) {
+    case Outcome::Admitted: case Outcome::NoAdmission: case Outcome::IgnoredTradingWindow:
+    case Outcome::IgnoredIntradayLoss: case Outcome::RejectedIntradayCap:
+    case Outcome::RejectedFrozenMarketCap: case Outcome::RejectedAffordability:
+    case Outcome::RejectedPricedCap: case Outcome::OpeningRejectedReductionAdmitted:
+    case Outcome::CancelCompleted: return true;
+    }
+    return false;
+}
+constexpr bool declared(Checkpoint x) {
+    switch (x) {
+    case Checkpoint::DefaultGross: case Checkpoint::ExplicitPair: case Checkpoint::TerminalGross:
+        return true;
+    }
+    return false;
+}
+constexpr bool declared(ResolutionKind x) {
+    switch (x) {
+    case ResolutionKind::Original: case ResolutionKind::Rejected: case ResolutionKind::PairedTransaction:
+        return true;
+    }
+    return false;
+}
+constexpr bool declared(OrderBirthCause x) {
+    switch (x) {
+    case OrderBirthCause::Unattributed: case OrderBirthCause::DirectCommand:
+    case OrderBirthCause::ChartEvaluation: case OrderBirthCause::FillEvaluation: return true;
+    }
+    return false;
+}
+constexpr bool declared(BirthCursorDomain x) {
+    switch (x) {
+    case BirthCursorDomain::None: case BirthCursorDomain::HistoricalPath:
+    case BirthCursorDomain::MagnifierTicks: return true;
+    }
+    return false;
+}
+constexpr bool declared(BirthCursorPosition x) {
+    switch (x) {
+    case BirthCursorPosition::None: case BirthCursorPosition::Point:
+    case BirthCursorPosition::Segment: return true;
+    }
+    return false;
+}
+
 // Path depth is fixed by the schema. Decimal array subscripts have at most
 // twenty digits; neither text values nor array populations enter this buffer.
 struct Path {
@@ -117,7 +171,9 @@ public:
 };
 struct CanonicalFold {
     std::uint64_t digest;
-    std::uint64_t after_sequence;
+    // The standalone fold hashes one record regardless of its sequence.
+    // Only a window fold has a frontier (which may itself be zero).
+    std::optional<std::uint64_t> after_sequence;
     bool active = true;
     bool validation_skipped = false;
     void bytes(const char* data, std::size_t size) noexcept {
@@ -175,7 +231,12 @@ template<bool Owning, bool Folding = false> struct Load {
         std::array<char, kJournalFoldFieldBytes> bytes{};
         in.bytes(bytes.data(), key.length);
         if (!good()) return;
-        if (std::memcmp(bytes.data(), key.bytes.data(), key.length) || in.word() != tag<T>()) {
+        if (std::memcmp(bytes.data(), key.bytes.data(), key.length)) {
+            in.status = Status::corrupt; return;
+        }
+        const auto read_tag = in.word();
+        if (!good()) return;
+        if (read_tag != tag<T>()) {
             in.status = Status::corrupt; return;
         }
         if constexpr (Folding) {
@@ -208,16 +269,18 @@ template<bool Owning, bool Folding = false> struct Load {
         else if constexpr (std::is_same_v<T, double>) in.real(value);
         else if constexpr (std::is_same_v<T, bool>) {
             const auto raw = in.word();
+            if (!good()) return;
             if (raw > 1) in.status = Status::corrupt;
             value = raw == 1;
-        } else if constexpr (std::is_enum_v<T>) {
-            std::underlying_type_t<T> raw{}; in.integer(raw); value = static_cast<T>(raw);
-        } else in.integer(value);
+        } else if constexpr (std::is_enum_v<T>)
+            in.enumeration(value, [](T e) { return declared(e); });
+        else in.integer(value);
         if constexpr (std::is_integral_v<T> || std::is_enum_v<T>) {
             if (key.is("event.observation.command") || key.is("event.receipt.sequence")) {
                 summary.sequence = static_cast<std::uint64_t>(value);
                 if constexpr (Folding)
-                    if (summary.sequence <= fold->after_sequence) fold->active = false;
+                    if (fold->after_sequence && summary.sequence <= *fold->after_sequence)
+                        fold->active = false;
             }
             if (key.is("event.outcome")) outcome = static_cast<Outcome>(value);
             if (key.is("event.observation.bar")) bar = static_cast<int>(value);
@@ -245,32 +308,44 @@ template<class A> struct Schema {
         field(p,"cursor_price",price); field(p,"first_fill",first);
         field(p,"last_fill",last); field(p,"evaluation_ordinal",ordinal);
         if constexpr (A::loading) {
-            if constexpr (A::owning) {
-                if (!a.good()) return;
-            }
+            if (!a.good()) return;
+            const auto nonfill = [&](const OrderBirth& expected) {
+                const auto& cursor = expected.cursor();
+                const double absent_price = expected.cursor_price();
+                // The fold normalizes NaNs; the absent price on the wire must match exactly.
+                if (bar != expected.bar() || timestamp != expected.timestamp()
+                    || domain != cursor.domain() || position != cursor.position()
+                    || index != cursor.index() || count != cursor.count()
+                    || std::memcmp(&price, &absent_price, sizeof price) != 0
+                    || first != expected.first_fill() || last != expected.last_fill()
+                    || ordinal != expected.evaluation_ordinal()) {
+                    a.in.status = Status::corrupt;
+                    return;
+                }
+                if constexpr (A::owning) value = expected;
+            };
             switch (cause) {
             case OrderBirthCause::Unattributed:
-                if constexpr (A::owning) value = OrderBirth{};
+                nonfill(OrderBirth{});
                 break;
             case OrderBirthCause::DirectCommand:
-                if constexpr (A::owning) value = OrderBirth::direct_command(bar,timestamp);
+                nonfill(OrderBirth::direct_command(bar,timestamp));
                 break;
             case OrderBirthCause::ChartEvaluation:
-                if constexpr (A::owning) value = OrderBirth::chart_evaluation(bar,timestamp);
+                nonfill(OrderBirth::chart_evaluation(bar,timestamp));
                 break;
             case OrderBirthCause::FillEvaluation: {
-                if constexpr (A::owning) {
-                    const auto cursor = position == BirthCursorPosition::Point
-                        ? BirthCursor::point(domain,index,count) : BirthCursor::segment(domain,index,count);
+                const bool segment = position == BirthCursorPosition::Segment;
+                if (!segment && position != BirthCursorPosition::Point) a.in.status = Status::corrupt;
+                else if constexpr (A::owning) {
+                    const auto cursor = segment ? BirthCursor::segment(domain,index,count)
+                                                : BirthCursor::point(domain,index,count);
                     value = OrderBirth::fill_evaluation(bar,timestamp,cursor,price,first,last,ordinal);
-                }
+                } else if (!detail::valid_birth_cursor(domain,segment,index,count)
+                           || !detail::valid_fill_evaluation(bar,domain,price,first,last,ordinal))
+                    a.in.status = Status::corrupt;
                 break;
             }
-            default:
-                if constexpr (A::owning)
-                    throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
-                                                       "invalid admission birth");
-                else a.in.status = Status::corrupt;
             }
         }
     }
@@ -313,14 +388,24 @@ template<class A> struct Schema {
         field(p,"bar",x.bar); field(p,"target_command",x.target_command);
     }
     void draft(const Path& p, Draft& x) {
+        // Each book row has its own origin; a sibling or the enclosing event
+        // cannot supply it. The non-owning paths need no shared observation.
+        std::uint64_t command = 0;
+        int placement_bar = -1;
         bool present = bool(x.observation());
         field(p,"observation_present",present);
         if (present) {
             if constexpr (A::loading) {
                 CommandObservation value;
                 observation(p.child("observation"),value);
-                if constexpr (A::owning)
-                    if (a.good()) x.bind(std::make_shared<const CommandObservation>(std::move(value)));
+                if (!a.good()) return;
+                if constexpr (A::owning) {
+                    x.bind(std::make_shared<const CommandObservation>(std::move(value)));
+                } else {
+                    command = value.command;
+                    placement_bar = value.bar;
+                    if (!command) { a.in.status = Status::corrupt; return; }
+                }
             } else observation(p.child("observation"),const_cast<CommandObservation&>(*x.observation()));
         }
         present = x.review().has_value(); field(p,"review_present",present);
@@ -328,14 +413,27 @@ template<class A> struct Schema {
             ReviewReceipt value;
             if constexpr (!A::loading) value = *x.review();
             receipt(p.child("review"),value);
-            if constexpr (A::loading && A::owning) if (a.good()) x.reviewed(value);
+            if constexpr (A::loading) {
+                if (!a.good()) return;
+                if constexpr (A::owning) x.reviewed(value);
+                else if (!command || !matches_origin(command, placement_bar, value) ||
+                         !known_checkpoint(value.checkpoint)) {
+                    a.in.status = Status::corrupt;
+                    return;
+                }
+            }
         }
         present = x.sizing_revision().has_value(); field(p,"sizing_revision_present",present);
         if (present) {
             SizingRevision value;
             if constexpr (!A::loading) value = *x.sizing_revision();
             receipt(p.child("sizing_revision"),value);
-            if constexpr (A::loading && A::owning) if (a.good()) x.sizing_revised(value);
+            if constexpr (A::loading) {
+                if (!a.good()) return;
+                if constexpr (A::owning) x.sizing_revised(value);
+                else if (!command || !matches_origin(command, placement_bar, value) || !has_fill_cause(value))
+                    a.in.status = Status::corrupt;
+            }
         }
     }
     void book(const Path& p, BookObservation& x) {
@@ -352,6 +450,7 @@ template<class A> struct Schema {
         auto count = static_cast<std::uint64_t>(rows.size());
         field(p,"size",count);
         if constexpr (A::loading) {
+            if (!a.good()) return;
             if (count > a.expected_rows - std::min(a.rows,a.expected_rows)
                 || count > rows.max_size()) { a.in.status = Status::corrupt; return; }
             if constexpr (A::owning) rows.resize(static_cast<std::size_t>(count));
@@ -372,6 +471,7 @@ template<class A> struct Schema {
         const Path p;
         auto kind = static_cast<std::uint64_t>(value.index()); field(p,"kind",kind);
         if constexpr (A::loading) {
+            if (!a.good()) return;
             switch (kind) {
             case 0: value.template emplace<0>(); break;
             case 1: value.template emplace<1>(); break;
@@ -427,6 +527,7 @@ template<bool Owning, bool Folding = false> Status decode(const detail::ScratchB
         Load<Owning,Folding> load{in};
         load.fold = fold;
         load.expected_rows = in.word();
+        if (in.status != Status::ok) return in.status;
         if (load.expected_rows > in.remaining() / 24) return Status::corrupt;
         Schema<Load<Owning,Folding>>{load}.event(event);
         if (load.rows != load.expected_rows && in.status == Status::ok) in.status = Status::corrupt;
@@ -504,9 +605,9 @@ detail::ScratchStatus scan_journal_record(const detail::ScratchByteSource& sourc
     const detail::ReportScratchIoError* failure = nullptr;
     return decode<false>(source,page,scratch,summary,failure);
 }
-detail::ScratchStatus fold_validated_journal_record(const detail::ScratchByteSource& source,
+static Status fold_record(const detail::ScratchByteSource& source,
     detail::ScratchBuffer page, JournalRecordSummary& summary, std::uint64_t& digest,
-    std::uint64_t after_sequence, std::optional<detail::ReportScratchIoError>* failure) noexcept {
+    std::optional<std::uint64_t> after_sequence, std::optional<detail::ReportScratchIoError>* failure) noexcept {
     if (failure) failure->reset();
     Event scratch;
     FoldSource input(source);
@@ -533,50 +634,19 @@ detail::ScratchStatus fold_validated_journal_record(const detail::ScratchByteSou
     if (failure && status == Status::io_error) *failure = input.carried;
     if (status == Status::ok) {
         summary = candidate;
-        if (summary.sequence > after_sequence) digest = fold.digest;
+        if (fold.active) digest = fold.digest;
     }
     return status;
 }
+detail::ScratchStatus fold_validated_journal_record(const detail::ScratchByteSource& source,
+    detail::ScratchBuffer page, JournalRecordSummary& summary, std::uint64_t& digest,
+    std::uint64_t after_sequence, std::optional<detail::ReportScratchIoError>* failure) noexcept {
+    return fold_record(source, page, summary, digest, after_sequence, failure);
+}
 detail::ScratchStatus fold_journal_record(const detail::ScratchByteSource& source,
     detail::ScratchBuffer page, std::uint64_t& digest) noexcept {
-    if (!page.data || !page.size) return Status::programming_error;
-    jc::Reader in{source,page};
-    const auto rows = in.word();
-    if (rows > in.remaining() / 24) return Status::corrupt;
-    auto h = digest;
-    const auto byte = [&](unsigned value) { h = (h ^ value) * 1099511628211ULL; };
-    const auto word = [&](std::uint64_t value) {
-        for (unsigned i = 0; i != 8; ++i) byte((value >> (8 * i)) & 255);
-    };
-    const auto text = [&] {
-        const auto length = in.word();
-        if (length > in.remaining()) { in.status = Status::corrupt; return; }
-        word(length);
-        std::array<std::byte, 97> bytes{};
-        for (std::uint64_t at = 0; at < length && in.status == Status::ok;) {
-            const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(bytes.size(),length-at));
-            in.bytes(bytes.data(),count);
-            for (std::size_t i = 0; i != count; ++i) byte(std::to_integer<unsigned>(bytes[i]));
-            at += count;
-        }
-    };
-    for (std::uint64_t i = 0; i != rows && in.status == Status::ok; ++i) {
-        text();
-        const auto kind = in.word(); word(kind);
-        if (kind == 3) text();
-        else if (kind < 3) {
-            auto value = in.word();
-            if (kind == 2) {
-                if ((value & 0x7fffffffffffffffULL) == 0) value = 0;
-                else if ((value & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL
-                         && (value & 0x000fffffffffffffULL)) value = 0x7ff8000000000000ULL;
-            }
-            word(value);
-        } else in.status = Status::corrupt;
-    }
-    const auto status = in.finish();
-    if (status == Status::ok) digest = h;
-    return status;
+    JournalRecordSummary summary;
+    return fold_record(source, page, summary, digest, std::nullopt, nullptr);
 }
 } // inline namespace market_admission_v2
 } // namespace pineforge::admission

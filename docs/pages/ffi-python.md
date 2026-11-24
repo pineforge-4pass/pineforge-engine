@@ -273,6 +273,13 @@ lib.strategy_set_override.argtypes = [ctypes.c_void_p,
 lib.strategy_set_override.restype  = None
 ```
 
+With `scripts/run_strategy.py`, you can use JSON booleans in the
+`strategy_overrides` object of `inputs.json`. For example,
+`{"strategy_overrides": {"process_orders_on_close": true}}` enables order
+processing on the bar close. The runner sends booleans as the text `true`
+or `false`, including with `--runner docker`. Direct calls to
+`strategy_set_override` take text, such as `b"true"` from Python.
+
 Probe `strategy_get_run_warnings` with `hasattr` before binding or calling it.
 After report assembly, read it while the strategy handle is still live and
 before any later run, stream-begin, setter or `strategy_free`. The returned
@@ -328,6 +335,11 @@ the code, not from the message, which a script's `runtime.error()` may leave
 empty. [Run-failure codes](@ref run_failure_codes) lists every code.
 
 ## End-to-end run
+
+For CSV feeds read by `scripts/run_strategy.py`, write `timestamp` as a
+decimal integer in Unix milliseconds, within the signed 64-bit range.
+The runner reports the file and line for fractional or exponent notation
+and keeps integer timestamps exactly, whether or not NumPy is installed.
 
 ```python
 import csv

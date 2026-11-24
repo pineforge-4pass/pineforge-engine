@@ -1265,17 +1265,20 @@ public:
 // non-na values stay ascending, and na, greater than nothing and with nothing
 // greater than it, enters last.
 class PercentileWindow {
-    int length_;
+    std::size_t length_;
     OwnedDeque<double> history_;
     std::vector<double> ranked_;
     // The last push, which a recompute of its bar undoes: where its value
-    // entered, and the value that left and where it stood (-1: none left).
-    int entered_at_ = -1;
-    int left_at_ = -1;
+    // entered, and the value that left and where it stood (npos: none).
+    static constexpr auto npos = std::numeric_limits<std::size_t>::max();
+    std::size_t entered_at_ = npos;
+    std::size_t left_at_ = npos;
     double left_value_ = na<double>();
 
 public:
     explicit PercentileWindow(int length);
+    struct ObservedLength {};
+    PercentileWindow(std::size_t length, ObservedLength);
     // The ranked array once `length` values are held, else null.
     const std::vector<double>* push(double src);
     // The bar's value replaced by `src` (a push when nothing was pushed yet).

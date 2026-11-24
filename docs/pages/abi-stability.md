@@ -119,7 +119,8 @@ destruction. NULL is returned only for a NULL handle. Collection failure reads
 `[{"args":{},"code":"run_warnings_unavailable"}]`, never an empty array.
 Warnings do not change values, trades, execution status, failure accessors or
 state hashes. The accessor adds no C struct and changes neither existing C
-layouts nor installed host class layouts; ABI 5 and stream layout 5 stay fixed.
+layouts nor installed host class layouts. In 1.14.0, the accessor left the
+public ABI and the stream layout at 5.
 
 `strategy_set_account_currency_fx_scalar(s, rate)` is an additive runtime
 setter; feature-probe the symbol in older modules. It installs the host's
@@ -132,26 +133,43 @@ the mark and returns -1, as do a NULL handle and a call made once
 `strategy_set_syminfo_metadata` installs through the same rule, and
 `strategy_set_account_currency_fx_series` remains the timestamped curve.
 
-The mark matters to three calls of a script. With an account currency other
-than the symbol's currency, `strategy.convert_to_account`,
-`strategy.convert_to_symbol` and `request.currency_rate` answer only from a
-supplied rate: the scalar, or the curve point in effect at the evaluated time.
-With none they stop the run with the code `currency_conversion_rate_unavailable`
-([run-failure codes](@ref run_failure_codes)); they never convert at the 1.0
-fallback. The same currency on both sides needs no rate. The ledger converts at
-the same numbers as before, so no trade, fill, size or equity value moves. The
-broker-state hash folds the mark only when a scalar was supplied: a run that
-supplies none keeps its hash values, and a run that supplies one, through
-either setter, hashes differently from 1.12.0. The setter adds no C struct and
-changes neither existing C layouts nor the size of an installed host class;
-ABI 5 and stream layout 5 stay fixed.
+The source host's `strategy_convert_to_account`, `strategy_convert_to_symbol`
+and `request_currency_rate` share the `currency_conversion` lookup
+(`src/source/pine_strategy_host.cpp:4580`). For a supported pair of different
+currencies, they use the supplied scalar or the curve point in effect at the
+evaluated time. The lookup never substitutes the ledger's 1.0 fallback for a
+missing rate. If the lookup fails, the direct conversion helpers stop the run
+with `currency_conversion_rate_unavailable`, as does a required
+`request.currency_rate` ([run-failure codes](@ref run_failure_codes)). A request with
+`ignore_invalid_currency` returns `na` and warns instead. Generated
+`strategy.convert_to_account` and `strategy.convert_to_symbol` calls that use
+`strategy_convert_identity_or_warn` return the input value; the helper warns
+once per call site when it cannot read a required rate. The same currency on
+both sides needs no rate.
+
+For broker accounting, the Pine host looks for a v1 capabilities receipt when
+the chart has a valid quote code and the host supplied either a scalar other than
+1.0 or a curve. An omitted `currency` is recorded as `currency.NONE` and
+uses the chart's quote currency. If the resolved account and quote codes
+match, the broker leaves both the scalar and the curve unused. The broker
+still uses the supplied FX for a different account code or for a module
+that does not advertise v1 capabilities.
+
+The handle retains the supplied FX for reuse. The broker-state hash
+distinguishes a supplied scalar from the default and, when the broker leaves
+FX unused in `account_fx_identity_` mode (`src/engine_state_hash.cpp:130`),
+includes the mode and the retained scalar and curve.
+
+The setter adds no C struct and changes neither existing C layouts nor the
+size of an installed host class; the public ABI and the 1.14.0 stream layout
+both remained at 5.
 
 ## Symbol inventory
 
 The counts below describe the current API, including recorded outputs and the report sink; recorded outputs are not part of 1.4.0.
 
-The stable inventory contains 126 compiled-strategy `PF_API` declarations
-(106 implementations in `src/c_abi.cpp` plus twenty generated declarations)
+The stable inventory contains 129 compiled-strategy `PF_API` declarations
+(109 implementations in `src/c_abi.cpp` plus twenty generated declarations)
 and 44 native-host declarations. A module supplies the generated symbols it
 supports; a script that declares
 `use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, and a
@@ -189,6 +207,7 @@ not the complete inventory:
 | `strategy_set_syminfo_metadata` | @ref pf_config |
 | `strategy_set_account_currency_fx_series` | @ref pf_config |
 | `strategy_set_account_currency_fx_scalar` | @ref pf_config |
+| `pf_ta_lookback_limit_set_checked` | Set the series-length TA lookback policy before creating a strategy |
 | `strategy_configure_native_fx_curve_v1` | @ref pf_lifecycle |
 | `strategy_get_last_error` | Diagnostics |
 | `strategy_get_last_error_code` | Diagnostics (@ref run_failure_codes) |
@@ -268,7 +287,7 @@ are unchanged. Uncertified hosts and Off requests do not call admission or
 preparation.
 
 Sixteen per-strategy exports include the five create/run/free lifecycle
-functions. The remaining 106 runtime implementations, including the
+functions. The remaining 109 runtime implementations, including the
 closed-trade incarnation accessor, are force-linked into each strategy library,
 so consumers resolve the same complete ABI from the strategy `.so`. All
 additions remain covered by the minor-version append-only guarantee.
@@ -457,6 +476,23 @@ consumer to `engine_script_run_v20` and the host capability macro to
 recipes keep their names. A C++ object built against 1.10.x headers must be
 rebuilt. `tests/test_ledger_cache_epoch_layout.cpp` fails the build when the
 layout of `CacheDefaults` changes under an unchanged epoch.
+
+In 1.14.0, `PF_STREAM_ENGINE_LAYOUT_VERSION` moved from 4 to 5. Before
+creating a strategy, the 1.14.0 `pineforge-live` rejects a module that
+declares stamp 4. Rebuild such modules against the matching 1.14.0 headers.
+Version 1.13.0 changed the internal layout but kept stamp 4, so its runner
+did not catch the layout mismatch when loading a 1.12.x module. Use matching
+headers and runtime for those releases too. The C ABI remains at version 5.
+
+After 1.14.0, the live layout stamp advances from 5 to 6 because the consumer
+stores each strategy's series-length TA lookback setting. Rebuild modules that
+declare an older nonzero stamp with the matching engine headers. The public
+C ABI remains 5.
+
+Recompile C++ objects that embed a series-length TA adapter or
+`ta::PercentileWindow` as well: the adapters now store the captured cap, and
+the percentile window uses size-based indices. Regenerate and relink strategy
+modules with the paired engine and code generator.
 
 | Matrix role | Internal identity |
 | --- | --- |

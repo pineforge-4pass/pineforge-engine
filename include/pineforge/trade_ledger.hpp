@@ -249,6 +249,11 @@ public:
     bool exit_comment_equals(size_type global, std::string_view rhs) const;
     void replace(size_type global, const Trade&);
     void modify(size_type global, const std::function<void(Trade&)>&);
+    // Bulk row edits refold the percentages once, at publication. Call
+    // finish_replacements() before appending, resizing, sealing, copying,
+    // or reading aggregates. Lookup of individual rows stays available.
+    void replace_deferred(size_type global, const Trade&);
+    void finish_replacements();
 
     /// Append at the logical global end (3.4:613-616).
     void push_back(const Trade& trade);
@@ -273,8 +278,9 @@ public:
     // Publication still requires a sink and streamable policy, returned
     // applied notifications, finalized phase/money folds and old exit times.
     // Keep the last exit-time block, its predecessor and a short-seed opening
-    // that can still be relabelled. Write T and advance the exact row, money,
-    // metric and phase seeds before advancing this publication boundary.
+    // that can still be relabelled. The publisher writes T and advances the
+    // report folds before moving this boundary; seal saves the percentage
+    // fold at the new base before releasing any row storage.
     // Those predicates may pin every row; physical eviction is independent.
     // Historical bytes remain readable unless the engine admitted retirement
     // from an explicit no-history generated-module capability.
@@ -290,9 +296,29 @@ public:
 private:
     friend class BacktestEngine;
     friend struct detail::TradeLedgerStorageProbe;
+    struct PercentFold {
+        double all_sum = 0.0, win_sum = 0.0, loss_sum = 0.0;
+        size_type all_count = 0, win_count = 0, loss_count = 0;
+        void add(double pnl, double pct) noexcept {
+            all_sum += pct;
+            ++all_count;
+            if (pnl > 0.0) { win_sum += pct; ++win_count; }
+            else if (pnl < 0.0) { loss_sum += pct; ++loss_count; }
+        }
+    };
+    const PercentFold& percent_fold() const;
+
     // Run-begin policy and non-public storage census; neither changes this
     // installed object's layout or the logical trade/hash representation.
     void set_history_retirement(bool);
+    void release() noexcept;
+    bool released() const noexcept;
+    void check_not_released() const;
+    template <class T>
+    T unavailable_read(T fallback) const {
+        check_not_released();
+        return fallback;
+    }
     void check_history_read(size_type) const;
     // Legacy file/arena extents; a retained capability's fstat extent enters
     // the first slot once, with zero in the second. Never RSS/charge/blocks.

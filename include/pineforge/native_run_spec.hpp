@@ -458,12 +458,12 @@ struct IntrabarPath {
 /// inherits those rules (docs/pages/native-engine.md).
 ///
 /// `lookahead` is Pine's barmerge.lookahead_off (false, the default: the
-/// bucket is delivered on the input bar that completes it -- its own last
-/// contributing input bar when that bar closes it, or, for a bucket only a
-/// later input reveals as complete (NativeCompletionKind::LazyComplete), the
-/// next period's first input bar, which contributes nothing to it) or
-/// lookahead_on (true: the completed bucket's final values are delivered at
-/// its FIRST contributing input bar).
+/// bucket is delivered on the primary input that reveals its close, including
+/// an input whose slice has no closing feed bar (NativeCompletionKind::LazyComplete))
+/// or lookahead_on (true: the completed bucket's final values are delivered on
+/// the historical primary input whose slice held its first contributing feed
+/// bar). Realtime input has no historical projection, so both modes deliver
+/// when the bucket completes.
 ///
 /// `gaps` is Pine's barmerge.gaps_off (false, the default: a delivered bucket
 /// stands until the next delivery replaces it) or gaps_on (true: the series is

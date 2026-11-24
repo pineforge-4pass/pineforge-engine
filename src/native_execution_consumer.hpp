@@ -1,9 +1,9 @@
 #pragma once
 
 #include <pineforge/cache_policy.hpp>
-
 #include <pineforge/detail/scratch_store.hpp>
 #include <pineforge/detail/scratch_arena.hpp>
+#include <pineforge/detail/ta_lookback.hpp>
 #include <pineforge/execution_consumer.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
@@ -180,19 +180,19 @@ public:
     // callback cannot turn its still-open slot into a completed observation.
     std::optional<native_calendar::NativeInterval> accepted_input_interval(
         std::int64_t stamp) const {
-        const auto* latest = accepted_input_context_
-            ? &accepted_input_context_->input_interval
-            : input_callback_context_ ? &input_callback_context_->input_interval
+        const auto* latest = accepted_input_
+            ? &accepted_input_->context.input_interval
             : last_accepted_input_ ? &*last_accepted_input_ : nullptr;
-        if (latest && native_confirmed_bar_label_admitted(*latest, stamp))
+        if (latest && ((accepted_input_ && stamp == accepted_input_->stamp)
+                       || native_confirmed_bar_label_admitted(*latest, stamp)))
             return completion_input_interval(*latest);
         if (!latest || stamp > latest->open_ms) return std::nullopt;
         const auto interval = input_interval_at(stamp);
         return interval ? completion_input_interval(*interval) : std::nullopt;
     }
     std::optional<native_calendar::NativeInterval> accepted_completion_interval() const {
-        const auto* latest = accepted_input_context_
-            ? &accepted_input_context_->input_interval
+        const auto* latest = accepted_input_
+            ? &accepted_input_->context.input_interval
             : last_accepted_input_ ? &*last_accepted_input_ : nullptr;
         return latest ? completion_input_interval(*latest) : std::nullopt;
     }
@@ -273,7 +273,7 @@ public:
     void set_scratch_io_policy_config(const ScratchIoPolicy& policy) noexcept {
         scratch_io_policy_config_ = policy;
     }
-    bool scratch_io_policy_setter_busy() const noexcept {
+    bool scratch_policy_setter_busy() const noexcept {
         return preparing_begin_ || cache_policy_preparing_ || in_callback_
             || processing_input_ || in_attempt_call_ || running();
     }
@@ -418,6 +418,9 @@ public:
     static const char* failure_code_of(const BacktestEngine& engine) noexcept;
     static const char* failure_args_of(const BacktestEngine& engine) noexcept;
     static RunFailureValue failure_value_of(const BacktestEngine& engine) noexcept;
+    static bool cabi_run_results_release_refused(const BacktestEngine& engine) noexcept;
+    static void note_cabi_run_results_release_refusal(BacktestEngine& engine) noexcept;
+    static void clear_cabi_run_results_release_refusal(const BacktestEngine& engine) noexcept;
     static const char* run_warnings_of(const BacktestEngine& engine) noexcept;
     static void mark_run_warnings_unavailable(BacktestEngine& engine) noexcept;
     void record_run_warning(int sec_id, std::string code, std::string args_json);
@@ -431,6 +434,8 @@ public:
     // fill_snapshot_report reads the latest reset attempt's rows through the same gate.
     static bool rows_are_current(const BacktestEngine& engine) noexcept;
     static void fill_snapshot_report(const BacktestEngine& engine, ReportC* out);
+    bool run_results_release_busy() const noexcept { return selected_epoch_busy(); }
+    void release_run_results() noexcept;
     std::vector<NativeMarketEvent> events_after(uint64_t after_ordinal) const;
     // The command rows of events_after(after_ordinal), read in place (the
     // in-place command journal reads). The history is in ordinal order, so those rows are exactly
@@ -440,9 +445,9 @@ public:
     // began, in history order, with one COPY per event -- the copy each
     // materialised row was -- so a visitor that appends to the history (a
     // cancel it issues) neither sees what it appended nor holds an event the
-    // append reallocated. It stops at, and answers, the first true a visitor
-    // returns. Driver points and account rows are never visited.
-    std::size_t first_command_after(uint64_t after_ordinal) const noexcept;
+    // append reallocated. It stops at, and answers, the first true a visitor returns. Driver points
+    // and account rows are never visited. Search and visit read spill pages: either can throw.
+    std::size_t first_command_after(uint64_t after_ordinal) const;
     // Whether a command event above `after_ordinal` is in the journal: the
     // first test first_command_after makes, which answers the history's size
     // exactly when it fails. A reader that only asks whether anything lies
@@ -456,6 +461,7 @@ public:
     }
     template <class Visit>
     bool visit_commands_after(uint64_t after_ordinal, Visit&& visit) const {
+        requests_.check_history_available();
         const auto& history = requests_.history();
         const std::size_t end = history.size();
         // The history only grows inside a run; the size is re-read anyway so
@@ -915,7 +921,7 @@ private:
     // such a Reduce as it stands (the representable-quantity refusal change).
     static bool scope_boundary_units(const BacktestEngine& engine,
                                      const native_order::Request& request,
-                                     double units, bool or_whole_scope) noexcept;
+                                     double units, bool or_whole_scope);
     // What an off-grid Reduce{ExplicitUnits} (admitted at submit as a FIFO
     // boundary of its scope) settles at this candidate still closes whole lots:
     // it is on the grid, a boundary of the scope as it stands, or at least the
@@ -924,7 +930,7 @@ private:
     bool grid_boundary_holds(const BacktestEngine& engine,
                              const native_order::LiveRequest& live,
                              const native_order::MatchCursor& cursor) const;
-    double sibling_claimed_units(const native_order::LiveRequest& live) const noexcept;
+    double sibling_claimed_units(const native_order::LiveRequest& live) const;
     // L3b placement-time sizing. sizing_point_price answers the price a Sized
     // request's basis converts at when it is accepted; placement_scope_units
     // measures the exposure a ScopeBasis::AtAcceptance fraction freezes; and
@@ -1357,6 +1363,7 @@ private:
                                         const Bar* input_bars, int n_input);
     bool pump_timeframe_subscriptions(BacktestEngine& engine, const Bar& bar, int index,
                                       const native_calendar::NativeInterval& input_interval);
+    bool check_fixed_subscription_input(BacktestEngine& engine, int index);
     // The declared auxiliary feed followed by a stream's appended bars, read
     // as one sequence. Zero / never called for a run that declares no feed.
     std::size_t auxiliary_bar_count() const noexcept;
@@ -1369,7 +1376,8 @@ private:
                               Completed&& completed);
     template <typename Completed>
     bool feed_fixed_subscription(BacktestEngine&, TimeframeSubscription&, int index,
-                                 const Bar* feed_bar, std::int64_t horizon_ms,
+                                 const Bar* feed_bar, std::int64_t eligible_open_ms,
+                                 std::int64_t horizon_ms,
                                  std::int64_t next_feed_ms, Completed&& completed);
     // A declared series is fed by accepted CONFIRMED input only, because that
     // is the only input a batch of the same bars also has. True (refused)
@@ -1604,8 +1612,8 @@ private:
                           std::vector<native_order::RequestHandle>& handles) const;
     void read_openings_into(const BacktestEngine& engine,
                             const std::vector<native_order::RequestHandle>& handles,
-                            int64_t cycle,
-                            std::vector<native_order::OpeningObservation>& out) const;
+                            int64_t cycle, std::vector<native_order::OpeningObservation>& out,
+                            const native_order::OpeningReadback* frozen = nullptr) const;
     std::optional<native_order::Side> scratch_cohort_side(
         const BacktestEngine& engine, const native_order::LiveRequest& live);
     bool scratch_request_is_buy(const BacktestEngine& engine,
@@ -1615,9 +1623,10 @@ private:
     void clear_cohort_target_cache() noexcept;
     void retarget_cohort_target_cache(const native_order::RequestHandle& predecessor,
                                       const native_order::RequestHandle& successor) noexcept;
+    class CommandOpeningObservations;
     native_order::CommandContext make_command_context(
-            const BacktestEngine& engine, const native_order::Request& request,
-            native_order::CommandSurface surface) const;
+            const BacktestEngine&, const native_order::Request&, native_order::CommandSurface,
+            CommandOpeningObservations&) const;
     void refresh_target_scalars(const BacktestEngine& engine,
                                 native_order::TargetObservation& target) const noexcept;
     std::optional<native_order::Side> cohort_side(
@@ -2165,9 +2174,14 @@ private:
     std::size_t driver_mark_count_ = 0;
     std::uint64_t applied_events_ = 0;
     NativeDecisionContext callback_context_{};
-    // Stack-borrowed after validation until all delayed source work for this
-    // accepted input returns. Never durable state or a borrowed input array.
-    const NativeInputContext* accepted_input_context_ = nullptr;
+    // Borrowed while the input is consumed; stamp and interval are copies no callback can edit.
+    struct AcceptedInput {
+        const NativeInputContext& context;
+        const Bar& bar;
+        std::int64_t stamp;
+        native_calendar::NativeInterval interval;
+    };
+    const AcceptedInput* accepted_input_ = nullptr;
     std::optional<NativeInputContext> input_callback_context_;
     std::optional<Bar> input_callback_bar_;
     std::optional<NativeTickContext> tick_callback_context_;
@@ -2674,6 +2688,7 @@ private:
         const bool nested_;
         const bool allow_live_;
         detail::RunCacheDiagnosticsScope cache_diagnostics_scope_;
+        detail::TaLookbackScope ta_lookback_scope_;
     public:
         // Inline: stream pushes are per-input entries. Keep the lifecycle
         // guard and the run's allocation-owner binding in the same scope.
@@ -2683,7 +2698,8 @@ private:
               uncaught_(tracked_ ? std::uncaught_exceptions() : 0),
               nested_(c.in_attempt_call_ || c.preparing_begin_ || c.in_callback_
                          || c.processing_input_ || c.selected_epoch_.dispatching),
-              allow_live_(allow_live), cache_diagnostics_scope_(c.run_cache_diagnostics_) {}
+              allow_live_(allow_live), cache_diagnostics_scope_(c.run_cache_diagnostics_),
+              ta_lookback_scope_(c.ta_lookback_limit_) {}
         ~EntryExitGuard() {
             if (nested_) return;
             if (tracked_)
@@ -2692,7 +2708,7 @@ private:
             if (!allow_live_ || !c_.running()) {
                 engine_.runtime_contexts().end_run();
                 if (c_.batch_input_release_)
-                    c_.batch_input_release_(c_.batch_input_owner_);
+                    c_.batch_input_release_(c_.host_cleanup_owner_);
                 c_.detach_bar_views();
             }
             if (!c_.running()) c_.release_run_command_scratch();
@@ -2806,7 +2822,7 @@ private:
     // its borrowed begin array at the outer public exit. Neither address nor
     // callback identity affects matching or the consumed-prefix hash. They
     // remain installed for the host lifetime; nested entries never call them.
-    void* batch_input_owner_ = nullptr;
+    void* host_cleanup_owner_ = nullptr;
     void (*batch_input_release_)(void*) noexcept = nullptr;
 
     // Selected E records have already been emitted at capture.
@@ -2822,10 +2838,16 @@ private:
     // continuation input. Admission/drop releases the previous run's file.
     std::unique_ptr<report_sink::ScratchCurveWriter> presentation_metric_curve_;
     metrics::SpillCurve make_selected_metric_curve() const;
+    // Explicit release, separate from the input cleanup at run end.
+    void (*host_results_release_)(void*) noexcept = nullptr;
+    // The busy refusal belongs to the C call, not to the active run.
+    mutable bool cabi_run_results_release_refused_ = false;
 public:
-    void set_batch_input_release(void* owner, void (*release)(void*) noexcept) noexcept {
-        batch_input_owner_ = owner;
-        batch_input_release_ = release;
+    void set_host_cleanup(void* owner, void (*release_input)(void*) noexcept,
+                          void (*release_results)(void*) noexcept) noexcept {
+        host_cleanup_owner_ = owner;
+        batch_input_release_ = release_input;
+        host_results_release_ = release_results;
     }
 
     // Projection judges the host's pending context without publishing it via
@@ -3079,6 +3101,22 @@ public:
     // same site-and-code key as record_run_warning, so a repeat adds nothing,
     // and the array is rendered again when the key is new.
     void record_live_run_warning(int site_id, std::string code, std::string args_json);
+    // The instant a fixed clock observes an input at: its label `stamp_ms`, moved onto traded
+    // time of this run's calendar and never past `horizon_ms`, the end of what the input is
+    // accepted for. `eligible_open_ms` is the first traded instant of the input's slot. For a
+    // host whose own series keep a fixed clock (defined at the end of the source file).
+    std::int64_t fixed_clock_seat(std::int64_t stamp_ms, std::int64_t eligible_open_ms,
+                                  std::int64_t horizon_ms) const;
+
+    void set_scratch_live_order_ids_limit(std::uint64_t limit) noexcept {
+        scratch_live_order_ids_limit_ = limit;
+    }
+
+private:
+    std::uint64_t scratch_live_order_ids_limit_ = 0;
+    const std::int64_t ta_lookback_limit_ = detail::ta_lookback_limit();
+    // The admitted book keeps its cap when the host stages the next run.
+    std::uint64_t run_live_order_ids_limit_ = 0;
 };
 
 // The same lazy backing used by RunCommandScratch's Book binding. Kept in

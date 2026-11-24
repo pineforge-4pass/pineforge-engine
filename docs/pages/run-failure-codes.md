@@ -132,6 +132,11 @@ time in Unix milliseconds. `request.currency_rate` with
 same code and arguments as a run warning (#strategy_get_run_warnings). Its
 retryability and typed arguments are listed below.
 
+In 1.14.0, generated `strategy.convert_to_account` and
+`strategy.convert_to_symbol` calls can use `strategy_convert_identity_or_warn`.
+That helper returns the input value and records the same warning once per
+call site if it cannot read a rate.
+
 The 1.11.0 additions are `runtime_history_budget_exhausted` (class
 `resource`), the refusal of a dynamic runtime context that exceeds its
 explicitly configured history storage budget;
@@ -172,10 +177,16 @@ The 1.7.0 additions are `report_mode_unsupported`, `report_sink_failed`,
 `scratch_io_failed`. Their classes, retryability and typed arguments are
 listed below.
 
+If a path sink fails while writing or syncing its trailer, the engine reports
+`report_sink_failed` with reason `sink_io` and tries to remove the trailer.
+If truncation also fails, a trailer may still be readable. A valid sink
+requires a successful run and a completed receipt.
+
 For `scratch_capacity_exceeded`, `resource=cohort_ids_total` identifies the
 bounded cohort table's historical distinct-ID count or aggregate ID-byte
 budget (`U/B_U`, default 65,536 IDs / 4,194,304 bytes).
-`resource=cohort_orders_live` identifies the separate 4,096 live-order-ID cap.
+`resource=cohort_orders_live` identifies a breach of a live-order-ID limit set
+by the host for bounded scratch; see [Scratch tables](@ref scratch_tables).
 `resource=cohort` remains valid for the refusal of an ID longer than 64 bytes,
 generic cohort-region capacity and an explicitly finite generic Store live-object policy.
 The former default of 1,048,576 is now 0 (unbounded); Store policy honors exact native limits, and finite-limit text omits the approved-maximum clause.
@@ -194,6 +205,15 @@ described [after the tables](#run_failure_codes_selected_window).
 The `strategy_library_incompatible` row also includes the two released
 1.5.0 outputs reasons, `outputs_api_mismatch` and `outputs_manifest_invalid`,
 in addition to its six released 1.4.0 reasons.
+The reason `capabilities_receipt_invalid` identifies a compiled module that
+advertises execution capabilities v1 but fails to supply a readable currency
+declaration when the broker needs it.
+
+When a trusted parent sets `PINEFORGE_STRATEGY_SO_SHA256`, the JSON harness
+checks the strategy library before opening it. A digest mismatch, unreadable
+file, empty file or nonregular file is `strategy_library_incompatible` with
+`reason: load_failed`. An empty or malformed expected digest is
+`run_request_invalid` with `option: arguments`. These refusals exit 1.
 
 `outputs_limit` admits reasons `too_many_events`, `too_many_rows` and
 `too_many_series`. The first two carry `max` `INT_MAX`. Series are unlimited
@@ -291,7 +311,7 @@ other `strategy_create_failed` lines omit it.
 | `setting_rejected` | `input` | no | `entrypoint` (vocab, 4 values, optional), `input` (pine_source, optional), `reason` (vocab, 21 values, optional) | A run setting (an input or a strategy() override) was refused. |
 | `setting_unsupported` | `unsupported` | no | none | A setting this compiled strategy cannot honour. |
 | `strategy_create_failed` | `engine_fault` | no | none | The compiled strategy could not be created. |
-| `strategy_library_incompatible` | `engine_fault` | no | `abi` (integer, optional), `missing` (vocab, 13 values, optional), `reason` (vocab, 8 values) | The compiled strategy library does not match the harness. |
+| `strategy_library_incompatible` | `engine_fault` | no | `abi` (integer, optional), `missing` (vocab, 13 values, optional), `reason` (vocab, 9 values) | The compiled strategy library does not match the harness. |
 | `strategy_runtime_error` | `strategy` | no | none | The script stopped itself with runtime.error(); the message, possibly empty, is the text. |
 | `strategy_settings_rejected` | `strategy` | no | `field` (vocab, 33 values) | A strategy() declaration setting (or its override) is not a value the engine accepts. |
 | `strategy_value_invalid` | `strategy` | no | `field` (string), `reason` (vocab, 3 values) | The strategy supplied an invalid actionable value (a non-finite number, invalid text or an overflowing finite value) to a declaration, setting or command that needs a valid one. |
@@ -397,8 +417,9 @@ choose the location, set `TMPDIR` to a disk-backed directory such as
 the trade ledger or the report files.
 
 The English templates describe the texts a code is raised with; they are not
-a grammar. A `{name}` marks a part that varies and need not be an argument of
-that name, and one text can sit under more than one code: a frame that fails
+a grammar or an exhaustive list of all texts a run may return. A `{name}`
+marks a part that varies and need not be an argument of that name, and one
+text can sit under more than one code: a frame that fails
 after an inner failure was recorded (`native current execution failed`, the
 configure refusal above) keeps its own text and carries that failure's code:
 `run_aborted` after an abort whose report was cleared, `engine_invariant` when
@@ -700,6 +721,12 @@ English it is given, so pass the English without a prefix.
 `drawing_ids` identifies exhaustion of the logical drawing-ID domain.
 `live_drawings` identifies an explicit operator capacity for live drawings
 of one type.
+
+For series-length TA, a positive `--limit-ta-lookback N` sets the maximum for
+`max_bars_back`. The adapter raises `pine_runtime_limit` with `max: N` when a
+window asks for more than N bars back. No cap is set by default.
+`--tv-compat` selects 15,000 unless the operator supplies an explicit value;
+`0` selects unlimited.
 
 `pine_limit_stop("live_drawings", N, english)` uses the operator's configured
 capacity `N` as `max` and raises the existing nonretryable

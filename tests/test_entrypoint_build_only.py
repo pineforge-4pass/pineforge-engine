@@ -52,6 +52,7 @@ ENGINE_ENVIRONMENT = (
     "PINEFORGE_BAR_MAGNIFIER", "PINEFORGE_MAGNIFIER_SAMPLES", "PINEFORGE_MAGNIFIER_DIST",
     "PINEFORGE_MAGNIFIER_VOLUME_WEIGHTED", "PINEFORGE_SYMINFO", "PINEFORGE_SYMBOL_FEEDS",
     "PINEFORGE_MAX_SYMBOL_FEEDS", "PINEFORGE_MAX_INVENTORY_BYTES", "PINEFORGE_TV_COMPAT",
+    "PINEFORGE_LIMIT_TA_LOOKBACK",
     "PINEFORGE_TRADE_START_MS", "PINEFORGE_CHART_TZ", "PINEFORGE_BENCH",
     "PINEFORGE_WARMUP", "PINEFORGE_REPEATS", "PINEFORGE_REPORT_POLICY",
     "PINEFORGE_WINDOW_START_MS", "PINEFORGE_WINDOW_END_MS", "PINEFORGE_PREROLL_BARS",
@@ -77,6 +78,7 @@ ALL_OPTIONS = {
     "PINEFORGE_MAX_SYMBOL_FEEDS": "0",
     "PINEFORGE_MAX_INVENTORY_BYTES": "0",
     "PINEFORGE_TV_COMPAT": "true",
+    "PINEFORGE_LIMIT_TA_LOOKBACK": "15001",
     "PINEFORGE_TRADE_START_MS": "60000",
     "PINEFORGE_CHART_TZ": "UTC",
     "PINEFORGE_BENCH": "true",
@@ -168,6 +170,9 @@ class Box:
         (self.indir / "strategy.pine").write_text(PINE)
         (self.packages / "pineforge_codegen/__init__.py").write_text(CODEGEN)
         (self.packages / "pineforge_codegen/errors.py").write_text("class CompileError(Exception):\n    pass\n")
+        (self.packages / "pineforge_codegen/cpp_allowlist.py").write_text(
+            "def check_generated_cpp(text):\n"
+            f"    return [] if text == {CPP.decode()!r} else [object()]\n")
         (self.prefix / "bin/bind_compiled_inventory.py").write_text(BINDER)
         (self.prefix / "bin/run_json.py").write_text(
             RUNNER.format(names=ENGINE_ENVIRONMENT, report=REPORT.decode()))
@@ -315,6 +320,8 @@ def test_manifest_argv_is_the_full_run_argv(tmp_path, shape, options):
     full_work = str(Path(full["argv"][full["argv"].index("--so") + 1]).parent)
     assert full_work != str(box.work)
     assert phase["argv"] == document["argv"]
+    assert phase["environment"].get("PINEFORGE_LIMIT_TA_LOOKBACK") == extra.get(
+        "PINEFORGE_LIMIT_TA_LOOKBACK")
     assert document["cwd"] == str(box.root)
     assert normalize_work(full, full_work) == normalize_work(phase, str(box.work))
     assert not Path(full_work).exists()

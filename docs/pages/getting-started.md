@@ -10,7 +10,7 @@ A minimal end-to-end build, install, and link.
 | --- | --- | --- |
 | CMake | 3.16 | `ctest --test-dir` below needs 3.20. |
 | C++ compiler | libstdc++ from GCC 11, or libc++ 14 | C++17 with floating-point `std::to_chars`. |
-| Eigen | 3.3+ | Optional — fetched automatically via `FetchContent` if no system install is found. |
+| Eigen | 3.3+ | If no suitable system install is found, CMake fetches Eigen 3.4.0 and rejects the archive if its SHA-256 does not match the pinned value. |
 
 ## Build + test
 

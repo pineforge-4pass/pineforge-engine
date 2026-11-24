@@ -683,6 +683,9 @@ public:
 
     double runup() const { return open_trade_max_runup(0); }
     double drawdown() const { return open_trade_max_drawdown(0); }
+    double equity_peak_runup() const { return max_runup_; }
+    double equity_peak_drawdown() const { return max_drawdown_; }
+    using BacktestEngine::record_equity_point;
 
 private:
     int host_ordinal_ = 0;
@@ -1343,6 +1346,29 @@ void nominal_and_clipped_confirmed_labels() {
     }
 }
 
+void nominal_label_of_realtime_successor() {
+    auto value = spec("60", "60");
+    value.session = "0930-1600,1700-2000";
+    const Bar warmup = flat(1704209400000LL);  // Jan 2, 15:30 UTC
+    const Bar successor = flat(1704213000000LL);  // 16:30 nominal, 17:00 eligible
+    TraceHost host;
+    if (!setup(host, value)) return;
+    CHECK(host.stream_begin(&warmup, 1, "", ""));
+    if (host.native_state().kind != NativeLifecycleKind::Running) return;
+    const bool skipped = host.stream_push_bar(flat(1704216600000LL));  // 17:30
+    CHECK(!skipped);
+    if (skipped) return;
+    const bool accepted = host.stream_push_bar(successor);
+    CHECK(accepted);
+    if (!accepted) return;
+    CHECK(host.stream_end(false));
+    if (!count(host, 2)) return;
+    const auto& coordinate = host.contexts[1].coordinate;
+    CHECK(coordinate.open_ms == 1704213000000LL);
+    CHECK(coordinate.eligible_open_ms == 1704214800000LL);
+    CHECK(coordinate.last_traded_close_ms == 1704216600000LL);
+}
+
 void friday_monday_continuity() {
     auto value = spec();
     value.session = "0930-1600:23456";
@@ -1792,6 +1818,99 @@ void partial_end_equal_clock_and_policy() {
     }
 }
 
+void partial_end_records_the_calculation() {
+    TraceHost host;
+    auto value = spec();
+    value.report_policy = NativeReportPolicy::KernelRecorded;
+    if (!setup(host, value)) return;
+    host.set_broker_state_hash_recording(true);
+    const Bar warmup = flat(0);
+    const bool ended = host.stream_begin(&warmup, 1, "", "")
+        && host.stream_push_tick(TradeTick{60100, 1, 107, 3})
+        && host.stream_advance_time(90000)
+        && host.stream_end(true);
+    CHECK(ended);
+    if (!ended || !count(host, 2)) return;
+
+    ReportC report{};
+    host.fill_report(&report);
+    CHECK(report.equity_curve_len == 2);
+    CHECK(report.broker_state_hash_len == 2);
+    CHECK(report.script_bars_processed == report.equity_curve_len);
+    CHECK(report.script_bars_processed == report.broker_state_hash_len);
+    if (report.equity_curve_len == 2) {
+        CHECK(report.equity_curve[0].time_ms == 0);
+        CHECK(report.equity_curve[1].time_ms == 60000);
+    }
+    BacktestEngine::free_report(&report);
+}
+
+void check_partial_end_extremes(double final_price, double drawdown, double runup) {
+    struct Extremes {
+        double contracts;
+        double drawdown;
+        double runup;
+    };
+    std::vector<Extremes> measured;
+    for (auto policy : {NativeReportPolicy::HostRecorded, NativeReportPolicy::KernelRecorded}) {
+        TraceHost host;
+        auto value = spec();
+        value.close_execution = NativeCloseExecution::AfterCalculation;
+        value.report_policy = policy;
+        if (!setup(host, value)) return;
+        host.callback = [policy](TraceHost& h) {
+            const auto open = h.contexts.back().coordinate.open_ms;
+            if (open == 0 || open == 120000)
+                CHECK(h.submit_market(buy()).status == SubmitStatus::Accepted);
+            // A fee-free buy at this mark has zero immediate P&L. The host
+            // can record here before matching; the kernel owns the scalar fold.
+            if (policy == NativeReportPolicy::HostRecorded) h.record_equity_point(open);
+        };
+        const Bar warmup[] = {flat(0, 100), flat(60000, 90)};
+        CHECK(host.stream_begin(warmup, 2, "", ""));
+        CHECK(host.stream_push_tick(TradeTick{120100, 1, final_price, 3}));
+        CHECK(host.stream_advance_time(150000));
+        const auto prior_dd = host.equity_peak_drawdown();
+        const auto prior_ru = host.equity_peak_runup();
+        CHECK(host.stream_end(true));
+        CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+        CHECK(host.equity_peak_drawdown() > prior_dd || host.equity_peak_runup() > prior_ru);
+        if (!count(host, 3)) return;
+        const auto executed = fills(host);
+        CHECK(executed.size() == 2);
+        if (executed.size() == 2) {
+            CHECK(executed[0].effective_time_ms() == 60000);
+            near(executed[0].raw_price, 100);
+            CHECK(executed[1].effective_time_ms() == 150000);
+            near(executed[1].raw_price, final_price);
+        }
+        measured.push_back({host.max_contracts_held_all(), host.equity_peak_drawdown(),
+                            host.equity_peak_runup()});
+        near(measured.back().contracts, 2);
+        near(measured.back().drawdown, drawdown);
+        near(measured.back().runup, runup);
+        ReportC report{};
+        host.fill_report(&report);
+        CHECK(report.equity_curve_len == 3);
+        near(report.metrics.equity.max_equity_drawdown, drawdown);
+        near(report.metrics.equity.max_equity_runup, runup);
+        BacktestEngine::free_report(&report);
+    }
+    if (measured.size() != 2) return;
+    near(measured[0].contracts, measured[1].contracts);
+    near(measured[0].drawdown, measured[1].drawdown);
+    near(measured[0].runup, measured[1].runup);
+}
+
+void partial_end_extremes_do_not_depend_on_the_report_policy() {
+    // One contract at 100 marks at 90: equity falls from 10000 to 9990.
+    // At 85, equity is 9985 (drawdown 15, run-up 0); at 96, equity is
+    // 9996 (drawdown 10, run-up 6 from 9990). Buying one more at the final
+    // mark changes only the peak position: 1 + 1 = 2 contracts.
+    check_partial_end_extremes(85, 15, 0);
+    check_partial_end_extremes(96, 10, 6);
+}
+
 void partial_end_does_not_seal_coarser_script() {
     for (auto policy : {NativeCloseExecution::NextEligiblePoint, NativeCloseExecution::AfterCalculation}) {
         TraceHost host;
@@ -2022,6 +2141,9 @@ int main() {
     run_case("C3-C4-nominal-clipped-labels-and-duplicate-refusal",
              "C3/C4 nominal clipped labels and duplicate refusal",
              nominal_and_clipped_confirmed_labels);
+    run_case("nominal-label-of-realtime-successor",
+             "realtime admits the nominal label of the immediate successor",
+             nominal_label_of_realtime_successor);
     run_case("C3-Friday-close-Monday-opening-and-missing-slot-refusal",
              "C3 Friday close Monday opening and missing-slot refusal",
              friday_monday_continuity);
@@ -2064,6 +2186,12 @@ int main() {
     run_case("D5-partial-equal-TF-end-retains-actual-floor-and-source-time",
              "D5 partial equal-TF end retains actual floor and source time",
              partial_end_equal_clock_and_policy);
+    run_case("partial-end-records-the-calculation",
+             "partial end records the calculation in the kernel report",
+             partial_end_records_the_calculation);
+    run_case("partial-end-extremes-do-not-depend-on-the-report-policy",
+             "partial end folds the extremes under every report policy",
+             partial_end_extremes_do_not_depend_on_the_report_policy);
     run_case("D5-partial-child-does-not-force-coarser-callback",
              "D5 partial child does not force coarser callback",
              partial_end_does_not_seal_coarser_script);

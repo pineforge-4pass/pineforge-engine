@@ -2,9 +2,6 @@
 # or report output rather than durable next-decision state. The native request
 # core and every source-adapter/scheduler durable field are hashed; each reason
 # below explains why this particular generic carrier is not a second omission.
-account_currency_fx_ # Staged scalar fallback; provider copies the chosen curve into the hashed native run specification before matching begins.
-account_currency_fx_rates_ # Input transport vector only; configure_native_fx_curve owns the active, hashed curve used by executions.
-account_currency_fx_timestamps_ # Input transport timestamps only; active FX lookup state is installed in the native consumer and hashed there.
 bar_index_ # Feed cursor reconstructed from delivered bars; it is not an independently mutable broker decision.
 bars_in_market_ # Diagnostic/report counter; no admission, matching, or settlement branch reads it.
 broker_state_hash_recording_ # Opt-in output-recording switch; it changes collected reports, never the next execution decision.

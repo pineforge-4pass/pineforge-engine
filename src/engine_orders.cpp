@@ -538,6 +538,7 @@ struct TradeLedger::State {
     // and never claim a block until its write has completed.
     std::uint64_t index_zeroed_end = 0, payload_zeroed_end = 0;
     bool retiring = false;
+    bool released = false;
     std::exception_ptr rollback_failure;
     std::array<char, kPayloadTailBytes> payload_tail{};
     std::string directory;
@@ -957,8 +958,17 @@ struct TradeLedger::State {
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: row outside resident window");
     }
+    [[noreturn, gnu::cold, gnu::noinline]]
+    static void throw_released() {
+        throw detail::RetiredTradeHistoryRead(detail::RetiredTradeHistoryRead::Reason::Released);
+    }
+    [[gnu::always_inline]]
+    void check_not_released() const {
+        if (released) throw_released();
+    }
     [[gnu::always_inline]]
     void check(size_type global, bool mutable_row = false) const {
+        check_not_released();
         if (rollback_failure) std::rethrow_exception(rollback_failure);
         if (retiring && global < first) throw_check_failure(true);
         if (global >= end || (mutable_row && global < first)) throw_check_failure(false);
@@ -1347,6 +1357,32 @@ struct TradeLedger::State {
         ++resident_first;
         --count;
     }
+
+    // Exact left folds at first, resident_first and end. They are derived
+    // solely from rows in global order and do not enter the broker hash.
+    PercentFold sealed_percent, before_resident_percent, total_percent;
+    size_type first_percent_replacement = std::numeric_limits<size_type>::max();
+
+    void check_percent_replacements_finished() const {
+        if (first_percent_replacement < end)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                          "trade ledger: unfinished percent fold");
+    }
+
+    PercentFold fold_percent_rows(PercentFold prefix, size_type from, size_type to) const {
+        for (auto i = from; i < to; ++i) {
+            const auto row = uncached_descriptor(i);
+            prefix.add(row.pnl, row.pnl_pct);
+        }
+        return prefix;
+    }
+
+    PercentFold percent_through(size_type stop) const {
+        if (stop == end) return total_percent;
+        if (stop >= resident_first)
+            return fold_percent_rows(before_resident_percent, resident_first, stop);
+        return fold_percent_rows(sealed_percent, first, stop);
+    }
 };
 
 TradeLedger::TradeLedger() : state_(std::make_unique<State>()) {}
@@ -1359,6 +1395,7 @@ TradeLedger::TradeLedger(const TradeLedger& other)
     : TradeLedger() {
     if (other.state_->rollback_failure)
         std::rethrow_exception(other.state_->rollback_failure);
+    other.state_->check_percent_replacements_finished();
     // The byte-policy path may exceed the legacy row setter's ceiling.
     // This fresh State copies an already validated physical allowance.
     state_->cache_rows = other.state_->cache_rows;
@@ -1369,6 +1406,13 @@ TradeLedger::TradeLedger(const TradeLedger& other)
         state_->history.bind(other.state_->history.factory, other.state_->history.extent,
                              &other.state_->history);
     }
+    if (other.state_->released) {
+        state_->first = other.state_->first;
+        state_->end = other.state_->end;
+        state_->retiring = other.state_->retiring;
+        release();
+        return;
+    }
     // A cold source remains unallocated. Reuse already cached source rows;
     // neither the source nor its copy allocates pages just for copying.
     if (other.state_->retiring) {
@@ -1376,6 +1420,8 @@ TradeLedger::TradeLedger(const TradeLedger& other)
         // intentionally retired prefix. Rebuild only the retained payload.
         state_->retiring = true;
         state_->first = state_->end = state_->resident_first = other.base();
+        state_->total_percent = state_->before_resident_percent
+            = state_->sealed_percent = other.state_->sealed_percent;
         state_->sync_cache_mode();
         state_->index_origin = State::absolute_record_offset(other.base());
     }
@@ -1428,6 +1474,25 @@ void TradeLedger::clear() {
     }
     state_.swap(next);
 }
+
+void TradeLedger::release() noexcept {
+    auto& state = *state_;
+    if (state.released) return;
+    state.released = true;
+    state.index.legacy.clear();
+    state.payload.legacy.clear();
+    state.rows.fill(State::Record{});
+    state.payload_tail.fill(0);
+    state.resident_first = state.end;
+    state.count = state.head = 0;
+    state.reset_cache();
+    state.uncached = State::CacheEntry{};
+    state.materialized.clear();
+    state.rollback_failure = nullptr;
+}
+
+bool TradeLedger::released() const noexcept { return state_->released; }
+void TradeLedger::check_not_released() const { state_->check_not_released(); }
 
 void TradeLedger::set_scratch_directory(const std::string& directory) {
     state_->index.set_directory(directory);
@@ -1580,6 +1645,7 @@ Trade TradeLedger::at(size_type global) const {
 }
 
 Trade TradeLedger::back() const {
+    state_->check_not_released();
     if (empty())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: no resident last row");
@@ -1616,19 +1682,31 @@ bool TradeLedger::exit_comment_equals(size_type global, std::string_view rhs) co
     return state_->string_equals<&State::Record::exit_comment>(global, rhs);
 }
 bool TradeLedger::entry_id_matches(int index, std::string_view rhs) const {
-    if (index < 0 || static_cast<size_type>(index) >= state_->end) return rhs.empty();
+    if (index < 0 || static_cast<size_type>(index) >= state_->end) {
+        state_->check_not_released();
+        return rhs.empty();
+    }
     return state_->string_equals<&State::Record::entry_id>(static_cast<size_type>(index), rhs);
 }
 bool TradeLedger::exit_id_matches(int index, std::string_view rhs) const {
-    if (index < 0 || static_cast<size_type>(index) >= state_->end) return rhs.empty();
+    if (index < 0 || static_cast<size_type>(index) >= state_->end) {
+        state_->check_not_released();
+        return rhs.empty();
+    }
     return state_->string_equals<&State::Record::exit_id>(static_cast<size_type>(index), rhs);
 }
 bool TradeLedger::entry_comment_matches(int index, std::string_view rhs) const {
-    if (index < 0 || static_cast<size_type>(index) >= state_->end) return rhs.empty();
+    if (index < 0 || static_cast<size_type>(index) >= state_->end) {
+        state_->check_not_released();
+        return rhs.empty();
+    }
     return state_->string_equals<&State::Record::entry_comment>(static_cast<size_type>(index), rhs);
 }
 bool TradeLedger::exit_comment_matches(int index, std::string_view rhs) const {
-    if (index < 0 || static_cast<size_type>(index) >= state_->end) return rhs.empty();
+    if (index < 0 || static_cast<size_type>(index) >= state_->end) {
+        state_->check_not_released();
+        return rhs.empty();
+    }
     return state_->string_equals<&State::Record::exit_comment>(static_cast<size_type>(index), rhs);
 }
 double TradeLedger::pnl_at(size_type global) const {
@@ -1675,12 +1753,23 @@ bool TradeLedger::is_long_at(size_type global) const {
 }
 
 void TradeLedger::replace(size_type global, const Trade& row) {
+    replace_deferred(global, row);
+    finish_replacements();
+}
+
+void TradeLedger::replace_deferred(size_type global, const Trade& row) {
     state_->check(global, true);
     const auto previous = state_->descriptor(global);
     const auto legacy = state_->materialized.find(global);
     Trade legacy_value{};
     if (legacy != state_->materialized.end()) legacy_value = row;
     const auto record = state_->store(global, row, &previous);
+    // Metadata edits do not change the fold. Compare percentage bits so a
+    // change between signed zeros or NaN payloads is also repaired.
+    if (std::memcmp(&previous.pnl_pct, &record.pnl_pct, sizeof(double)) != 0
+        || (previous.pnl > 0.0) != (record.pnl > 0.0)
+        || (previous.pnl < 0.0) != (record.pnl < 0.0))
+        state_->first_percent_replacement = std::min(state_->first_percent_replacement, global);
     state_->invalidate(global);
     if (state_->retiring) {
         const State::StringExtent old_texts[]{previous.entry_id, previous.entry_comment,
@@ -1697,6 +1786,26 @@ void TradeLedger::replace(size_type global, const Trade& row) {
     if (state_->cache) state_->remember(global, record, &row);
 }
 
+void TradeLedger::finish_replacements() {
+    if (state_->rollback_failure) std::rethrow_exception(state_->rollback_failure);
+    const auto changed = state_->first_percent_replacement;
+    if (changed >= state_->end) return;
+    const auto middle = state_->resident_first;
+    const auto prefix = changed < middle
+        ? state_->fold_percent_rows(state_->sealed_percent, state_->first, middle)
+        : state_->before_resident_percent;
+    state_->total_percent = state_->fold_percent_rows(prefix, middle, state_->end);
+    state_->before_resident_percent = prefix;
+    state_->first_percent_replacement = std::numeric_limits<size_type>::max();
+}
+
+const TradeLedger::PercentFold& TradeLedger::percent_fold() const {
+    if (state_->rollback_failure && state_->first != state_->end)
+        std::rethrow_exception(state_->rollback_failure);
+    state_->check_percent_replacements_finished();
+    return state_->total_percent;
+}
+
 void TradeLedger::modify(size_type global, const std::function<void(Trade&)>& edit) {
     state_->check(global, true);
     Trade row = at(global);
@@ -1705,15 +1814,22 @@ void TradeLedger::modify(size_type global, const std::function<void(Trade&)>& ed
 }
 
 void TradeLedger::push_back(const Trade& trade) {
+    state_->check_not_released();
+    state_->check_percent_replacements_finished();
     if (size() == std::numeric_limits<size_type>::max())
         throw std::length_error("trade ledger: logical end exhausted");
     // Copies and write-only runs keep a cold cache unallocated. Optional
     // cache fills follow backing publication and cannot refuse the append.
     const auto record = state_->store(size(), trade);
-    if (state_->count == kResidentRows) state_->evict();
+    if (state_->count == kResidentRows) {
+        const auto& oldest = state_->rows[state_->head];
+        state_->before_resident_percent.add(oldest.pnl, oldest.pnl_pct);
+        state_->evict();
+    }
     state_->rows[(state_->head + state_->count) % kResidentRows] = record;
     ++state_->count;
     ++state_->end;
+    state_->total_percent.add(record.pnl, record.pnl_pct);
     state_->sync_cache_mode();
     if (state_->cache) state_->remember(state_->end - 1, record, &trade);
 }
@@ -1721,18 +1837,22 @@ void TradeLedger::push_back(const Trade& trade) {
 void TradeLedger::push_back(Trade&& trade) { push_back(static_cast<const Trade&>(trade)); }
 
 void TradeLedger::resize(size_type global_end) {
+    state_->check_not_released();
     if (state_->rollback_failure) std::rethrow_exception(state_->rollback_failure);
+    state_->check_percent_replacements_finished();
     if (global_end < state_->first)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: rewind below resident window");
     state_->invalidate_cache();
     if (global_end < size()) {
+        const auto percent = state_->percent_through(global_end);
         if (state_->retiring)
             state_->release_cache_pages(global_end, size(), state_->first, global_end);
         // Re-cuts may rewind far below the descriptor window. All row bytes
         // are already external; discard the bounded descriptor cache.
         while (state_->count != 0) state_->evict();
         state_->end = state_->resident_first = global_end;
+        state_->total_percent = state_->before_resident_percent = percent;
         state_->sync_cache_mode();
         state_->materialized.erase(state_->materialized.lower_bound(global_end),
                                     state_->materialized.end());
@@ -1746,6 +1866,7 @@ Trade TradeLedger::const_iterator::operator*() const { return ledger_->read(inde
 TradeLedger::const_iterator TradeLedger::begin() const { return {this, base()}; }
 TradeLedger::const_iterator TradeLedger::end() const { return {this, size()}; }
 void TradeLedger::visit(size_type first, size_type end, const Visitor& visitor) const {
+    state_->check_not_released();
     if (first > end || end > size())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: invalid visit range");
@@ -1756,6 +1877,7 @@ void TradeLedger::visit(size_type first, size_type end, const Visitor& visitor) 
 }
 
 bool TradeLedger::previous(size_type& cursor, Trade& value) const {
+    state_->check_not_released();
     if (cursor > size())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: invalid backward cursor");
@@ -1773,10 +1895,14 @@ const Trade& TradeLedger::materialize(size_type global) const {
 }
 
 void TradeLedger::seal(size_type global_end) {
+    state_->check_not_released();
     if (state_->rollback_failure) std::rethrow_exception(state_->rollback_failure);
+    state_->check_percent_replacements_finished();
     if (global_end < state_->first || global_end > size())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: seal outside resident window");
+    if (global_end == state_->first) return;
+    const auto percent = state_->percent_through(global_end);
     // The consumer has already emitted T and folded all logical identities.
     // Only an explicitly admitted sink run drops its physical history.
     state_->retire(global_end);
@@ -1785,6 +1911,8 @@ void TradeLedger::seal(size_type global_end) {
     // Physical retirement invalidates its cache and refuses erased rows.
     while (state_->count != 0 && state_->resident_first < global_end) state_->evict();
     state_->first = global_end;
+    state_->sealed_percent = percent;
+    if (state_->resident_first == global_end) state_->before_resident_percent = percent;
 }
 
 // This adapter is deliberately private until P2/R compose the engine's frozen
@@ -1795,11 +1923,13 @@ class TradeLedger::Source final : public report::TradeSourceV1 {
     using Row = report::TradeRowV1;
     using Text = report::TradeTextV1;
     void range(Index first, Index count) const {
+        ledger_.check_not_released();
         const auto total = size();
         if (first > total || count > total - first)
             throw std::out_of_range("trade source range");
     }
     State::StringExtent text(Index index, Text field) const {
+        ledger_.check_not_released();
         // Validate selectors even on an otherwise invalid/empty request.
         if (field != Text::EntryId && field != Text::EntryComment
             && field != Text::ExitId && field != Text::ExitComment)
@@ -1833,6 +1963,7 @@ public:
     explicit Source(const TradeLedger& ledger) : ledger_(ledger) {}
     Index size() const override { return ledger_.size(); }
     Row at(Index index) const override {
+        ledger_.check_not_released();
         if (index >= size()) throw std::out_of_range("trade source index");
         const Trade value = ledger_.numeric_at(static_cast<size_type>(index));
         Row row{};

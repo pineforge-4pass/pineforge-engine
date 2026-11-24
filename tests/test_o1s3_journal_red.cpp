@@ -789,7 +789,7 @@ std::vector<no::CommandEvent> native_examples(const no::RunIdentity& run) {
     events.emplace_back(no::AcceptedEvent{0, before, no::CommandSurface::MarketOnly});
     request.intent = no::Transact{binary64(0x7ff8000000000041ULL)};
     events.emplace_back(no::RejectedEvent{0, request,
-        static_cast<no::RequestRejectReason>(233), no::CommandSurface::General});
+        no::RequestRejectReason::InvalidQuantity, no::CommandSurface::General});
     events.emplace_back(no::ReplacedEvent{0, before, after, no::CommandSurface::MarketOnly});
     request.intent = no::HostSized{no::HostSizedKind::Close, std::nullopt};
     events.emplace_back(no::ReplaceRejectedEvent{0, before, request,
@@ -841,8 +841,7 @@ std::vector<no::CommandEvent> native_examples(const no::RunIdentity& run) {
     events.emplace_back(no::NativeRiskEvent{0, no::RiskLimitKind::MaxIntradayLoss,
         binary64(0x7ff8000000000041ULL), binary64(0xfff8000000000083ULL), -917, cursor});
 
-    // Nested alternatives and optional absences are values too. Attempted
-    // requests may contain unknown enum NUMBERS without being corrupt tags.
+    // Nested alternatives and optional absences are values too.
     const std::vector<no::OrderIntent> intents{
         no::Flatten{}, no::Reduce{no::OwnerOpenedUnits{}}, no::Reduce{no::ExplicitUnits{9}},
         no::Reduce{no::ScopeFraction{0.25, no::ScopeClaim::NetOfSiblings, no::ScopeBasis::AtAcceptance}},
@@ -870,7 +869,7 @@ std::vector<no::CommandEvent> native_examples(const no::RunIdentity& run) {
                                                         no::NativeAnchorRounding::Directional}}
                                  : no::TriggerAnchor{no::Absolute{}};
         events.emplace_back(no::RejectedEvent{0, attempted,
-            static_cast<no::RequestRejectReason>(199 + i), no::CommandSurface::General});
+            no::RequestRejectReason::InvalidOwner, no::CommandSurface::General});
     }
     const std::vector<no::Authority> authorities{no::BookTransaction{}, no::Wait{parent},
         no::ArmedTransaction{parent, cause, cursor}, no::UnboundBookClose{}, book,
@@ -891,7 +890,7 @@ std::vector<no::CommandEvent> native_examples(const no::RunIdentity& run) {
     for (std::size_t i = 0; i != states.size(); ++i)
         events.emplace_back(no::ActivatedEvent{0, before, no::ActivationKind::StopLimit,
             states[i], states[(i + 1) % states.size()], 97 + double(i), cursor});
-    applied.definition.reset(); // Absent shared values and terminal optionals.
+    // The terminal reason is optional; both applied scopes require the definition.
     applied.terminal = true; applied.terminal_reason.reset();
     applied.allowance_before = no::AllowanceUnset{};
     applied.scope = pineforge::execution::OpeningExposure{17, -71};
@@ -1375,7 +1374,7 @@ void s3_journal_islands_fixed_under_pins_red() {
 void s3_native_codec_all_values_cross_page_red() {
     // Records and ordering / S3-NR. Input: all 19 alternatives, every nested
     // request/authority/state alternative, independent kept-handle definitions,
-    // >cache arrays/text, NULs, unknown reason numbers, zeros and NaN payloads.
+    // >cache arrays/text, NULs, declared reasons, zeros and NaN payloads.
     // Assertion: storage equals Wire and diagnostic decode equals every active
     // value in absolute order after eviction; malformed framing is corrupt.
     // Fails to compile: encode_journal_record (also decode_journal_record).
@@ -1451,6 +1450,12 @@ void s3_native_codec_all_values_cross_page_red() {
         std::fill_n(narrow_enum.end() - 16, 8, std::byte{0});
         narrow_enum[narrow_enum.size() - 15] = std::byte{1};
         corrupt.push_back(std::move(narrow_enum));
+        // expectation corrected: ok -> corrupt, because these numbers fit
+        // uint8_t but do not name a declared rejection reason (#944).
+        for (const auto raw : {233, 199, 200, 201, 202, 203, 204, 205, 206, 207}) {
+            simple.reason = static_cast<no::RequestRejectReason>(raw);
+            corrupt.push_back(native_value(simple));
+        }
         for (const auto& invalid : corrupt) {
             const pd::ScratchSpanSource bytes(view(invalid));
             no::CommandEvent output;

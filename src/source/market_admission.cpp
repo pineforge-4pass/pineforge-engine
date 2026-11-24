@@ -21,14 +21,10 @@ bool same(const SizingRevision& a, const SizingRevision& b) {
     return a.sequence == b.sequence && a.cause_fill == b.cause_fill &&
         a.bar == b.bar && a.target_command == b.target_command;
 }
-bool known_checkpoint(Checkpoint checkpoint) {
-    return checkpoint == Checkpoint::DefaultGross ||
-        checkpoint == Checkpoint::ExplicitPair || checkpoint == Checkpoint::TerminalGross;
-}
+template<class Receipt>
 void require_origin(const std::shared_ptr<const CommandObservation>& origin,
-                    uint64_t target, uint64_t event, int bar) {
-    if (!origin || target != origin->command || event <= origin->command ||
-        bar < origin->bar)
+                    const Receipt& receipt) {
+    if (!origin || !matches_origin(origin->command, origin->bar, receipt))
         throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
                                            "admission receipt requires its exact earlier command");
 }
@@ -40,7 +36,7 @@ void Draft::bind(std::shared_ptr<const CommandObservation> observation) {
     observation_=std::move(observation);
 }
 void Draft::reviewed(ReviewReceipt receipt) {
-    require_origin(observation_, receipt.target_command, receipt.sequence, receipt.bar);
+    require_origin(observation_, receipt);
     if (!known_checkpoint(receipt.checkpoint))
         throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
                                            "review requires a known checkpoint");
@@ -52,8 +48,8 @@ void Draft::reviewed(ReviewReceipt receipt) {
     review_ = receipt;
 }
 void Draft::sizing_revised(SizingRevision receipt) {
-    require_origin(observation_, receipt.target_command, receipt.sequence, receipt.bar);
-    if (receipt.cause_fill == 0)
+    require_origin(observation_, receipt);
+    if (!has_fill_cause(receipt))
         throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
                                            "sizing revision requires committed cause");
     if (sizing_revision_) {
@@ -203,15 +199,20 @@ detail::ScratchStatus append_journal_record(Journal& journal,
     if (status != Status::not_found) return status;
     status = codec.store.begin();
     if (status != Status::ok) return status;
-    detail::ScratchHandle handle = detail::scratch_no_handle;
+    const auto requested_sequence = summary.sequence;
     if (codec.abandoned && codec.abandoned > journal.retired_prefix_.last_sequence) {
         const jc::WordSource abandoned(codec.abandoned);
         const detail::ScratchSpanSource empty({nullptr,0});
+        detail::ScratchHandle handle = detail::scratch_no_handle;
         status = codec.store.put(abandoned,empty,handle);
     }
     if (status == Status::ok) {
-        const jc::WordSource key(summary.sequence);
-        status = codec.store.put(key,source,handle);
+        const auto validate = [&](const detail::ScratchByteSource& stored) noexcept {
+            const auto checked = scan_journal_record(stored,codec.buffer(),summary);
+            if (checked != Status::ok) return checked;
+            return summary.sequence == requested_sequence ? Status::ok : Status::corrupt;
+        };
+        status = jc::put_checked(codec.store,requested_sequence,source,validate);
     }
     status = jc::finish(codec.store,status);
     if (status == Status::ok) {
@@ -225,7 +226,7 @@ detail::ScratchStatus append_journal_record(Journal& journal,
         if (summary.rejected && journal.rejection_gate_.valid
             && summary.sequence > journal.rejection_gate_.sequence)
             journal.rejection_gate_ = {summary.sequence,summary.rejected_bar,true};
-    } else codec.failed_sequence = summary.sequence;
+    } else codec.failed_sequence = requested_sequence;
     return status;
 }
 
@@ -652,7 +653,7 @@ ReviewReceipt ReviewCapture::receipt_for(const Draft& draft) const {
                                            "draft does not belong to this admission review");
     auto receipt = event_.receipt;
     receipt.target_command = origin->command;
-    require_origin(origin, receipt.target_command, receipt.sequence, receipt.bar);
+    require_origin(origin, receipt);
     return receipt;
 }
 

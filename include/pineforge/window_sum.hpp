@@ -32,6 +32,8 @@ class KahanWindowSum {
     int saved_count_;
     double saved_evicted_value_;
     bool saved_pushed_;
+    bool exact_recovery_ = false;
+    bool saved_exact_recovery_ = false;
 
     std::size_t index(std::size_t offset) const noexcept {
         const auto position = head_ + offset;

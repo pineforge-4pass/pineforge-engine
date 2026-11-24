@@ -53,6 +53,21 @@ its sources, depend on addresses or consult mutable external state. The order
 id in `ScratchKeyOrder` is a nonzero schema version: reopening under another id
 is refused.
 
+The native order and market admission journals reject an imported record with
+an undeclared enum value, even when the number fits its field. Both
+`append_journal_record` (`src/native_order.cpp:2210`, `src/source/market_admission.cpp:182`)
+and `decode_journal_record` (`src/native_journal_codec.cpp:407`, `src/source/admission_journal_codec.cpp:587`)
+return `ScratchStatus::corrupt`. The native ordinal or the outstanding admission
+sequence remains available for a valid retry.
+
+`fold_journal_record` (`src/source/admission_journal_codec.cpp:646`) checks the
+admission fields before updating the digest. `fold_validated_journal_record`
+(`src/source/admission_journal_codec.cpp:641`) also checks enum values in records
+at or below the window frontier. A failed fold publishes neither a digest nor
+a summary. When `submit` rejects a native request, the core's own history keeps
+the attempted input even after cache eviction. Importing that rejection as a
+record checks the attempted input just like any other import.
+
 A handle is a 64-bit nonzero number. The first record of a created store gets
 1, each further new record the next number, an upsert keeps its number, and an
 erased number is never issued again. Handles survive page eviction, commit and
@@ -96,11 +111,15 @@ continues to report `programming_error`.
 ### Resident bound of the parent-terminal drain (native order)
 
 The native request core's `JournalStore` has a resident cap of 2,048
-committed events in 32-event chunks, with a keep-resident floor of 128.
+committed events in 32-event chunks. It spills while an append would exceed
+the cap and more than 128 events remain resident. The last spill can leave
+fewer than 128.
 A single bar can exceed the cap before its journal is retired; older events
 then spill to pages and remain readable at their original positions and
-ordinals. The spill page remains 32,768 bytes and the decoded cache has four
-slots. The separately bound `CommandScratchStore` codec uses its own fixed
+ordinals. Each transfer carries up to 32,768 bytes of events plus an 8-byte
+seal. A larger event occupies one page spanning multiple transfers. The
+decoded cache has four slots.
+The separately bound `CommandScratchStore` codec uses its own fixed
 workspace instead of this resident tail.
 
 This is a bound of the native request core, not of `CommandScratchStore`: the
@@ -306,6 +325,13 @@ well under one byte per handle ever issued even when the live set is bounded.
 transaction that is not rollback-only. `commit` reports the failing backing call's
 own status. Reads preserve backing `io_error`/`corrupt` and comparator failures.
 
+When a saved exit placement or pending order contains an invalid birth cursor
+or fill evaluation, the C++ scratch reader throws `ExitScratchError` with
+`status() == ScratchStatus::corrupt`. If the birth factory rejects a field,
+its message is retained; the run-failure code is `engine_invariant`.
+An unknown birth tag or fill details on a non-fill birth are rejected before
+the reader calls a factory.
+
 The status is a transport, not the run-failure classification. Command and
 script backings retain a prebuilt typed `out_of_memory` exception when an
 allocation fails, including an allocation while formatting an I/O or arena
@@ -319,6 +345,21 @@ the read/create/write status. Owning native and admission journal decoders are
 throwing diagnostic surfaces: they raise typed `out_of_memory` before their
 callers can interpret invalid-storage status. Their nonowning validation scans
 remain nonallocating and `noexcept`.
+
+When a C++ caller appends a raw record to a bound journal, the journal checks
+the pending value before committing it (`put_checked` at
+`include/pineforge/detail/journal_codec.hpp:236`). A native record's ordinal
+must be greater than the last committed ordinal. An admission record's sequence
+must match the key chosen for the append. The journal uses the stored outcome
+and sequence to decide whether to update the last rejected command bar.
+Callers must still supply immutable byte sources.
+
+If an I/O error prevents reading a field's type tag in an otherwise valid
+admission journal record, `append_journal_record` and `decode_journal_record`
+return `io_error`. On a journal bound to a store, `Journal::events()` and
+`Journal::folded_window()` surface that read failure as an I/O error. The codec
+still reports `corrupt` for a wrong field key or a successfully read tag with
+the wrong value.
 
 ## What a consumer lane must do
 

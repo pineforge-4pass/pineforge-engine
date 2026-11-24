@@ -1972,7 +1972,7 @@ public:
     /// typed scratch failure (scratch_io_failed) -- until reset. False, with
     /// nothing kept, when the book has never spilled: it then has no such read.
     bool carry_book_read_failure(std::exception_ptr failure) const noexcept;
-    /// Throws the failure carry_book_read_failure kept, if any.
+    /// Throws a carried read failure from a spilled row or a resident row's opening list.
     void rethrow_book_read_failure() const;
     /// How many spilled rows the book has read back to answer a lookup -- by
     /// handle (find_live, hold_live), by rank (live_at, live_back) -- and how
@@ -2344,6 +2344,8 @@ public:
 
 private:
     enum class TargetKind { Live, NotWorking, InvalidHandle };
+    void release_run_history() noexcept;
+    void check_history_available() const;
     // Native-private bridge. The existing opaque journal owns the resource;
     // this borrow ends at reset/move/destruction, like its other core reads.
     const detail::NativeHistoryOwner* managed_history_owner() const noexcept;
@@ -2473,10 +2475,11 @@ private:
     bool bump_epoch() noexcept;
     void require_epoch_room() const;
     void clear_unbound() noexcept;
-
+    void carry_live_read_failure(std::exception_ptr failure) const noexcept;
     struct InstanceBinding {
         uint64_t generation = 1;
         bool expired = false;
+        std::exception_ptr resident_read_failure;
     };
     struct MutationPlan {
         std::weak_ptr<InstanceBinding> instance;
@@ -2582,10 +2585,9 @@ private:
                                                   uint64_t& next_timeline_ordinal,
                                                   bool open_activation_grant);
 
-    // The journal, the group-effect keys and the long
-    // chains' id lists keep a fixed resident part and write the rest to
-    // run-owned scratch files, created on the first spill. They are defined in
-    // native_order.cpp and held by shared_ptr so this header stays complete.
+    // The journal, group-effect keys and long chains' id lists keep a fixed
+    // resident part and spill the rest to run-owned scratch on demand. The
+    // shared owners are defined in native_order.cpp.
     struct JournalStore;
     struct ReceiptStore;
     struct ChainSegments;

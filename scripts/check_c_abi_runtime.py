@@ -82,6 +82,7 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_closed_trade_exit_id",
     "strategy_closed_trade_exit_comment",
     "strategy_closed_trade_close_cause",
+    "strategy_release_run_results_v1",
     "strategy_position_size",
     "strategy_current_equity",
     "strategy_initial_capital",
@@ -137,11 +138,13 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_set_report_sink_fd_v1",
     "strategy_report_sink_receipt_v1",
     "strategy_set_scratch_tables_v1",
+    "strategy_set_scratch_live_order_ids_limit_v1",
     "strategy_set_cache_policy_v1",
     "strategy_set_scratch_io_policy_v1",
     "strategy_report_sink_summary_v1",
     "strategy_stream_engine_layout_version", "pf_output_series_limit_set_checked", "pf_output_series_limit_failure",
     "pf_map_pairs_limit_set_checked",
+    "pf_ta_lookback_limit_set_checked",
     # The host's scalar account-currency rate, beside the curve setter above.
     "strategy_set_account_currency_fx_scalar",
 })
@@ -157,12 +160,16 @@ RUNTIME_HEADERS = (
     "report_sink.h",
 )
 
-# Source inventory: pineforge.h 115 + observer 3 + window 3 + sink 5.
-# expectation corrected: 125 -> 126 and 105 -> 106, because pineforge.h declares
-# and c_abi.cpp implements strategy_set_account_currency_fx_scalar.
-EXPECTED_PUBLIC_DECLARATIONS = 126
-# c_abi.cpp implements 106 of those declarations; twenty remain generated.
-EXPECTED_RUNTIME_IMPLEMENTATIONS = 106
+# Source inventory: pineforge.h 118 + observer 3 + window 3 + sink 5.
+# strategy_set_account_currency_fx_scalar brought the counts to 126/106.
+# strategy_release_run_results_v1 brought the counts to 127/107.
+# expectation corrected: 127 -> 128 and 107 -> 108, because pineforge.h declares
+# and c_abi.cpp implements strategy_set_scratch_live_order_ids_limit_v1.
+# expectation corrected: 128 -> 129 and 108 -> 109, because the C ABI adds
+# pf_ta_lookback_limit_set_checked.
+EXPECTED_PUBLIC_DECLARATIONS = 129
+# c_abi.cpp implements 109 of those declarations; twenty remain generated.
+EXPECTED_RUNTIME_IMPLEMENTATIONS = 109
 
 # Per-module implementations, never static-runtime implementations. The
 # capability has its own declaration in native_module.hpp; the other eight

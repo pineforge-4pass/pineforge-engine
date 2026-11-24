@@ -899,7 +899,8 @@ PF_API int strategy_stream_end(pf_strategy_t s, int finalize_partial_input_bar);
 /** Snapshot the cumulative warmup + realtime report. The embedded arrays are
  *  caller-owned after return and must be released with #report_free, or with
  *  #strategy_native_report_free_v1 by a host that links the kernel archive,
- *  which has no #report_free. */
+ *  which has no #report_free. After #strategy_release_run_results_v1, returns
+ *  nonzero with `engine_invariant` and publishes no arrays. */
 PF_API int strategy_stream_fill_report(pf_strategy_t s, pf_report_t* out);
 
 /** @} */ /* end of pf_streaming */
@@ -1101,38 +1102,54 @@ PF_API int  strategy_last_run_status(pf_strategy_t s);
  *  for a later plain historical replay must be explicitly turned back off.
  *  Effects when @p on is non-zero:
  *    1. `barstate.islast` is false for that bar.
- *    2. `session.islastbar` is computed from the bucket calendar (no next
- *       bar to peek at, so it evaluates whether the next bucket -- this
- *       bar's timestamp plus one script-TF step -- falls out of session).
+ *    2. Pine starts `session.islastbar_regular` and `session.islastbar`
+ *       from the kernel's open-ended session close, so ending the batch
+ *       does not by itself close the forming bar's session. For a regular
+ *       intraday bar that opens at or after a dated symbol calendar
+ *       interval's open and before its close (see
+ *       #strategy_set_syminfo_metadata), Pine sets both flags to whether
+ *       the bar's open plus one chart timeframe step reaches or passes the
+ *       dated close. On an extended-hours chart, `session.islastbar` can
+ *       also account for pre- and post-market bars. If the next retained
+ *       input at or after the end of a regular closing bar's interval
+ *       is post-market under the recurring session on the same local day,
+ *       Pine clears `session.islastbar` on the regular bar and keeps
+ *       `session.islastbar_regular` true. A later post-market bar can
+ *       carry `session.islastbar` instead.
  *    3. `bar_index` stays put; `last_bar_index` is frozen at the horizon
  *       bar (`horizon_bars - 1`), when @p horizon_bars > 0. `last_bar_time`
  *       is exact when the horizon bar is in the script-bar array, one
  *       script-TF step per missing bar past the array's last bar
  *       otherwise; under aggregation (input_tf < script_tf) it is
- *       extrapolated from the first bar instead, and the aggregation-path
- *       caveat below applies.
+ *       extrapolated from the first input bar instead.
  *    4. The range-end synthetic close row/trade is skipped (no
  *       `open_at_end` row); the final equity point keeps `open_profit`.
- *    5. Interior bars (every bar before the last) are unaffected, except
- *       effect 2 under aggregation (below).
- *  Scope: the Pine source host's scheduler applies these where it publishes
- *  a script bar to the generated script. Effects 1, 3 and 4 hold on every
- *  path. Effect 2 is its session-predicate step, which runs for every script
- *  bar of a run whose timeframe is known -- a timeframe-aware overload, or
- *  `run(bars, n)` with at least two bars, whose timeframe it detects from
- *  them; with fewer, `session.ismarket`/`session.islastbar` keep their
- *  reset-state `false` whatever this flag says. The bucket-calendar
- *  lookahead stands in for the next bar wherever the scheduler holds none:
- *  with input_tf == script_tf that is the array's last bar alone, but under
- *  aggregation (input_tf < script_tf) the scheduler holds no next script
- *  bar at all, so the lookahead decides `session.islastbar` on every bar of
- *  the run. Callers must feed an input_tf == script_tf array, matching
- *  #strategy_set_probe_suppress_tail_logic's scope note.
+ *    5. On interior bars, both kernel session-close facts agree when there
+ *       is a retained successor.
+ *
+ *  Scope: the Pine host sets the session flags before publishing a script
+ *  bar when the timeframe is supplied or detected. In `run(bars, n)` with
+ *  fewer than two bars, the timeframe is undetected; `session.ismarket`
+ *  and both last-bar flags stay false.
+ *
+ *  In intraday batches, including aggregation from a supported lower input
+ *  timeframe, the kernel uses the first retained input after the current
+ *  script bar to find its successor script bar. Both kernel close facts
+ *  mark an in-session bar as last if the successor is out of session or
+ *  belongs to another session day, even if the recurring session has
+ *  another slot that day. When no successor is available, the open-ended
+ *  close uses the next eligible input slot in the recurring session,
+ *  skipping declared breaks. This fallback cannot see an early close
+ *  absent from the session string.
+ *
+ *  The dated Pine symbol calendar does not change the kernel's schedule
+ *  or add bars. For the separate live probe protocol's input requirements,
+ *  see #strategy_set_probe_suppress_tail_logic.
  *  `strategy_stream_begin` refuses a handle with this flag set.
- *  Default off (@p on == 0): every historical run stays byte-identical to
- *  before this flag existed. The mode belongs to the Pine source host; on
- *  a host that models no still-forming tail bar (a bare kernel host) the
- *  call is accepted and inert, as it always was there. */
+ *  Default off (@p on == 0) keeps the ordinary historical batch semantics.
+ *  The Pine source host interprets this mode. A bare kernel host, which
+ *  models no still-forming tail bar, accepts the call and leaves its run
+ *  unchanged. */
 PF_API void strategy_set_realtime_tail(pf_strategy_t s, int on, int horizon_bars);
 /** Live probe tail suppression (spec §3.2): the LAST script bar of the array
  *  fed to every subsequent run() is matched but not calculated. The kernel
@@ -1494,10 +1511,11 @@ PF_API int64_t strategy_position_cycle_seq(pf_strategy_t s);
 /** Task 9: closed-trade id / exit-comment string accessors, indexing the
  *  same REPORT row space as #strategy_closed_trade_entry_incarnation
  *  (`trades_` then the range-end rows, `open_at_end`). The returned pointer
- *  is valid until the next run() (or stream call) on this handle, like
- *  #strategy_get_last_error. NULL on NULL @p s, out-of-range @p trade_index
- *  or policy-erased rows; retained sealed rows are readable. This legacy API
- *  materializes rows until the next run; full-history reads use growing RAM. */
+ *  is valid until the next run(), stream call, or #strategy_release_run_results_v1
+ *  on this handle. Returns NULL on a NULL @p s, out-of-range @p trade_index,
+ *  or a policy-erased or released row. A released row records `engine_invariant`
+ *  unless a run failure is already latched. This legacy API materializes rows;
+ *  full-history reads use growing RAM. */
 PF_API const char* strategy_closed_trade_entry_id(pf_strategy_t s, int trade_index);
 /** See #strategy_closed_trade_entry_id for the row-space/lifetime/NULL
  *  contract. The returned string is the engine's own INTERNAL exit id, not
@@ -1685,13 +1703,13 @@ PF_API void strategy_set_syminfo_mintick(pf_strategy_t s, double mintick);
  *  (e.g. 50 for ES). Non-positive and NaN values record a typed refusal. Call before #run_backtest / #run_backtest_full. */
 PF_API void strategy_set_syminfo_pointvalue(pf_strategy_t s, double pointvalue);
 
-/** Inject a fundamental/exchange metadata value by Pine member name (e.g.
- *  "shares_outstanding_total"); un-injected reads return na. Quantity step: a
- *  declared "qty_step", or a finite "mincontract" > 0 while no "qty_step" is
- *  declared, sets the order quantity grid. Call before #run_backtest[_full].
- *  series_origin_ms declares the reference series' first bar open
- *  in epoch ms and enables chart EMA SMA seeding plus request.security warmup
- *  from the first whole bucket opening at/after that origin. */
+/** Set Pine metadata before #run_backtest or #run_backtest_full (unset fundamental reads return na).
+ *  `qty_step`, or finite positive `mincontract` when `qty_step` is unset, sets the quantity grid.
+ *  `series_origin_ms` names the first reference bar open in epoch ms for chart EMA SMA seeding
+ *  and request.security warmup from the first whole bucket opening at or after that origin.
+ *  For a Pine symbol calendar, set `symbol_calendar_days` to N. For each i from 0 to N - 1,
+ *  set `symbol_calendar_open:<i>` and `symbol_calendar_close:<i>` in epoch ms. The Pine host
+ *  installs the ascending, nonoverlapping intervals at run begin. */
 PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
                                           double value);
 
@@ -1701,16 +1719,16 @@ PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
  *  currency and becomes active, inclusively, at the corresponding Unix-ms
  *  timestamp. The latest active value carries forward; broker events before
  *  the first point use the scalar `account_currency_fx` metadata fallback.
- *  Installing a curve also selects the converted account-currency broker
- *  ledger, including during that pre-first fallback interval; it is not
- *  equivalent to a same-currency run merely because a rate happens to be 1.
+ *  A Pine strategy whose compiled account currency matches the chart's quote
+ *  currency (including omitted currency or currency.NONE) uses no broker FX.
+ *  For a different currency the curve selects conversion even before its first point.
  *  Arrays are copied. Timestamps must be strictly increasing and rates
  *  positive and finite. Pass `n == 0` to clear the curve and restore scalar
- *  behavior. Timestamped curves currently support ordinary historical runs.
- *  Broker-open rate changes: carried 1× longs and 1× shorts are supported;
- *  leveraged positions fail closed at the crossing. Streaming,
- *  calc-on-order-fills, and bar-magnifier runs
- *  also fail closed.
+ *  behavior. Timestamped curves used for broker conversion support ordinary
+ *  historical runs. Broker-open rate changes: carried 1× longs and 1× shorts
+ *  are supported; leveraged positions fail closed at the crossing. Streaming,
+ *  calc-on-order-fills, and bar-magnifier runs refuse a curve in use.
+ *  An unused curve remains installed for a later run on the same handle.
  *
  *  @return 0 on success, -1 for a null strategy or invalid arrays. */
 PF_API int strategy_set_account_currency_fx_series(
@@ -2196,7 +2214,7 @@ PF_API int strategy_set_symbol_feed_borrowed_v1(
 
 /** Exact C++ engine layout accepted by the live report accumulator.
  *  Bump whenever that layout changes, independently of #PF_ABI_VERSION. */
-#define PF_STREAM_ENGINE_LAYOUT_VERSION 5u
+#define PF_STREAM_ENGINE_LAYOUT_VERSION 6u
 
 /** Optional module declaration that its strategy handles point directly to
  *  a BacktestEngine with the returned #PF_STREAM_ENGINE_LAYOUT_VERSION.
@@ -2247,9 +2265,9 @@ PF_API int pf_map_pairs_limit_set_checked(const int64_t* maximum,
 
 /** @ingroup pf_config
  *  Install the host's scalar account-currency rate: account-currency units per
- *  one unit of the symbol's quote currency, the rate every quote-to-account
- *  money path converts at wherever no point of
- *  #strategy_set_account_currency_fx_series is in effect.
+ *  one unit of the symbol's quote currency. The broker uses it when the
+ *  currencies differ and no point of #strategy_set_account_currency_fx_series
+ *  is in effect. A compiled same-currency strategy books directly in quote units.
  *
  *  A finite positive @p rate is installed and marked as supplied by the host,
  *  1.0 included: an explicit 1.0 is host data, the default 1.0 is not. Only a
@@ -2269,6 +2287,45 @@ PF_API int pf_map_pairs_limit_set_checked(const int64_t* maximum,
  *  rate or a refused call. A runtime library without this export lacks the
  *  symbol: look it up with `dlsym`. */
 PF_API int strategy_set_account_currency_fx_scalar(pf_strategy_t s, double rate);
+
+/** @ingroup pf_streaming
+ *  Release the run's closed trade ledger, report scratch, native command
+ *  history and successor-root index after the last result read. An active
+ *  run or stream refuses with `setting_rejected` and continues unchanged.
+ *  The number of closed trades remains available. Trade row, report and
+ *  journal reads refuse with `engine_invariant` until the next begin. A
+ *  latched run failure takes precedence over a later read refusal.
+ *  Repeating the release succeeds. Success clears the last error unless
+ *  a run or setup failure is already latched. Published sink output and
+ *  report arrays already returned remain available. Borrowed row strings
+ *  expire at release.
+ *  @return 0 on success, -1 on a NULL handle, or nonzero on refusal with
+ *  #strategy_get_last_error and #strategy_get_last_error_code set. */
+PF_API int strategy_release_run_results_v1(pf_strategy_t s);
+
+/** @ingroup pf_config
+ *  Set the maximum simultaneously active Pine order IDs in bounded scratch
+ *  runs on this handle. Zero (the default) sets no separate live-ID limit;
+ *  positive values are exact. U/B_U still limit all historical IDs and their
+ *  bytes. Disk scratch ignores this setting. The setting is independent of
+ *  #strategy_set_scratch_tables_v1 and is copied to the slab at each begin.
+ *  Returns 0 on success, -1 for a null handle, -2 during a stream and -3
+ *  during a batch (including begin callbacks). A refusal keeps the setting. */
+PF_API int strategy_set_scratch_live_order_ids_limit_v1(pf_strategy_t s,
+                                                        uint64_t limit);
+
+/** Set this module's series-length TA lookback policy on the calling thread.
+ *  Call before the strategy factory (or C++ construction); the host captures
+ *  the policy and reinstalls it during execution. Standalone source TA
+ *  objects capture it at construction too. Restore NULL afterward.
+ *  NULL or 0 means unlimited, the default. A positive N allows lengths up to
+ *  N + 1; a longer window raises pine_runtime_limit with max_bars_back and N.
+ *  Returns a pf_settings_status_t under the checked-settings buffer protocol.
+ *  A negative value leaves the previous setting intact. */
+PF_API int pf_ta_lookback_limit_set_checked(const int64_t* maximum,
+                                           char* error, size_t error_capacity);
+/** Feature probe for the series-length TA lookback setter. */
+#define PINEFORGE_HAS_TA_LOOKBACK_LIMIT_V1 1
 
 #ifdef __cplusplus
 } /* extern "C" */

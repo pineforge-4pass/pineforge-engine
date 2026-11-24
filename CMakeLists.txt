@@ -75,6 +75,7 @@ if(NOT Eigen3_FOUND)
     FetchContent_Declare(
         eigen
         URL https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz
+        URL_HASH SHA256=8586084f71f9bde545ee7fa6d00288b264a2b7ac3607b974e54d13e7162c1c72
     )
     set(EIGEN_BUILD_DOC OFF CACHE BOOL "" FORCE)
     set(EIGEN_BUILD_TESTING OFF CACHE BOOL "" FORCE)
@@ -441,6 +442,12 @@ endif()
 # === Tests =============================================================
 if(PINEFORGE_BUILD_TESTS)
     enable_testing()
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    execute_process(COMMAND "${Python3_EXECUTABLE}" -B -c "import numpy"
+        RESULT_VARIABLE _pf_numpy_import OUTPUT_QUIET ERROR_QUIET)
+    if(NOT _pf_numpy_import STREQUAL "0")
+        message(STATUS "NOT COMPARED: configured Python cannot import NumPy; NumPy CSV timestamp test not registered")
+    endif()
     add_subdirectory(tests)
 
     # L0 bar-identity lane, row 1 (spec §10.1): aggregates a 1m OHLCV CSV to

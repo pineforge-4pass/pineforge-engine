@@ -3,6 +3,7 @@
 #include <deque>
 #include <vector>
 #include <string>
+#include <string_view>
 #include <cstddef>
 #include <cstdint>
 #include <cmath>
@@ -41,9 +42,8 @@
 #include <pineforge/report_sequence.hpp>
 // Suppress per-strategy function declarations (strategy_create, run_backtest, etc.) whose pf_*_t parameter types conflict with the internal C++ types
 // used in codegen-emitted extern "C" blocks that include this header.
-// NOTE: this macro leaks into every TU that includes engine.hpp; include
-// pineforge.h FIRST in any TU that needs the per-strategy declarations
-// (see src/c_abi.cpp).
+// NOTE: this macro leaks into every TU that includes engine.hpp; include pineforge.h FIRST
+// in any TU that needs the per-strategy declarations (see src/c_abi.cpp).
 #define PINEFORGE_NO_STRATEGY_DECLS
 // Angle-bracket form is the installed public path (deliberate).
 #include <pineforge/pineforge.h>
@@ -464,6 +464,8 @@ private:
     // Reference-oracle rows with no live lot (tests only; production leaves
     // this empty).
     std::vector<Trade> synthetic_;
+    friend class BacktestEngine;
+    void release() noexcept;
 };
 }  // inline namespace engine_script_run_v20
 
@@ -531,11 +533,11 @@ public:
         if (v != v) v = std::numeric_limits<double>::quiet_NaN();
         bytes(&v, sizeof v);
     }
-
     void i(int64_t v) { bytes(&v, sizeof v); }
     void u(uint64_t v) { bytes(&v, sizeof v); }
     void b(bool v) { const unsigned char c = v ? 1 : 0; bytes(&c, 1); }
-    void s(const std::string& v) { u(v.size()); bytes(v.data(), v.size()); }
+    void s(std::string_view v) { u(v.size()); bytes(v.data(), v.size()); }
+    template <class K> auto s(const K& key) -> decltype(void(key.string())) { s(key.string()); }
 };
 // Optional frontend projection interface retained for source compatibility.
 // Broker dispatch itself is virtual on BacktestEngine and never discovers a
@@ -650,9 +652,9 @@ protected:
     // host data: has_account_currency_fx_at() answers false for them, so the
     // source layer's currency conversions refuse instead of converting at a
     // rate nobody supplied. Configuration: it survives reruns, and nothing
-    // derives it from a rate's value. Declared beside the flag above, in bytes
-    // that were padding, so no other member moves.
+    // derives it from a rate's value. Both flags below occupy former padding.
     bool account_currency_fx_scalar_supplied_ = false;
+    bool account_fx_identity_ = false;  // Run uses quote units; keep the supplied FX for reuse.
     std::size_t account_currency_fx_broker_epoch_ = 0;
     double account_currency_fx_broker_rate_ = 1.0;
 
@@ -1289,11 +1291,11 @@ protected:
         return (n > 0) ? (net_profit_sum_ / (double)n) : 0.0;
     }
     double avg_trade_percent() const {
-        double s = trade_percent_prefix_.all_sum;
-        std::size_t n = trade_percent_prefix_.all_count;
-        // Continue the original left fold over the resident rows.
-        for (const auto& t : trades_) { s += t.pnl_pct; ++n; }
-        return n > 0 ? s / static_cast<double>(n) : 0.0;
+        // Includes sealed rows and excludes report-only range-end marks.
+        const auto& fold = trades_.percent_fold();
+        return fold.all_count > 0
+            ? fold.all_sum / static_cast<double>(fold.all_count)
+            : 0.0;
     }
     double avg_winning_trade() const {
         return (win_trades_count_ > 0) ? (gross_profit_sum_ / (double)win_trades_count_) : 0.0;
@@ -1303,21 +1305,21 @@ protected:
     }
     double avg_winning_trade_percent() const {
         if (win_trades_count_ <= 0) return 0.0;
-        double s = trade_percent_prefix_.win_sum;
-        std::size_t c = trade_percent_prefix_.win_count;
-        for (const auto& t : trades_) {
-            if (t.pnl > 0.0) { s += t.pnl_pct; ++c; }
-        }
-        return (c > 0) ? (s / (double)c) : 0.0;
+        const auto& fold = trades_.percent_fold();
+        // Membership follows the money P&L, not the percentage's sign.
+        const auto count = fold.win_count;
+        const auto sum = fold.win_sum;
+        return count > 0
+            ? sum / static_cast<double>(count) : 0.0;
     }
     double avg_losing_trade_percent() const {
         if (loss_trades_count_ <= 0) return 0.0;
-        double s = trade_percent_prefix_.loss_sum;
-        std::size_t c = trade_percent_prefix_.loss_count;
-        for (const auto& t : trades_) {
-            if (t.pnl < 0.0) { s += t.pnl_pct; ++c; }
-        }
-        return (c > 0) ? (s / (double)c) : 0.0;
+        const auto& fold = trades_.percent_fold();
+        // Keep the sign of the stored losing percentages.
+        const auto count = fold.loss_count;
+        const auto sum = fold.loss_sum;
+        return count > 0
+            ? sum / static_cast<double>(count) : 0.0;
     }
     double open_trades_capital_held() const {
         if (position_side_ == PositionSide::FLAT) return 0.0;
@@ -1757,66 +1759,66 @@ protected:
     double closed_trade_profit(int index) const {
         if (index >= 0 && index < (int)trades_.size())
             return trades_.pnl_at(index);
-        return 0.0;
+        return trades_.unavailable_read(0.0);
     }
     double closed_trade_profit_percent(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return std::numeric_limits<double>::quiet_NaN();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(std::numeric_limits<double>::quiet_NaN());
         return trades_.pnl_pct_at(idx);
     }
     double closed_trade_commission(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return std::numeric_limits<double>::quiet_NaN();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(std::numeric_limits<double>::quiet_NaN());
         return trades_.commission_at(idx);
     }
     int closed_trade_entry_bar_index(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return na<int>();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(na<int>());
         return trades_.entry_bar_index_at(idx);
     }
     int closed_trade_exit_bar_index(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return na<int>();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(na<int>());
         return trades_.exit_bar_index_at(idx);
     }
     std::string closed_trade_entry_comment(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return std::string();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(std::string());
         return trades_.entry_comment_at(idx);
     }
     std::string closed_trade_exit_comment(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return std::string();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(std::string());
         return trades_.exit_comment_at(idx);
     }
     std::string closed_trade_entry_id(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return std::string();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(std::string());
         return trades_.entry_id_at(idx);
     }
     std::string closed_trade_exit_id(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return std::string();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(std::string());
         return trades_.exit_id_at(idx);
     }
     uint64_t closed_trade_entry_incarnation(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return 0;
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(uint64_t{0});
         return trades_.entry_incarnation_at(idx);
     }
     double closed_trade_entry_price(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return std::numeric_limits<double>::quiet_NaN();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(std::numeric_limits<double>::quiet_NaN());
         return trades_.entry_price_at(idx);
     }
     double closed_trade_exit_price(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return std::numeric_limits<double>::quiet_NaN();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(std::numeric_limits<double>::quiet_NaN());
         return trades_.exit_price_at(idx);
     }
     int64_t closed_trade_entry_time(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return 0;
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(int64_t{0});
         return trades_.entry_time_at(idx);
     }
     int64_t closed_trade_exit_time(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return 0;
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(int64_t{0});
         return trades_.exit_time_at(idx);
     }
     double closed_trade_size(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return std::numeric_limits<double>::quiet_NaN();
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(std::numeric_limits<double>::quiet_NaN());
         return trades_.is_long_at(idx) ? trades_.qty_at(idx) : -trades_.qty_at(idx);
     }
     double closed_trade_max_runup(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return 0.0;
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(0.0);
         return trades_.max_runup_at(idx);
     }
     // Percent excursions: trade.max_runup / max_drawdown are stored in
@@ -1824,23 +1826,23 @@ protected:
     // cost denominator must be in currency too (entry × qty × pointvalue).
     // pointvalue=1 cancels out and matches the legacy ratio bit-for-bit.
     double closed_trade_max_runup_percent(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return 0.0;
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(0.0);
         double cost = trades_.entry_price_at(idx) * trades_.qty_at(idx) * syminfo_.pointvalue;
         return (cost > 0.0) ? (trades_.max_runup_at(idx) / cost) * 100.0 : 0.0;
     }
     double closed_trade_max_drawdown(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return 0.0;
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(0.0);
         return trades_.max_drawdown_at(idx);
     }
     double closed_trade_max_drawdown_percent(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return 0.0;
+        if (idx < 0 || idx >= (int)trades_.size()) return trades_.unavailable_read(0.0);
         double cost = trades_.entry_price_at(idx) * trades_.qty_at(idx) * syminfo_.pointvalue;
         return (cost > 0.0) ? (trades_.max_drawdown_at(idx) / cost) * 100.0 : 0.0;
     }
 
     // --- Direction accessors ---
     std::string closed_trade_direction(int idx) const {
-        if (idx < 0 || idx >= (int)trades_.size()) return "";
+        if (idx < 0 || idx >= (int)trades_.size()) { trades_.check_not_released(); return {}; }
         return trades_.is_long_at(idx) ? "long" : "short";
     }
     std::string open_trade_direction(int idx) const {
@@ -2002,10 +2004,10 @@ protected:
     void reset_run_state();
     double account_currency_fx_at(int64_t timestamp_ms) const;
     double active_account_currency_fx() const;
-    // The one scalar installer, behind set_account_currency_fx_scalar and the
-    // "account_currency_fx" metadata key. A finite positive rate becomes the
-    // scalar and marks it supplied; any other value restores the 1.0 fallback
-    // and clears the mark. Returns whether the rate was installed.
+    // The host's rate independently of the broker's units for this run.
+    double supplied_account_currency_fx_at(int64_t timestamp_ms) const;
+    // Both scalar setters mark valid rates supplied; invalid rates clear the
+    // mark, restore the 1.0 fallback and return false.
     bool install_account_currency_fx_scalar(double rate) noexcept;
 
     // Native HTF feed routing (engine_aux_security.cpp): per-state label maps
@@ -2181,8 +2183,8 @@ public:
                                         const double* rates, int n);
 
     // Install the host's scalar account-currency FX rate: account-currency
-    // units per one unit of the symbol's quote currency, the rate every
-    // quote->account money path converts at wherever no curve point is active.
+    // units per one unit of the symbol's quote currency. When conversion is
+    // needed this rate applies wherever no curve point is active.
     // A finite positive rate is installed and marked as supplied by the host,
     // 1.0 included: an explicit 1.0 is host data, the default 1.0 is not.
     // Any other value restores the 1.0 fallback, clears the mark and returns
@@ -2190,7 +2192,7 @@ public:
     // a stream's warmup has begun. The "account_currency_fx" key of
     // set_syminfo_metadata installs through the same rule.
     bool set_account_currency_fx_scalar(double rate);
-    // Whether the host supplied the rate account_currency_fx_at(at_ms)
+    // Whether the host supplied the rate supplied_account_currency_fx_at(at_ms)
     // answers: an explicit scalar, or a curve point effective at or before
     // at_ms. False where only the 1.0 fallback would answer, which includes
     // every instant before a curve's first point when no scalar was supplied.
@@ -2241,16 +2243,18 @@ public:
     // A range-end row is rebuilt from its terminal lot mark on every value read.
     Trade get_report_trade(int i) const {
         const int n_closed = (int)trades_.size();
-        return i < n_closed ? trades_[(size_t)i]
-                            : range_end_trades_.row((std::size_t)(i - n_closed));
+        if (i < n_closed) return trades_[static_cast<std::size_t>(i)];
+        trades_.check_not_released();
+        return range_end_trades_.row(static_cast<std::size_t>(i - n_closed));
     }
-    // The legacy C string ABI promises pointer lifetime until the next run.
-    // Asking for that borrowed storage explicitly materializes the requested
+    // The C string ABI borrows rows until the next run, stream call or release.
+    // Asking for that storage explicitly materializes the requested
     // row. Ordinary report/value readers never enter this compatibility path.
     const Trade& materialize_report_trade(int i) const {
         const int n_closed = static_cast<int>(trades_.size());
-        return i < n_closed ? trades_.materialize(static_cast<std::size_t>(i))
-                            : range_end_trades_.materialize(static_cast<std::size_t>(i - n_closed));
+        if (i < n_closed) return trades_.materialize(static_cast<std::size_t>(i));
+        trades_.check_not_released();
+        return range_end_trades_.materialize(static_cast<std::size_t>(i - n_closed));
     }
     // Why a report row closed, from the row's own recorded facts; the report
     // index form below adds the row-space bounds. Kept together so a caller
@@ -2775,7 +2779,7 @@ private:
         ScratchTableRun& operator=(ScratchTableRun&&) noexcept = default;
     };
     ScratchTableRun scratch_table_run_;
-    void prepare_scratch_table_run(const detail::ScratchTableConfig& config);
+    void prepare_scratch_table_run(const detail::ScratchTableConfig& config, std::uint64_t live_order_ids_limit);
 
     // Reporting configuration and run-local output ownership. Copies retain
     // configuration, never a writer, receipt, or an active-call barrier.
@@ -2845,6 +2849,7 @@ private:
         ReportSinkCallScope& operator=(const ReportSinkCallScope&) = delete;
     };
     int report_sink_setter_status() const;
+    void release_report_scratch() noexcept;
     void begin_report_sink();
     void finish_report_sink(ReportC* out) const;
     void stage_report_sink_equity_point(const pf_equity_point_t& point) const;
@@ -2984,9 +2989,6 @@ protected:
     void fold_report_equity_extreme(double equity);
     void refold_equity_tail();
     void present_report_equity_tail(ReportC* out) const;
-    // Sealed closed rows only; range-end report rows never enter these sums.
-    // Each accessor continues its own sum one resident row at a time, so a
-    // separately accumulated tail cannot change floating-point grouping.
     struct TradePercentPrefix {
         double all_sum = 0.0;
         double win_sum = 0.0;
@@ -2995,6 +2997,9 @@ protected:
         std::size_t win_count = 0;
         std::size_t loss_count = 0;
     };
+    // Keep the old sealed-prefix layout for the previous inline accessors.
+    // The current accessors read the complete fold from TradeLedger.
+    // Sealing and reset still maintain this legacy prefix as before.
     // @broker-state begin
     TradePercentPrefix trade_percent_prefix_;
     // @broker-state end
@@ -3073,6 +3078,20 @@ private:
     // the output shape and recording switch. Existing hosts keep their setting.
     std::optional<std::int64_t> max_output_series_ = default_output_series_limit();
     RuntimeContextService runtime_contexts_;
+
+public:
+    /// Release the run's closed trade ledger, report scratch, native command
+    /// history and successor-root index after the last result read.
+    /// An active run or stream refuses with a coded std::logic_error
+    /// (setting_rejected) without changing the run.
+    /// closed_trade_count() still returns the run's count. Trade row, report
+    /// and journal reads refuse with engine_invariant until the next begin.
+    /// Repeating the release succeeds. Published sink output and returned
+    /// owning trade and event values remain available.
+    void release_run_results();
+
+    /// Set the next bounded run's live order ID limit while idle (0: no separate limit).
+    int set_scratch_live_order_ids_limit(std::uint64_t limit);
 };
 
 inline constexpr std::size_t kReportSinkHeldEquityPoints = 1;

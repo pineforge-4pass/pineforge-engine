@@ -13,32 +13,38 @@ row.
 
 | Place | What is in it | Grows with |
 | --- | --- | --- |
-| Process heap | The engine's working book window, the resident windows of the stores below, retained placement rows, settled bracket-family records, the strategy's own containers (arrays, strings, maps, matrices, user-defined types, series and indicator history, drawing objects), the equity curve when no report sink is installed, and the owning arrays of a FULL report | See [what scales with what](#memory_scaling) |
-| Scratch backing | The spilled part of the trade ledger, the command journals, the order book, the id tables and the report chain. Without an arena these are unlinked files in a writable, disk-backed directory (`TMPDIR`, else `/tmp`; a tmpfs is refused). In the jailed profile they live in the inherited arena (descriptor 5, a sealed memfd), which the host charges as memory | The run's own counts (bars, closed trades, distinct ids, successor rows) |
+| Process heap | The engine's working book window, the resident windows of the stores below, retained placement rows, settled bracket-family records, the resident parts of the strategy's containers (including map handles and their read caches), the equity curve when no report sink is installed, and the owning arrays of a FULL report | See [what scales with what](#memory_scaling) |
+| Scratch backing | The spilled part of the trade ledger, the command journals, the order book, the id tables, the report chain and the default script store for Pine maps. Without an arena these are unlinked files in a writable, disk-backed directory (`TMPDIR`, else `/tmp`; a tmpfs is refused). In the jailed profile they live in the inherited arena (descriptor 5, a sealed memfd), which the host charges as memory | The run's own counts (including bars, closed trades, distinct ids, successor rows and map entries) |
 | Input bars | The OHLCV arrays. The engine borrows them and copies nothing; they must outlive the run. `docker/run_json.py` maps a binary bars file privately, copy-on-write, so touched pages count toward its resident size | Input bars N |
 
 The jailed/no-sink stdout route, J0, keeps the legacy result behavior: a FULL
 result may retain `O(T)` closed-trade rows and its FULL report projection is `O(T)` heap. With a report sink and a script that never reads closed-trade history by index, closed trades below the published base are not retained in the arena or scratch file beyond the newest retired index and payload bytes per file, fewer than 4,096 bytes (about 24 trade descriptors); disk scratch is anonymous, unlinked and never reopened, while hosted arena bytes stay in the run-owned chunk until the run ends, and the bytes are released when the ledger is cleared or destroyed;
 otherwise full history is kept (O(T)). Retirement requires the optional compiled-module symbol `strategy_reads_trade_history()` to return zero and the existing streamable policy; a missing or nonzero symbol keeps full history. A below-base read on a retiring run refuses with `engine_invariant`.
 
+After the last result read, call `BacktestEngine::release_run_results()` in C++
+or `strategy_release_run_results_v1()` in C to close the run's ledger, report,
+and native journal scratch while keeping the handle. The closed trade count
+stays available. Trade row, report, and journal reads refuse until the next
+begin. Read or finalize the report first if you need the sink's output.
+
 ## Report memory: resident buffers, disk and the jailed arena {#memory_sink}
 
 Default C/C++ and Python callers without a report sink keep the native equity
 curve on the heap: **24 B per script bar plus vector spare capacity**
 (`pf_equity_point_t` include/pineforge/pineforge.h:326-330;
-`equity_curve_` include/pineforge/engine.hpp:772).
+`equity_curve_` include/pineforge/engine.hpp:774).
 Building the default FULL report then adds an owning **24 B per script bar**
-copy (`equity_curve` src/engine_report.cpp:790-793).
+copy (`equity_curve` src/engine_report.cpp:792-795).
 
 On the default sink route, the engine releases the resident vector and installs
-a scratch writer (`equity_curve_` src/engine_report.cpp:1553-1563), keeping an editable
+a scratch writer (`equity_curve_` src/engine_report.cpp:1569-1579), keeping an editable
 tail for reporting (`fill_report_sink_metrics_section`
-src/engine_report.cpp:1814-1828).
+src/engine_report.cpp:1830-1844).
 The writer batches **2,730 points of 24 B**, within a **64 KiB** window
 (`kScratchWindowPoints` src/report_scratch.hpp:20-22;
 `ScratchCurveWriter::State` src/report_scratch.cpp:160-168).
 Metrics re-read scratch through 24-byte point-cache lines plus one fixed 65,520-byte block workspace, included in `cache_control_bytes()`
-(`compute_report_sink_metrics` src/engine_report.cpp:1791-1812;
+(`compute_report_sink_metrics` src/engine_report.cpp:1807-1828;
 `ScratchCurveWindow::State` src/report_scratch.cpp:278-334); backing misses adjacent to the previous lookup fill aligned blocks of up to 2,730 points; other backing misses and bypasses read one point.
 This bounds resident equity-report buffers; the scratch backing and output
 still grow with the run. The replay needs no descriptor of its own in a jailed run (the arena's inherited descriptor serves it) and exactly one transient anonymous file otherwise; a run leaves the process's descriptor count as it found it.
@@ -67,9 +73,14 @@ is set), the same choice is `--report-sink PATH` (a file) or
 report carries `NULL` trades and equity curve and the totals in its summary;
 read the records from the sink. See [Report schema](@ref report_schema).
 
+For a path sink, require successful report capture and a completed engine
+receipt before accepting the file. A failed final sync leaves the receipt
+incomplete and the writer tries to truncate the file to its last data record
+(`write_trailer` at `src/report_sink_writer.cpp:652`).
+
 The default **unjailed** `run_json` route, with a sink-capable module,
 installs a temporary path sink (`_new_report_sink`
-docker/run_json.py:6166-6206; `_ReportSink` docker/run_json.py:6790-6842).
+docker/run_json.py:6186; `_ReportSink` docker/run_json.py:6810).
 The full equity curve is **not resident**: with disk scratch and no arena
 attached, its resident equity-curve buffers are **O(1) in bars**.
 Binary curve scratch on **disk** still costs **24 B per script bar**
@@ -77,16 +88,16 @@ Binary curve scratch on **disk** still costs **24 B per script bar**
 **6 MiB at 262,144 bars** and **48 MiB at 2,097,152 bars**, calculated payload
 sizes excluding other scratch and output.
 The sink's `E` output and the default route's JSON artifact also grow with
-the bar count: `_build_sink_report` docker/run_json.py:8194-8291 supplies lazy
-record arrays, and `_prepare_stream_report` docker/run_json.py:8051-8073
+the bar count: `_build_sink_report` docker/run_json.py:8214 supplies lazy
+record arrays, and `_prepare_stream_report` docker/run_json.py:8071
 serializes them to a temporary artifact. The final artifact's aligned I/O
-window is fixed at **1 MiB** (`report_window` docker/run_json.py:7665;
-`_json_temporary` docker/run_json.py:8055-8056).
+window is fixed at **1 MiB** (`report_window` docker/run_json.py:7685;
+`_json_temporary` docker/run_json.py:8075-8076).
 Columns and spools select **1 MiB** or **64 KiB** windows from the per-run
 budget below; the sink reader keeps its **64 KiB** window
-(`_BoundedJSONFile.window` docker/run_json.py:7371;
-`_UncachedSinkFile` docker/run_json.py:7580-7582;
-`_JSONColumn` docker/run_json.py:7692-7700).
+(`_BoundedJSONFile.window` docker/run_json.py:7391;
+`_UncachedSinkFile` docker/run_json.py:7600-7602;
+`_JSONColumn` docker/run_json.py:7712).
 Lazy serialization bounds buffers, not output bytes.
 Python artifact windows share the per-run default budget
 `_ARTIFACT_WINDOW_BUDGET_BYTES = 6 * 1024 * 1024` (**6 MiB**).
@@ -118,10 +129,10 @@ Whenever a scratch arena is attached (a **jailed run with `--report-sink-fd`**
 always, and any other run that inherits one), curve scratch instead consumes
 the **RAM-backed arena**, so those same **24 B per script bar are memory**.
 The fd setter attaches the arena (`attach_from_environment`
-src/engine_report.cpp:1411), and `ScratchFile::open`
+src/engine_report.cpp:1427), and `ScratchFile::open`
 include/pineforge/detail/scratch_file.hpp:370-378 selects it.
 Linux jailed admission requires sealed memfd backing
-(`strategy_require_report_scratch_arena_v1` src/c_abi.cpp:1521-1540).
+(`strategy_require_report_scratch_arena_v1` src/c_abi.cpp:1548).
 The hosting wrapper supplies `PF_SCRATCH_ARENA_BYTES`
 src/scratch_arena.cpp:400-401.
 The engine never resizes that backing (the sizing comment above `ScratchArena`
@@ -137,7 +148,7 @@ There is no RAM fallback (the comment on `ScratchFile`
 include/pineforge/detail/scratch_file.hpp:173-179).
 
 A **jailed run without `--report-sink-fd` has no sink at all**:
-`_new_report_sink` docker/run_json.py:6166-6187 returns `None`, so it retains
+`_new_report_sink` docker/run_json.py:6186-6207 returns `None`, so it retains
 the native curve and owning FULL report copy described above. It also builds
 the whole report text in memory before writing stdout, and that text is the
 largest per-bar term of this route. It is held as UTF-8 bytes: about one byte
@@ -224,8 +235,8 @@ public-report path, its whole-report read at every input and, under
 `--native-config`, the kernel's whole event record; the engine's closed trades
 (`trades_`: a fixed window and cache in memory, older rows in the engine's
 scratch files) and, with broker-state hash recording on, one 8-byte hash per
-script bar (`broker_state_hashes_` include/pineforge/engine.hpp:781, appended
-at `broker_state_hashes_` src/native_execution_consumer.cpp:9735 and not
+script bar (`broker_state_hashes_` include/pineforge/engine.hpp:783, appended
+at `broker_state_hashes_` src/native_execution_consumer.cpp:9850 and not
 released on this route); the selected,
 sink and whole-array routes, which first put the curve back in the engine; a
 ledger on a memory filesystem, where under `window` the curve scratch is refused and the
@@ -270,22 +281,22 @@ same: each cumulative line repeats every row so far, and the default exact
 ratios walk the whole curve at every input.
 
 For the plain `.bin` input route the input file is mapped, 48 B per bar of file
-payload (`_map_bar_file` docker/run_json.py:2802-2825), and the touched pages
+payload (`_map_bar_file` docker/run_json.py:2821), and the touched pages
 count toward resident size as the run reads them. A read of the source sites
-in `load_bars_bin` (docker/run_json.py:2896-2928) finds no further per-bar copy of the chart, but
+in `load_bars_bin` (docker/run_json.py:2915) finds no further per-bar copy of the chart, but
 this page publishes no measured figure for the route and does not give the
 reading as a bound; the sink and arena paragraphs above govern the report
 bytes.
 
 The sink-off jailed route buffers the whole report text before writing to
 stdout, so a serialization error publishes no partial report
-(`_prepare_report_json`, `docker/run_json.py:8076`; publication in
-`_write_report`, `docker/run_json.py:4927`). Its UTF-8 byte buffer uses about
+(`_prepare_report_json`, `docker/run_json.py:8096`; publication in
+`_write_report`, `docker/run_json.py:4940`). Its UTF-8 byte buffer uses about
 one byte of resident text per output byte, plus bounded encoding and
 read-back buffers, on top of the input mapping and the engine's storage:
 this is `O(output)` memory for the report the caller requested. Passing
 `--report-sink-fd` selects the fd sink before the jailed no-sink fallback
-(`_new_report_sink`, `docker/run_json.py:6166`), avoiding the full report-text
+(`_new_report_sink`, `docker/run_json.py:6186`), avoiding the full report-text
 buffer; stdout then buffers only the bounded summary.
 
 ## The report-sink descriptor: what a caller passes and what it gets {#memory_sink_fd}
@@ -295,7 +306,7 @@ report from an inherited descriptor instead of a file. It states what the engine
 statement the tree does not settle says so.
 
 **Which image has it.** The environment variable `PINEFORGE_REPORT_SINK_FD` is read by the release
-entrypoint only from engine 1.8.0 on (`docker/entrypoint.sh:875`).
+entrypoint only from engine 1.8.0 on (`docker/entrypoint.sh:892`).
 On a 1.7.0 image the entrypoint forwards no sink descriptor (the v1.7.0 `docker/entrypoint.sh` has no
 such line): the variable is ignored without an error and the run produces its report as it does without
 the variable. The flag
@@ -306,19 +317,24 @@ passes every argument that is not `hpo` to `/opt/pineforge/bin/entrypoint.sh`, t
 decides it is `grep -c REPORT_SINK_FD /opt/pineforge/bin/entrypoint.sh` (0 on 1.7.0, 1 from 1.8.0), or
 the sha256 of that file against the release's `HARNESS-SHA256SUMS`. After a run, a descriptor that
 received no header line, with the trade and equity arrays on stdout, means the variable was ignored.
-`run_json.py --capabilities-json` (`_capabilities_main` at `docker/run_json.py:5004`) carries no
+`run_json.py --capabilities-json` (`_capabilities_main` at `docker/run_json.py:5017`) carries no
 report-sink key, so it is not a probe.
+
+The historical grep counts above do not identify newer builds: the build manifest also
+mentions the variable (`docker/entrypoint.sh:245`). On those builds, check that the
+entrypoint actually passes `--report-sink-fd` (`docker/entrypoint.sh:892`), or compare
+the installed file with the release checksum.
 
 **What the caller passes.** A descriptor number N, open for writing in the process that executes the
 entrypoint: a FIFO or an `AF_UNIX` stream socket. N is from 3 through `INT_MAX` and is not 5. A request
 that breaks any rule below fails at argument validation, before any bar is read, as one failure line on
 stdout with code `run_request_invalid` and exit status 2 (`_validate_sink_options` at
-`docker/run_json.py:6120-6163`):
+`docker/run_json.py:6140`):
 
 | Refused | Why |
 | --- | --- |
 | N below 3 or above `INT_MAX` | outside the range |
-| a value that is not an integer, an empty string included | the option is an integer option (`--report-sink-fd` at `docker/run_json.py:5548`), so the argument parser refuses it with the same code and exit status |
+| a value that is not an integer, an empty string included | the option is an integer option (`--report-sink-fd` at `docker/run_json.py:5562`), so the argument parser refuses it with the same code and exit status |
 | N = 5 | the engine's scratch arena owns descriptor 5 (`PF_SCRATCH_ARENA_FD`) |
 | together with `--report-sink PATH` | the file sink and the descriptor sink are exclusive |
 | together with `--bench` or `--validate-window-only` | the descriptor carries one run's stream |
@@ -336,7 +352,7 @@ number: in particular 6 is not reserved. A host that gives 6 to its own sink and
 it.
 
 **Route.** The descriptor sink is chosen before the jailed check, so a jailed run that is given the
-descriptor uses it (`_new_report_sink` at `docker/run_json.py:6166-6187`). A strategy library without the five descriptor-sink
+descriptor uses it (`_new_report_sink` at `docker/run_json.py:6186-6207`). A strategy library without the five descriptor-sink
 symbols fails with the typed `symbol_missing` reason (same lines).
 
 **What is written to the descriptor.** The `pf-report-sink/v1` stream described in [Report
@@ -346,7 +362,7 @@ the `O`, `V`, `K`, `X` and `H` records, then one trailer line
 `{"trailer":"pf-report-sink","version":1,"counts":{...},"sha256":"..."}`. The sha256 covers the header
 and every data line with its LF, not the trailer. The writer and the header are byte-identical in v1.7.0
 and at main. `run_json.py` closes the descriptor after the run through the `close` method of `_InheritedSinkFd`
-(`docker/run_json.py:6209-6223`), so a reader sees EOF.
+(`docker/run_json.py:6229-6243`), so a reader sees EOF.
 
 **What stdout carries.** Only the bounded summary document: about 9 KB in the measured runs (9,274 bytes
 at 2 M bars), with no trade or equity array. Do not use it to verify the stream: the stdout summary of a
@@ -354,8 +370,8 @@ measured jailed descriptor run carried no sha256 of the stream, so a caller has 
 the trailer against.
 
 The process entry reserves the caller's original stdout as a private report descriptor before argument parsing or
-strategy loading (`_ReportOutput` at `docker/run_json.py:8540`; `_host_main` at
-`docker/run_json.py:8745`). It redirects native fd 1 to fd 2, and writes the summary and every typed
+strategy loading (`_ReportOutput` at `docker/run_json.py:8560`; `_host_main` at
+`docker/run_json.py:8765`). It redirects native fd 1 to fd 2, and writes the summary and every typed
 failure through the saved descriptor. The native stream N stays on the descriptor supplied by the caller.
 Isolation holds only when the harness keeps stdout and stderr separate. If they name the same file
 (for example, with `2>&1`), the host writes one stderr line,
@@ -363,15 +379,15 @@ Isolation holds only when the harness keeps stdout and stderr separate. If they 
 publication through the saved descriptor.
 The host refuses a report descriptor that shares a number or open file with N, the phase descriptor, or
 arena fd 5, using `run_request_invalid` (`_validate_report_fd_separation` at
-`docker/run_json.py:8707`). The library can write the saved descriptor because it runs in this process.
+`docker/run_json.py:8727`). The library can write the saved descriptor because it runs in this process.
 The descriptor is non-inheritable, so exec'd children do not get it. Code that deliberately writes
 through that file description can still affect the report. This transport arrangement isolates
 ordinary native fd 1 output when the streams stay separate; it is not a security boundary.
 
 Imported library calls write reports and failures to the current Python stdout without reserving or
-redirecting descriptors (`_report_output` at `docker/run_json.py:8662`). Each call to the library entry
+redirecting descriptors (`_report_output` at `docker/run_json.py:8682`). Each call to the library entry
 gets its own publication guard, so repeated runs remain independent (`_LibraryReportRun` at
-`docker/run_json.py:8519`).
+`docker/run_json.py:8539`).
 
 **When the report is complete.** The verified trailer is the completion marker, and EOF alone is not.
 Read every record as provisional until the trailer's counts and sha256 equal what the reader counted and
@@ -389,16 +405,16 @@ trailer, 7 internal error, 8 `sink_exhausted` (the stream exceeds `--max-bytes`;
 `sink_exhausted` at `docker/pineforge_sink_finalize.py:115-123`). Its output is provisional until
 exit 0, and a consumer must discard everything it received on exit 3 to 8 (`PROVISIONAL` at
 `docker/pineforge_sink_finalize.py:24-26`). The failure catalog maps exit 8 to `report_sink_failed`
-with `reason` `sink_exhausted` (`sink_exhausted` at `docker/run_failure_codes.json:1193`). A sink failure carries code `report_sink_failed` and a `reason`
-from the closed list of the catalog (`report_sink_failed` at `docker/run_failure_codes.json:1161`):
+with `reason` `sink_exhausted` (`sink_exhausted` at `docker/run_failure_codes.json:1194`). A sink failure carries code `report_sink_failed` and a `reason`
+from the closed list of the catalog (`report_sink_failed` at `docker/run_failure_codes.json:1162`):
 `arena_exhausted`, `arena_io`, `arena_backing`, `scratch_io`, `sink_io`, `sink_peer_closed` and
 `sink_exhausted`. Only some reasons carry sizes: `arena_exhausted` carries `high_water_bytes`,
 `arena_bytes`, `claimed_bytes`, `store` and `needed_bytes_lower_bound`, `sink_exhausted` carries
 `sink_bytes` and `cap_bytes`, and every other reason carries `reason` alone, a closed reader included.
 A write error while `run_json.py` prepares the report in scratch is raised as `RunFailure` with
-`scratch_io` (`docker/run_json.py:8067-8068`); it is not a write to the descriptor. `sink_peer_closed` is also raised when the descriptor setup itself
+`scratch_io` (`docker/run_json.py:8087-8088`); it is not a write to the descriptor. `sink_peer_closed` is also raised when the descriptor setup itself
 finds a closed peer (`EPIPE`, `ECONNRESET` or `ENOTCONN`, with the message "report sink fd setup
-failed"; `RunFailure` at `docker/run_json.py:2199-2202`). The descriptor then holds records without a
+failed"; `RunFailure` at `docker/run_json.py:6269-6272`). The descriptor then holds records without a
 verified trailer, and a caller treats it as absent. The engine writer loops a short write to completion,
 retries `EINTR` and fails on a zero-byte write with `EIO`. On a nonblocking descriptor it waits with
 `poll` on `EAGAIN`, and a closed peer shows as `POLLERR` or `POLLHUP` (`wait_writable` at
@@ -421,11 +437,13 @@ to EOF got exit status 0 and a complete verified trailer.
 | `PF_SCRATCH_ARENA_FD`, `PF_SCRATCH_ARENA_BYTES` | environment | none | The inherited arena: descriptor 5 (only 5 is accepted) and its size in bytes, in whole 1 MiB chunks (under 1 MiB is refused). A run that crosses it fails with `report_sink_failed`, reason `arena_exhausted`, and the failure carries a lower bound of the bytes needed |
 | `PF_SCRATCH_WINDOW_BYTES` | environment | 32 MiB | Total cap on the arena bytes mapped at one time, rounded down to whole pages. Mapped pages count toward the resident size while mapped |
 | `pf_scratch_tables_v1` through `strategy_set_scratch_tables_v1` | descriptor of eleven maxima | disk tables; with `bounded_memory`, the policy values of [Scratch tables](@ref scratch_tables) | Sizes the fixed slab of the historical tables: `K_e`, `B_e`, `K_c`, `B_c`, `U`, `B_U`, `V`, `B_V`, `R` and the unused q pair. Exceeding a maximum fails the run with `scratch_capacity_exceeded` |
+| `strategy_set_scratch_live_order_ids_limit_v1` | active IDs, `uint64_t` | 0 (no separate limit) | Optional maximum on live cohort IDs in bounded scratch. The jailed runner accepts `--limit-live-order-ids` (`docker/run_json.py:5623`). The limit does not resize the historical slab |
+| `--limit-ta-lookback N` or `PINEFORGE_LIMIT_TA_LOOKBACK` | maximum bars back for series-length TA; captured at strategy creation (`pf_ta_lookback_limit_set_checked`, `include/pineforge/pineforge.h:2325`) | unlimited; `--tv-compat` selects 15,000 if neither is supplied | History grows with observations. A positive N allows a window of N + 1; a longer request fails with `pine_runtime_limit`. The flag overrides the environment, including when set to zero for unlimited history (`docker/run_json.py:9647`). This bounds the lookback, not process memory |
 | A report sink (`strategy_set_report_sink_v1`, `strategy_set_report_sink_fd_v1`) | setter | none | Streams the trades and the equity curve to the sink instead of keeping them in the report. See [Report schema](@ref report_schema) |
-| `--spill-dir DIR` | `docker/run_json.py` flag (`docker/run_json.py:5559`), available only when `run_json.py` is invoked directly: the release entrypoint forwards no command-line flags | the system temporary directory, then `/var/tmp` if disk backing is required | The writable directory for engine scratch and unlinked report temporaries when no arena is attached. The jailed profile refuses it |
-| `--profile jailed` or `PINEFORGE_RUN_JSON_PROFILE=jailed` | `docker/run_json.py` flag or environment (`docker/run_json.py:5597,5474`); the release entrypoint forwards the environment form only | `unjailed` | Selects the bounded-memory table backend and the inherited arena for the Python host. It is the scratch profile of the engine run, not a read-only container: the entrypoint itself still compiles in `${TMPDIR:-/tmp}`. Every executed success report carries `diagnostics.run_profile` (`"jailed"` or `"unjailed"`) and `diagnostics.scratch_arena_jailed` (true only when the jailed profile ran and the arena admission succeeded; `_add_scratch_arena_diagnostics` at `docker/run_json.py:6046-6051`); the marker records the checked profile and the admission, not an independent check of operating-system confinement |
-| `PINEFORGE_REPORT_SINK_FD` | environment, read by the release entrypoint (`PINEFORGE_REPORT_SINK_FD` at `docker/entrypoint.sh:875`) | unset | When set, the entrypoint passes `--report-sink-fd <value>` to `run_json.py`, so the report records stream to that inherited descriptor. `run_json.py` validates the value: a descriptor number from 3 through `INT_MAX`, not 5, not combined with `--report-sink`, not in a benchmark run (`PINEFORGE_BENCH`), not in a validate-only run and not the same number as `--run-phase-fd` (`_validate_sink_options` at `docker/run_json.py:6120-6163`); a refusal is a `run_request_invalid` failure with exit status 2. Unset, nothing changes |
-| `pf_cache_policy_v1` through `strategy_set_cache_policy_v1` | optional bytes per supported cache kind, per handle | internal defaults (next section) | Chooses optional resident cache sizes. Omitted kinds use defaults; explicit zero bypasses caching. Nonzero ledger bytes must convert to 1–1,048,576 decoded entries; other kinds bypass below one line. A cold read uses backing. Settings freeze at run admission; an idle replacement affects the next run. A standalone C++ ledger also accepts an optional row budget through its constructor or `TradeLedger::set_cache_rows`, including zero to bypass. An omitted ledger setting keeps the engine's provisional default byte cap of 67,108,864 (64 MiB, unmeasured), which holds 215,070 ledger entries with or without a report sink (`CacheDefaults::apply_ledger_cache`, `include/pineforge/cache_policy.hpp:119-124`); run begin applies it (`apply_ledger_cache`, `src/native_execution_consumer.cpp:3360`) |
+| `--spill-dir DIR` | `docker/run_json.py` flag (`docker/run_json.py:5573`), available only when `run_json.py` is invoked directly: the release entrypoint forwards no command-line flags | the system temporary directory, then `/var/tmp` if disk backing is required | The writable directory for engine scratch and unlinked report temporaries when no arena is attached. The jailed profile refuses it |
+| `--profile jailed` or `PINEFORGE_RUN_JSON_PROFILE=jailed` | `docker/run_json.py` flag (`docker/run_json.py:5611`) or environment (`environment_profile` at `docker/run_json.py:5488`); the release entrypoint forwards the environment form only | `unjailed` | Selects the bounded-memory table backend and the inherited arena for the Python host. It is the scratch profile of the engine run, not a read-only container: the entrypoint itself still compiles in `${TMPDIR:-/tmp}`. Every executed success report carries `diagnostics.run_profile` (`"jailed"` or `"unjailed"`) and `diagnostics.scratch_arena_jailed` (true only when the jailed profile ran and the arena admission succeeded; `_add_scratch_arena_diagnostics` at `docker/run_json.py:6066-6071`); the marker records the checked profile and the admission, not an independent check of operating-system confinement |
+| `PINEFORGE_REPORT_SINK_FD` | environment, read by the release entrypoint (`PINEFORGE_REPORT_SINK_FD` at `docker/entrypoint.sh:892`) | unset | When set, the entrypoint passes `--report-sink-fd <value>` to `run_json.py`, so the report records stream to that inherited descriptor. `run_json.py` validates the value: a descriptor number from 3 through `INT_MAX`, not 5, not combined with `--report-sink`, not in a benchmark run (`PINEFORGE_BENCH`), not in a validate-only run and not the same number as `--run-phase-fd` (`_validate_sink_options` at `docker/run_json.py:6140`); a refusal is a `run_request_invalid` failure with exit status 2. Unset, nothing changes |
+| `pf_cache_policy_v1` through `strategy_set_cache_policy_v1` | optional bytes per supported cache kind, per handle | internal defaults (next section) | Chooses optional resident cache sizes. Omitted kinds use defaults; explicit zero bypasses caching. Nonzero ledger bytes must convert to 1–1,048,576 decoded entries; other kinds bypass below one line. A cold read uses backing. Settings freeze at run admission; an idle replacement affects the next run. A standalone C++ ledger also accepts an optional row budget through its constructor or `TradeLedger::set_cache_rows`, including zero to bypass. An omitted ledger setting keeps the engine's provisional default byte cap of 67,108,864 (64 MiB, unmeasured), which holds 215,070 ledger entries with or without a report sink (`CacheDefaults::apply_ledger_cache`, `include/pineforge/cache_policy.hpp:119-124`); run begin applies it (`apply_ledger_cache`, `src/native_execution_consumer.cpp:3415`) |
 | Calendar projection and recorded-tape pages | C++ overloads | 256 KiB per calendar column and per recorded tape | Selects optional resident payload and complete shared read-through-cache metadata, allocated lazily; zero, sub-page sizes and optional allocation failures read from the provider through bypass. Production projections up to one transfer page stay in memory; larger projections use the report-sink scratch directory or its default. Each active read has a separate fixed transfer page. Logical rows and raw-array ownership are unchanged; see [Feed projection readers](../feed-projections.md) |
 | Resident event and row limits of the command journal and order book | implementation constants | fixed constants (next section) | The optional cache policy does not resize these fixed workspaces or cap retained history. The journal's resident-event threshold and the book's resident-row limit remain fixed |
 | `PF_SCRATCH_ARENA_JAILED` | environment, exactly `1` or `0` | unset | Read with the arena variables by `ScratchArena::attach_from_environment` (declared at `include/pineforge/detail/scratch_arena.hpp:142`, defined in `src/scratch_arena.cpp`). `1` additionally requires the attached arena to be a sealed memfd at attachment, else the attach fails with `EINVAL`; `0` or unset adds no requirement (a direct attach may then use ordinary files); any other value fails with `EINVAL`. The separate admission call `strategy_require_report_scratch_arena_v1` requires a sealed memfd on Linux whatever this variable says (stated in the comment on the `ScratchArena` class in `include/pineforge/detail/scratch_arena.hpp`; see [Scratch tables](@ref scratch_tables)) |
@@ -440,16 +458,17 @@ in backing.
 | Store | Resident bound | Bytes per entry | Spills to scratch |
 | --- | --- | --- | --- |
 | Trade ledger (`TradeLedger`), descriptor window | 64 rows (`kResidentRows`, `include/pineforge/trade_ledger.hpp:48`), and a fixed payload tail of the same size | 168 B per row descriptor (`kRecordBytes`), so 10,752 B for the rows and 10,752 B for the tail; the four strings of a row are variable | Retiring sink runs erase published rows and return complete head chunks, keeping at most one head chunk per extent plus the unsealed suffix; each head retains fewer than 4,096 B of the newest retired index and payload bytes per file (about 24 trade descriptors) until the next zero-fill block completes or the chunk holding them is returned; other runs retain 168 B plus text per closed trade |
-| Trade ledger, read cache | Default cap: a provisional byte cap of 67,108,864 (`kDefaultLedgerCacheMaxBytes`, 64 MiB, not measurement-selected), which holds 215,070 occupied entries (840 full 256-slot pages and a clipped page of 30) with or without a report sink; an explicit row setting selects the finite row route instead (`kSinkCacheRows = kDefaultCacheRows` is its 65,536-entry legacy geometry; the row-setting ceiling `kMaxCacheRows` is 1,048,576). The ledger cap is policy-controlled: frozen host bytes for `PF_CACHE_KIND_LEDGER_CACHE` select the largest row count R with `R*kLedgerEntryBytes + ceil(R/256)*sizeof(void*) <= capacity_bytes`, including the private page directory. The host and standalone byte setters share `TradeLedger::cache_rows_for_capacity` (`include/pineforge/trade_ledger.hpp:80`); run begin applies the frozen policy through `CacheDefaults::apply_ledger_cache` (`src/native_execution_consumer.cpp:3360`), which gives an omitted setting `TradeLedger::set_ledger_cache_max_bytes` and an explicit one `TradeLedger::set_cache_rows` (`include/pineforge/cache_policy.hpp:119-124`). Zero bypasses; for an explicit host setting, nonzero values below one entry plus one pointer and values converting above the row ceiling are typed setting errors. Storage is private. While the ledger holds at most `cap` rows, row `n` owns slot `n` (one way), so the pages follow the rows (25,000 rows hold 98 pages, 7.8 MB, not the cap); once it holds more, a global ordinal chooses one four-way set (`global % ceil(cap/4)`, the last set partial when the cap is not a multiple of four) and a full set replaces the way touched longest ago. The change from one placement to the other, an append past `cap` or a rewind back to `cap` rows or fewer, drops every cached row and keeps the allocated pages. The first read creates `ceil(cap/256)` owning pointers, and the first touch of page `p` allocates `min(256,cap-256*p)` slots (`TradeLedger::cache_resident_bytes`, `include/pineforge/trade_ledger.hpp:166-172`). Page growth preserves entries through every page boundary (every 256 rows within the cap). Writes publish to backing before an optional cache fill. Retirement and a rewind invalidate every hot entry and release every optional page (the directory stays); the retained rows allocate their pages again by first touch, so allocated slots never exceed the cap. A directory or page allocation failure bypasses the cache: an explicit row setting stays bypassed for that ledger, while the byte default retries once the retained population has doubled since the failed attempt; reads, appends and replacements continue through backing. A copy of a ledger starts with a cold cache; a move hands over the whole cache, so the target is as hot as the source was and the source is left empty and cold with its declared policy | 312 B per slot (`kLedgerEntryBytes`: 168 B record, 16 B key and generation, 128 inline string bytes); up to 79,872 B per page, with the last page clipped to the cap. The charge `resident_cache_bytes(cap)` is `sizeof(TradeLedger)+sizeof(State)+cap*312+ceil(cap/256)*sizeof(void*)`: the default optional allowance is 67,108,864 B on LP64, of which the 215,070-entry default charges 67,108,568 B, comprising 67,101,840 entry bytes plus 6,728 table bytes (841 pointers); an explicit 65,536-entry cap charges 20,449,280 B, comprising 20,447,232 entry bytes plus 2,048 table bytes. The fixed base is separate. `cache_resident_bytes()` reports the fixed base, allocated directory and allocated pages once in cache resident bytes. The base includes the descriptor window, payload tail and zero-row read workspace; allocator overhead, returned owning Trades and explicit legacy materialization are excluded. Accounted allocation never exceeds the charge. The cap is independent of trade and bar counts | Not applicable (a cache over the retained rows) |
-| Command journal | 2,048 events (`JournalStore::kMaxResident`, `src/native_order.cpp:1806`), in 32-event chunks (`kChunk`); spilling stops once the resident count is at most 128 (`kKeepResident`, a stopping threshold rather than a floor) | Not a constant: an event is a variant with variable payload and `sizeof` of a resident slot is not stated in the source and was not compiled. Plus one lazy 163,840 B spill buffer per journal: a 32,768 B write buffer and four 32,768 B reload buffers (`SpillStorage`) | Older events, in pages of 32,768 B (`kSpillPageBytes`, `src/native_order.cpp:1827`) read back through four decoded page slots. An event whose serialized form exceeds one page is refused with `EFBIG` (about 1,360 external openings) and stays resident |
+| Trade ledger, percentage averages | One set of sums and counts for each of three row prefixes: the sealed rows, the rows before the descriptor window, and all closed rows | Three fixed folds and one row ordinal in `sizeof(State)` | Reads use the complete fold without reading rows. Rewinds and changes to the percent or profit sign of older rows may replay descriptors from the sealed prefix to preserve the original order of addition. |
+| Trade ledger, read cache | Default cap: a provisional byte cap of 67,108,864 (`kDefaultLedgerCacheMaxBytes`, 64 MiB, not measurement-selected), which holds 215,070 occupied entries (840 full 256-slot pages and a clipped page of 30) with or without a report sink; an explicit row setting selects the finite row route instead (`kSinkCacheRows = kDefaultCacheRows` is its 65,536-entry legacy geometry; the row-setting ceiling `kMaxCacheRows` is 1,048,576). The ledger cap is policy-controlled: frozen host bytes for `PF_CACHE_KIND_LEDGER_CACHE` select the largest row count R with `R*kLedgerEntryBytes + ceil(R/256)*sizeof(void*) <= capacity_bytes`, including the private page directory. The host and standalone byte setters share `TradeLedger::cache_rows_for_capacity` (`include/pineforge/trade_ledger.hpp:80`); run begin applies the frozen policy through `CacheDefaults::apply_ledger_cache` (`src/native_execution_consumer.cpp:3415`), which gives an omitted setting `TradeLedger::set_ledger_cache_max_bytes` and an explicit one `TradeLedger::set_cache_rows` (`include/pineforge/cache_policy.hpp:119-124`). Zero bypasses; for an explicit host setting, nonzero values below one entry plus one pointer and values converting above the row ceiling are typed setting errors. Storage is private. While the ledger holds at most `cap` rows, row `n` owns slot `n` (one way), so the pages follow the rows (25,000 rows hold 98 pages, 7.8 MB, not the cap); once it holds more, a global ordinal chooses one four-way set (`global % ceil(cap/4)`, the last set partial when the cap is not a multiple of four) and a full set replaces the way touched longest ago. The change from one placement to the other, an append past `cap` or a rewind back to `cap` rows or fewer, drops every cached row and keeps the allocated pages. The first read creates `ceil(cap/256)` owning pointers, and the first touch of page `p` allocates `min(256,cap-256*p)` slots (`TradeLedger::cache_resident_bytes`, `include/pineforge/trade_ledger.hpp:166-172`). Page growth preserves entries through every page boundary (every 256 rows within the cap). Writes publish to backing before an optional cache fill. Retirement and a rewind invalidate every hot entry and release every optional page (the directory stays); the retained rows allocate their pages again by first touch, so allocated slots never exceed the cap. A directory or page allocation failure bypasses the cache: an explicit row setting stays bypassed for that ledger, while the byte default retries once the retained population has doubled since the failed attempt; reads, appends and replacements continue through backing. A copy of a ledger starts with a cold cache; a move hands over the whole cache, so the target is as hot as the source was and the source is left empty and cold with its declared policy | 312 B per slot (`kLedgerEntryBytes`: 168 B record, 16 B key and generation, 128 inline string bytes); up to 79,872 B per page, with the last page clipped to the cap. The charge `resident_cache_bytes(cap)` is `sizeof(TradeLedger)+sizeof(State)+cap*312+ceil(cap/256)*sizeof(void*)`: the default optional allowance is 67,108,864 B on LP64, of which the 215,070-entry default charges 67,108,568 B, comprising 67,101,840 entry bytes plus 6,728 table bytes (841 pointers); an explicit 65,536-entry cap charges 20,449,280 B, comprising 20,447,232 entry bytes plus 2,048 table bytes. The fixed base is separate. `cache_resident_bytes()` reports the fixed base, allocated directory and allocated pages once in cache resident bytes. The base includes the descriptor window, payload tail and zero-row read workspace; allocator overhead, returned owning Trades and explicit legacy materialization are excluded. Accounted allocation never exceeds the charge. The cap is independent of trade and bar counts | Not applicable (a cache over the retained rows) |
+| Command journal | 2,048 events (`JournalStore::kMaxResident`, `src/native_order.cpp:1897`), in 32-event chunks (`kChunk`). Spilling stops when the incoming events fit or the resident count is at most 128 (`kKeepResident`, a stopping threshold rather than a floor) | Events own variable-size payloads. One journal prepared to spill also holds 163,880 B of transfer buffers: one 32,776 B write buffer and four 32,776 B reload buffers (`SpillStorage`, `src/native_order.cpp:2001`). The four decoded page slots hold the full values, including a large event's strings and opening lists | Each transfer holds up to 32,768 B of event data (`kSpillPageBytes`, `src/native_order.cpp:1902`) followed by an 8 B seal. A larger event gets one directory entry and spans as many transfers as needed. The final seal covers the directory record and all preceding page bytes. The journal verifies the whole page before decoding; for a spanning event it also checks each transfer again as it decodes |
 | Order book | 4,096 rows | See the drain plateau below | Older rows |
 | Command-store resident prefix / read cache | Up to five 64 KiB payloads, each with at most 128 direct-mapped lines in `ReadThroughCache`. Default K is `5 * (65536 + 128 * (ReadThroughCache::line_bytes(512) - 512) + 2048)` bytes (`CachedScratchBacking::kCommandScratchMemoryBytes`, `src/command_scratch_cache.hpp`): the slab includes all shared tags, pins and replacement metadata; the 2 KiB allowance bounds each decorator's fixed control. For another representable build default C = `kCacheBytes`, the same bound is `K = 5 * (C + floor(C/512) * (ReadThroughCache::line_bytes(512) - 512) + 2048)`. Owners are trade, dependency, exit, lazy dormant book and lazy retained-sequence index. Pages larger than the selected payload (64 KiB by default) or smaller than 512 B bypass it | Independent of extent and bars. For internal payload capacity C and page size P, N = floor(C/P) and optional slab bytes are `C + N * (ReadThroughCache::line_bytes(P) - P)`; control bytes are separate. Capacities are `std::size_t` and page ids are 64-bit; no capacity-sized array enlarges the fixed object when the default is raised. Zero, sub-page or unrepresentable capacity bypasses. The host policy supplies independent inclusive allowances for the supported owners. Optional slab allocation failure selects direct backing I/O. The former 330 KiB K did not include the shared cache's larger metadata and no longer applies | Each disk store holds its prefix in the same slab until its extent exceeds the selected prefix capacity, then spills the prefix once and lends the slab to the shared read cache. Shared tags are constructed only after the entire prefix has landed. Failed spills retain the authoritative prefix for rollback and retry. Direct mode still charges logical extent against the same byte budget. Attached arenas retain direct mapped admission |
 | Id-table read caches | Defaults remain 192 KiB of page bytes **per adapter, not per engine** (`IdTableReadCache::kAdapterCacheBytes`, `include/pineforge/detail/id_table_read_cache.hpp`): the cohort AVL and exit-rank AVL use 64 KiB each, and erased minima and consumed cycles use 32 KiB each (data/index share one cache per pair store). Other instances default to zero capacity and allocate nothing. The detail constructors accept `IdTableReadCache::Policy{line_bytes, lines}`; defaults are 4 KiB lines and zero lines. Payload capacity is the product, independent of logical ids and backing extent. Typed `CacheCapacity` constructors and setup setters reserve the shared line metadata within the inclusive byte allowance and forward `Policy{4096, lines}`; zero and sub-line allowances bypass, and line counts are clipped only to representable allocation geometry. The existing byte-count constructors retain their 4 KiB alignment and 64 KiB ceiling. Each adapter uses the shared `ReadThroughCache` with direct mapping and immediate owner writes. Lazy optional-allocation failure takes the exact original backing read; a later logical read can retry allocation. Slab and arena paths bypass allocation and cache lookup, including unjailed regular-file arenas and inherited sealed memfds | The shared allocation is exactly `lines * ReadThroughCache::line_bytes(line_bytes)`, including payload, tags, pins and replacement metadata; the 192 KiB default names payload only. Add `sizeof(IdTableReadCache)` per instance (including the shared cache control), plus a 4 KiB stack transfer workspace per active read. Policies wider than 4 KiB also use one optional line-sized transfer allocation, separately counted; its allocation failure also reads directly. No separate private tags or payload cache remain, and no cache allocation grows with ids. One adapter owns each enabled cache; no sharing across threads. Every write reaches the file immediately; overlapping writes invalidate before I/O, appends invalidate from the old tail page onward, and index growth, clear, moves and backend changes invalidate all lines. Writes spanning more pages than the configured slots conservatively invalidate the following pages of that file too. These are configuration/layout bounds, not measurements | Not applicable (copy-in/copy-out reads over private disk files; formats and logical folds unchanged) |
-| Scratch files read through a bounded window | one 64 KiB window per file that enables it (`ScratchFile::kCacheBytes`, `include/pineforge/detail/scratch_file.hpp:176`) | Counted in bytes. It bounds the operating-system page cache the file pins (the kernel is asked to drop clean pages); it is not an engine heap cache | Not applicable |
+| Scratch files that request cache discards | 64 KiB of clean reads between discard requests (`ScratchFile::kCacheBytes`, `include/pineforge/detail/scratch_file.hpp:176`); writes use the configured batch size | On Linux the discard is advice to the operating system. It does not guarantee a limit on the pages in memory. The default map store does not request it | Not applicable |
 | Report sink writer | a fixed 64 KiB buffer; a record line may not exceed 1 MiB | Counted in bytes | The sink file or stream |
 | Position-tail read window | one fixed 64 KiB window | Counted in bytes | The position tail: a 30-byte footer plus the entry id per trade |
-| Cohort id table | Rows kept in memory: at most twice the rows left by the last spill pass, plus 64, plus the rows pinned by live exposure or an outstanding reference (the comment above `kMaxResidentCohorts` at `include/pineforge/detail/scratch_defaults.hpp:16`; the threshold is set in `DiskResidentIdTable::spill`, with the floor `kSpillFloor` of 64). That is not a bound in terms of live rows. In the bounded scratch (jailed) profile, admission also refuses a run that would hold more than 4,096 live (non-spillable) cohorts (`kMaxResidentCohorts`, `include/pineforge/detail/scratch_defaults.hpp:16`) with `scratch_capacity_exceeded`. The rows that hold an opening or live units are also tracked in an ordered set, one map node each. `DiskResidentIdTable::find` walks the disk AVL on every lookup, even for resident rows; those disk reads use the id-table page cache above. `exit_rank_keys_` is a separate plain `DiskIdTable`. The id-pair store's index file starts at 64 slots and doubles when it grows (`kInitialSlots` and `grow_index`, `include/pineforge/detail/id_pair_store.hpp`) | Not measured | The on-disk ordered tree |
-| Cohort roster (native working-request core, `cohorts_`) | One in-memory map node per cohort that holds a live origin: `WorkingRequestCore::cohort_add` inserts it and `cohort_remove` erases it with its last origin (`src/native_order.cpp`), and nothing checks the map's size. It is bounded by the strategy's open lots, like the open-trade list, not by bars or closed trades. No engine constant caps open lots in the default profile: `pyramiding` is the script's own input, it limits same-side entries only when above 0 and does not cap `strategy.order`, and the native `max_open_lots` is optional and left unset by the Pine projection (`src/source/pine_adapter.cpp`). Only the bounded scratch (jailed) profile caps the number of cohort rows, because it refuses a run that would hold more than 4,096 live cohorts (`kMaxResidentCohorts`, above) with `scratch_capacity_exceeded`; it does not cap the origins inside one cohort, so the roster still follows the strategy's open lots | 96 B per open lot with one origin (estimate: the map node plus one `RequestHandle`, allocator headers not counted), which is 393,216 B (384 KiB) for 4,096 cohorts of one origin each; every further origin of a cohort adds one `RequestHandle` and vector growth. Measured on one run, trades equal to a build without the counter: 268 open lots at 10,000 bars and 269 at 100,000 bars (25,824 B; that plateau is most likely that script's own sizing, not a cap), and at most 2 on a script that adds and closes one lot per bar (10,000 and 35,000 adds), so it does not follow the bar count or the closed-trade count; the row is freed on close | Does not spill |
+| Cohort id table | Rows kept in memory: at most twice the rows left by the last spill pass, plus 64, plus the rows pinned by live exposure or an outstanding reference (`DiskResidentIdTable::spill`, with the floor `kSpillFloor` of 64). That is not a bound in terms of live rows. A bounded scratch run refuses additional live (non-spillable) cohorts with `scratch_capacity_exceeded` if it exceeds the host's optional live-ID limit. The rows that hold an opening or live units are also tracked in an ordered set, one map node each. `DiskResidentIdTable::find` checks the resident directory first; misses use the AVL index, whose disk reads use the id-table page cache above. `exit_rank_keys_` is a separate plain `DiskIdTable`. The id-pair store's index file starts at 64 slots and doubles when it grows (`kInitialSlots` and `grow_index`, `include/pineforge/detail/id_pair_store.hpp`) | Not measured | The scratch-backed ordered tree |
+| Cohort roster (native working-request core, `cohorts_`) | One in-memory map node per cohort that holds a live origin: `WorkingRequestCore::cohort_add` inserts it and `cohort_remove` erases it with its last origin (`src/native_order.cpp`), and nothing checks the map's size. The roster follows live origins, including resting orders, and open lots. No engine constant caps open lots in the default profile: `pyramiding` is the script's own input, it limits same-side entries only when above 0 and does not cap `strategy.order`, and the native `max_open_lots` is optional and left unset by the Pine projection (`src/source/pine_adapter.cpp`). A bounded scratch host can cap live Pine cohort IDs; the cap does not limit origins within any one cohort | 96 B per open lot with one origin (estimate: the map node plus one `RequestHandle`, allocator headers not counted), which is 393,216 B (384 KiB) for 4,096 cohorts of one origin each; every further origin of a cohort adds one `RequestHandle` and vector growth. Measured on one run, trades equal to a build without the counter: 268 open lots at 10,000 bars and 269 at 100,000 bars (25,824 B; that plateau is most likely that script's own sizing, not a cap), and at most 2 on a script that adds and closes one lot per bar (10,000 and 35,000 adds), so it does not follow the bar count or the closed-trade count; the row is freed on close | Does not spill |
 | Cohort-target index (native consumer) | Up to 4,096 rows: `kCohortOpeningIndexBytes` (64 KiB, a constant with no setter; production code uses the constant) divided by the row size, applied in `read_indexed_cohort_target` (`src/native_execution_consumer.cpp`). Reserved once, on the first indexed cohort read, even for a few lots; kept across commands and run begin; held until the native consumer is destroyed, so a reused engine run object keeps it. | 16 B per row, so 65,536 B (64 KiB) per native consumer (one per engine run object), independent of bars, trades and lots | Does not spill: above 4,096 open lots, and in the other fallback cases, the original reader answers instead |
 | Report artifact I/O windows (`run_json`, unjailed route) | The per-run 6 MiB default budget reserves the final report's 1 MiB window first, then equity/trade spools and open/close/event columns. Each declared series adds a 64 KiB window after those six fixed files; the sink reader has a separate 64 KiB page. Sizes are defaults, not refusals. | At most 6 MiB + 64 KiB × S + 64 KiB for S declared series, independent of bars, trades and report size. Series are unlimited by default; `--limit-output-series N` applies before creation and bounds S by N | Disk-backed temporary files; the windows are the resident part |
 | Placement table (retained placement rows) | not a constant. It holds the live rows plus the rows the retirement rules pin, one heap node each; retirement erases the rest every bar, so it grows only for the patterns in the dormant-leg and settled-family rows below | Not measured (`sizeof` of a placement snapshot plus its node was not compiled) | Not applicable |
@@ -471,7 +490,7 @@ scratch bytes  =  base  +  sum over k of ( count_k x bytes_k )
 `base` is the part that does not depend on the run's counts: the fixed
 portion of the table slab (below) and the chunk and page rounding. The counts
 are the run's own: `S` script bars, `T` closed trades, `D` distinct ids, `L`
-the longest id in bytes (at most 64 in the bounded profile: the id checks run only when the table slab exists, because `preflight_keys` at `include/pineforge/detail/id_pair_store.hpp:277-278` and `preflight_joined_single` at `include/pineforge/detail/id_pair_store.hpp:326-328` return at once without one, and the cohort table checks `bounded_cohorts()`), `Q` distinct id pairs (`D x D` at most), `R`
+the longest id in bytes (at most 64 in the bounded profile: the id checks run only when the table slab exists, because `preflight_keys` at `include/pineforge/detail/id_pair_store.hpp:277-278` and `preflight_joined_single` at `include/pineforge/detail/id_pair_store.hpp:326-328` return at once without one, and the cohort table checks for a slab in `DiskIdTable::require_id_size`), `Q` distinct id pairs (`D x D` at most), `R`
 successor-root rows and `E` stored equity points. The per-store figures below
 are logical peak bytes before the arena's 1 MiB chunk rounding. They are
 derived by hand in [the arena bound](../design/arena-bound.md), which also
@@ -625,8 +644,8 @@ population has doubled since the failed attempt), while backing reads, appends
 and replacements continue normally.
 Real backing I/O, corruption, arena/slab
 exhaustion and explicit output-materialization failures retain their typed
-failures. Journal cache sizing is unavailable until oversized-event storage is
-migrated. Generic numeric scratch sequences, selected `SpillCurve` readers,
+failures. Hosts cannot configure the size of the command journal's read cache.
+Generic numeric scratch sequences, selected `SpillCurve` readers,
 other TA buffers, nonnumeric Series and raw caller-owned feeds are outside
 the supported kinds above.
 
@@ -638,9 +657,9 @@ host add up the existing owners and workspaces; see
 | Kind of store | Default budget | Resident memory at that budget |
 | --- | --- | --- |
 | Trade ledger | Descriptor window of 64 rows; private read cache defaults to a provisional byte cap of 67,108,864, holding up to 215,070 occupied entries, with or without a report sink. Hosts control its inclusive entry-and-directory byte cap through `PF_CACHE_KIND_LEDGER_CACHE`, within the existing 1,048,576-row setting ceiling; zero bypasses. Placement (a slot per row up to the cap, four-way sets beyond it) uses pages of at most 256 slots, clipped to the cap, allocated on first touch and all released when a retiring ledger seals or a rewind invalidates its hot entries. A directory or page allocation failure bypasses the cache (an explicit row setting for the ledger's lifetime, the byte default until the retained population has doubled since the failed attempt); backing reads and writes continue | 21,504 B for the window and its tail, plus a default optional allowance of 67,108,864 B on LP64, of which it charges 67,108,568 B (67,101,840 B of entries and a lazy 6,728 B pointer table); `resident_cache_bytes(rows)` at the default's 215,070 rows charges entries and table plus `sizeof(TradeLedger)+sizeof(State)` (which already includes the window, tail and zero-row read workspace). `cache_resident_bytes()` counts only allocated pages and the directory above that base, once; accounted allocation never exceeds the charge |
-| Command journal | 2,048 resident events; spill stopping threshold 128 | Not a constant per event; plus 163,840 B of spill buffers per journal once it first spills |
+| Command journal | 2,048 resident events; spill stopping threshold 128 | Not a constant per event; plus 163,880 B of transfer buffers per journal once it prepares to spill |
 | Placement rows | No budget: the live rows plus the rows the retirement rules pin | Not measured |
-| Id tables | Cohort table: resident rows follow the spill rule above (at most twice the rows left by the last pass, plus 64, plus pinned rows), and the bounded profile admits at most 4,096 live cohorts. The ordered index is read through a 64 KiB window per scratch file | 64 KiB per file; the index itself is on disk |
+| Id tables | Cohort table: resident rows follow the spill rule above (at most twice the rows left by the last pass, plus 64, plus pinned rows). Bounded scratch has no separate live-ID limit by default; the historical `U/B_U` maxima still apply. The disk index is read through a 64 KiB window per scratch file | 64 KiB per file; bounded scratch keeps the index in its fixed slab |
 
 ## Getting the bound before a run {#memory_before}
 
@@ -670,14 +689,14 @@ or bounds the row.
 | C/C++ or Python host with no sink, including jailed Python without `--report-sink-fd` (the default route of the C API): equity curve | `N`: 24 B per script bar plus vector spare capacity, then another 24 B per bar for the owning FULL report copy when the default FULL report is built, plus the whole report text held until written (`O(output)`, about one byte of resident text per stdout byte on the jailed route; see [Report memory](#memory_sink)); sources in [Report memory](#memory_sink) | Heap | Install a report sink (no bounded default route exists in this release); account for disk scratch or jailed arena memory as above |
 | Same route (no sink): closed trades | `T`: 168 B plus text per trade | Scratch, with 64 descriptor rows resident and a read cache of up to 215,070 entries by default (312 B each, in 256-slot pages allocated on first touch plus a lazy 6,728 B pointer table on 64-bit targets); the FULL report built from them is `O(T)` heap | Install a report sink |
 | Default report sink route (native or Pine host, history streamed or not) | Equity-report buffers are bounded (an editable tail and one 64 KiB writer batch, plus bounded metric-read windows); the ledger has 64 descriptor rows and a policy-controlled private read cache with a default cap of 215,070 entries (a provisional 64 MiB byte cap), in pages allocated on first touch (67,101,840 entry bytes at most, plus the fixed ledger/State base and a lazy 6,728 B pointer table on 64-bit targets). Closed-trade rows below the published base are released only with an explicit no-history capability and a streamable policy (a read below the base then refuses with `engine_invariant`); retirement also releases the ledger's cache pages, which the retained rows allocate again by first touch; otherwise the full history is kept (`O(T)`). The trailing block of rows that share the last exit time stays resident only when history is streamed (`K` lots closed at one time, `O(K)`). Binary curve scratch grows at 24 B per script bar; `E` output and the default path route's JSON artifact also grow | Disk scratch without an arena; RAM-backed scratch in the jailed arena, plus resident buffers and the sink file or stream; sources in [Report memory](#memory_sink) | Not applicable |
-| Pine product host (`PineStrategyHost`) | It cannot select `STREAMED` or `SUMMARY_ONLY`. With a sink installed and the default report mode (the legacy route) its resident equity buffers and ledger cache are bounded as in the row above: the curve through the scratch writer (`ScratchCurveWriter` at `src/engine_report.cpp:1559`), selected by the Pine host's report policy (`KernelRecordedAtHostMarks` at `src/source/pine_adapter.cpp:3212`) and the install condition (`report_policy` at `src/engine_report.cpp:1553`); and the ledger at 64 descriptor rows (`kResidentRows` at `include/pineforge/trade_ledger.hpp:48`) with its policy-controlled private read cache allocated lazily and defaulting to 215,070 entries (a provisional 64 MiB byte cap). Adapter state (placement rows, settled bracket families, script containers) is separate and has its own rows below | Resident equity buffers and ledger cache bounded; curve scratch grows on disk or in the jailed RAM-backed arena; adapter state as the rows below | Not applicable |
+| Pine product host (`PineStrategyHost`) | It cannot select `STREAMED` or `SUMMARY_ONLY`. With a sink installed and the default report mode (the legacy route) its resident equity buffers and ledger cache are bounded as in the row above: the curve through the scratch writer (`ScratchCurveWriter` at `src/engine_report.cpp:1575`), selected by the Pine host's report policy (`KernelRecordedAtHostMarks` at `src/source/pine_adapter.cpp:3221`) and the install condition (`report_policy` at `src/engine_report.cpp:1569`); and the ledger at 64 descriptor rows (`kResidentRows` at `include/pineforge/trade_ledger.hpp:48`) with its policy-controlled private read cache allocated lazily and defaulting to 215,070 entries (a provisional 64 MiB byte cap). Adapter state (placement rows, settled bracket families, script containers) is separate and has its own rows below | Resident equity buffers and ledger cache bounded; curve scratch grows on disk or in the jailed RAM-backed arena; adapter state as the rows below | Not applicable |
 | A touched dormant leg that is re-issued | One placement row per re-issue, until the position cycle ends or the origin closes; an untouched re-issue with the same exit id replaces its row in place | Heap | Planned, with no release date |
 | Settled bracket families | One fixed record per archived family, which grows with `T` on a bracket strategy; not measured | Heap | Not scheduled |
 | Pending-book reads | `R`: `O(R^2)` for a size or a late indexed copy, `O(P R^2)` for a full indexed walk of `P` projected rows, up to `O(R^3)` when `P = R`; this is time, and it was already so in v1.6.3 | CPU | Planned, with no release date |
 | Cohort lookups | A cohort lookup was `O(1)` before 1.7.0 and was `O(resident rows + log of the id population x key length)` per call in 1.7.0. Since 1.8.0 a lookup of a resident cohort is `O(log r)` in the number `r` of resident rows, without allocation or disk | CPU, plus scratch reads | Partly fixed in 1.8.0: a full close on N owners seeks the scratch index 2N+1 times (it was N(N+1)/2), and the walks that need only the cohorts holding an opening or live units no longer visit every pending-only cohort. Not fixed: the per-bar retire pass is still proportional to the resident rows, and a close event is still quadratic in N in in-memory work, so in the release's own measurement a dense script (many pending orders) did not finish within 600 s at 10,000 bars and above, and a script with many orders and few ids was only 12.5 to 16 percent faster at 30,000 to 100,000 bars; no release date for the rest |
 | Pending orders that never fill | `R`: about 2.5 kB each on dense scripts (the release notes' known limit) | Heap | Planned for a later release, with no date |
 | Closed-trade reads from a script | `O(T)` per call, one scratch read per older row; not measured | CPU and scratch I/O | Planned, with no release date |
-| The strategy's own containers (arrays, strings, maps, matrices, user-defined types, series and indicator history, drawing objects) | What the script stores | Heap, unchanged from v1.6.3 | Planned, with no release date |
+| The strategy's own containers (arrays, strings, maps, matrices, user-defined types, series and indicator history, drawing objects) | What the script stores | Heap and, for paged containers, the script store. A Pine map stores its entries, key index and string payloads in the store; maps of container handles also keep a table on the heap | Maps have used paged storage since 1.8.0. Ordinary map reads and writes now leave frequently used disk pages available in the operating system's cache |
 | Distinct ids, pairs and successor rows | `D`, `Q`, `R`, by the formulas above | Scratch, or the slab | Bounded by the admitted maxima |
 | Input bars | `N` bars of OHLCV | The host | Not applicable |
 
@@ -685,10 +704,10 @@ or bounds the row.
 
 | Signal | Meaning |
 | --- | --- |
-| `scratch_capacity_exceeded`, argument `resource` | `cohort_ids_total`: historical cohort IDs or their aggregate bytes exceed `U/B_U` (default 65,536 IDs / 4,194,304 bytes); `cohort_orders_live`: more than 4,096 order IDs are live in the bounded profile; `cohort`: an ID is longer than 64 bytes, generic cohort-region capacity, or a nonzero generic Store live-object policy. Other names identify the exhausted slab region, except `layout`, which labels a layout refusal and is not a byte region. Refusals precede store changes. The former capped Store default is now 0 (unbounded); exact native limits replace normalization, and finite text omits the approved maximum. Native embedders/tests alone set this policy; scripts need recompilation with new headers for the default. Admit larger maxima, close/cancel live orders sooner, or use shorter/reused IDs as applicable before another attempt |
+| `scratch_capacity_exceeded`, argument `resource` | `cohort_ids_total`: historical cohort IDs or their aggregate bytes exceed `U/B_U` (default 65,536 IDs / 4,194,304 bytes); `cohort_orders_live`: admission would exceed the host's explicit live-ID limit in the bounded profile; `cohort`: an ID is longer than 64 bytes, generic cohort-region capacity, or a nonzero generic Store live-object policy. Other names identify the exhausted slab region, except `layout`, which labels a layout refusal and is not a byte region. Refusals precede store changes. The former capped Store default is now 0 (unbounded); exact native limits replace normalization, and finite text omits the approved maximum. Native embedders/tests alone set this policy; scripts need recompilation with new headers for the default. Admit larger maxima, close/cancel live orders sooner, or use shorter/reused IDs as applicable before another attempt |
 | `report_sink_failed`, reason `arena_exhausted` | The inherited arena filled. A host may re-place the run on a larger arena; one that makes a single attempt returns the failure |
 | `scratch_io_failed` | A scratch read, write, create or resize failed, including real syscall `ENOMEM`, or the command-scratch byte cap was reached |
-| `report_sink_failed`, reason `scratch_io` | The native command journal's scratch read or write failed, or its stored bytes or page directory are damaged. An event whose serialized form exceeds the 32,768 B page is refused with `EFBIG` and stays resident. Genuine file-offset exhaustion, disk errors and missing event bytes remain typed failures |
+| `report_sink_failed`, reason `scratch_io` | The native command journal could not read or write its scratch file, or the page did not match its directory record and seal. File-offset exhaustion, disk errors and missing bytes remain typed failures. A failed spill leaves the event resident for retry |
 | `scratch_configuration_invalid` | `PINEFORGE_COMMAND_SCRATCH_MAX_BYTES` is not a positive decimal |
 | `out_of_memory` | A required C++ allocation failed, including script scratch, arena directories/metadata, store workspace, owning decode, caller-owned output values or error-diagnostic construction. It is not relabelled as I/O or a capacity failure |
 

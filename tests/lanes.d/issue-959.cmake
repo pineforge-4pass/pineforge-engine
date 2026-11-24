@@ -1,0 +1,1 @@
+pineforge_add_unit_test(test_eigen_fallback_archive_hash)

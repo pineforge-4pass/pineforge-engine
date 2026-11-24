@@ -154,8 +154,10 @@ def test_run_strategy_declares_the_run_status_getter_without_the_abort_export(mo
 
 def test_run_strategy_docker_runner_sends_overrides_as_strategy_run_does(tmp_path, tape,
                                                                          monkeypatch):
-    # The release image's run_json refuses a JSON boolean or null; the docker
-    # runner sends every value as the ctypes runner passes it, str().
+    # The release image's run_json refuses a JSON boolean or null; both
+    # runners send strategy property overrides as strings.
+    # The image's run_json refuses a JSON boolean or null; the Docker runner
+    # sends them as wire text, with lowercase booleans for the generated setter.
     (tmp_path / "generated.cpp").write_text("// generated\n")
     sent = {}
 
@@ -166,15 +168,18 @@ def test_run_strategy_docker_runner_sends_overrides_as_strategy_run_does(tmp_pat
         sent.update(kw)
         raise Sent
     monkeypatch.setattr(pf_release_run, "run_release", run_release)
-    overrides = {"process_orders_on_close": True, "initial_capital": 1000,
+    overrides = {"process_orders_on_close": True, "calc_on_order_fills": False,
+                 "initial_capital": 1000,
                  "commission_value": 0.04, "default_qty_type": "cash", "slippage": None}
     with pytest.raises(Sent):
         run_strategy._run_via_docker(tmp_path, tape, {"Length": 5, "Use Filter": False},
                                      {"strategy_overrides": overrides}, None, None)
-    assert sent["overrides"] == {"process_orders_on_close": "True", "initial_capital": "1000",
+    assert sent["overrides"] == {"process_orders_on_close": "true", "calc_on_order_fills": "false",
+                                 "initial_capital": "1000",
                                  "commission_value": "0.04", "default_qty_type": "cash",
                                  "slippage": "None"}
-    assert sent["inputs"] == {"Length": "5", "Use Filter": "False"}
+    # expectation corrected: "False" -> "false", because Pine boolean inputs require lowercase.
+    assert sent["inputs"] == {"Length": "5", "Use Filter": "false"}
     for label in ("inputs", "overrides"):
         assert run_json.parse_kv_json(json.dumps(sent[label]), f"--{label}") == sent[label]
 

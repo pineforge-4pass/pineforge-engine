@@ -2099,6 +2099,7 @@ private:
         PineExecutionAdapter&, const std::shared_ptr<::pineforge::detail::ScratchSlab>&);
     friend void ::pineforge::detail::bind_tree_scratch_tables(
         PineExecutionAdapter&, const std::shared_ptr<::pineforge::detail::ScratchSlab>&);
+    void release_run_results() noexcept;
     bool partial_exit_sibling_live(const PlacementSnapshot&,
                                   native_order::RequestHandle) const;
     // Called once for [trades_.base(), global_end), in forward

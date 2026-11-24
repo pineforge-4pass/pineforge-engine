@@ -1,8 +1,18 @@
+#include <cerrno>
 #include <cstdio>
+#include <cstring>
+#include <ctime>
 #include <string>
+#include <system_error>
 
 #include <pineforge/na.hpp>
+#include <pineforge/native_calendar.hpp>
+#include <pineforge/run_failure.hpp>
 #include <pineforge/session_time.hpp>
+
+#if defined(__linux__)
+#include <dlfcn.h>
+#endif
 
 using namespace pineforge;
 
@@ -18,6 +28,39 @@ static int tests_failed = 0;
             ++tests_passed;                                                     \
         }                                                                       \
     } while (0)
+
+#if defined(__linux__)
+// This executable's own mktime, which the engine's calls reach too. While
+// forced_mktime_errno is nonzero every call fails with that errno and is
+// counted; otherwise libc's mktime answers.
+static thread_local int forced_mktime_errno = 0;
+static thread_local int forced_mktime_failures = 0;
+
+using MktimeFunction = std::time_t (*)(std::tm*);
+
+static MktimeFunction libc_mktime() noexcept {
+    static const auto real = reinterpret_cast<MktimeFunction>(::dlsym(RTLD_NEXT, "mktime"));
+    return real;
+}
+
+extern "C" std::time_t mktime(std::tm* fields) noexcept {
+    if (forced_mktime_errno != 0) {
+        ++forced_mktime_failures;
+        errno = forced_mktime_errno;
+        return static_cast<std::time_t>(-1);
+    }
+    // A result of -1 is also a valid Unix second, told from a failure by errno
+    // alone: finding libc's mktime must leave errno as the caller set it.
+    const int entry_errno = errno;
+    const MktimeFunction real = libc_mktime();
+    if (real == nullptr) {
+        errno = ENOSYS;
+        return static_cast<std::time_t>(-1);
+    }
+    errno = entry_errno;
+    return real(fields);
+}
+#endif
 
 static void test_time_hourly_bucket_utc() {
     std::printf("test_time_hourly_bucket_utc\n");
@@ -187,6 +230,62 @@ static void test_time_syminfo_tz_does_not_move_calendar_open() {
     CHECK(pine_time(bar, "D", "America/New_York", "", "15", "America/New_York") == plain);
 }
 
+static void test_calendar_preserves_minus_one_second() {
+    std::printf("test_calendar_preserves_minus_one_second\n");
+    // UTC+1 second: at Unix 0 the local clock is 00:00:01 on Jan 1, 1970.
+    // The local day's midnight was one second before the Unix epoch.
+    const int64_t open = timeframe_time(0, "D", "", "TST-00:00:01", "15");
+    CHECK(open == -1000);
+
+    // DST is UTC+1h and ends at Jan 1 01:00 DST, i.e. Unix 0.
+    // The repeated Jan 1 00:59:59 is Unix -1 under DST and +3599 under standard
+    // time. Civil resolution must report the fold and pick its earlier instant.
+    const auto fold = native_calendar::resolve_civil(
+        "STD0DST-1,M7.1.0/2,J1/1", 1970, 1, 1, 0, 59, 59);
+    CHECK(fold && fold->kind == native_calendar::CivilKind::Fold);
+    CHECK(fold && fold->epoch_ms == -1000);
+}
+
+#if defined(__linux__)
+static void test_calendar_boundary_mktime_failure_is_coded() {
+    std::printf("test_calendar_boundary_mktime_failure_is_coded\n");
+    CHECK(libc_mktime() != nullptr);
+    if (libc_mktime() == nullptr)
+        return;
+    const int64_t bar = 1775572200000LL;  // 2026-04-07 14:30 UTC = 10:30 America/New_York (EDT)
+    // The day boundary asks mktime for midnight and then for the two later
+    // hours it retries; the week and month boundaries ask once. When every
+    // conversion fails no retry is left, and each raises the same failure.
+    const struct {
+        const char* tf;
+        int conversions;
+    } rows[] = {{"D", 3}, {"W", 1}, {"M", 1}};
+    for (const auto& row : rows) {
+        const int64_t open = timeframe_time(bar, row.tf, "", "America/New_York", "15");
+        CHECK(!is_na(open));
+        bool failed = false;
+        forced_mktime_failures = 0;
+        forced_mktime_errno = EOVERFLOW;
+        try {
+            (void)timeframe_time(bar, row.tf, "", "America/New_York", "15");
+        } catch (const std::system_error& error) {
+            failed = true;
+            CHECK(error.code() == std::error_code(EOVERFLOW, std::generic_category()));
+            // The code the failure itself carries: classify_run_failure also
+            // answers engine_unclassified_error for an exception with no code.
+            const auto* info = dynamic_cast<const RunFailureInfo*>(&error);
+            CHECK(info && info->run_failure_code() == RunFailureCode::engine_unclassified_error);
+            CHECK(std::strstr(error.what(), "mktime") != nullptr);
+        }
+        forced_mktime_errno = 0;
+        CHECK(failed);
+        CHECK(forced_mktime_failures == row.conversions);
+        // Once mktime converts again the same call answers as it did.
+        CHECK(timeframe_time(bar, row.tf, "", "America/New_York", "15") == open);
+    }
+}
+#endif
+
 int main() {
     test_time_hourly_bucket_utc();
     test_time_session_ny_inside();
@@ -201,6 +300,10 @@ int main() {
     test_time_session_explicit_tz_beats_syminfo();
     test_time_session_syminfo_tz_dst_aware();
     test_time_syminfo_tz_does_not_move_calendar_open();
+    test_calendar_preserves_minus_one_second();
+#if defined(__linux__)
+    test_calendar_boundary_mktime_failure_is_coded();
+#endif
 
     std::printf("session_time: %d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;

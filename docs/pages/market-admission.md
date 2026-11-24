@@ -55,12 +55,40 @@ Appending nested events out of allocation order is supported; reclaiming a recor
 does not make its sequence available again. An unfinished allocation is abandoned
 by its call frame, and reset refuses outstanding operations.
 
+The C++ journal checks stored order births on append and decode (`Schema::birth`
+at `src/source/admission_journal_codec.cpp:298`). For `Unattributed`,
+`DirectCommand` and `ChartEvaluation`, the cursor domain and position must both
+be `None`, the index must be −1 and the count must be zero. The cursor price must
+have the exact bits of the factory's absent price (a quiet NaN); both fill
+numbers and the evaluation ordinal must be zero. `Unattributed` also requires
+bar −1 and timestamp zero. A direct command or chart evaluation keeps its own
+bar and timestamp. Append and decode return `ScratchStatus::corrupt` for a
+violation; a refused append leaves the sequence available for retry.
+
+For an encoded command, `admission::append_journal_record` checks the order's
+fill cursor and fill numbers by the same rules as readback. For example, a
+fill evaluation whose first fill number is zero returns `ScratchStatus::corrupt`
+before the journal stores it or consumes its sequence.
+
+For a `FillEvaluation` birth, the stored `cursor_position` must be `Point` or
+`Segment` (`src/source/admission_journal_codec.cpp:338-339`). `None` is valid
+for an order that was not placed during a fill. On a fill, `None` or an
+unknown position makes append return `ScratchStatus::corrupt` without
+consuming the sequence. Owning decode and the validated fold return the same
+status: the destination event, fold summary and digest keep their prior values.
+
 A per-order review or sizing receipt names the original command. Its event must
 follow that command and its bar cannot precede the placement bar. Review progress
 is the first actual receipt, with identical replay allowed and conflicting
 replacement refused. Sizing revisions similarly preserve the causal order of
 their events, bars and committed fill causes. A batch review can issue a receipt
 only for an original draft captured by that review.
+
+With a codec bound, the journal checks each book row's draft before storing the
+event. A present observation must have a nonzero command number. A review
+requires a known checkpoint, and a sizing revision requires a nonzero fill
+cause. A draft with no observation is valid only if it has neither receipt.
+Refusing an invalid draft leaves the event's sequence available for a retry.
 
 ## Reflection and retention
 

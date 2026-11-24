@@ -7,6 +7,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -16,8 +17,8 @@
 namespace pineforge::source::detail {
 namespace {
 
-// The tree has no exit payload codec. This local schema writes logical fields,
-// never object images, padding, SessionKey pointers or shared_ptr control blocks.
+// This positional schema writes logical fields, never object images, padding,
+// SessionKey pointers or shared_ptr control blocks.
 // All scalars are LE64, doubles preserve their bits, and variable values have
 // lengths/tags. Output borrows the caller only during put; input constructs the
 // returned value using a fixed byte window. Neither is retained by the provider.
@@ -48,13 +49,8 @@ PF_EXIT_PAYLOAD_MEMBER(LifecycleReplay, exit_legs::Lifecycle, last_);
 PF_EXIT_PAYLOAD_MEMBER(DefinitionIncarnation, exit_legs::Definition, incarnation_);
 PF_EXIT_PAYLOAD_MEMBER(DefinitionRevision, exit_legs::Definition, revision_);
 PF_EXIT_PAYLOAD_MEMBER(DefinitionPrices, exit_legs::Definition, value_);
-PF_EXIT_PAYLOAD_MEMBER(ActivationBounds, ExitLegActivation, bounds_);
-PF_EXIT_PAYLOAD_MEMBER(ActivationEvidence, compat::pine::ExitActivationPolicy, evidence_);
 PF_EXIT_PAYLOAD_MEMBER(ExpansionCapture, ReservationExpansion, capture_);
 PF_EXIT_PAYLOAD_MEMBER(GrowthOwner, ReservationGrowthSource, reservation_owner_);
-PF_EXIT_PAYLOAD_MEMBER(AdmissionObservation, admission::Draft, observation_);
-PF_EXIT_PAYLOAD_MEMBER(AdmissionReview, admission::Draft, review_);
-PF_EXIT_PAYLOAD_MEMBER(AdmissionSizing, admission::Draft, sizing_revision_);
 #undef PF_EXIT_PAYLOAD_MEMBER
 
 template<class T, class Tag> decltype(auto) member(T& value, Tag tag) {
@@ -137,6 +133,16 @@ public:
     [[noreturn]] void invalid() const {
         exit_scratch_failure(ScratchStatus::corrupt);
     }
+    // A factory argument here came from storage. Preserve its diagnostic
+    // while giving scratch readers the same status as an unknown birth tag.
+    template<class Factory, class... Args>
+    static auto restore_birth(Factory factory, const Args&... args) {
+        try {
+            return factory(args...);
+        } catch (const std::invalid_argument& error) {
+            throw ExitScratchError(error);
+        }
+    }
     std::uint64_t remaining() const noexcept { return size_ - offset_; }
     void bytes(char* destination, std::size_t count) {
         if (count > remaining()) invalid();
@@ -158,29 +164,32 @@ public:
         }
     }
     template<class T> void scalar(T& value) {
-        if constexpr (std::is_enum_v<T>) {
-            std::underlying_type_t<T> underlying{};
-            scalar(underlying);
-            value = static_cast<T>(underlying);
+        static_assert(std::is_arithmetic_v<T>);
+        std::array<unsigned char, 8> encoded{};
+        bytes(reinterpret_cast<char*>(encoded.data()), encoded.size());
+        std::uint64_t word = 0;
+        for (unsigned i = 0; i < encoded.size(); ++i)
+            word |= static_cast<std::uint64_t>(encoded[i]) << (i * 8);
+        if constexpr (std::is_same_v<T, double>) {
+            std::memcpy(&value, &word, sizeof(word));
+        } else if constexpr (std::is_signed_v<T>) {
+            std::int64_t signed_word = 0;
+            std::memcpy(&signed_word, &word, sizeof(word));
+            if (signed_word < std::numeric_limits<T>::min()
+                || signed_word > std::numeric_limits<T>::max()) invalid();
+            value = static_cast<T>(signed_word);
         } else {
-            std::array<unsigned char, 8> encoded{};
-            bytes(reinterpret_cast<char*>(encoded.data()), encoded.size());
-            std::uint64_t word = 0;
-            for (unsigned i = 0; i < encoded.size(); ++i)
-                word |= static_cast<std::uint64_t>(encoded[i]) << (i * 8);
-            if constexpr (std::is_same_v<T, double>) {
-                std::memcpy(&value, &word, sizeof(word));
-            } else if constexpr (std::is_signed_v<T>) {
-                std::int64_t signed_word = 0;
-                std::memcpy(&signed_word, &word, sizeof(word));
-                if (signed_word < std::numeric_limits<T>::min()
-                    || signed_word > std::numeric_limits<T>::max()) invalid();
-                value = static_cast<T>(signed_word);
-            } else {
-                if (word > std::numeric_limits<T>::max()) invalid();
-                value = static_cast<T>(word);
-            }
+            if (word > std::numeric_limits<T>::max()) invalid();
+            value = static_cast<T>(word);
         }
+    }
+    template<class E, class... Values> void enumerated(E& result, Values... allowed) {
+        using Raw = std::underlying_type_t<E>;
+        static_assert(sizeof...(Values) > 0 && (std::is_same_v<E, Values> && ...));
+        Raw raw{};
+        scalar(raw);
+        if (!((raw == static_cast<Raw>(allowed)) || ...)) invalid();
+        result = static_cast<E>(raw);
     }
 private:
     const CommandScratchStore& store_;
@@ -203,7 +212,65 @@ void read_variant(Archive& archive, Variant& value, std::uint64_t index) {
 
 template<class Archive, class T> void payload_fields(Archive& a, T& v) {
     using V = std::remove_const_t<T>;
-    if constexpr (std::is_arithmetic_v<V> || std::is_enum_v<V>) {
+    if constexpr (std::is_enum_v<V> && Archive::reading) {
+        // This is the stored vocabulary. A new enum field needs its own
+        // decoder, even when its underlying integer type is already supported.
+        if constexpr (std::is_same_v<V, PineOrderFamily>)
+            a.enumerated(v, V::Entry, V::Close, V::CloseAll, V::ExitLimit, V::ExitStop,
+                         V::ExitTrail, V::Order, V::Margin, V::Risk);
+        else if constexpr (std::is_same_v<V, PineCancellationCause>)
+            a.enumerated(v, V::None, V::Replacement, V::Dependency, V::Admission, V::Explicit);
+        else if constexpr (std::is_same_v<V, PositionSide>)
+            a.enumerated(v, V::FLAT, V::LONG, V::SHORT);
+        else if constexpr (std::is_same_v<V, OrderBirthCause>)
+            a.enumerated(v, V::Unattributed, V::DirectCommand, V::ChartEvaluation, V::FillEvaluation);
+        else if constexpr (std::is_same_v<V, BirthCursorDomain>)
+            a.enumerated(v, V::None, V::HistoricalPath, V::MagnifierTicks);
+        else if constexpr (std::is_same_v<V, BirthCursorPosition>)
+            a.enumerated(v, V::None, V::Point, V::Segment);
+        else if constexpr (std::is_same_v<V, compat::pine::HistoricalBirthReach>)
+            a.enumerated(v, V::Standard, V::ExtremeWaypoints);
+        else if constexpr (std::is_same_v<V, compat::pine::LimitContinuationCause>)
+            a.enumerated(v, V::LaterSameOpen, V::FirstHighRecross);
+        else if constexpr (std::is_same_v<V, admission::CommandKind>)
+            a.enumerated(v, V::Entry, V::Raw, V::Cancel, V::CancelAll);
+        else if constexpr (std::is_same_v<V, admission::Checkpoint>)
+            a.enumerated(v, V::DefaultGross, V::ExplicitPair, V::TerminalGross);
+        else if constexpr (std::is_same_v<V, exit_legs::Leg>)
+            a.enumerated(v, V::Stop, V::Limit, V::Trail);
+        else if constexpr (std::is_same_v<V, exit_legs::Domain>)
+            a.enumerated(v, V::Ordinary, V::FillRecalc, V::Magnifier, V::MagnifierFillRecalc, V::RawTicks);
+        else if constexpr (std::is_same_v<V, exit_legs::Phase>)
+            a.enumerated(v, V::Observation, V::AfterMargin);
+        else if constexpr (std::is_same_v<V, exit_legs::Fold>)
+            a.enumerated(v, V::Prefix, V::Continue);
+        else if constexpr (std::is_same_v<V, native_order::HostSizedKind>)
+            a.enumerated(v, V::Open, V::Close);
+        else if constexpr (std::is_same_v<V, native_order::Side>)
+            a.enumerated(v, V::Long, V::Short);
+        else if constexpr (std::is_same_v<V, native_order::SizeTime>)
+            a.enumerated(v, V::AtMatch, V::AtAcceptance);
+        else if constexpr (std::is_same_v<V, native_order::SizePrice>)
+            a.enumerated(v, V::Resolved, V::Signal, V::SignalOnTick);
+        else if constexpr (std::is_same_v<V, native_order::ExecutionGridPolicy>)
+            a.enumerated(v, V::SnapToGrid, V::ExplicitUnits);
+        else if constexpr (std::is_same_v<V, native_order::ScopeClaim>)
+            a.enumerated(v, V::Gross, V::NetOfSiblings);
+        else if constexpr (std::is_same_v<V, native_order::ScopeBasis>)
+            a.enumerated(v, V::AtMatch, V::AtAcceptance);
+        else if constexpr (std::is_same_v<V, native_order::NativeAnchorRounding>)
+            a.enumerated(v, V::Raw, V::HalfUp, V::Directional);
+        else if constexpr (std::is_same_v<V, native_order::NativeArmVisibility>)
+            a.enumerated(v, V::Working, V::PendingUntilArmed);
+        else if constexpr (std::is_same_v<V, native_order::NativeArmFirstMatch>)
+            a.enumerated(v, V::AtArmPrint, V::AfterArmPrint);
+        else if constexpr (std::is_same_v<V, native_order::NativeArmScope>)
+            a.enumerated(v, V::OwnerLot, V::Book);
+        else if constexpr (std::is_same_v<V, native_order::GroupEffect>)
+            a.enumerated(v, V::Cancel, V::Reduce);
+        else
+            static_assert(unsupported_payload<V>, "exit payload enum values must be enumerated");
+    } else if constexpr (std::is_arithmetic_v<V> || std::is_enum_v<V>) {
         static_assert(!std::is_floating_point_v<V> || std::is_same_v<V, double>);
         a.scalar(v);
     } else if constexpr (std::is_same_v<V, std::string>) {
@@ -357,51 +424,75 @@ template<class Archive, class T> void payload_fields(Archive& a, T& v) {
         a(v.cause, v.state, v.close_claim_release, v.source_incarnation, v.source_sequence,
           v.target_incarnation, v.target_owner, v.target_revision,
           v.close_claim_consumed, v.close_claim_retired);
-    } else if constexpr (std::is_same_v<V, BirthCursor>) {
-        auto domain = v.domain();
-        auto position = v.position();
-        auto index = v.index();
-        auto count = v.count();
-        a(domain, position, index, count);
-        if constexpr (Archive::reading) {
-            if (position == BirthCursorPosition::None) {
-                if (domain != BirthCursorDomain::None || index != -1 || count != 0) a.invalid();
-                v = {};
-            } else if (position == BirthCursorPosition::Point) {
-                v = BirthCursor::point(domain, index, count);
-            } else if (position == BirthCursorPosition::Segment) {
-                v = BirthCursor::segment(domain, index, count);
-            } else a.invalid();
-        }
     } else if constexpr (std::is_same_v<V, OrderBirth>) {
         auto cause = v.cause();
         auto bar = v.bar();
         auto timestamp = v.timestamp();
-        auto cursor = v.cursor();
+        auto domain = v.cursor().domain();
+        auto position = v.cursor().position();
+        auto index = v.cursor().index();
+        auto count = v.cursor().count();
         auto price = v.cursor_price();
         auto first = v.first_fill();
         auto last = v.last_fill();
         auto evaluation = v.evaluation_ordinal();
-        a(cause, bar, timestamp, cursor, price, first, last, evaluation);
+        a(cause, bar, timestamp, domain, position, index, count, price, first, last, evaluation);
         if constexpr (Archive::reading) {
+            if (cause != OrderBirthCause::FillEvaluation) {
+                // A non-fill factory discards these fields. Check the exact bytes it would write.
+                const OrderBirth empty;
+                const auto empty_price = empty.cursor_price();
+                if (domain != empty.cursor().domain() || position != empty.cursor().position()
+                    || index != empty.cursor().index() || count != empty.cursor().count()
+                    || std::memcmp(&price, &empty_price, sizeof(price)) != 0
+                    || first != 0 || last != 0 || evaluation != 0
+                    || (cause == OrderBirthCause::Unattributed
+                        && (bar != empty.bar() || timestamp != empty.timestamp()))) a.invalid();
+            }
             switch (cause) {
             case OrderBirthCause::Unattributed: v = {}; break;
             case OrderBirthCause::DirectCommand:
                 v = OrderBirth::direct_command(bar, timestamp); break;
             case OrderBirthCause::ChartEvaluation:
                 v = OrderBirth::chart_evaluation(bar, timestamp); break;
-            case OrderBirthCause::FillEvaluation:
-                v = OrderBirth::fill_evaluation(
+            case OrderBirthCause::FillEvaluation: {
+                BirthCursor cursor;
+                if (position == BirthCursorPosition::None) {
+                    if (domain != BirthCursorDomain::None || index != -1 || count != 0) a.invalid();
+                } else if (position == BirthCursorPosition::Point) {
+                    cursor = a.restore_birth(BirthCursor::point, domain, index, count);
+                } else if (position == BirthCursorPosition::Segment) {
+                    cursor = a.restore_birth(BirthCursor::segment, domain, index, count);
+                } else a.invalid();
+                v = a.restore_birth(OrderBirth::fill_evaluation,
                     bar, timestamp, cursor, price, first, last, evaluation); break;
+            }
             default: a.invalid();
             }
         }
     } else if constexpr (std::is_same_v<V, ExitLegActivation>) {
-        a(member(v, ActivationBounds{}));
+        if constexpr (Archive::reading) {
+            std::optional<ExitLegActivationBounds> bounds;
+            a(bounds);
+            try {
+                if (bounds) v.bind(*bounds);
+                else v.unbind();
+            } catch (const std::invalid_argument&) {
+                a.invalid();
+            }
+        } else a(v.bounds());
     } else if constexpr (std::is_same_v<V, ExitLegActivationBounds>) {
         a(v.position_cycle, v.stop_first_bar, v.limit_first_bar);
     } else if constexpr (std::is_same_v<V, compat::pine::ExitActivationPolicy>) {
-        a(member(v, ActivationEvidence{}));
+        if constexpr (Archive::reading) {
+            std::optional<compat::pine::ExitPlacementEvidence> evidence;
+            a(evidence);
+            try {
+                v = evidence ? V(*evidence) : V{};
+            } catch (const std::invalid_argument&) {
+                a.invalid();
+            }
+        } else a(v.evidence());
     } else if constexpr (std::is_same_v<V, compat::pine::ExitPlacementEvidence>) {
         a(v.position_cycle, v.entry_bar, v.direction, v.cursor_price,
           v.stop_level, v.limit_level, v.limit_continuation);
@@ -411,11 +502,34 @@ template<class Archive, class T> void payload_fields(Archive& a, T& v) {
         a(member(v, ExpansionCapture{}));
     } else if constexpr (std::is_same_v<V, ReservationExpansionCapture>) {
         a(v.position_cycle, v.side, v.first_later_admission);
+        if constexpr (Archive::reading) {
+            // The capture retains neither the receiver nor the original capacity.
+            if (v.position_cycle <= 0
+                || (v.side != PositionSide::LONG && v.side != PositionSide::SHORT)
+                || v.first_later_admission == 0) a.invalid();
+        }
     } else if constexpr (std::is_same_v<V, ReservationGrowthSource>) {
         a(member(v, GrowthOwner{}));
+        if constexpr (Archive::reading) {
+            // Only the receiver of assign_capture(source, receiver) is stored.
+            if (v.reservation_owner() == 0) a.invalid();
+        }
     } else if constexpr (std::is_same_v<V, admission::Draft>) {
-        a(member(v, AdmissionObservation{}), member(v, AdmissionReview{}),
-          member(v, AdmissionSizing{}));
+        if constexpr (Archive::reading) {
+            std::shared_ptr<const admission::CommandObservation> observation;
+            std::optional<admission::ReviewReceipt> review;
+            std::optional<admission::SizingRevision> sizing;
+            a(observation, review, sizing);
+            try {
+                if (observation) v.bind(std::move(observation));
+                if (review) v.reviewed(*review);
+                if (sizing) v.sizing_revised(*sizing);
+            } catch (const std::logic_error&) {
+                a.invalid();
+            }
+        } else {
+            a(v.observation(), v.review(), v.sizing_revision());
+        }
     } else if constexpr (std::is_same_v<V, admission::CommandObservation>) {
         a(v.command, v.kind, v.birth, v.id, v.requested_quantity, v.quantity_type,
           v.buy, v.prices, v.oca_name, v.oca_type, v.configuration, v.bar,
@@ -438,9 +552,14 @@ template<class Archive, class T> void payload_fields(Archive& a, T& v) {
         a(v.sequence, v.cause_fill, v.bar, v.target_command);
     } else if constexpr (std::is_same_v<V, exit_legs::Lifecycle>) {
         a(member(v, LifecycleTarget{}), member(v, LifecycleRevision{}),
-          member(v, LifecycleDefinition{}), member(v, LifecycleGenerations{}),
-          member(v, LifecycleRetirements{}), member(v, LifecycleSuspension{}),
-          member(v, LifecycleReplay{}));
+          member(v, LifecycleDefinition{}));
+        if constexpr (Archive::reading) {
+            const auto target = v.target();
+            if (target.owner < 0 || target.incarnation != v.current_definition().incarnation())
+                a.invalid();
+        }
+        a(member(v, LifecycleGenerations{}), member(v, LifecycleRetirements{}),
+          member(v, LifecycleSuspension{}), member(v, LifecycleReplay{}));
     } else if constexpr (std::is_same_v<V, exit_legs::Definition>) {
         a(member(v, DefinitionIncarnation{}), member(v, DefinitionRevision{}),
           member(v, DefinitionPrices{}));
@@ -555,6 +674,27 @@ template<class... T> std::uint64_t put_version(CommandScratchStore& store,
     return version;
 }
 
+template<class... T> std::uint64_t put_request_version(CommandScratchStore& store,
+        std::uint64_t scope, std::uint64_t kind, const native_order::Request& request,
+        const T&... rest) {
+    const auto* owner = std::get_if<native_order::BindOpenings>(&request.owner);
+    if (!owner || !owner->external_openings)
+        return put_version(store, scope, kind, request, rest...);
+
+    // put's byte source may not read its own store. Snapshot the external
+    // handles before put; the positional codec already round-trips inline ones.
+    const auto count = owner->external_openings->count();
+    if (!owner->openings.empty() || count > owner->openings.max_size())
+        exit_scratch_failure(ScratchStatus::programming_error);
+    auto saved = request;
+    auto& binding = std::get<native_order::BindOpenings>(saved.owner);
+    binding.openings.resize(static_cast<std::size_t>(count));
+    for (std::uint64_t i = 0; i < count; ++i)
+        exit_scratch_check(owner->external_openings->opening_at(i, binding.openings[i]));
+    binding.external_openings.reset();
+    return put_version(store, scope, kind, saved, rest...);
+}
+
 } // namespace
 
 std::uint64_t ExitScratchVersionsProduction::placement(
@@ -573,7 +713,7 @@ PlacementSnapshot ExitScratchVersionsProduction::placement(std::uint64_t version
 std::uint64_t ExitScratchVersionsProduction::request(
         std::uint64_t scope, const native_order::Request& value) {
     check_teardown_failure();
-    return put_version(store_, scope, request_kind, value);
+    return put_request_version(store_, scope, request_kind, value);
 }
 
 native_order::Request ExitScratchVersionsProduction::request(std::uint64_t version) const {
@@ -587,7 +727,7 @@ std::uint64_t ExitScratchVersionsProduction::pending(std::uint64_t scope,
         const native_order::Request& request, const PlacementSnapshot& placement,
         const std::string& key) {
     check_teardown_failure();
-    return put_version(store_, scope, pending_kind, request, placement, key);
+    return put_request_version(store_, scope, pending_kind, request, placement, key);
 }
 
 void ExitScratchVersionsProduction::pending(std::uint64_t version,

@@ -9,8 +9,12 @@ namespace pineforge::detail {
 // carry this newly admitted refusal without changing older error paths.
 class RetiredTradeHistoryRead final : public std::logic_error, public RunFailureInfo {
 public:
-    RetiredTradeHistoryRead()
-        : std::logic_error("trade ledger: row outside resident window"),
+    enum class Reason { Retired, Released };
+
+    explicit RetiredTradeHistoryRead(Reason reason = Reason::Retired)
+        : std::logic_error(reason == Reason::Released
+              ? "trade ledger: closed trades released"
+              : "trade ledger: row outside resident window"),
           RunFailureInfo(RunFailureCode::engine_invariant, {}) {}
 };
 

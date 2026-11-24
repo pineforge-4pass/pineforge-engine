@@ -49,15 +49,39 @@ namespace {
             "' function. It must not be na");
 }
 
-[[noreturn]] void max_bars_back_exceeded(long long length) {
+[[noreturn]] void max_bars_back_exceeded(std::uint64_t offset, std::int64_t maximum,
+                                         bool beyond_uint64 = false) {
     throw coded<std::runtime_error>(
         RunFailureCode::pine_runtime_limit,
-        {{"limit", "max_bars_back"}, {"max", SeriesWindowExtreme::kMaxBarsBack}},
+        {{"limit", "max_bars_back"}, {"max", maximum}},
         run_error_bar_prefix() +
         "The script attempts to reference historical data that is too far from "
-        "the current bar (" + std::to_string(length - 1) +
+        "the current bar (" + (beyond_uint64 ? "more than " : "") + std::to_string(offset) +
         " bars back). The historical buffer's limit is " +
-        std::to_string(SeriesWindowExtreme::kMaxBarsBack) + " bars.");
+        std::to_string(maximum) + " bars.");
+}
+
+void check_lookback(long long length, const char* function, std::int64_t maximum) {
+    if (length <= 0) length_not_positive(length, function, "length");
+    if (maximum != 0 && length - 1 > maximum) max_bars_back_exceeded(length - 1, maximum);
+}
+
+constexpr std::size_t kMaxHistorySlots = std::numeric_limits<std::size_t>::max() / sizeof(double);
+
+// A limit beyond addressable storage cannot cause eviction. The byte extent
+// check in grow_history still refuses a physical allocation that cannot fit.
+std::size_t history_limit(std::int64_t maximum) {
+    if (maximum == 0 || static_cast<std::uint64_t>(maximum) >= kMaxHistorySlots)
+        return 0;
+    return static_cast<std::size_t>(maximum) + 1;
+}
+
+std::size_t grow_history(std::size_t current, std::size_t minimum, std::size_t limit) {
+    if (minimum > kMaxHistorySlots)
+        throw coded<std::length_error>(RunFailureCode::scratch_capacity_exceeded,
+            {{"resource", "layout"}}, "history byte extent is not representable");
+    const auto grown = current ? std::min(kMaxHistorySlots, 2 * current) : HeldHistory::kChunk;
+    return std::min(limit ? limit : kMaxHistorySlots, std::max(minimum, grown));
 }
 
 // A Pine int length carried as a double: na stays na, anything else
@@ -112,15 +136,19 @@ int simple_ta_length(std::int64_t value, const char* function, const char* argum
 
 // --- HeldHistory ---
 
-void HeldHistory::ensure_slots(std::size_t keep) {
+void HeldHistory::ensure_slots(std::size_t minimum, std::size_t keep) {
+    if (minimum <= values_.size()) return;
     // The existing whole-chunk retirement can retain keep + kChunk - 1
-    // members. Leave room for the next write before that retirement.
-    const std::size_t chunks = keep / kChunk + (keep % kChunk != 0) + 1;
-    if (chunks > std::numeric_limits<std::size_t>::max() / kChunk)
+    // members. Grow in whole chunks, leaving room for that write.
+    const std::size_t max_chunks = kMaxHistorySlots / kChunk;
+    if (minimum > max_chunks * kChunk)
         throw coded<std::length_error>(RunFailureCode::scratch_capacity_exceeded,
             {{"resource", "layout"}}, "history byte extent is not representable");
+    const auto needed = minimum / kChunk + (minimum % kChunk != 0);
+    const auto limit = keep == 0 ? max_chunks : keep / kChunk + (keep % kChunk != 0) + 1;
+    const auto chunks = std::max(needed, std::min(std::min(limit, max_chunks),
+        2 * (values_.size() / kChunk)));
     const std::size_t slots = chunks * kChunk;
-    if (slots <= values_.size()) return;
     ::pineforge::detail::WindowValues<double> next(slots, na<double>(), values_.cache_capacity());
     for (long long i = 0; i < count_; ++i)
         next.write(static_cast<std::size_t>(i), at(first_bar_ + i));
@@ -133,14 +161,16 @@ std::size_t HeldHistory::slot(std::size_t offset) const {
     return offset >= remaining ? offset - remaining : head_ + offset;
 }
 
-void HeldHistory::push(double value) {
+void HeldHistory::push(double value, std::size_t keep) {
+    ensure_slots(static_cast<std::size_t>(count_) + 1, keep);
     values_.write(slot(static_cast<std::size_t>(count_)), value);
     ++count_;
 }
 
 void HeldHistory::drop_front_chunks(std::size_t keep) {
+    if (keep == 0) return;
     while (count_ > static_cast<long long>(kChunk) &&
-           count_ - static_cast<long long>(kChunk) >= static_cast<long long>(keep)) {
+           static_cast<std::uint64_t>(count_ - static_cast<long long>(kChunk)) >= keep) {
         values_.retire_page(head_ / kChunk);
         head_ = slot(kChunk);
         count_ -= static_cast<long long>(kChunk);
@@ -150,9 +180,8 @@ void HeldHistory::drop_front_chunks(std::size_t keep) {
 
 void HeldHistory::write(long long bar, double value, std::size_t keep) {
     if (count_ == 0) {
-        ensure_slots(keep);
         first_bar_ = bar;
-        push(value);
+        push(value, keep);
         return;
     }
     const long long last = last_bar();
@@ -161,12 +190,11 @@ void HeldHistory::write(long long bar, double value, std::size_t keep) {
         values_.write(slot(static_cast<std::size_t>(count_ - 1)), value);
         return;
     }
-    ensure_slots(keep);
-    // Skipped bars hold the last value. Only the `keep` newest bars can ever
-    // be read, so a longer gap restarts the history at its readable part.
+    // Skipped bars hold the last value. With a cap, a longer gap restarts
+    // the history at the first bar the window could still read.
     const double held = at(last);
     long long gap = bar - last - 1;
-    if (gap >= static_cast<long long>(keep)) {
+    if (keep != 0 && static_cast<std::uint64_t>(gap) >= keep) {
         values_.reset(values_.size(), na<double>());
         head_ = 0;
         count_ = 0;
@@ -174,12 +202,12 @@ void HeldHistory::write(long long bar, double value, std::size_t keep) {
         gap = static_cast<long long>(keep);
     }
     for (long long i = 0; i < gap; ++i) {
-        push(held);
+        push(held, keep);
         // Retiring complete chunks during the gap yields the same final base
         // as retiring after it, and keeps the physical ring bounded.
         drop_front_chunks(keep);
     }
-    push(value);
+    push(value, keep);
     drop_front_chunks(keep);
 }
 
@@ -192,6 +220,7 @@ double HeldHistory::at(long long bar) const {
 SeriesWindowExtreme::Result SeriesWindowExtreme::update(double src, long long length,
                                                         bool advance, bool want_max,
                                                         const char* function) {
+    check_lookback(length, function, max_lookback_);
     long long bar;
     long long origin;
     const ta::BarContext& ctx = ta::bar_context();
@@ -206,9 +235,6 @@ SeriesWindowExtreme::Result SeriesWindowExtreme::update(double src, long long le
         origin = 0;
     }
 
-    if (length <= 0) length_not_positive(length, function, "length");
-    if (length - 1 > kMaxBarsBack) max_bars_back_exceeded(length);
-
     // Every call of one bar re-applies from the state the bar found.
     if (!has_bar_ || bar != current_bar_) {
         saved_state_ = state_;
@@ -219,24 +245,22 @@ SeriesWindowExtreme::Result SeriesWindowExtreme::update(double src, long long le
     }
     BarState& s = state_;
     if (!s.started) first_exec_bar_ = bar;
-    history_.write(bar, src, static_cast<std::size_t>(kMaxBarsBack) + 1);
+    history_.write(bar, src, history_limit(max_lookback_));
 
     const auto better = [want_max](double a, double b) { return want_max ? a > b : a < b; };
-    // A member of the window: 1 = a value, 0 = na (resets the running
-    // extremum), -1 = before the context's first bar (does not exist).
-    const auto member = [&](long long at, double& value) -> int {
-        if (at < origin) return -1;
-        if (at < first_exec_bar_ || at < history_.first_bar()) return 0;
-        value = history_.at(at);
-        return is_na(value) ? 0 : 1;
-    };
     // Walks window offsets [from, to] oldest first into `running`.
     const auto walk = [&](long long from_k, long long to_k, Cache& running) {
+        // Before origin there are no bars. Unrecorded bars from origin to
+        // the first retained value all act as one na reset.
+        from_k = std::min(from_k, bar - origin);
+        const long long available = bar - std::max(first_exec_bar_, history_.first_bar());
+        if (from_k >= to_k && from_k > available) {
+            running.valid = false;
+            from_k = available;
+        }
         for (long long k = from_k; k >= to_k; --k) {
-            double v = 0.0;
-            const int kind = member(bar - k, v);
-            if (kind < 0) continue;
-            if (kind == 0) {
+            const double v = history_.at(bar - k);
+            if (is_na(v)) {
                 running.valid = false;
                 continue;
             }
@@ -298,110 +322,116 @@ SeriesWindowExtreme::Result SeriesWindowExtreme::update(double src, long long le
 
 namespace {
 
-long long series_length(double length, const char* function) {
-    long long value = 0;
-    // TradingView reports an na length as 0 (RE10001).
-    if (!length_value(length, value)) length_not_positive(0, function, "length");
-    return value;
+std::uint64_t series_length(double length, const char* function, std::int64_t maximum) {
+    if (!(length >= 1.0)) {
+        long long value = 0;
+        // TradingView reports an na length as 0 (RE10001).
+        length_value(length, value);
+        length_not_positive(value, function, "length");
+    }
+    if (length >= 0x1p64) {
+        constexpr auto last = std::numeric_limits<std::uint64_t>::max();
+        if (maximum != 0) max_bars_back_exceeded(last, maximum, length > 0x1p64);
+        return last;
+    }
+    // The unsigned conversion preserves the integer part, including 2^63.
+    const auto requested = static_cast<std::uint64_t>(length);
+    if (maximum != 0 && requested - 1 > static_cast<std::uint64_t>(maximum))
+        max_bars_back_exceeded(requested - 1, maximum);
+    return requested;
 }
 
 }  // namespace
 
+SeriesWindowExtreme::Result SeriesWindowExtreme::update_series(
+        double src, double length, bool advance, bool want_max, const char* function) {
+    const auto requested = series_length(length, function, max_lookback_);
+    const auto window = std::min(requested, static_cast<std::uint64_t>(LLONG_MAX));
+    return update(src, static_cast<long long>(window), advance, want_max, function);
+}
+
 double SeriesHighest::compute(double src, double length) {
-    return core_.update(src, series_length(length, "highest"), true, true, "highest").value;
+    return core_.update_series(src, length, true, true, "highest").value;
 }
 double SeriesHighest::recompute(double src, double length) {
-    return core_.update(src, series_length(length, "highest"), false, true, "highest").value;
+    return core_.update_series(src, length, false, true, "highest").value;
 }
 double SeriesLowest::compute(double src, double length) {
-    return core_.update(src, series_length(length, "lowest"), true, false, "lowest").value;
+    return core_.update_series(src, length, true, false, "lowest").value;
 }
 double SeriesLowest::recompute(double src, double length) {
-    return core_.update(src, series_length(length, "lowest"), false, false, "lowest").value;
+    return core_.update_series(src, length, false, false, "lowest").value;
 }
 double SeriesHighestBars::compute(double src, double length) {
-    return core_.update(src, series_length(length, "highestbars"), true, true, "highestbars")
-        .offset;
+    return core_.update_series(src, length, true, true, "highestbars").offset;
 }
 double SeriesHighestBars::recompute(double src, double length) {
-    return core_.update(src, series_length(length, "highestbars"), false, true, "highestbars")
-        .offset;
+    return core_.update_series(src, length, false, true, "highestbars").offset;
 }
 double SeriesLowestBars::compute(double src, double length) {
-    return core_.update(src, series_length(length, "lowestbars"), true, false, "lowestbars")
-        .offset;
+    return core_.update_series(src, length, true, false, "lowestbars").offset;
 }
 double SeriesLowestBars::recompute(double src, double length) {
-    return core_.update(src, series_length(length, "lowestbars"), false, false, "lowestbars")
-        .offset;
+    return core_.update_series(src, length, false, false, "lowestbars").offset;
 }
 
 // --- SeriesPercentileNearestRank ---
 
 void SeriesPercentileNearestRank::append(double src) {
-    constexpr std::size_t capacity =
-        static_cast<std::size_t>(SeriesWindowExtreme::kMaxBarsBack) + 1;
-    if (history_.empty()) history_.assign(capacity, na<double>());
+    const auto limit = history_limit(max_lookback_);
+    if (limit == 0 || history_.size() < limit) {
+        if (history_.size() == history_.capacity())
+            history_.reserve(grow_history(history_.capacity(), history_.size() + 1, limit));
+        history_.push_back(src);
+        return;
+    }
     history_[next_] = src;
-    next_ = (next_ + 1) % capacity;
-    if (count_ != capacity) ++count_;
+    next_ = (next_ + 1) % history_.size();
 }
 
 void SeriesPercentileNearestRank::replace_last(double src) {
-    if (count_ == 0) {
+    if (history_.empty()) {
         append(src);
         return;
     }
-    constexpr std::size_t capacity =
-        static_cast<std::size_t>(SeriesWindowExtreme::kMaxBarsBack) + 1;
-    history_[(next_ + capacity - 1) % capacity] = src;
+    history_[next_ ? next_ - 1 : history_.size() - 1] = src;
 }
 
 double SeriesPercentileNearestRank::history_at(std::size_t offset) const {
-    constexpr std::size_t capacity =
-        static_cast<std::size_t>(SeriesWindowExtreme::kMaxBarsBack) + 1;
-    const std::size_t oldest = count_ == capacity ? next_ : 0;
-    return history_[(oldest + offset) % capacity];
+    return history_[(next_ + offset) % history_.size()];
 }
 
-const std::vector<double>* SeriesPercentileNearestRank::rebuild_window(std::size_t length) {
-    window_.emplace(static_cast<int>(length));
-    window_length_ = length;
-    const std::size_t before = count_ - 1;
-    const std::size_t seed = std::min(before, length - 1);
-    for (std::size_t offset = before - seed; offset != before; ++offset)
+double SeriesPercentileNearestRank::evaluate(double src, std::uint64_t length,
+                                              double percentage, bool replace) {
+    const bool again = replace && !history_.empty();
+    if (again) replace_last(src);
+    else append(src);
+    // The eventual window is replayed in the same append order. Avoid
+    // allocating or ranking a requested window before it has enough samples.
+    if (length > history_.size()) {
+        window_.reset();
+        return na<double>();
+    }
+    const auto size = static_cast<std::size_t>(length);
+    if (window_ && window_length_ == size)
+        return ta::nearest_rank_of(again ? window_->repush(src) : window_->push(src), percentage);
+
+    window_.emplace(size, ta::PercentileWindow::ObservedLength{});
+    window_length_ = size;
+    const std::size_t before = history_.size() - 1;
+    for (std::size_t offset = history_.size() - size; offset != before; ++offset)
         window_->push(history_at(offset));
-    return window_->push(history_at(before));
+    return ta::nearest_rank_of(window_->push(src), percentage);
 }
 
 double SeriesPercentileNearestRank::compute(double src, double length, double percentage) {
-    const long long value = series_length(length, "percentile_nearest_rank");
-    if (value <= 0) length_not_positive(value, "percentile_nearest_rank", "length");
-    if (value - 1 > SeriesWindowExtreme::kMaxBarsBack)
-        max_bars_back_exceeded(value);
-    append(src);
-    const auto requested = static_cast<std::size_t>(value);
-    const std::vector<double>* ranked = nullptr;
-    if (!window_ || window_length_ != requested)
-        ranked = rebuild_window(requested);
-    else
-        ranked = window_->push(src);
-    return ta::nearest_rank_of(ranked, percentage);
+    const auto requested = series_length(length, "percentile_nearest_rank", max_lookback_);
+    return evaluate(src, requested, percentage, false);
 }
 
 double SeriesPercentileNearestRank::recompute(double src, double length, double percentage) {
-    const long long value = series_length(length, "percentile_nearest_rank");
-    if (value <= 0) length_not_positive(value, "percentile_nearest_rank", "length");
-    if (value - 1 > SeriesWindowExtreme::kMaxBarsBack)
-        max_bars_back_exceeded(value);
-    replace_last(src);
-    const auto requested = static_cast<std::size_t>(value);
-    const std::vector<double>* ranked = nullptr;
-    if (!window_ || window_length_ != requested)
-        ranked = rebuild_window(requested);
-    else
-        ranked = window_->repush(src);
-    return ta::nearest_rank_of(ranked, percentage);
+    const auto requested = series_length(length, "percentile_nearest_rank", max_lookback_);
+    return evaluate(src, requested, percentage, true);
 }
 
 void SeriesPercentileNearestRank::observe_owned_storage(OwnedStorage& out) const noexcept {
@@ -468,33 +498,33 @@ ta::SupertrendResult PineSupertrend::recompute(double factor, double atr_period,
 
 // --- SeriesSma ---
 
-std::size_t SeriesSma::checked_length(double current_length) {
+std::uint64_t SeriesSma::checked_length(double current_length) const {
     if (!std::isfinite(current_length)) length_na("sma", "length");
-    long long length = 0;
-    if (!length_value(current_length, length)) length_na("sma", "length");
-    if (length <= 0) length_not_positive(length, "sma", "length");
-    if (length - 1 > SeriesWindowExtreme::kMaxBarsBack)
-        max_bars_back_exceeded(length);
-    return static_cast<std::size_t>(length);
+    return series_length(current_length, "sma", max_lookback_);
 }
 
-void SeriesSma::ensure_capacity() {
-    if (history_.size() != 0) return;
-    // One bounded ring, independent of bars, current N and cache residency.
-    ::pineforge::detail::WindowValues<double> next(
-        kCapacity, na<double>(), history_.cache_capacity());
+void SeriesSma::ensure_capacity(std::size_t count) {
+    if (count <= history_.size()) return;
+    const auto capacity = grow_history(history_.size(), count, history_limit(max_lookback_));
+    // Growing storage has never wrapped, so the old prefix indices (including
+    // the rollback checkpoint) stay valid after the copy.
+    ::pineforge::detail::WindowValues<double> next(capacity, na<double>(), history_.cache_capacity());
+    for (std::size_t i = 0; i < count_; ++i)
+        next.write(i, history_.read(i));
     history_ = std::move(next);
 }
 
-double SeriesSma::mean(std::size_t length) const {
-    if (length > count_) return na<double>();
+double SeriesSma::mean(std::uint64_t requested) const {
+    if (requested > count_) return na<double>();
 
+    const auto length = static_cast<std::size_t>(requested);
+    const auto capacity = history_.size();
     double partials[::pineforge::detail::kWindowSumPartialCapacity];
     std::size_t parts = 0;
     const auto partial = [&partials](std::size_t i) -> double& { return partials[i]; };
-    const auto first = (head_ + kCapacity - length) % kCapacity;
-    const auto source = [this, first](std::size_t i) {
-        return history_.read((first + i) % kCapacity);
+    const auto first = (head_ + capacity - length) % capacity;
+    const auto source = [this, first, capacity](std::size_t i) {
+        return history_.read((first + i) % capacity);
     };
     std::size_t i = 0;
     for (; i != length; ++i) {
@@ -529,14 +559,16 @@ double SeriesSma::compute(double source, double current_length) {
     const auto length = checked_length(current_length);
     const auto previous_head = head_;
     const auto previous_count = count_;
+    const auto limit = history_limit(max_lookback_);
     // Save the oldest even on an NA call: a later replacement may evict it.
-    const double evicted = count_ == kCapacity
-        ? history_.read(head_) : na<double>();
+    const bool full = limit && count_ == limit;
+    const double evicted = full ? history_.read(head_) : na<double>();
     if (!is_na(source)) {
-        ensure_capacity();
+        if (!full) ensure_capacity(count_ + 1);
         history_.write(head_, source);
-        head_ = (head_ + 1) % kCapacity;
-        count_ = std::min(count_ + 1, kCapacity);
+        ++head_;
+        if (head_ == limit) head_ = 0;
+        if (!full) ++count_;
     }
     // Publish state only after the required reads/writes succeed.
     pre_update_head_ = previous_head;
@@ -548,21 +580,24 @@ double SeriesSma::compute(double source, double current_length) {
 
 double SeriesSma::recompute(double source, double current_length) {
     const auto length = checked_length(current_length);
+    const auto limit = history_limit(max_lookback_);
+    const bool full = limit && pre_update_count_ == limit;
     if (is_na(source)) {
         // A full-ring push replaced the pre-update oldest slot. Restore its
         // bytes before publishing the restored head/count, including on copies.
-        if (current_pushed_ && pre_update_count_ == kCapacity)
+        if (current_pushed_ && full)
             history_.write(pre_update_head_, pre_update_evicted_);
         head_ = pre_update_head_;
         count_ = pre_update_count_;
         current_pushed_ = false;
     } else {
-        ensure_capacity();
+        if (!full) ensure_capacity(pre_update_count_ + 1);
         // The restored prefix plus this source has exactly this final slot.
         // Write it directly: a failed second write cannot follow a rollback.
         history_.write(pre_update_head_, source);
-        head_ = (pre_update_head_ + 1) % kCapacity;
-        count_ = std::min(pre_update_count_ + 1, kCapacity);
+        head_ = pre_update_head_ + 1;
+        if (head_ == limit) head_ = 0;
+        count_ = pre_update_count_ + !full;
         current_pushed_ = true;
     }
     return mean(length);

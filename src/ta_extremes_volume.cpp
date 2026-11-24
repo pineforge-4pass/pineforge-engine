@@ -10,7 +10,7 @@
 #include <pineforge/ta.hpp>
 #include <pineforge/na.hpp>
 #include <pineforge/timeframe.hpp>
-
+#include <pineforge/detail/ta_lookback.hpp>
 #include "runtime_ambient.hpp"
 
 #include <algorithm>
@@ -1111,3 +1111,17 @@ double Range::recompute(double src) {
 
 } // namespace ta
 } // namespace pineforge
+
+namespace pineforge::detail {
+namespace {
+thread_local std::int64_t current_ta_lookback_limit = 0;
+}
+
+std::int64_t ta_lookback_limit() noexcept { return current_ta_lookback_limit; }
+
+std::int64_t exchange_ta_lookback_limit(std::int64_t maximum) noexcept {
+    const auto previous = current_ta_lookback_limit;
+    current_ta_lookback_limit = maximum;
+    return previous;
+}
+} // namespace pineforge::detail

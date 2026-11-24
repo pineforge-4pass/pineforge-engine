@@ -171,22 +171,23 @@ double Correlation::compute(double src1, double src2) {
 // PercentileWindow
 // ============================================================================
 
-PercentileWindow::PercentileWindow(int length) : length_(length) {
-    if (length_ > 0) {
-        ranked_.reserve(static_cast<std::size_t>(length_));
-    }
+PercentileWindow::PercentileWindow(int length)
+    : PercentileWindow(length > 0 ? static_cast<std::size_t>(length) : 0, ObservedLength{}) {}
+
+PercentileWindow::PercentileWindow(std::size_t length, ObservedLength) : length_(length) {
+    ranked_.reserve(length_);
 }
 
 const std::vector<double>* PercentileWindow::push(double src) {
-    if (length_ < 1) return nullptr;
-    left_at_ = -1;
-    if (static_cast<int>(history_.size()) == length_) {
+    if (length_ == 0) return nullptr;
+    left_at_ = npos;
+    if (history_.size() == length_) {
         const double left = history_.front();
         history_.pop_front();
         const auto at = std::find_if(ranked_.begin(), ranked_.end(), [&](double held) {
             return is_na(left) ? is_na(held) : held == left;
         });
-        left_at_ = static_cast<int>(at - ranked_.begin());
+        left_at_ = static_cast<std::size_t>(at - ranked_.begin());
         left_value_ = left;
         ranked_.erase(at);
     }
@@ -195,16 +196,16 @@ const std::vector<double>* PercentileWindow::push(double src) {
     // and an na held value is greater than nothing.
     const auto at = std::find_if(ranked_.begin(), ranked_.end(),
                                  [&](double held) { return held > src; });
-    entered_at_ = static_cast<int>(at - ranked_.begin());
+    entered_at_ = static_cast<std::size_t>(at - ranked_.begin());
     ranked_.insert(at, src);
-    return static_cast<int>(history_.size()) == length_ ? &ranked_ : nullptr;
+    return history_.size() == length_ ? &ranked_ : nullptr;
 }
 
 const std::vector<double>* PercentileWindow::repush(double src) {
-    if (entered_at_ < 0) return push(src);
+    if (entered_at_ == npos) return push(src);
     ranked_.erase(ranked_.begin() + entered_at_);
     history_.pop_back();
-    if (left_at_ >= 0) {
+    if (left_at_ != npos) {
         ranked_.insert(ranked_.begin() + left_at_, left_value_);
         history_.push_front(left_value_);
     }
@@ -213,11 +214,12 @@ const std::vector<double>* PercentileWindow::repush(double src) {
 
 // Element ceil(pct/100 * n) - 1 of the ranked window, clamped to its ends.
 double nearest_rank_of(const std::vector<double>* ranked, double percentage) {
-    if (ranked == nullptr) return na<double>();
-    const int n = static_cast<int>(ranked->size());
+    if (ranked == nullptr || ranked->empty()) return na<double>();
+    const auto n = ranked->size();
     const double rank = std::ceil(percentage / 100.0 * n);
     if (std::isnan(rank)) return na<double>();
-    return (*ranked)[static_cast<int>(std::min(std::max(rank, 1.0), static_cast<double>(n))) - 1];
+    if (rank >= static_cast<double>(n)) return ranked->back();
+    return (*ranked)[static_cast<std::size_t>(std::max(rank, 1.0)) - 1];
 }
 
 namespace {

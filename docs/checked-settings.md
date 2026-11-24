@@ -21,6 +21,8 @@ unknown script-preparation exceptions also fail stream begin with the
 preparation message and NOT_COMPLETED. Batch retains its historical behavior
 for these ordinary exceptions: preparation is disabled, the report is empty,
 the message is readable, and the run status is completed.
+An invalid numeric or boolean input read during preparation is a setting
+failure instead: it stops the run with status NOT_COMPLETED and names the input.
 
 Every checked setter and receipt query on a latched handle returns
 `PF_SETTINGS_RUN_FAILED` with the original message. A throwing legacy setter

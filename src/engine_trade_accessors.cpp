@@ -164,7 +164,10 @@ int BacktestEngine::classify_report_close_cause(const Trade& t) {
 }
 
 int BacktestEngine::closed_trade_close_cause(int i) const {
-    if (i < 0 || i >= report_trade_count()) return -1;
+    if (i < 0 || i >= report_trade_count()) {
+        trades_.check_not_released();
+        return -1;
+    }
     // Retained sealed rows have the same close cause as before publication.
     // get_report_trade() checks the ledger's history-retirement policy.
     // A physically erased row still raises the typed retired-history error.

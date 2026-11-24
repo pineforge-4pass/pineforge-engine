@@ -817,13 +817,13 @@ struct NativeTickContext {
 /// and left zeroed when that lookup has no answer. For a series built from the
 /// auxiliary feed (NativeSeriesSource::AuxiliaryFeed) a contributing bar is a
 /// FEED bar, while `delivered_at_ms` stays the accepted input it rides on.
-/// `completion` is Confirmed when the bucket completed on its own last
-/// contributing input bar, a bucket the session close clips included, and
-/// LazyComplete when the next period's first input closed it (a feed hole over
-/// its last slot). `delivered_at_ms` is the input bar the delivery rides on:
-/// under lookahead_off the input that completed the bucket (its own last
-/// contributing bar when Confirmed, the next period's first input bar when
-/// LazyComplete); under lookahead_on the bucket's first contributing bar.
+/// `completion` is Confirmed when the last contributing feed bar reaches
+/// the bucket's close, including a close clipped by the session. It is
+/// LazyComplete when an input reveals the close without a closing feed bar,
+/// including a primary slice with no auxiliary bars. `delivered_at_ms` is
+/// the accepted primary input's label: under lookahead_off, the input whose
+/// slice completed the bucket; under historical lookahead_on, the input
+/// whose slice held its first contributing feed bar.
 struct NativeTimeframeBarContext {
     std::size_t subscription = 0;
     native_calendar::NativeInterval interval{};
@@ -1368,6 +1368,8 @@ public:
     /// NativeRunSpec::event_retention keeps: under Window the command events
     /// the host has not yet acknowledged, and no driver point or account row;
     /// a read from below native_event_window_start() starts there.
+    /// After release_run_results(), new reads throw a coded std::logic_error
+    /// (engine_invariant). Returned snapshots retain their own data.
     std::vector<NativeMarketEvent> native_events(uint64_t after_ordinal) const;
     /// The host has read every event through `through_ordinal` (the bounded event journal).
     /// Under NativeEventRetention::Window the kernel drops the acknowledged

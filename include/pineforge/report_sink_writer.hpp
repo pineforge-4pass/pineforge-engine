@@ -118,6 +118,10 @@ public:
     /// incomplete until the trailer succeeds; no input or output I/O.
     pf_report_sink_diagnostics_v1 diagnostics() const noexcept;
 
+    /// Release the owned descriptor without publishing any further records.
+    /// Completed diagnostics remain readable. Borrowed descriptors are untouched.
+    void release() noexcept;
+
     /// At a completed-bar boundary, flush the last complete records and
     /// permanently abandon this stream without a trailer or a receipt.
     /// Does not close a borrowed fd; its owner closes it after native cleanup.

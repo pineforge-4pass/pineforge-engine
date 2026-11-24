@@ -138,13 +138,13 @@ bool passes_session_filter(const std::string& session,
                            int64_t bar_ms);
 
 // Floor bar_ms to local-calendar midnight in the given IANA timezone.
-// DST edge-case: if mktime() returns -1 (non-existent midnight — e.g.,
-// America/Havana, Pacific/Lord_Howe spring-forward), the implementation
-// retries with midnight + 1 h and midnight + 2 h to find a valid epoch
-// (i.e. uses the first available second after the gap). A warning is
-// logged once per occurrence via fprintf(stderr). The fallback is
-// conservative: the returned timestamp is never more than 2 hours later
-// than the true calendar-day start; downstream consumers
+// DST edge-case: if mktime() fails for midnight (it returns -1 and sets
+// errno), the implementation retries with midnight + 1 h and midnight + 2 h
+// and uses the first that converts. A result of -1 with errno unset is a
+// valid boundary (Unix second -1) and is kept. If no candidate converts,
+// the run stops with the coded run failure engine_unclassified_error;
+// nothing is printed to stderr. The returned timestamp is never more than
+// 2 hours later than the true calendar-day start; downstream consumers
 // (session_trading_day_open_ms) inherit the same semantics.
 int64_t calendar_day_open_local_ms(int64_t bar_ms, const std::string& tz);
 

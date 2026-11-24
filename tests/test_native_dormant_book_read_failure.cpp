@@ -6,6 +6,8 @@
 // These cases explicitly read damaged data and propagate the real failure
 // through public run/stream calls or the carried-failure guard.
 // Printed failure traces allow comparison of eager and dormant runs.
+// A stream ended on a partial slot now runs the same report point at that last
+// calculation as at a confirmed one; the partial-end rows pin this per policy.
 #include "../src/native_execution_consumer.hpp"
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
@@ -208,6 +210,139 @@ FailureTrace run(Mode mode, const char* name, bool enabled = true) {
     return {failure.code, h.native_state().failure.code, h.native_state().failure.operation,
             h.input_bars, h.script_bars, h.tick_callbacks, h.last_error()};
 }
+
+enum class Damage { None, Truncate, TruncateCarried };
+
+// The book spills as in Host. Three confirmed slots warm the stream up and one
+// print opens a fourth, so the fourth calculation is the partial one that
+// stream_end(true) finalizes; the spill files are damaged there, or not at all
+// in the control rows.
+class PartialEndHost final : public NativeStrategyHost {
+public:
+    explicit PartialEndHost(Damage damage) : damage_(damage) {}
+    std::size_t script_bars = 0;
+    std::size_t truncated = 0;
+    bool spilled = false;
+    bool carried = false;
+    std::vector<int> book_files;
+
+    NativeExecutionConsumer& consumer() {
+        return as_native_consumer(execution_consumer());
+    }
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+        ++script_bars;
+        if (script_bars == 1) {
+            for (std::size_t i = 0; i < resident; ++i) put(i);
+        } else if (script_bars == 2) {
+            // The next submission spills a row and opens the files to fault.
+            const auto before = unlinked_descriptors();
+            put(resident);
+            for (const int fd : unlinked_descriptors())
+                if (std::find(before.begin(), before.end(), fd) == before.end())
+                    book_files.push_back(fd);
+            for (std::size_t i = resident + 1; i < resident + 512; ++i) put(i);
+        } else if (script_bars == 4) {
+            spilled = consumer().request_core().book_spilled();
+            if (damage_ == Damage::None) return;
+            for (const int fd : book_files)
+                if (::ftruncate(fd, 0) == 0) ++truncated;
+            if (damage_ == Damage::TruncateCarried) {
+                // The noexcept kernel fold carries the REAL read failure;
+                // this rethrow confirms the carry and leaves it pending.
+                (void)consumer().continuation_hash();
+                try {
+                    consumer().request_core().rethrow_book_read_failure();
+                } catch (const std::exception&) {
+                    carried = true;
+                }
+            }
+        }
+    }
+private:
+    void put(std::size_t i) {
+        no::Request r{no::Transact{(i & 1) ? -1.0 : 1.0}, "rest", ""};
+        r.trigger = no::Limit{(i & 1) ? 200.0 : 50.0};
+        const auto result = submit(r);
+        require(result.handle.has_value(), "partial end request placement refused");
+    }
+    Damage damage_;
+};
+
+const char* policy_name(NativeReportPolicy policy) {
+    switch (policy) {
+    case NativeReportPolicy::HostRecorded: return "host-recorded";
+    case NativeReportPolicy::KernelRecorded: return "kernel-recorded";
+    case NativeReportPolicy::KernelRecordedAtHostMarks: return "kernel-recorded-at-host-marks";
+    }
+    return "unknown-policy";
+}
+
+const char* damage_name(Damage damage) {
+    switch (damage) {
+    case Damage::None: return "none";
+    case Damage::Truncate: return "truncate";
+    case Damage::TruncateCarried: return "truncate+carry";
+    }
+    return "unknown-damage";
+}
+
+// The partial end now runs the same report point as a confirmed calculation:
+// the partial branch of finalize_observed_tick_slot records through
+// record_script_report_point. There a book read failure that a noexcept fold
+// has already carried fails the stream under every report policy, and under
+// KernelRecorded the continuation hash also reads the spilled rows, so damaged
+// files fail it there even when nothing was carried. HostRecorded folds the
+// equity extremes there and KernelRecordedAtHostMarks folds nothing; neither
+// reads a book row, so truncated files alone do not fail them. Rows:
+//   KernelRecorded             none: completes; truncate, truncate+carry: fail
+//   KernelRecordedAtHostMarks  none, truncate: complete; truncate+carry: fails
+//   HostRecorded               none, truncate: complete; truncate+carry: fails
+// Every failing row ends with stream_end(true) false, a Failed lifecycle and
+// scratch_io_failed.
+void run_partial_end(NativeReportPolicy policy, Damage damage) {
+    PartialEndHost h(damage);
+    NativeRunSpec s;
+    s.identity = {"dormant-partial-end-read-failure", 1};
+    s.input_tf = "5"; s.script_tf = "5";
+    s.tickerid = "TEST:DORMANT"; s.timezone = "UTC"; s.session = "24x7";
+    s.slot_label_policy = NativeSlotLabelPolicy::FeedTolerant;
+    s.initial_capital = 1.0e9; s.point_value = 1; s.account_fx = 1;
+    s.report_policy = policy;
+    require(h.configure_native(s).status == NativeSetupStatus::Applied, "partial end run configuration refused");
+    std::array<Bar, 3> bars{};
+    for (std::size_t i = 0; i < bars.size(); ++i)
+        bars[i] = {100, 100, 100, 100, 1,
+                   1736121600000LL + static_cast<std::int64_t>(i) * 300000};
+    require(h.stream_begin(bars.data(), static_cast<int>(bars.size()), "5", "5"),
+            "partial end stream warmup failed");
+    require(h.stream_push_tick({1736122500000LL + 1000, 1, 100, 1}),
+            "partial end print opening the fourth slot failed");
+    const bool ended = h.stream_end(true);
+    const bool fails = damage == Damage::TruncateCarried
+        || (damage == Damage::Truncate && policy == NativeReportPolicy::KernelRecorded);
+    require(h.script_bars == 4, "partial end did not finalize exactly one partial calculation");
+    require(h.spilled && !h.book_files.empty(), "partial end book did not spill to an observable file");
+    if (damage != Damage::None)
+        require(h.truncated == h.book_files.size(), "partial end could not truncate a book file");
+    if (damage == Damage::TruncateCarried)
+        require(h.carried, "noexcept continuation fold did not carry the failed spill read");
+    const auto kind = h.native_state().kind;
+    if (fails) {
+        require(!ended, "partial end over an unreadable book returned success");
+        require(kind == NativeLifecycleKind::Failed, "partial end over an unreadable book did not fail the stream");
+        require(run_failure_value_of(h).code == RunFailureCode::scratch_io_failed,
+                (std::string("partial end read failure has the wrong code: ") + h.last_error()).c_str());
+        require(!h.last_error().empty(), "partial end read failure has no text");
+    } else {
+        require(ended && kind == NativeLifecycleKind::Completed,
+                (std::string("partial end did not complete: ") + h.last_error()).c_str());
+    }
+    std::printf("partial-end %s %s stream_end=%d state=%s script=%zu failure=%s text=%s\n",
+                policy_name(policy), damage_name(damage), ended ? 1 : 0,
+                kind == NativeLifecycleKind::Failed ? "failed" : "completed", h.script_bars,
+                fails ? run_failure_code_name(run_failure_value_of(h).code) : "none",
+                h.last_error().c_str());
+}
 } // namespace
 
 int main() {
@@ -218,6 +353,15 @@ int main() {
         const auto eager = run(Mode::Promotion, "promotion-eager", false);
         const auto dormant = run(Mode::Promotion, "promotion-dormant", true);
         require(eager == dormant, "spilled promotion read failure changed the eager failure code or callback");
+        // A partial stream end over an unreadable book: the rule and the nine
+        // expected rows are stated above run_partial_end.
+        const std::array<NativeReportPolicy, 3> policies{NativeReportPolicy::KernelRecorded,
+                                                         NativeReportPolicy::KernelRecordedAtHostMarks,
+                                                         NativeReportPolicy::HostRecorded};
+        const std::array<Damage, 3> damages{Damage::None, Damage::Truncate, Damage::TruncateCarried};
+        for (const auto policy : policies)
+            for (const auto damage : damages)
+                run_partial_end(policy, damage);
         return 0;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "test_native_dormant_book_read_failure: %s\n", e.what());

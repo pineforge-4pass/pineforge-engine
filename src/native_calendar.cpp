@@ -214,14 +214,13 @@ std::optional<int64_t> mktime_candidate(const CivilStamp& c, int isdst, const st
     t.tm_min = c.minute;
     t.tm_sec = c.second;
     t.tm_isdst = isdst;
-    time_t sec;
     if (is_utc_zone(tz)) {
         // timegm is not required: UTC civil is exact integer math.
         return utc_civil_ms(c);
     }
     tz_util::ScopedTimezone guard(tz);
-    sec = mktime(&t);
-    if (sec == static_cast<time_t>(-1)) return std::nullopt;
+    const time_t sec = mktime(&t);
+    // -1 is also a Unix second. The round trip verifies whether it fits.
     std::tm back{};
     if (localtime_r(&sec, &back) == nullptr) return std::nullopt;
     if (!stamp_matches_tm(c, back)) return std::nullopt;

@@ -33,9 +33,9 @@ from pathlib import Path
 
 DEFAULT_IMAGE = os.environ.get(
     "PINEFORGE_RELEASE_IMAGE", "ghcr.io/pineforge-4pass/pineforge-release:latest")
-# The reviewed engine-step/v1 producer, docker/entrypoint.sh at this source base.
+# The reviewed engine-step/v1 producer from this tree: docker/entrypoint.sh.
 # An older installed producer could ignore BUILD_ONLY and execute bars.
-_BUILD_ONLY_ENTRYPOINT_SHA256 = "a529102f475efe9eaa18c194f522c50be840c067648d1fe7e39ab2556ed7af93"
+_BUILD_ONLY_ENTRYPOINT_SHA256 = "680160eae62aca428de3e4aab418aa59be8d9c46287034092f4dbb888c9517d6"
 
 
 class ReleaseRunError(RuntimeError):

@@ -29,7 +29,7 @@ these recomputation controls.
 | Symbol | Purpose | Default | Changes history when off? |
 | --- | --- | --- | --- |
 | `strategy_request_abort` | Set a cooperative abort flag, consumed by the run in progress, checked at the top of the batch run's ordinary and aggregated paths. | N/A — an action, not configuration; cleared at `run()` entry. | No |
-| `strategy_last_run_status` | `0` completed, `1` `NOT_COMPLETED` (aborted), `-1` if `s` is `NULL`. | N/A — read-only. | No |
+| `strategy_last_run_status` | `0` completed, `1` `NOT_COMPLETED` (failed, aborted, or void setter failure), `-1` if `s` is `NULL`. A zero status alone does not establish success; read `strategy_get_last_error` and `strategy_get_last_error_code` after every start. | N/A — read-only. | No |
 | `strategy_set_realtime_tail` | Mark the array's last bar as a still-forming tail (§3.1 semantics below). | Off (`on == 0`). | No |
 | `strategy_set_probe_suppress_tail_logic` | Run only the broker's pre-`on_bar` steps on the last bar and stop (§3.2 below). | Off (`on == 0`). | No |
 | `strategy_set_path_order` | Force the intrabar leg order used by every OHLC-path helper (§3.3 below). | `0` AUTO (the unchanged TV-emulator "nearer-to-open" rule). | No |
@@ -69,38 +69,30 @@ configuration**, not one-shot: it stays in effect until a caller passes
 `on == 0`. When `on` is non-zero:
 
 1. `barstate.islast` is false for that bar.
-2. `session.islastbar` is derived from the bucket calendar (no next bar to
-   peek at, so it asks whether the next bucket — this bar's timestamp plus
-   one script-TF step — falls out of session, or belongs to another session
-   day), pinned to agree with the `i+1` lookahead on every interior bar of
-   the 24x7 execution paths. Since the kernel session-day integration that is the kernel's answer, not the
-   host's: the tail bar reads `NativeDecisionContext::closes_session_day_open_ended`
-   (`market_driver.hpp:164`), the same fact as `closes_session_day` on every
-   bar except a batch's final one, which it reads off the calendar instead
-   of the run end. Historical bars read early closes correctly from the
-   session day alone, with no holiday calendar; a *forming* tail bar
-   cannot, because the calendar step it takes is one the session string
-   declares as open. That is a ruled retention (ADR-0001, ruling
-   "Session-day facts at a bar with nothing held after it"): the remedy
-   is an early-close calendar, which the run spec does not carry.
+2. The Pine host starts `session.islastbar_regular` and `session.islastbar`
+   from the kernel's `NativeDecisionContext::closes_session_day_open_ended`
+   (`market_driver.hpp:164`). On the forming tail the kernel uses the next
+   eligible input slot in the recurring session instead of treating the end
+   of the batch as a close. This fallback cannot see an early close absent
+   from the session string. If a regular intraday bar opens at or after a
+   supplied dated interval's open and before its close, Pine sets both flags
+   to whether the bar's open plus one chart timeframe step reaches or passes
+   the dated close. On an extended-hours chart a following post-market bar
+   of the same day can move `session.islastbar` to a later bar; the regular
+   flag stays put.
 3. `bar_index` stays put; `last_bar_index` is frozen at the horizon bar
    (`horizon_bars - 1`), when `horizon_bars > 0`. `last_bar_time` is exact
    when the horizon bar is in the script-bar array, one script-TF step per
    missing bar past the array's last bar otherwise; under aggregation
-   (`input_tf < script_tf`) it is extrapolated from the first bar instead,
-   and the aggregation-path caveat below applies.
+   (`input_tf < script_tf`) it is extrapolated from the first bar instead.
 4. The range-end synthetic close row/trade is skipped (no `open_at_end`
    row); the final equity point keeps `open_profit`, and the drawdown/runup
    scalars are folded without the range-end row.
-5. Interior bars (every bar before the last) are unaffected.
+5. The tail flag leaves the kernel's session close facts for interior bars unchanged.
 
-Dispatch-path scope: all four effects are honoured on every dispatch path,
-including effect 2. This paragraph used to scope effect 2 to one removed
-loop, deny that the single-timeframe `run(bars, n)` overload evaluates session
-predicates, and call effect 2 UNDEFINED under aggregation; all three were measured false. On an RTH tape that ends
-at the session close — so the calendar lookahead answers "last" while
-`in_session && barstate.islast` cannot, this flag having forced
-`barstate.islast` off — every path flags the tail bar from the calendar:
+The session flags are evaluated when the timeframe is known, including on
+the aggregated and magnified batch paths. With no dated override, a tape
+of regular-session bars ending at the scheduled close gives:
 
 | path | `session.ismarket` | `session.islastbar` | `barstate.islast` |
 |---|---|---|---|
@@ -109,18 +101,30 @@ at the session close — so the calendar lookahead answers "last" while
 | `run(1, 5)` aggregation | `111111` | `000001` | `000000` |
 | `run(1, 5)` aggregation, magnifier | `111111` | `000001` | `000000` |
 
-Read the tail bar's `session.islastbar` column: `1` is the calendar
-lookahead's answer, and the legacy expression could only have produced `0`.
-The one dispatch-path caveat that remains is not this flag's, and it is
-narrower than it was: every historical bar ends its session at the session
-day (the session-day rule), so a non-24x7 tape's early closes are read from the tape
-itself. Only the forming tail bar is left — its calendar step cannot know a
-close the session string does not declare — and that residue is ruled, not
-open (ADR-0001, ruling "Session-day facts at a bar with nothing held after
-it"): it needs an early-close calendar the run spec does not carry.
+To supply a dated Pine chart calendar before the run:
 
-Default off (`on == 0`): every historical run stays byte-identical to
-before this flag existed.
+- C++ hosts call `PineStrategyHost::set_symbol_calendar` with ascending,
+  nonoverlapping `(open_ms, close_ms)` pairs in epoch milliseconds.
+- C hosts call `strategy_set_syminfo_metadata` with `symbol_calendar_days`
+  set to the number of days, and `symbol_calendar_open:<i>` and
+  `symbol_calendar_close:<i>` set to each day's endpoints in epoch milliseconds.
+  Index from `0` and supply all days in ascending, nonoverlapping order.
+  The Pine host installs the calendar when the run begins.
+- With `scripts/run_strategy.py`, use `--runner ctypes` and point
+  `PINEFORGE_RUN_SESSION_CALENDAR` at a `pineforge-symbol-calendar/v1` JSON file.
+  Its `sessions` array holds the same pairs.
+  Optionally set `PINEFORGE_RUN_SESSION_CALENDAR_SHA256` to the file's SHA-256 digest.
+
+For example, on a regular 15-minute chart with `0930-1600:23456` in UTC,
+both flags are false on a forming 12:45 bar on 2025-01-02 without an
+override. Both are true on the same bars if that day's supplied interval
+is 09:30 to 13:00 UTC. The override also applies to covered regular
+intraday bars in historical runs. It does not add dated intervals to
+`NativeRunSpec`, change the kernel's close or seal decisions or gap
+acceptance, or add missing bars.
+
+With the tail flag off (`on == 0`, the default), the run keeps the ordinary
+historical batch semantics.
 
 ### §3.2 — `strategy_set_probe_suppress_tail_logic(s, on)`
 
@@ -182,10 +186,12 @@ at +0, +5 and +10 minutes with the flag off, and +0 and +5 with it on. The
 bucket opening at +15, which holds only two of its five inputs, appears on
 neither.
 
-`strategy_stream_begin` does not need this flag cleared: it **refuses**
-while either historical override is set, with
-`native stream cannot use historical probe/tail overrides`. A one-bar array
-is all tail, so `run(bars, 1)` under this flag calculates nothing.
+On a Pine handle, both historical overrides must be off before calling
+`strategy_stream_begin`. Clear them with `strategy_set_realtime_tail(s, 0, 0)`
+and `strategy_set_probe_suppress_tail_logic(s, 0)`. If either flag is set,
+stream begin refuses with `native stream cannot use historical probe/tail overrides`.
+
+A one-bar array is all tail, so `run(bars, 1)` under this flag calculates nothing.
 
 Under `process_orders_on_close`, a carried position's margin checkpoints are
 not skipped on the suppressed last bar: the bar-open slice, the kernel's path
@@ -263,8 +269,10 @@ existed.
 by the run in progress and cleared at `run()` entry (a no-op when idle),
 checked at the top of every batch path and stream input loop.
 `strategy_last_run_status(s)` (an append-only status accessor) reports
-whether the most recent run completed
-(`0`) or was aborted (`1`, `NOT_COMPLETED`); `-1` if `s` is `NULL`. The CTest row `test_live_flags_off_identity` pins
+whether the handle is complete (`0`) or `NOT_COMPLETED` (`1`, for a failed
+or aborted run or a void setter failure); `-1` if `s` is `NULL`. A zero
+status alone does not establish success, so read `strategy_get_last_error`
+and `strategy_get_last_error_code` after every start. The CTest row `test_live_flags_off_identity` pins
 **"abort before run → run completes"**: requesting an abort before a run
 starts must not prevent that run from completing, since the flag is
 cleared fresh at `run()` entry.
@@ -372,5 +380,5 @@ libraries already built (`SKIP_RUN=1 SKIP_VERIFY=1 JOBS=8
 scripts/run_corpus.sh`); see each script's own `--help` / module docstring
 for flags.
 
-@see @ref streaming for why the live runtime does not use the
-`strategy_stream_*` lifecycle instead of this surface.
+@see @ref streaming for the `strategy_stream_*` lifecycle used by the native
+`pineforge-live` runner.
