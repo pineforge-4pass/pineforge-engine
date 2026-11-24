@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_falling_na_recompute)
+pineforge_add_unit_test(test_falling_na_recompute)
