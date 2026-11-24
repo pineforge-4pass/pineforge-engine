@@ -10,10 +10,10 @@
 #include <pineforge/ta.hpp>
 #include <pineforge/na.hpp>
 #include <pineforge/ta_compare_band.hpp>
+#include "ta_observation_count.hpp"
 
 #include <algorithm>
 #include <cmath>
-#include <numeric>
 #include <string>
 #include <vector>
 
@@ -50,7 +50,7 @@ double RSI::compute(double src) {
 
     if (bar_count == 0) {
         prev_src = src;
-        bar_count++;
+        bar_count = 1;
         return na<double>();
     }
 
@@ -62,7 +62,7 @@ double RSI::compute(double src) {
     double rma_down_val = rma_down.compute(down);
 
     prev_src = src;
-    bar_count++;
+    detail::advance_observation_count(bar_count);
 
     if (is_na(rma_up_val) || is_na(rma_down_val)) {
         return na<double>();
@@ -487,7 +487,7 @@ double MFI::compute(double src, double vol) {
     saved_bar_count_ = bar_count_;
     saved_pos_buffer_ = pos_buffer_;
     saved_neg_buffer_ = neg_buffer_;
-    bar_count_++;
+    detail::advance_observation_count(bar_count_);
     double pos = 0, neg = 0;
     if (!is_na(prev_src_)) {
         double mf = src * vol;
@@ -499,7 +499,7 @@ double MFI::compute(double src, double vol) {
     prev_src_ = src;
     pos_buffer_.push_front(pos);
     neg_buffer_.push_front(neg);
-    if (bar_count_ < length_ + 1) return na<double>();
+    if (saved_bar_count_ < length_) return na<double>();
     double pos_sum = 0, neg_sum = 0;
     for (std::size_t i = pos_buffer_.size(); i > 0; --i) {
         pos_sum += pos_buffer_[i - 1];
@@ -533,7 +533,7 @@ double CMO::compute(double src) {
     saved_bar_count_ = bar_count_;
     saved_up_buffer_ = up_buffer_;
     saved_down_buffer_ = down_buffer_;
-    bar_count_++;
+    detail::advance_observation_count(bar_count_);
     double up = 0, down = 0;
     if (!is_na(prev_src_)) {
         double diff = src - prev_src_;
@@ -543,7 +543,7 @@ double CMO::compute(double src) {
     prev_src_ = src;
     up_buffer_.push_front(up);
     down_buffer_.push_front(down);
-    if (bar_count_ < length_ + 1) return na<double>();
+    if (saved_bar_count_ < length_) return na<double>();
     double up_sum = 0, down_sum = 0;
     for (std::size_t i = up_buffer_.size(); i > 0; --i) {
         up_sum += up_buffer_[i - 1];

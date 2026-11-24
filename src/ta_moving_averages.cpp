@@ -11,11 +11,11 @@
 #include <pineforge/na.hpp>
 
 #include "runtime_ambient.hpp"
+#include "ta_observation_count.hpp"
 #include "window_sum_expansion.hpp"
 
 #include <algorithm>
 #include <cmath>
-#include <numeric>
 #include <string>
 #include <utility>
 #include <vector>
@@ -125,7 +125,7 @@ double KahanWindowSum::push(double src) {
     window_[head_] = src;
     ++size_;
     if (!finite || !add(src)) recover();
-    ++count_;
+    detail::advance_observation_count(count_);
     return sum();
 }
 
@@ -186,12 +186,12 @@ double RMA::compute(double src) {
         return na<double>();
     }
 
-    bar_count++;
+    detail::advance_observation_count(bar_count);
 
-    if (bar_count <= length) {
+    if (saved_bar_count_ < length) {
         // The seed is the first fixed SMA: push valid sources in order, then
-        // divide the emitted sum by length. The subsequent recursion never
-        // pushes or evicts a source from this window.
+        // divide the emitted sum by length. The pre-bar count distinguishes
+        // the last seed input even when length is INT_MAX.
         const double window_sum = seed_window_.push(src);
         seed_pushed_ = true;
         if (bar_count < length) {
@@ -318,7 +318,7 @@ double EMA::compute(double src, bool input_ready) {
         // warm-up window. Once output_val is finite the series is seeded.
         if (is_na(output_val)) {
             sum += src;
-            bar_count++;
+            detail::advance_observation_count(bar_count);
             if (bar_count < length_) {
                 return na<double>();
             }
@@ -328,7 +328,7 @@ double EMA::compute(double src, bool input_ready) {
             return output_val;
         }
         output_val = ema_step(alpha, src, output_val);
-        bar_count++;
+        detail::advance_observation_count(bar_count);
         return output_val;
     }
 
@@ -343,7 +343,7 @@ double EMA::compute(double src, bool input_ready) {
     }
 
     output_val = ema_step(alpha, src, output_val);
-    bar_count++;
+    detail::advance_observation_count(bar_count);
     return output_val;
 }
 

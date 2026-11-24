@@ -12,12 +12,12 @@
 #include <pineforge/timeframe.hpp>
 #include <pineforge/detail/ta_lookback.hpp>
 #include "runtime_ambient.hpp"
+#include "ta_observation_count.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <functional>
-#include <numeric>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -525,13 +525,13 @@ double OBV::compute(double close, double volume) {
     // TradingView's OBV term needs the previous bar's close, so the first bar has no value.
     if (bar_count_ == 0) {
         prev_close_ = close;
-        bar_count_++;
+        bar_count_ = 1;
         return na<double>();
     }
     if (close > prev_close_) sum_ += volume;
     else if (close < prev_close_) sum_ -= volume;
     prev_close_ = close;
-    bar_count_++;
+    detail::advance_observation_count(bar_count_);
     return sum_;
 }
 
@@ -556,7 +556,7 @@ double NVI::compute(double close, double volume) {
     if (bar_count_ == 0) {
         prev_close_ = close;
         prev_volume_ = volume;
-        bar_count_++;
+        bar_count_ = 1;
         return nvi_;
     }
     if (volume < prev_volume_ && prev_close_ != 0.0) {
@@ -564,7 +564,7 @@ double NVI::compute(double close, double volume) {
     }
     prev_close_ = close;
     prev_volume_ = volume;
-    bar_count_++;
+    detail::advance_observation_count(bar_count_);
     return nvi_;
 }
 
@@ -578,7 +578,7 @@ double PVI::compute(double close, double volume) {
     if (bar_count_ == 0) {
         prev_close_ = close;
         prev_volume_ = volume;
-        bar_count_++;
+        bar_count_ = 1;
         return pvi_;
     }
     if (volume > prev_volume_ && prev_close_ != 0.0) {
@@ -586,7 +586,7 @@ double PVI::compute(double close, double volume) {
     }
     prev_close_ = close;
     prev_volume_ = volume;
-    bar_count_++;
+    detail::advance_observation_count(bar_count_);
     return pvi_;
 }
 
