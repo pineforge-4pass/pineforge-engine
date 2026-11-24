@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_recorded_session_grid_labels)
+pineforge_add_unit_test(test_recorded_session_grid_labels)
