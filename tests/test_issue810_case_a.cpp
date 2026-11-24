@@ -1333,6 +1333,18 @@ std::vector<Comparison> step_checks(const Observed& seen, Mode mode) {
             require_events(r);
             r.one(entries.size(), "Long fill count");
             require_run(r, seen, mode, step_end_close_bar(mode) + 1);
+            if (fill) {
+                r.require(fill->bar >= 0 && fill->bar <= seen.last_source_bar,
+                          "fill bar outside observation", fill->bar, kStepSignalBar);
+                const auto phase = static_cast<int>(fill->phase);
+                const auto close = static_cast<int>(NativePathPhase::Close);
+                r.require(fill->phase >= NativePathPhase::Open && fill->phase <= NativePathPhase::Close,
+                          "fill phase unavailable", phase, close);
+                r.expect(fill->bar == kStepSignalBar, "fill bar", fill->bar, kStepSignalBar);
+                r.expect(phase == close, "fill phase", phase, close);
+                r.expect(fill->after_calculation_close, "after-calculation close",
+                         fill->after_calculation_close, true);
+            }
             return r;
         };
         const auto positive = at_signal_close(entry);
