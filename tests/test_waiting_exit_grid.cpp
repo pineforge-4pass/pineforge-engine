@@ -270,5 +270,11 @@ int main(int argc, char** argv) {
         const bool limit_buy = check({"limit-long", Parent::Limit, true, 100, "", false, true});
         return buy && sell && limit_sell && limit_buy ? 0 : 1;
     }
+    if (row == "partial") {
+        const bool buy = check({"two-halves-partial-long", Parent::Working, true, 75});
+        const bool sell = check({"two-halves-partial-short", Parent::Working, false, 75});
+        const bool full = check({"two-halves-full-short", Parent::Working, false, 100});
+        return buy && sell && full ? 0 : 1;
+    }
     return 2;
 }
