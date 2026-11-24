@@ -16504,6 +16504,18 @@
    "ordinal": 1
   },
   {
+   "file": "src/engine_run.cpp",
+   "symbol": "input_error_message",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void reject_input ( const std :: string & key , const char * expected ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
    "file": "src/engine_security.cpp",
    "symbol": "runtime_subdivide",
    "scope": [
@@ -19650,6 +19662,7 @@
     "namespace pineforge #1",
     "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: apply_spec ( BacktestEngine & engine , const NativeRunSpec & spec ) #1",
+    "if ( ! engine . account_fx_identity_ ) #1",
     "if ( staged_fx_curve_ ) #1"
    ],
    "cls": "assign",
@@ -19663,6 +19676,7 @@
     "namespace pineforge #1",
     "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: apply_spec ( BacktestEngine & engine , const NativeRunSpec & spec ) #1",
+    "if ( ! engine . account_fx_identity_ ) #1",
     "if ( staged_fx_curve_ ) #1"
    ],
    "cls": "assign",
@@ -19714,7 +19728,7 @@
     "namespace pineforge #1",
     "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: apply_spec ( BacktestEngine & engine , const NativeRunSpec & spec ) #1",
-    "else #2"
+    "else #1"
    ],
    "cls": "assign",
    "spelling": "input_tf_ = . . .",
@@ -19727,7 +19741,7 @@
     "namespace pineforge #1",
     "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: apply_spec ( BacktestEngine & engine , const NativeRunSpec & spec ) #1",
-    "else #2"
+    "else #1"
    ],
    "cls": "assign",
    "spelling": "script_tf_ = . . .",
@@ -20058,6 +20072,19 @@
   },
   {
    "file": "src/native_execution_consumer.cpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "class NativeExecutionConsumer :: CommandOpeningObservations final : public native_order :: OpeningObservationReadback #1",
+    "detail :: ScratchStatus observation_at ( std :: uint64_t i , native_order :: OpeningObservation & out ) const noexcept override #1"
+   ],
+   "cls": "assign",
+   "spelling": "out = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
    "symbol": "reason",
    "scope": [
     "namespace pineforge #1",
@@ -20370,7 +20397,8 @@
    "scope": [
     "namespace pineforge #1",
     "inline namespace engine_script_run_v20 #1",
-    "void NativeExecutionConsumer :: read_openings_into ( const BacktestEngine & engine , const std :: vector < native_order :: RequestHandle > & handles , int64_t cycle , std :: vector < native_order :: OpeningObservation > & out ) const #1"
+    "void NativeExecutionConsumer :: read_openings_into ( const BacktestEngine & engine , const std :: vector < native_order :: RequestHandle > & handles , int64_t cycle , std :: vector < native_order :: OpeningObservation > & out , const native_order :: OpeningReadback * frozen ) const #1",
+    "if ( frozen ) #1"
    ],
    "cls": "grow",
    "spelling": "out . reserve ( . . . )",
@@ -20382,7 +20410,33 @@
    "scope": [
     "namespace pineforge #1",
     "inline namespace engine_script_run_v20 #1",
-    "void NativeExecutionConsumer :: read_openings_into ( const BacktestEngine & engine , const std :: vector < native_order :: RequestHandle > & handles , int64_t cycle , std :: vector < native_order :: OpeningObservation > & out ) const #1",
+    "void NativeExecutionConsumer :: read_openings_into ( const BacktestEngine & engine , const std :: vector < native_order :: RequestHandle > & handles , int64_t cycle , std :: vector < native_order :: OpeningObservation > & out , const native_order :: OpeningReadback * frozen ) const #1",
+    "if ( frozen ) #1",
+    "+ + i ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "out . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: read_openings_into ( const BacktestEngine & engine , const std :: vector < native_order :: RequestHandle > & handles , int64_t cycle , std :: vector < native_order :: OpeningObservation > & out , const native_order :: OpeningReadback * frozen ) const #1"
+   ],
+   "cls": "grow",
+   "spelling": "out . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: read_openings_into ( const BacktestEngine & engine , const std :: vector < native_order :: RequestHandle > & handles , int64_t cycle , std :: vector < native_order :: OpeningObservation > & out , const native_order :: OpeningReadback * frozen ) const #1",
     "for ( const auto & handle : handles ) #1"
    ],
    "cls": "grow",
@@ -22155,7 +22209,7 @@
    "scope": [
     "namespace pineforge #1",
     "inline namespace engine_script_run_v20 #1",
-    "void BacktestEngine :: prepare_scratch_table_run ( const detail :: ScratchTableConfig & config ) #1",
+    "void BacktestEngine :: prepare_scratch_table_run ( const detail :: ScratchTableConfig & config , std :: uint64_t live_order_ids_limit ) #1",
     "switch ( config . backend ) #1"
    ],
    "cls": "alloc",
@@ -23437,6 +23491,20 @@
   },
   {
    "file": "src/native_order.cpp",
+   "symbol": "openings",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "namespace #3",
+    "template < class Ar > void archive_external_openings ( Ar & ar , std :: shared_ptr < const OpeningReadback > & external ) #1",
+    "else #1"
+   ],
+   "cls": "grow",
+   "spelling": "openings . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
    "symbol": "external",
    "scope": [
     "namespace pineforge :: native_order #1",
@@ -23625,7 +23693,22 @@
     "namespace pineforge :: native_order #1",
     "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1",
-    "void spill_front_chunk ( ) #1"
+    "void spill_front_chunk ( ) #1",
+    "if ( spanning ) #2"
+   ],
+   "cls": "grow",
+   "spelling": "data . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
+   "symbol": "data",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "struct WorkingRequestCore :: JournalStore #1",
+    "void spill_front_chunk ( ) #1",
+    "else #1"
    ],
    "cls": "grow",
    "spelling": "data . append ( . . . )",
@@ -30719,7 +30802,8 @@
     "template < class A > struct Schema #1",
     "void draft ( const Path & p , Draft & x ) #1",
     "if ( present ) #1",
-    "if constexpr ( A :: loading ) #1"
+    "if constexpr ( A :: loading ) #1",
+    "if constexpr ( A :: owning ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_shared",
@@ -30778,21 +30862,6 @@
     "namespace #1",
     "class PayloadInput #1",
     "template < class T > void scalar ( T & value ) #1",
-    "if constexpr ( std :: is_enum_v < T > ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "value = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/exit_scratch_versions_production.cpp",
-   "symbol": "value",
-   "scope": [
-    "namespace pineforge :: source :: detail #1",
-    "namespace #1",
-    "class PayloadInput #1",
-    "template < class T > void scalar ( T & value ) #1",
-    "else #1",
     "else if constexpr ( std :: is_signed_v < T > ) #1"
    ],
    "cls": "assign",
@@ -30807,7 +30876,6 @@
     "namespace #1",
     "class PayloadInput #1",
     "template < class T > void scalar ( T & value ) #1",
-    "else #1",
     "else #1"
    ],
    "cls": "assign",
@@ -30898,6 +30966,18 @@
    ],
    "cls": "decl",
    "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/exit_scratch_versions_production.cpp",
+   "symbol": "openings",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "namespace #1",
+    "template < class . . . T > std :: uint64_t put_request_version ( CommandScratchStore & store , std :: uint64_t scope , std :: uint64_t kind , const native_order :: Request & request , const T & . . . rest ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "openings . resize ( . . . )",
    "ordinal": 1
   },
   {
@@ -31704,6 +31784,17 @@
    ],
    "cls": "assign",
    "spelling": "session = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_account_currency.hpp",
+   "symbol": "receipt",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "static bool compiled_account_uses_quote ( BacktestEngine & host , const std :: string & quote ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < char >",
    "ordinal": 1
   },
   {
@@ -37928,7 +38019,7 @@
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_delayed_orders ( bool explicit_brackets_only , double current_open ) #1",
     "for ( auto & order : delayed ) #1",
-    "if ( order . release_open_epoch < = broker_open_epoch_ && ( ! explicit_brackets_only || explicit_bracket || coof_delayed_price ) ) #1",
+    "if ( order . release_open_epoch < = broker_open_epoch_ && ( ! explicit_brackets_only || explicit_bracket || coof_delayed_price || order . release_priced_at_open ) ) #1",
     "if ( accepted && ( family = = PineOrderFamily :: ExitLimit || family = = PineOrderFamily :: ExitStop || family = = PineOrderFamily :: ExitTrail ) ) #1"
    ],
    "cls": "grow",
@@ -41656,22 +41747,7 @@
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: on_applied ( const native_order :: ExecutionAppliedEvent & event , const NativeDecisionContext & context ) #1",
     "if ( placement_snapshot && placement_snapshot -> opening && std :: abs ( event . opened_units ) > 0 . 0 ) #1",
-    "const bool partial_prearmed_parent = std :: isfinite ( [ & ] ( ) #1",
-    "for ( const auto & handle : live_handles_ ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "pending = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: on_applied ( const native_order :: ExecutionAppliedEvent & event , const NativeDecisionContext & context ) #1",
-    "if ( placement_snapshot && placement_snapshot -> opening && std :: abs ( event . opened_units ) > 0 . 0 ) #1",
-    "( ) ) && [ & ] ( ) #1",
-    "for ( const auto & handle : live_handles_ ) #1"
+    "for ( const auto & handle : live_handles_ ) #2"
    ],
    "cls": "assign",
    "spelling": "pending = . . .",
@@ -44880,7 +44956,7 @@
     "namespace pineforge #1",
     "void source :: PineStrategyHost :: pine_feed_security_eval_state ( SecurityEvalState & state , const Bar & input_bar , bool calling_bar_complete ) #1",
     "if ( pine_native_fixed_security_clock ( state ) ) #1",
-    "else #1",
+    "const auto input_horizon = [ & ] #1",
     "if ( calling ) #1"
    ],
    "cls": "assign",
@@ -46384,7 +46460,7 @@
     "void source :: PineStrategyHost :: RequestCallerIds :: emplace ( const RequestCallerKey & key , std :: uint64_t caller ) #1"
    ],
    "cls": "grow",
-   "spelling": "runs_ . emplace ( . . . )",
+   "spelling": "runs_ . emplace_hint ( . . . )",
    "ordinal": 1
   },
   {
@@ -46982,7 +47058,7 @@
     "namespace pineforge #1",
     "namespace source #1",
     "namespace #1",
-    "[ [ noreturn ] ] void max_bars_back_exceeded ( long long length ) #1"
+    "[ [ noreturn ] ] void max_bars_back_exceeded ( long long length , std :: int64_t maximum ) #1"
    ],
    "cls": "temp",
    "spelling": "std :: to_string ( . . . )",
@@ -46995,7 +47071,7 @@
     "namespace pineforge #1",
     "namespace source #1",
     "namespace #1",
-    "[ [ noreturn ] ] void max_bars_back_exceeded ( long long length ) #1"
+    "[ [ noreturn ] ] void max_bars_back_exceeded ( long long length , std :: int64_t maximum ) #1"
    ],
    "cls": "temp",
    "spelling": "std :: to_string ( . . . )",
@@ -47007,7 +47083,7 @@
    "scope": [
     "namespace pineforge #1",
     "namespace source #1",
-    "void HeldHistory :: ensure_slots ( std :: size_t keep ) #1"
+    "void HeldHistory :: ensure_slots ( std :: size_t minimum , std :: size_t keep ) #1"
    ],
    "cls": "assign",
    "spelling": "values_ = . . .",
@@ -47032,10 +47108,24 @@
    "scope": [
     "namespace pineforge #1",
     "namespace source #1",
-    "void SeriesPercentileNearestRank :: append ( double src ) #1"
+    "void SeriesPercentileNearestRank :: append ( double src ) #1",
+    "if ( limit = = 0 || history_ . size ( ) < limit ) #1"
    ],
    "cls": "grow",
-   "spelling": "history_ . assign ( . . . )",
+   "spelling": "history_ . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_ta_length.cpp",
+   "symbol": "history_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "void SeriesPercentileNearestRank :: append ( double src ) #1",
+    "if ( limit = = 0 || history_ . size ( ) < limit ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "history_ . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -47044,7 +47134,7 @@
    "scope": [
     "namespace pineforge #1",
     "namespace source #1",
-    "const std :: vector < double > * SeriesPercentileNearestRank :: rebuild_window ( std :: size_t length ) #1"
+    "double SeriesPercentileNearestRank :: evaluate ( double src , std :: uint64_t length , double percentage , bool replace ) #1"
    ],
    "cls": "grow",
    "spelling": "window_ . emplace ( . . . )",
@@ -47081,7 +47171,7 @@
    "scope": [
     "namespace pineforge #1",
     "namespace source #1",
-    "void SeriesSma :: ensure_capacity ( ) #1"
+    "void SeriesSma :: ensure_capacity ( std :: size_t count ) #1"
    ],
    "cls": "assign",
    "spelling": "history_ = . . .",
@@ -48697,8 +48787,7 @@
    "scope": [
     "namespace pineforge #1",
     "namespace ta #1",
-    "PercentileWindow :: PercentileWindow ( int length ) : length_ ( length ) #1",
-    "if ( length_ > 0 ) #1"
+    "PercentileWindow :: PercentileWindow ( std :: size_t length , ObservedLength ) : length_ ( length ) #1"
    ],
    "cls": "grow",
    "spelling": "ranked_ . reserve ( . . . )",
@@ -48735,7 +48824,7 @@
     "namespace pineforge #1",
     "namespace ta #1",
     "const std :: vector < double > * PercentileWindow :: repush ( double src ) #1",
-    "if ( left_at_ > = 0 ) #1"
+    "if ( left_at_ ! = npos ) #1"
    ],
    "cls": "grow",
    "spelling": "ranked_ . insert ( . . . )",
@@ -48748,7 +48837,7 @@
     "namespace pineforge #1",
     "namespace ta #1",
     "const std :: vector < double > * PercentileWindow :: repush ( double src ) #1",
-    "if ( left_at_ > = 0 ) #1"
+    "if ( left_at_ ! = npos ) #1"
    ],
    "cls": "grow",
    "spelling": "history_ . push_front ( . . . )",
