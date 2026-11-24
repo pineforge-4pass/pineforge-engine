@@ -24009,7 +24009,7 @@ void PineExecutionAdapter::apply_terminal_explicit_market_policy(
         const auto& row = found->second;
         if (!row.opening || row.family != PineOrderFamily::Entry
             || row.projection_created_bar != projection_bar_index(context)
-            || !finite_positive(row.requested_qty)
+            || !has_requested_units(row) || !(row.requested_qty > 0.0)
             || finite_positive(row.exit_levels.limit)
             || finite_positive(row.exit_levels.stop)
             || !row.oca_name.empty() || row.oca_type != 0
