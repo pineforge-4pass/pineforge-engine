@@ -9,7 +9,10 @@
 #include <string_view>
 
 namespace {
-enum class Fault { size_query, changed_size, no_size, no_nul, invalid_json, missing_field };
+enum class Fault {
+    size_query, changed_size, no_size, no_nul, invalid_json, missing_field,
+    unresolved_not_array, unresolved_member_not_string, currency_not_string
+};
 
 class ReceiptHost final : public pineforge::source::PineStrategyHost {
 public:
@@ -22,6 +25,15 @@ public:
 std::string_view payload(Fault fault) {
     if (fault == Fault::invalid_json) return "{";
     if (fault == Fault::missing_field) return "{}";
+    if (fault == Fault::unresolved_not_array)
+        return R"({"declarations":{"currency":"currency.USDT"},"requests":[],"requirements":{},)"
+               R"("unresolved":"currency","version":1})";
+    if (fault == Fault::unresolved_member_not_string)
+        return R"({"declarations":{"currency":null},"requests":[],"requirements":{},)"
+               R"("unresolved":["currency",42],"version":1})";
+    if (fault == Fault::currency_not_string)
+        return R"({"declarations":{"currency":null},"requests":[],"requirements":{},)"
+               R"("unresolved":[],"version":1})";
     return R"({"declarations":{"currency":"currency.NONE"},"unresolved":[],"version":1})";
 }
 
@@ -68,6 +80,9 @@ int main() {
         {Fault::no_nul, "missing terminator", incomplete},
         {Fault::invalid_json, "invalid JSON", malformed},
         {Fault::missing_field, "missing field", malformed},
+        {Fault::unresolved_not_array, "unresolved is not an array", malformed},
+        {Fault::unresolved_member_not_string, "unresolved contains a non-string", malformed},
+        {Fault::currency_not_string, "resolved currency is not a string", malformed},
     };
     int compared = 0;
     for (const auto& row : rows) {
@@ -89,7 +104,7 @@ int main() {
             expect("FAIL", row.name, "text", result(strategy_get_last_error(handle)), row.error) &&
             expect("FAIL", row.name, "evaluated bars", host.bars, 0)) ++compared;
     }
-    if (compared != 6) return 1;
-    std::cout << "PASS #954: 6 currency receipt refusals\n";
+    if (compared != 9) return 1;
+    std::cout << "PASS #954: 9 currency receipt refusals\n";
     return 0;
 }
