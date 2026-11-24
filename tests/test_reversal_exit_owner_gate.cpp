@@ -652,6 +652,8 @@ protected:
             const auto at_signal_close = [](const NativeDecisionContext& at,
                                             const no::ExecutionAppliedEvent& fill) {
                 return at.script_bar_open_ms == kStart + (kPrefix + 2) * 60000LL
+                    && at.coordinate.path_phase == NativePathPhase::Close
+                    && fill.cursor.point.provenance == NativePriceProvenance::AfterCalculationClose
                     && fill.opened_units == 1.0 && fill.closed_units == 1.0
                     && fill.resolved_price == 150.0;
             };
