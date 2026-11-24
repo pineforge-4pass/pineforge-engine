@@ -27001,6 +27001,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         if (!throttled_reopen_rearm_.empty())
             rearm_throttled_reopens();
     }
+    const auto prior_position_cycle = current_position_cycle_;
     const double live_position = detail::run_position(require_host()).signed_units;
     const int next_sign = live_position > 0.0 ? 1 : (live_position < 0.0 ? -1 : 0);
     const bool flipped_position = current_position_sign_ != 0 && next_sign != 0
@@ -27596,36 +27597,27 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             }
         }
     }
-    // A reversal closed the side opposite the units its fill actually opened.
-    if (placement_snapshot && placement_snapshot->opening && placement_snapshot->reverse_to
-        && event.closed_units > 0.0 && (event.opened_units > 0.0 || event.opened_units < 0.0)) {
+    // A fixed entry placed while flat can close a later position and open the
+    // opposite side. Settlement identifies the reversal in either direction.
+    if (placement_snapshot && placement_snapshot->family == PineOrderFamily::Entry
+        && event.closed_units > 0.0 && event.opened_units != 0.0
+        && event.cycle_before != event.cycle_after) {
         purge_brackets_after_applied_reversal(*placement_snapshot, event);
-    }
-    // A from_entry="" exit the script placed while the reversed position was
-    // open belongs to that position, as every exit a flattening close
-    // outlives does (retire_in_position_exits_at_flat): TradingView never
-    // applies it to the side the reversal opens, on its entry bar or later,
-    // in either direction (lane TVDEF-DROPS, tests/fixtures/tvdef_drops R3).
-    // The kernel binds such a close to the book it first evaluates against;
-    // one evaluated before this fill was already cancelled with that book.
-    // Retire it from the projection now; only a working leg needs a cancel.
-    if (placement_snapshot && placement_snapshot->opening
-        && placement_snapshot->reverse_to && event.closed_units > 0.0
-        && event.opened_units != 0.0) {
+        // Global exits placed on the old side belong to its source cycle.
+        // A leg already ended by the kernel only needs to leave the projection.
         const auto reversed_side = static_cast<std::int32_t>(
             event.opened_units > 0.0 ? PositionSide::SHORT : PositionSide::LONG);
+        const auto reversed_global_leg = [&](const PlacementSnapshot& row) {
+            return (row.family == PineOrderFamily::ExitLimit
+                    || row.family == PineOrderFamily::ExitStop
+                    || row.family == PineOrderFamily::ExitTrail)
+                && row.from_entry.empty() && row.projection_position_side == reversed_side
+                && row.placement_cycle == prior_position_cycle;
+        };
         detail::ExitScratchRows<native_order::RequestHandle> reversed_global_exits(*this);
         for (const auto& handle : live_handles_) {
             const auto found = placement_.find(handle.incarnation);
-            if (found == placement_.end()) continue;
-            const auto& row = found->second;
-            const bool exit = row.family == PineOrderFamily::ExitLimit
-                || row.family == PineOrderFamily::ExitStop
-                || row.family == PineOrderFamily::ExitTrail;
-            // The reversal advanced the cycle above; the reversed position's
-            // is the one before it.
-            if (exit && row.from_entry.empty() && row.projection_position_side == reversed_side
-                && row.placement_cycle == current_position_cycle_ - 1) {
+            if (found != placement_.end() && reversed_global_leg(found->second)) {
                 reversed_global_exits.push_back(handle);
             }
         }
@@ -27635,13 +27627,6 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         // open, its request cancelled (lane W3-ENG-EXIT-ALLOC, tape
         // w3f05-r1-two-parent-reversal-global-exit). It is void as well, and
         // leaving the queue records no kernel event.
-        const auto reversed_global_leg = [&](const PlacementSnapshot& row) {
-            return (row.family == PineOrderFamily::ExitLimit
-                    || row.family == PineOrderFamily::ExitStop
-                    || row.family == PineOrderFamily::ExitTrail)
-                && row.from_entry.empty() && row.projection_position_side == reversed_side
-                && row.placement_cycle == current_position_cycle_ - 1;
-        };
         delayed_market_orders_.erase(std::remove_if(
             delayed_market_orders_.begin(), delayed_market_orders_.end(),
             [&](const auto& order) { return reversed_global_leg(order.snapshot); }),

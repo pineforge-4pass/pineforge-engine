@@ -61,6 +61,7 @@ version number follows semantic versioning over the surfaces the
 - A market entry now arms both legs of a `strategy.exit` that mixes prices and ticks at its fill.
 - With pyramiding, a full named tick bracket on chart bars now measures `profit` and `loss` from each entry’s fill price when no other exit reserves its units. FIFO can still book the close against an older trade.
 - A historical `lookahead_on` request can opt into the day's final close from its first hourly bar.
+- A fixed entry requested while already flat now retires the prior position’s brackets and margin calls if its fill closes that position and opens the opposite side.
 - Before the Unix epoch, a four-hour bar on `0900-1130,1230-1530` now includes the 12:30–12:59 inputs and completes at 13:00 when the next input is unknown. The fixed completion clock follows the same rule.
 - Before the Unix epoch, a supplied chart close can now complete a sparse intraday bar or an OTC calendar bar on its last input. A zero chart close still means unknown.
 - A partial stop placed after two 50% tick targets on a three-contract market entry can now close the remaining contract on its first crossing.
