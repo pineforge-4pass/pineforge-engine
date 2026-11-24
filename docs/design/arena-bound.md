@@ -161,7 +161,7 @@ The carried declaration fields are visible in `PineStrategyConfig` at
 | --- | --- |
 | pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset (the `max_open_lots` setting spelling is at `src/source/pine_adapter.cpp:3012`). Do not assume this caps strategy.order or use it as an unconditional H. |
 | calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard `kCoofLoopGuard` through the native cadence at `src/source/pine_adapter.cpp:3193`; the `kCoofLoopGuard` literal is declared at `include/pineforge/source/pine_adapter.hpp:78`. The native point budget is a callback bound, not a total fill bound. |
-| max_recalculations_per_point | Further executions still apply after callbacks stop; see the cadence comment and `max_recalculations_per_point` declaration at `include/pineforge/native_run_spec.hpp:686-695`. The actual counter check is `src/native_execution_consumer.cpp:8387`. |
+| max_recalculations_per_point | Further executions still apply after callbacks stop; see the cadence comment and `max_recalculations_per_point` declaration at `include/pineforge/native_run_spec.hpp:686-695`. The actual counter check is `src/native_execution_consumer.cpp:8393`. |
 | first-open COOF chain | A second source-side guard exists at `src/source/pine_scheduler_native.cpp:984`. Count this source path; a native budget of 8 is not Pine's bound. |
 | process_orders_on_close | Adds a matching opportunity after calculation; projection at `src/source/pine_adapter.cpp:3182`. It does not impose an order/trade count. |
 | default_qty, margin, initial capital | Admission/sizing predicates can tighten a separately proved schedule. They provide no universal positive minimum close quantity or minimum loss, hence no universal T. Margin can create additional reductions. |
@@ -344,7 +344,7 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 | Entry-rank AVL | (60+L)*J + 1[J>0] | `exit_rank_keys_` at `src/source/pine_adapter.cpp:7256-7257`; `Links` at `include/pineforge/detail/disk_id_table.hpp:28-32`, `end_` at `:540` |
 | Erased minima data | (40+L)*D + (40+2*L)*Q | `erased_minima_` at `include/pineforge/source/pine_adapter.hpp:965`; 40-byte header at `include/pineforge/detail/id_pair_store.hpp:69` |
 | Erased minima index | indexPeak(D+Q) | 16-byte slot at `include/pineforge/detail/id_pair_store.hpp:69`; replacement at `:642` |
-| Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2944`; joined key at `src/source/pine_adapter.cpp:26855` |
+| Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2936`; joined key at `src/source/pine_adapter.cpp:26765` |
 | Consumed partial-cycle index | indexPeak(Q) | `include/pineforge/detail/id_pair_store.hpp:642` |
 | Ordered consumed-cycle fold | 136*leaves + 2088*branches + 2096*savedPath | `include/pineforge/detail/id_pair_ordered_fold.hpp:161`, `:165`, `:172`, size assertion for `Leaf`, `Branch` and `Snapshot` at `:183` |
 | Successor-root rows | 16*R | `SuccessorRootIndex` at `src/native_order.cpp:8546`, size assertion for `Row` at `:8547`, 64-row tail bound `kTailRows` at `:8552` |
@@ -381,7 +381,7 @@ root only when a newly issued definition has one. The 64-row RAM tail makes
 charging every issued row conservative. Partial closes create one trade
 row per affected lot: `src/engine_execution.cpp:1241`. Bracket definitions
 have limit, stop and trailing families; per-entry expansion is visible at
-`src/source/pine_adapter.cpp:25266`. A closed-trade count cannot bound
+`src/source/pine_adapter.cpp:25176`. A closed-trade count cannot bound
 unfilled placement history or the replacement-root history.
 
 The ordered fold retains distinct-ever keys, including erased keys.
@@ -561,7 +561,7 @@ non-command certificates exactly.
 These formulas apply to the EngineRecorded streamed invocation. The
 selected recorder appends its anchor and selected observations in one
 writer (`equity_scratch` append at `src/engine_report.cpp:1579`), and capture transfers that writer as `metric_curve`
-instead of copying its prefix (`src/native_execution_consumer.cpp:13920`).
+instead of copying its prefix (`src/native_execution_consumer.cpp:13926`).
 HostRecorded array presentation and a second full curve are outside this
 profile. Adding another persistent scratch user requires another term and
 rounding region.
