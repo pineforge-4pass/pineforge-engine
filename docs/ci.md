@@ -962,7 +962,7 @@ the one in `CLAUDE.md` included -- registers the four receipt-gated rows
 each exits 77, and CTest counts a skipped row as passed: `100% tests passed`
 does not include them. `scripts/check_abi_receipt_skips.py --build-dir <dir>`
 names each registered input that is missing and exits 1 if any are missing.
-An unusable registry exits 2. Only CTest results show which rows ran. It does not know every argument that a row's own program requires. With
+An unusable registry exits 2. Only CTest results show which rows ran. It does not know every argument that a row's own program requires, and it looks for the program only under an absolute path, so a missing relative program is not refused. With
 `--prepare` it first prepares the seven providers into the tree with the argv `ci_verify.py`
 uses (`ReceiptRecipe` in `scripts/test_ci_verify.py` holds the two equal):
 it fetches a missing pinned commit, reuses a matching provider and refuses a
@@ -1281,7 +1281,7 @@ fail-closed from the day it landed: it reads `docs/design/native-feature-parity.
 §1, replays `tests/CMakeLists.txt`'s own decision about which units the kernel
 profile compiles, and fails when an inventory row's closure marker does not
 match what the tests actually drive. `--ctest-list` cross-checks its transliteration
-against real `ctest -N` output in both directions.
+against real `ctest -N` output in both directions. A list variable that is set inside a disabled branch still counts as a closure witness, and preflight passes no `--ctest-list`, so its registry comparison reads `NOT COMPARED`.
 
 The sixth is `scripts/check_pine_to_native_coverage.py` (`doc-pine-coverage`),
 fail-closed from the day it landed as well: it derives the offered Pine set
