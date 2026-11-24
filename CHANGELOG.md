@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- On Hong Kong's `0930-1200,1300-1600` session, the public C++ `TimeframeAggregator` now includes the 11:57 input in the 11:00 hourly bar built from 7-minute inputs starting at 09:30. It previously published after eight inputs at 11:50 because it rounded the number of inputs per hour down.
 - When the broker reads a v1 strategy receipt for host FX, it now requires a `declarations` object even if `currency` is unresolved. A missing or non-object `declarations` stops the run before the first bar callback with `strategy_library_incompatible` (reason `capabilities_receipt_invalid`) (#990).
 - Calendar day openings now round down before the Unix epoch. At −1 ms, the UTC day starts at midnight on December 31, 1969. If the opening cannot fit in a signed 64-bit millisecond timestamp, the engine reports `engine_unclassified_error`.
 - `BacktestEngine::release_run_results()` and `strategy_release_run_results_v1()` let callers close the trade ledger, report scratch, and native command history after the last result read without destroying the handle. The closed trade count remains available, and further trade row, report, or journal reads refuse until the next run. An active run or stream refuses the release.

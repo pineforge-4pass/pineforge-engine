@@ -1509,9 +1509,9 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
         // bucket the count is never matched again.
         bool complete = false;
         if (!s.current_emitted_complete) {
-            // A folded prefix can make bucket zero longer than one width.
-            // Its ordinary count shortcut must not finalize it before its end.
-            complete = (s.sub_bar_count == ratio
+            // Count proves completion only for an exact ratio and a bucket
+            // no wider than usual (a folded prefix can extend bucket zero).
+            complete = (s.sub_bar_count == ratio && ratio * input_seconds == target_seconds
                 && input_bucket.end_ms - input_bucket.open_ms <= target_seconds * 1000);
             // Real-end completion (finding 467): TradingView finalizes an
             // intraday HTF bucket on the chart bar whose close reaches the
