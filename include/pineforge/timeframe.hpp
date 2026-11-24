@@ -78,7 +78,7 @@ inline bool tf_is_seconds(const std::string& tf) {
     return tf.find('S') != std::string::npos;
 }
 
-/// Check if prev/curr timestamps cross a timeframe boundary.
+/// Check for a timeframe change; zero in either argument denotes an unknown timestamp.
 bool tf_change(int64_t prev_ms, int64_t curr_ms, const std::string& tf);
 
 /// Compute how many input bars fit into one target bar.
@@ -711,5 +711,11 @@ private:
     // native_index would answer -1.
     bool native_source_period(int64_t ms, int64_t& stamp) const;
 };
+
+namespace internal {
+/// Compare the intraday bucket keys of two known timestamps on the symbol clock.
+bool intraday_bucket_changes(int64_t prev_ms, int64_t curr_ms, int secs,
+                             const std::string& tz, const std::string& session);
+} // namespace internal
 
 } // namespace pineforge

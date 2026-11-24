@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- A historical daily `lookahead_on` projection now keeps the Unix epoch bar in its exchange day, including when midnight falls at a different UTC hour.
 - `strategy.entry` now places no order when it omits `qty` under a declared cash or percent-of-equity default of zero. A resting order with the same ID keeps its price and place in the book.
 - The observation counters in `ta.atr`, `ta.tr` and `ta.tsi` now stop at 2147483647 instead of overflowing on the next increment.
 - When the 2147483647-sample window of `ta.stdev(..., biased = false)` is full, the next valid input evicts the oldest sample. The window stays seeded when that input is recalculated with another valid value or followed by `na`.
@@ -70,7 +71,7 @@ version number follows semantic versioning over the surfaces the
 - A buy stop accepted while flat that later reverses a short now removes the short’s pending margin call. The same rule applies when a sell reverses a long.
 - A market entry now arms both legs of a `strategy.exit` that mixes prices and ticks at its fill (#694).
 - With pyramiding, a full named tick bracket on chart bars now measures `profit` and `loss` from each entry’s fill price when no other exit reserves its units, `process_orders_on_close` and `calc_on_order_fills` are off, and the call names neither `qty` nor an OCA group. FIFO can still book the close against an older trade (#694).
-- A historical `lookahead_on` request can opt into the day's final close from its first bar; a request that does not opt in keeps the running close (#694). The day before and the day after the Unix epoch can still be taken for one day.
+- A historical `lookahead_on` request can opt into the day's final close from its first bar; a request that does not opt in keeps the running close (#694).
 - A fixed entry requested while already flat now retires the prior position’s visible brackets and margin calls if its fill closes that position and opens the opposite side.
 - Before the Unix epoch, a four-hour bar on `0900-1130,1230-1530` now includes the 12:30–12:59 inputs and completes at 13:00 when the next input is unknown. The fixed completion clock follows the same rule.
 - Before the Unix epoch, a supplied chart close can now complete a sparse intraday bar or an OTC calendar bar on its last input. A zero chart close still means unknown.

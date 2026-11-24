@@ -1169,6 +1169,11 @@ bool tf_change(int64_t prev_ms, int64_t curr_ms, const std::string& tf,
     }
     int secs = tf_to_seconds(tf);
     if (secs <= 0) return false;
+    return internal::intraday_bucket_changes(prev_ms, curr_ms, secs, tz, session);
+}
+
+bool internal::intraday_bucket_changes(int64_t prev_ms, int64_t curr_ms, int secs,
+                                      const std::string& tz, const std::string& session) {
     const std::vector<int64_t>* late_opens = chart_late_day_opens(tz, session);
     return intraday_bucket(prev_ms, secs, tz, session, late_opens, prev_ms).key !=
            intraday_bucket(curr_ms, secs, tz, session, late_opens, curr_ms).key;
