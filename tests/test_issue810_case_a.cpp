@@ -129,9 +129,9 @@ const char* mode_name(Mode mode) {
 // The step rows that run the engine, in their two forms.  Under
 // process_orders_on_close the entry is an order at once.  In the live-entry
 // rows a commission keeps it from being held to the end of its calculation:
-// src/source/pine_adapter.cpp:3760-3763 holds a market entry only when the
-// commission is zero, and the other two held scopes need a pyramiding of two
-// or more (:3765-3771, :8449-8457; :8477-8482 is where the three meet).
+// In src/source/pine_adapter.cpp, same_bar_market_tx_scope requires zero
+// commission. The other two cases in entry (the flat pair and
+// fixed_unmargined_market_batch_scope) require pyramiding of at least two.
 bool is_pooc_step_mode(Mode mode) {
     return mode == Mode::PoocOddStepsLimitFirst
         || mode == Mode::PoocOddStepsStopFirst
@@ -821,35 +821,33 @@ bool check_b_pending(Probe& probe, const std::vector<Bar>& bars) {
 //   docs/pages/pine-to-native.md        R2
 //   docs/pages/quantity-intent.md       R4, R5
 // docs/pages/fill-model.md gives R6 and R7 only, and CHANGELOG.md gives R4
-// and R5 in words.  src/source/pine_adapter.cpp states each rule where it
-// applies it.  Every citation below is to the lines that state the rule.
+// and R5 in words. The adapter functions cited below are in
+// src/source/pine_adapter.cpp.
 //
 //   R1  Without process_orders_on_close a market order fills at the next
 //       bar's open.
 //       - docs/pine-adapter-kernel-notes.md:237: a market fill at the next
 //         bar is quoted at that bar's open; :239: under
 //         process_orders_on_close, at the signal close.
-//       - docs/pages/native-engine.md:3366-3367: an accepted order has no
-//         fill yet, and the next bar's modeled open is the fill.
-//       - src/source/pine_adapter.cpp:3135-3136: without
-//         process_orders_on_close an order executes at the next eligible
-//         point; :20109-20111: its quote is the next open.
+//       - docs/pages/native-engine.md, the NextEligiblePoint example:
+//         acceptance has no fill yet; the next bar's modeled open is the fill.
+//       - project selects NextEligiblePoint without process_orders_on_close;
+//         unified_fill_admits describes the market fill quote as the next open.
 //   R2  A level given in ticks is the entry's fill price moved by that many
 //       ticks.
 //       - docs/pages/pine-to-native.md:343-345: at the parent's fill the
 //         level becomes the fill plus the offset, in ticks.
-//       - src/source/pine_adapter.cpp:15602-15608
-//         (materialize_relative_exits): the limit is the entry's fill price
-//         plus the profit ticks, on the tick grid.
+//       - materialize_relative_exits sets the long entry's limit to the fill
+//         price plus the profit ticks, rounded up to the tick grid.
 //   R3  A limit that a crossing reaches fills at its level, and a sell stop
 //       at the lower of the bar's open and its level.
-//       - docs/pages/native-engine.md:520-522: the path has to reach a
-//         limit's level, and a crossing books the level itself.
+//       - docs/pages/native-engine.md, "A limit is two facts": the path has
+//         to reach the level, and a crossing books the level itself.
 //       - docs/pine-adapter-kernel-notes.md:238: a stop is quoted at
 //         min(open, stop) for a sell.
-//       - src/source/pine_adapter.cpp:20110: max/min(open, stop) for a stop;
-//         :21886-21887: a touched level fills at its level.  The adapter
-//         leaves a limit's price to the kernel's matcher.
+//       - unified_fill_admits describes the sell stop quote as min(open, stop);
+//         pending_veto_point_first describes a touched level filling at its
+//         level. The kernel's matcher prices the limit.
 //   R4  Exits reserve the entry's quantity in the order they were placed,
 //       and a later full exit is left what the earlier ones have not
 //       reserved.
@@ -862,13 +860,11 @@ bool check_b_pending(Probe& probe, const std::vector<Bar>& bars) {
 //         later full stop.
 //       - docs/pages/quantity-intent.md:35-37: a full request clipped behind
 //         another reservation holds less than its basis.
-//       - src/source/pine_adapter.cpp:859-862 (exit_queue_rank), :5880-5884
-//         (compute_exit_reservation), :6226-6227 and :6277-6303
-//         (reconcile_deferred_exit_reservations): the entry's quantity goes
-//         to its exits in queue order, each taking what the ones before it
-//         leave; :12902-12925 (exit_with_reservation_sequence): a waiting
-//         partial exit gets its place when a later exit of the entry is
-//         placed.
+//       - exit_queue_rank retains an exit's place; compute_exit_reservation
+//         caps a new exit at the unreserved quantity. At the entry's fill,
+//         reconcile_deferred_exit_reservations allocates units in queue order.
+//         exit_with_reservation_sequence gives a waiting partial its place
+//         before sizing a later exit for the same entry.
 //   R5  An exit placed while its entry was unfilled holds a fixed share of
 //       what the entry opens, whichever exit fills first.
 //       - docs/pine-adapter-kernel-notes.md:963-971: when the entry opens,
@@ -878,24 +874,22 @@ bool check_b_pending(Probe& probe, const std::vector<Bar>& bars) {
 //         reservation when a live owner is bound.
 //       - CHANGELOG.md (the same unreleased entry): the partial exit is sized
 //         from the quantity the entry actually opens.
-//       - src/source/pine_adapter.cpp:15589-15601
-//         (materialize_relative_exits): the partial exit's quantity is its
-//         percentage of what the entry opened; :6321-6327
-//         (reconcile_deferred_exit_reservations): each exit's units are
-//         written on its order rows; :17404-17419 (resolve_source_terms): a
-//         fixed reservation executes as written.
+//       - materialize_relative_exits sizes the waiting partial from the units
+//         the entry actually opened. reconcile_deferred_exit_reservations
+//         records each share on its orders; resolve_source_terms executes
+//         the fixed reservation without sizing it again.
 //   R6  A closing order closes no more than is held and never opens a
 //       position.
 //       - docs/pages/fill-model.md:91-92: a reduction is capped at the held
 //         exposure and never opens or flips; :214: it never creates new
 //         exposure.
-//       - src/source/pine_adapter.cpp:6277-6279: what an exit may take is
-//         what is held less what the exits before it took, never below zero.
+//       - reconcile_deferred_exit_reservations caps an exit at what is held
+//         less earlier reservations, with zero as the lower bound.
 //   R7  An order that has filled is not filled again.
 //       - docs/pages/fill-model.md:176: a retired object is not dispatched
 //         again.
-//       - src/source/pine_adapter.cpp:26727-26729 (on_applied): an exit that
-//         has filled on an opening does not fill again on that opening.
+//       - on_applied removes a waiting reissue when its exit has filled on
+//         that opening, so it cannot fill there again.
 bool check_held_entry(Probe& probe, Mode mode, const std::vector<Bar>& bars) {
     const char* name = mode_name(mode);
     const bool stop_first = mode == Mode::HeldEntryStopFirst;
@@ -1125,7 +1119,9 @@ std::vector<Bar> bars_for(Mode mode) {
 //       the bar that placed it: docs/pine-adapter-kernel-notes.md:239.
 //   R8  On a quantity step a share below the whole is floored onto the step:
 //       docs/pages/pine-to-native.md:291 says it of a fractional close, and
-//       src/source/pine_adapter.cpp:5857-5873 applies it to a percentage exit.
+//       quantize_percent_exit_units in src/source/pine_adapter.cpp floors
+//       the requested share, keeping one step for a smaller positive share
+//       when a whole step is available.
 //
 // A 50% partial exit of three steps has a share of one and a half steps.  By
 // R8 it closes one, and by R4 and R5 the full exit closes what that leaves,
