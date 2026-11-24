@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- `strategy.cancel`, and an exit call that withdraws its bracket, now also withdraw exit orders that wait for the next bar.
 - With two entries in one direction, an opposite market entry that follows a named close of one of them reverses the units that remain, and a second call with the same ID replaces the first and transacts its own units (#993).
 - When market entries with different IDs follow a named close on one bar, an entry that would exceed the pyramiding limit is refused once the entry before it has filled (#993).
 - After `strategy.close_all()`, a market entry for the other side and repeated named closes on one bar, the entry opens its own size instead of a reversal's (#993).

@@ -16611,6 +16611,16 @@ void PineExecutionAdapter::exit_cancel_bracket(const SourceId& exit_id,
     if (!materializing_relative_) withdraw_anchored_relative_legs(&exit_id, &from_entry);
     pending_write(pending_bracket_legs_).erase(std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
         [&](const PendingBracketLeg& leg) { return leg.family_key == key; }), pending_bracket_legs_.end());
+    // A parked leg has no working handle to cancel, but release can submit it again.
+    delayed_market_orders_.erase(
+        std::remove_if(delayed_market_orders_.begin(), delayed_market_orders_.end(),
+            [&](const DelayedMarketOrder& order) {
+                const auto& row = order.snapshot;
+                return row.source_id == exit_id && row.from_entry == from_entry
+                    && (row.family == PineOrderFamily::ExitLimit
+                        || row.family == PineOrderFamily::ExitStop
+                        || row.family == PineOrderFamily::ExitTrail);
+            }), delayed_market_orders_.end());
     // Cancellation can synchronously change source state. Copy the family
     // roster and release the map iterator before issuing any host operation.
     std::vector<native_order::RequestHandle> handles;
@@ -16700,6 +16710,10 @@ void PineExecutionAdapter::cancel(const SourceId& id) {
     pending_write(pending_bracket_legs_).erase(std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
         [&](const PendingBracketLeg& leg) { return leg.snapshot.source_id == id; }),
         pending_bracket_legs_.end());
+    delayed_market_orders_.erase(
+        std::remove_if(delayed_market_orders_.begin(), delayed_market_orders_.end(),
+            [&](const DelayedMarketOrder& order) { return order.snapshot.source_id == id; }),
+        delayed_market_orders_.end());
     // A gapped stop waiting for a margin-call revival is withdrawn with the
     // rest of the id (retire_cancelled_exits).
     pending_margin_revivals_.erase(std::remove_if(pending_margin_revivals_.begin(),
