@@ -3,6 +3,7 @@
 #include <pineforge/pending_order_mirror.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -14,6 +15,8 @@ namespace entry_amount {
 using pineforge::Bar;
 using pineforge::NativeDecisionContext;
 using pineforge::NativeLifecycleKind;
+using pineforge::NativePathPhase;
+using pineforge::NativePriceProvenance;
 using pineforge::PositionSide;
 using pineforge::QtyType;
 namespace source = pineforge::source;
@@ -52,12 +55,56 @@ inline Bar bar(int index, double open, double high, double low, double close) {
 }
 inline Bar flat(int index, double price) { return bar(index, price, price, price, price); }
 
+enum class ClosePoint { Calculation, AfterCalculation };
+
 struct Fill {
     std::string id;
     int bar;
     std::uint64_t incarnation, ordinal;
     double price, opened, closed;
+    NativePathPhase phase;
+    NativePriceProvenance provenance, decision_provenance;
+    int charged_slots;
+
+    bool at_close(ClosePoint point) const {
+        // A synchronous fill has its own cursor but uses the calculation's
+        // quote. The ordinary market matcher runs at the later close tick.
+        if (point == ClosePoint::Calculation) {
+            return phase == NativePathPhase::None
+                && provenance == NativePriceProvenance::CurrentExecution
+                && decision_provenance == NativePriceProvenance::Calculation;
+        }
+        return phase == NativePathPhase::Close
+            && provenance == NativePriceProvenance::AfterCalculationClose
+            && decision_provenance == NativePriceProvenance::AfterCalculationClose;
+    }
 };
+
+// Change exactly one field of one real fill and use the row's full comparison.
+template<std::size_t N, class Compare, class Change>
+bool rejects_each_change(std::array<const Fill*, N> observed, Compare compare, Change change) {
+    static_assert(N > 0);
+    for (auto& fill : observed) {
+        const auto* original = fill;
+        Fill changed = *original;
+        change(changed);
+        fill = &changed;
+        if (compare(observed)) return false;
+        fill = original;
+    }
+    return true;
+}
+
+template<std::size_t N, class Compare>
+bool rejects_wrong_close(const std::array<const Fill*, N>& observed, Compare compare) {
+    return rejects_each_change(observed, compare, [](Fill& f) { f.phase = NativePathPhase::High; })
+        && rejects_each_change(observed, compare, [](Fill& f) {
+               f.provenance = NativePriceProvenance::Confirmed;
+           })
+        && rejects_each_change(observed, compare, [](Fill& f) {
+               f.decision_provenance = NativePriceProvenance::ObservedPrint;
+           });
+}
 
 class Host : public source::PineStrategyHost {
 public:
@@ -88,9 +135,11 @@ public:
             && last_bar == static_cast<int>(bars.size()) - 1;
     }
     void on_native_applied_event(const no::ExecutionAppliedEvent& e,
-                                 const NativeDecisionContext&) override {
+                                 const NativeDecisionContext& context) override {
         fills.push_back({e.request().label, e.interval_index(), e.handle().incarnation,
-                         e.ordinal, e.resolved_price, e.opened_units, e.closed_units});
+                         e.ordinal, e.resolved_price, e.opened_units, e.closed_units,
+                         e.cursor.point.path_phase, e.cursor.point.provenance,
+                         context.coordinate.provenance, adapter_.cap.budget().charged_slots()});
     }
     const Fill* only_fill(const char* id) const {
         const Fill* found = nullptr;

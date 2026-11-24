@@ -55,21 +55,29 @@ bool check(Amount a, bool sell_first) {
     // transacts one unit. In a fixed sell-then-buy pair the buy fills first
     // with its own unit plus the pending sell (six), then sells five.
     const double contracts = a == Amount::Cash || units ? 5 : 5.25;
-    const auto* budget = p.only_fill("budget");
-    const auto* unit = p.only_fill("unit");
-    const bool fills = budget && unit && p.fills.size() == 2
-        && budget->price == 80 && budget->bar == 0 && unit->price == 80 && unit->bar == 0
-        && (units ? budget->incarnation != p.original : budget->incarnation == p.original)
-        && (units ? unit->incarnation != p.fixed_id : unit->incarnation == p.fixed_id)
-        && (units && sell_first
-            ? unit->ordinal < budget->ordinal && unit->opened == 6 && unit->closed == 0
-                && budget->closed == 5 && budget->opened == 0
-            : budget->ordinal < unit->ordinal && budget->opened == (sell_first ? -contracts : contracts)
-                && budget->closed == 0 && unit->closed == (units ? contracts : 1)
-                && unit->opened == (units ? -1 : 0))
-        && p.live_position_size() == (units ? (sell_first ? 1 : -1)
-                                            : (sell_first ? 1 - contracts : contracts - 1));
-    ok &= report(!measured ? "NOT COMPARED" : (fills ? "PASS" : "FAIL"), label, a);
+    const std::array<const Fill*, 2> observed{p.only_fill("budget"), p.only_fill("unit")};
+    const auto matches = [&](const std::array<const Fill*, 2>& rows) {
+        const auto& budget = *rows[0];
+        const auto& unit = *rows[1];
+        const auto point = units ? ClosePoint::Calculation : ClosePoint::AfterCalculation;
+        return budget.at_close(point) && unit.at_close(point) && p.fills.size() == 2
+            && budget.price == 80 && budget.bar == 0 && unit.price == 80 && unit.bar == 0
+            && (units ? budget.incarnation != p.original : budget.incarnation == p.original)
+            && (units ? unit.incarnation != p.fixed_id : unit.incarnation == p.fixed_id)
+            && (units && sell_first
+                ? unit.ordinal < budget.ordinal && unit.opened == 6 && unit.closed == 0
+                    && budget.closed == 5 && budget.opened == 0
+                : budget.ordinal < unit.ordinal && budget.opened == (sell_first ? -contracts : contracts)
+                    && budget.closed == 0 && unit.closed == (units ? contracts : 1)
+                    && unit.opened == (units ? -1 : 0))
+            && p.live_position_size() == (units ? (sell_first ? 1 : -1)
+                                                : (sell_first ? 1 - contracts : contracts - 1));
+    };
+    const bool matched = measured && observed[0] && observed[1] && matches(observed);
+    ok &= report(!measured ? "NOT COMPARED" : matched ? "PASS" : "FAIL", label, a);
+    ok &= report(!matched ? "NOT COMPARED" : rejects_wrong_close(observed, matches) ? "PASS" : "FAIL",
+                 sell_first ? "sell pair rejects changed fill coordinates"
+                            : "buy pair rejects changed fill coordinates", a);
     return ok;
 }
 
