@@ -271,16 +271,8 @@ bool Cross::compute(double a, double b) {
 Mom::Mom(int length) : length_(length) {}
 
 double Mom::compute(double src) {
-    if (is_na(src)) {
-        return na<double>();
-    }
-
-    buffer_.push_back(src);
-    while (static_cast<long long>(buffer_.size()) > static_cast<long long>(length_) + 1) {
-        buffer_.pop_front();
-    }
-
-    if (static_cast<long long>(buffer_.size()) < static_cast<long long>(length_) + 1) {
+    const long long keep = static_cast<long long>(length_) + 1;
+    if (keep <= 0 || !bar_.push(buffer_, src, keep) || static_cast<long long>(buffer_.size()) < keep) {
         return na<double>();
     }
 
@@ -292,16 +284,8 @@ double Mom::compute(double src) {
 ROC::ROC(int length) : length_(length) {}
 
 double ROC::compute(double src) {
-    if (is_na(src)) {
-        return na<double>();
-    }
-
-    buffer_.push_back(src);
-    while (static_cast<long long>(buffer_.size()) > static_cast<long long>(length_) + 1) {
-        buffer_.pop_front();
-    }
-
-    if (static_cast<long long>(buffer_.size()) < static_cast<long long>(length_) + 1) {
+    const long long keep = static_cast<long long>(length_) + 1;
+    if (keep <= 0 || !bar_.push(buffer_, src, keep) || static_cast<long long>(buffer_.size()) < keep) {
         return na<double>();
     }
 
@@ -318,16 +302,8 @@ double ROC::compute(double src) {
 Rising::Rising(int length) : length_(length) {}
 
 double Rising::compute(double src) {
-    if (is_na(src)) {
-        return 0.0;
-    }
-
-    buffer_.push_back(src);
-    while (static_cast<long long>(buffer_.size()) > static_cast<long long>(length_) + 1) {
-        buffer_.pop_front();
-    }
-
-    if (static_cast<long long>(buffer_.size()) < static_cast<long long>(length_) + 1) {
+    const long long keep = static_cast<long long>(length_) + 1;
+    if (!bar_.push(buffer_, src, keep) || static_cast<long long>(buffer_.size()) < keep) {
         return 0.0;
     }
 
@@ -345,16 +321,8 @@ double Rising::compute(double src) {
 Falling::Falling(int length) : length_(length) {}
 
 double Falling::compute(double src) {
-    if (is_na(src)) {
-        return 0.0;
-    }
-
-    buffer_.push_back(src);
-    while (static_cast<long long>(buffer_.size()) > static_cast<long long>(length_) + 1) {
-        buffer_.pop_front();
-    }
-
-    if (static_cast<long long>(buffer_.size()) < static_cast<long long>(length_) + 1) {
+    const long long keep = static_cast<long long>(length_) + 1;
+    if (!bar_.push(buffer_, src, keep) || static_cast<long long>(buffer_.size()) < keep) {
         return 0.0;
     }
 
@@ -372,16 +340,7 @@ double Falling::compute(double src) {
 CCI::CCI(int length) : length_(length) {}
 
 double CCI::compute(double src) {
-    if (is_na(src)) {
-        return na<double>();
-    }
-
-    buffer_.push_back(src);
-    while ((int)buffer_.size() > length_) {
-        buffer_.pop_front();
-    }
-
-    if ((int)buffer_.size() < length_) {
+    if (!bar_.push(buffer_, src, length_) || (int)buffer_.size() < length_) {
         return na<double>();
     }
 
@@ -452,13 +411,7 @@ double RCI::calculate() {
 }
 
 double RCI::compute(double src) {
-    if (is_na(src)) {
-        return na<double>();
-    }
-    buffer_.push_back(src);
-    while ((int)buffer_.size() > length_) {
-        buffer_.pop_front();
-    }
+    if (!bar_.push(buffer_, src, length_)) return na<double>();
     const int n = (int)buffer_.size();
     if (n < length_ || n < 2) {
         return na<double>();
@@ -720,85 +673,38 @@ double Change::recompute(double src, int length) {
 
 // --- Mom ---
 double Mom::recompute(double src) {
-    if (buffer_.empty()) return compute(src);
-    buffer_.back() = src;
-
-    if (is_na(src)) return na<double>();
-    if (static_cast<long long>(buffer_.size()) < static_cast<long long>(length_) + 1) return na<double>();
-    return src - buffer_.front();
+    bar_.undo(buffer_);
+    return compute(src);
 }
 
 // --- ROC ---
 double ROC::recompute(double src) {
-    if (buffer_.empty()) return compute(src);
-    buffer_.back() = src;
-
-    if (is_na(src)) return na<double>();
-    if (static_cast<long long>(buffer_.size()) < static_cast<long long>(length_) + 1) return na<double>();
-
-    double prev = buffer_.front();
-    if (prev == 0.0) return na<double>();
-    return (src - prev) / prev * 100.0;
+    bar_.undo(buffer_);
+    return compute(src);
 }
 
 // --- Rising ---
 double Rising::recompute(double src) {
-    if (buffer_.empty()) return compute(src);
-    buffer_.back() = src;
-
-    if (is_na(src)) return 0.0;
-    if (static_cast<long long>(buffer_.size()) < static_cast<long long>(length_) + 1) return 0.0;
-
-    for (int i = 1; i < (int)buffer_.size(); i++) {
-        if (buffer_[i] <= buffer_[i - 1]) return 0.0;
-    }
-    return 1.0;
+    bar_.undo(buffer_);
+    return compute(src);
 }
 
 // --- Falling ---
 double Falling::recompute(double src) {
-    if (buffer_.empty()) return compute(src);
-    buffer_.back() = src;
-
-    if (is_na(src)) return 0.0;
-    if (static_cast<long long>(buffer_.size()) < static_cast<long long>(length_) + 1) return 0.0;
-
-    for (int i = 1; i < (int)buffer_.size(); i++) {
-        if (buffer_[i] >= buffer_[i - 1]) return 0.0;
-    }
-    return 1.0;
+    bar_.undo(buffer_);
+    return compute(src);
 }
 
 // --- CCI ---
 double CCI::recompute(double src) {
-    if (buffer_.empty()) return compute(src);
-    buffer_.back() = src;
-
-    if (is_na(src)) return na<double>();
-    if ((int)buffer_.size() < length_) return na<double>();
-
-    double sum = 0.0;
-    for (double v : buffer_) sum += v;
-    double mean = sum / length_;
-
-    double md_sum = 0.0;
-    for (double v : buffer_) md_sum += std::abs(v - mean);
-    double mean_dev = md_sum / length_;
-
-    if (mean_dev == 0.0) return 0.0;
-    return (src - mean) / (0.015 * mean_dev);
+    bar_.undo(buffer_);
+    return compute(src);
 }
 
 // --- RCI ---
 double RCI::recompute(double src) {
-    if (buffer_.empty()) return compute(src);
-    buffer_.back() = src;
-
-    if (is_na(src)) return na<double>();
-    const int n = (int)buffer_.size();
-    if (n < length_ || n < 2) return na<double>();
-
-    return calculate();
+    bar_.undo(buffer_);
+    return compute(src);
 }
 
 // --- MFI ---

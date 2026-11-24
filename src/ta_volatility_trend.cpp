@@ -609,16 +609,7 @@ KCResult KC::compute(double src, double high, double low, double close) {
 Variance::Variance(int length, bool biased) : length_(length), biased_(biased) {}
 
 double Variance::compute(double src) {
-    if (is_na(src)) {
-        return na<double>();
-    }
-
-    buffer_.push_back(src);
-    while ((int)buffer_.size() > length_) {
-        buffer_.pop_front();
-    }
-
-    if ((int)buffer_.size() < length_) {
+    if (!bar_.push(buffer_, src, length_) || (int)buffer_.size() < length_) {
         return na<double>();
     }
 
@@ -718,10 +709,7 @@ double TR::recompute(double high, double low, double close, double prev_chart_cl
 
 // --- Dev (Mean Absolute Deviation) ---
 double Dev::compute(double src) {
-    if (is_na(src)) return na<double>();
-    buffer_.push_back(src);
-    if ((int)buffer_.size() > length_) buffer_.pop_front();
-    if ((int)buffer_.size() < length_) return na<double>();
+    if (!bar_.push(buffer_, src, length_) || (int)buffer_.size() < length_) return na<double>();
     double mean = 0.0;
     for (auto v : buffer_) mean += v;
     mean /= length_;
@@ -867,23 +855,8 @@ KCResult KC::recompute(double src, double high, double low, double close) {
 
 // --- Variance ---
 double Variance::recompute(double src) {
-    if (buffer_.empty()) return compute(src);
-    buffer_.back() = src;
-
-    if (is_na(src)) return na<double>();
-    if ((int)buffer_.size() < length_) return na<double>();
-
-    double sum = 0.0;
-    for (double v : buffer_) sum += v;
-    double mean = sum / length_;
-
-    double sq_sum = 0.0;
-    for (double v : buffer_) {
-        double diff = v - mean;
-        sq_sum += diff * diff;
-    }
-    const int denom = biased_ ? length_ : (length_ - 1);
-    return denom > 0 ? (sq_sum / denom) : na<double>();
+    bar_.undo(buffer_);
+    return compute(src);
 }
 
 // --- BBW ---
@@ -911,18 +884,8 @@ double TR::recompute(double high, double low, double close) {
 
 // --- Dev ---
 double Dev::recompute(double src) {
-    if (buffer_.empty()) return compute(src);
-    buffer_.back() = src;
-
-    if (is_na(src)) return na<double>();
-    if ((int)buffer_.size() < length_) return na<double>();
-
-    double mean = 0.0;
-    for (auto v : buffer_) mean += v;
-    mean /= length_;
-    double mad = 0.0;
-    for (auto v : buffer_) mad += std::abs(v - mean);
-    return mad / length_;
+    bar_.undo(buffer_);
+    return compute(src);
 }
 
 } // namespace ta

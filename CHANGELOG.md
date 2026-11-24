@@ -20,6 +20,19 @@ version number follows semantic versioning over the surfaces the
 - The ABI receipt check now refuses an empty CTest registry. The verifier’s private-fixture label comparison now includes tests registered by the CMake glob.
 - The design inventory now reads included CMake test registrations and reports compiled rows in a kernel CTest listing that the inventory missed.
 - The private-file read check now examines Python tests registered in included CMake files and reads their skip properties.
+- `ta.mom` now keeps the previous source when the current bar is recalculated to or from `na`.
+- `ta.roc` now measures the percentage change from the correct earlier value when a recalculated bar gains or loses its source.
+- `ta.rising` now checks the last valid sources when the current bar changes to or from `na`.
+- `ta.falling` now checks the last valid sources when the current bar changes to or from `na`.
+- `ta.cci` no longer loses a price from its mean and mean deviation when a recalculated bar gains or loses its source.
+- `ta.rci` no longer overwrites an earlier rank input or leaves `na` among the prices after a recalculation.
+- Both forms of `ta.variance` now use the last valid samples after a recalculation to or from `na`.
+- `ta.dev` now preserves the samples used for mean deviation when a recalculated bar gains or loses its source.
+- `ta.median` now takes the median of the correct window after a recalculation to or from `na`.
+- `ta.mode` now restores the previous frequencies when a recalculated bar loses its source and counts a newly available source once.
+- `ta.wma` now restores the previous weighted window when a recalculated source becomes `na` and appends a previously missing source at its proper weight.
+- `ta.hma` now recalculates all three weighted averages when a bar changes to or from `na`, including during warmup.
+- `ta.vwma` now restores both rolling sums and their source/volume pairs when either input changes to or from `na` on a recalculated bar. Replacements between complete pairs on a bar with no missing input keep their previous rounding.
 - Lengths at the int limit no longer overflow in `length + 1` or `left + right + 1`: `ta.ema`, `ta.mom`, `ta.roc`, `ta.rising`, `ta.falling`, `ta.percentrank`, `ta.pivothigh` and `ta.pivotlow` with a length of 2147483647, and `ta.valuewhen` with that occurrence limit. A negative `ta.valuewhen` occurrence returns `na` instead of reading outside the kept values. Other lengths are unchanged.
 - `ta.stdev(..., biased = false)` recalculated on the same bar now gives what a run over the bar's final value gives when that value changes to or from `na`, and no longer overwrites the previous bar's value or writes `na` into the window. Recalculations between two valid values are unchanged.
 - `ta.rci` with a length of 1291 or more now returns the rank correlation of its formula; the denominator `n * (n * n - 1)` no longer overflows an int. Shorter lengths are unchanged.

@@ -670,8 +670,8 @@ static void test_rising_falling() {
     CHECK(near(rising.compute(2.5), 0.0));  // dropped → not strictly rising
     // NaN input → 0
     CHECK(near(rising.compute(na<double>()), 0.0));
-    // recompute
-    CHECK(near(rising.recompute(10.0), 1.0));
+    // expectation corrected: 1 -> 0, because {3, 2.5, 10} is not rising.
+    CHECK(near(rising.recompute(10.0), 0.0));
 
     ta::Falling falling(2);
     CHECK(near(falling.compute(5.0), 0.0));
@@ -679,7 +679,8 @@ static void test_rising_falling() {
     CHECK(near(falling.compute(3.0), 1.0));
     CHECK(near(falling.compute(3.5), 0.0));
     CHECK(near(falling.compute(na<double>()), 0.0));
-    CHECK(near(falling.recompute(0.0), 1.0));
+    // expectation corrected: 1 -> 0, because {3, 3.5, 0} is not falling.
+    CHECK(near(falling.recompute(0.0), 0.0));
 }
 
 // ============================================================================

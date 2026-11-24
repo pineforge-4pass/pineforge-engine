@@ -414,6 +414,15 @@ public:
         }
     }
 
+    // Reverse a push_front. At capacity the entering value overwrote the
+    // oldest; restore it before moving the head back to the previous newest.
+    void undo_push_front(std::optional<T> evicted) {
+        if (size_ == 0) return;
+        if (evicted) buffer_.write(head_, *evicted);
+        else --size_;
+        head_ = size_ == 0 || head_ + 1 == capacity_ ? 0 : head_ + 1;
+    }
+
     T operator[](std::size_t offset) const {
         if (offset >= size_ || capacity_ == 0) {
             return na<T>();

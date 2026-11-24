@@ -19,7 +19,6 @@
 #include <cstdlib>
 #include <functional>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace pineforge {
@@ -429,12 +428,11 @@ double Median::calculate() {
     auto first = scratch_.begin();
     auto last = first + n;
 
-    // std::sort was the old operation for recompute() after a NaN input.
-    // Signed zero is also kept on that path because +0 and -0 compare equal
-    // while still carrying different result bits.
+    // Keep signed zero on the sort path: +0 and -0 compare equal but
+    // carry different result bits.
     bool preserve_sort = false;
     for (int i = 0; i < n; ++i) {
-        if (is_na(scratch_[i]) || scratch_[i] == 0.0) {
+        if (scratch_[i] == 0.0) {
             preserve_sort = true;
             break;
         }
@@ -462,16 +460,7 @@ double Median::calculate() {
 }
 
 double Median::compute(double src) {
-    if (is_na(src)) {
-        return na<double>();
-    }
-
-    buffer_.push_back(src);
-    while ((int)buffer_.size() > length_) {
-        buffer_.pop_front();
-    }
-
-    if ((int)buffer_.size() < length_) {
+    if (!bar_.push(buffer_, src, length_) || (int)buffer_.size() < length_) {
         return na<double>();
     }
 
@@ -784,13 +773,12 @@ void Mode::add_count(double value) {
     if (counts_.empty()) return;
 
     const std::size_t slot_count = counts_.size();
-    const bool value_is_na = is_na(value);
     std::size_t slot = std::hash<double>{}(value) % slot_count;
     std::size_t first_deleted = slot_count;
     for (std::size_t probe = 0; probe < slot_count; ++probe) {
         CountEntry& entry = counts_[slot];
         if (entry.state == 1) {
-            if (!value_is_na && !is_na(entry.value) && entry.value == value) {
+            if (entry.value == value) {
                 ++entry.count;
                 return;
             }
@@ -822,14 +810,11 @@ void Mode::remove_count(double value) {
     if (counts_.empty()) return;
 
     const std::size_t slot_count = counts_.size();
-    const bool value_is_na = is_na(value);
     std::size_t slot = std::hash<double>{}(value) % slot_count;
     for (std::size_t probe = 0; probe < slot_count; ++probe) {
         CountEntry& entry = counts_[slot];
         if (entry.state == 0) return;
-        if (entry.state == 1
-            && ((value_is_na && is_na(entry.value))
-                || (!value_is_na && !is_na(entry.value) && entry.value == value))) {
+        if (entry.state == 1 && entry.value == value) {
             if (--entry.count == 0) entry.state = 2;
             return;
         }
@@ -838,27 +823,6 @@ void Mode::remove_count(double value) {
 }
 
 double Mode::current_mode() const {
-    // compute() does not retain an na input, but recompute() deliberately
-    // leaves one in the window before returning na. In that exceptional state
-    // preserve the former unordered_map iteration and NaN-key behavior.
-    for (double value : buffer_) {
-        if (is_na(value)) {
-            std::unordered_map<double, int> counts;
-            for (double held : buffer_) ++counts[held];
-            int max_count = 0;
-            double mode_value = na<double>();
-            for (auto& entry : counts) {
-                if (entry.second > max_count
-                    || (entry.second == max_count
-                        && (is_na(mode_value) || entry.first < mode_value))) {
-                    max_count = entry.second;
-                    mode_value = entry.first;
-                }
-            }
-            return mode_value;
-        }
-    }
-
     int max_count = 0;
     double mode_val = na<double>();
     for (const CountEntry& entry : counts_) {
@@ -883,14 +847,9 @@ double Mode::current_mode() const {
 }
 
 double Mode::compute(double src) {
-    if (is_na(src)) return na<double>();
-    buffer_.push_back(src);
-    if ((int)buffer_.size() > length_) {
-        const double leaving = buffer_.front();
-        buffer_.pop_front();
-        remove_count(leaving);
-    }
-    if (!buffer_.empty()) add_count(src);
+    if (!bar_.push(buffer_, src, length_) || buffer_.empty()) return na<double>();
+    if (!is_na(bar_.evicted())) remove_count(bar_.evicted());
+    add_count(src);
     if ((int)buffer_.size() < length_) return na<double>();
     return current_mode();
 }
@@ -970,13 +929,8 @@ double AllTimeMin::recompute(double src) {
 
 // --- Median ---
 double Median::recompute(double src) {
-    if (buffer_.empty()) return compute(src);
-    buffer_.back() = src;
-
-    if (is_na(src)) return na<double>();
-    if ((int)buffer_.size() < length_) return na<double>();
-
-    return calculate();
+    bar_.undo(buffer_);
+    return compute(src);
 }
 
 // --- OBV ---
@@ -1090,15 +1044,13 @@ VWAPBandsResult AnchoredVWAP::recompute_bands(double src, double volume, bool an
 
 // --- Mode ---
 double Mode::recompute(double src) {
-    if (buffer_.empty()) return compute(src);
-    const double replaced = buffer_.back();
-    remove_count(replaced);
-    buffer_.back() = src;
-    add_count(src);
-
-    if (is_na(src)) return na<double>();
-    if ((int)buffer_.size() < length_) return na<double>();
-    return current_mode();
+    if (bar_.pushed()) {
+        const double replaced = buffer_.back();
+        bar_.undo(buffer_);
+        remove_count(replaced);
+        if (!is_na(bar_.evicted())) add_count(bar_.evicted());
+    }
+    return compute(src);
 }
 
 // --- Range ---

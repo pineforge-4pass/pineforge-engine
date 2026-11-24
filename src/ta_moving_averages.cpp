@@ -354,13 +354,20 @@ WMA::WMA(int length, WindowCacheCapacity cache)
 
 double WMA::compute(double src) {
     if (is_na(src)) {
+        pushed_ = false;
         return na<double>();
     }
 
-    // Ring buffer is capacity-bounded at length_: push_front drops the
-    // oldest sample automatically once full (the deque pop_front evict).
+    const auto capacity = buffer_.capacity();
+    const double leaving = capacity && buffer_.size() == capacity
+        ? buffer_[capacity - 1] : na<double>();
     buffer_.push_front(src);
+    pushed_ = capacity != 0;
+    evicted_ = leaving;
+    return weighted_mean();
+}
 
+double WMA::weighted_mean() const {
     if ((int)buffer_.size() < length_) {
         return na<double>();
     }
@@ -390,17 +397,10 @@ HMA::HMA(int length)
       wma_sqrt_(std::max((int)std::sqrt((double)length), 1)) {}
 
 double HMA::compute(double src) {
-    if (is_na(src)) {
-        return na<double>();
-    }
-
     double half_val = wma_half_.compute(src);
     double full_val = wma_full_.compute(src);
-
-    if (is_na(half_val) || is_na(full_val)) {
-        return na<double>();
-    }
-
+    // A missing input (including warmup) records a no-push bar in each
+    // stage, so a later replacement cannot rewind the preceding bar.
     double diff = 2.0 * half_val - full_val;
     return wma_sqrt_.compute(diff);
 }
@@ -410,7 +410,12 @@ double HMA::compute(double src) {
 VWMA::VWMA(int length) : length_(length), sv_sum_(0.0), v_sum_(0.0) {}
 
 double VWMA::compute(double src, double vol) {
-    if (is_na(src) || is_na(vol)) {
+    saved_sv_sum_ = sv_sum_;
+    saved_v_sum_ = v_sum_;
+    pushed_ = false;
+    evicted_ = false;
+    saw_na_ = is_na(src) || is_na(vol);
+    if (saw_na_) {
         return na<double>();
     }
 
@@ -421,11 +426,15 @@ double VWMA::compute(double src, double vol) {
     v_sum_ += vol;
 
     while ((int)sv_buffer_.size() > length_) {
-        sv_sum_ -= sv_buffer_.front();
+        evicted_ = true;
+        evicted_sv_ = sv_buffer_.front();
+        evicted_v_ = v_buffer_.front();
+        sv_sum_ -= evicted_sv_;
         sv_buffer_.pop_front();
-        v_sum_ -= v_buffer_.front();
+        v_sum_ -= evicted_v_;
         v_buffer_.pop_front();
     }
+    pushed_ = !sv_buffer_.empty();
 
     if ((int)sv_buffer_.size() < length_) {
         return na<double>();
@@ -549,42 +558,45 @@ double SMA::recompute(double src) {
 
 // --- WMA ---
 double WMA::recompute(double src) {
-    if (buffer_.size() == 0) return compute(src);
-    buffer_.update_front(src);  // overwrite newest in place (deque back())
-
-    if (is_na(src)) return na<double>();
-    if ((int)buffer_.size() < length_) return na<double>();
-
-    double weighted_sum = 0.0;
-    double weight_total = 0.0;
-    for (int i = 0; i < length_; i++) {
-        double weight = i + 1;
-        weighted_sum += buffer_[static_cast<std::size_t>(length_ - 1 - i)] * weight;
-        weight_total += weight;
+    if (pushed_) {
+        if (!is_na(src)) {
+            buffer_.update_front(src);
+            return weighted_mean();
+        }
+        buffer_.undo_push_front(is_na(evicted_) ? std::nullopt : std::optional<double>{evicted_});
     }
-    return weighted_sum / weight_total;
+    return compute(src);
 }
 
 // --- HMA ---
 double HMA::recompute(double src) {
-    if (is_na(src)) return na<double>();
-
     double half_val = wma_half_.recompute(src);
     double full_val = wma_full_.recompute(src);
-
-    if (is_na(half_val) || is_na(full_val)) {
-        return na<double>();
-    }
-
     double diff = 2.0 * half_val - full_val;
     return wma_sqrt_.recompute(diff);
 }
 
 // --- VWMA ---
 double VWMA::recompute(double src, double vol) {
-    if (sv_buffer_.empty()) return compute(src, vol);
-    if (is_na(src) || is_na(vol)) return na<double>();
+    const bool replay = saw_na_ || is_na(src) || is_na(vol);
+    if (replay || !pushed_) {
+        if (pushed_) {
+            if (evicted_) {
+                sv_buffer_.push_front(evicted_sv_);
+                v_buffer_.push_front(evicted_v_);
+            }
+            sv_buffer_.pop_back();
+            v_buffer_.pop_back();
+            sv_sum_ = saved_sv_sum_;
+            v_sum_ = saved_v_sum_;
+        }
+        const double result = compute(src, vol);
+        saw_na_ = replay;
+        return result;
+    }
 
+    // A bar that has only had complete pairs keeps the original rounding
+    // order. Once it crosses na, every replacement starts at its saved sums.
     double old_sv = sv_buffer_.back();
     double old_v = v_buffer_.back();
     double new_sv = src * vol;
