@@ -388,7 +388,8 @@ struct TradeLedger::State {
         dev_t device{};
         ino_t inode{};
         HistoryFactory factory;
-        ~HistoryBacking() { if (fd >= 0) ::close(fd); }
+        ~HistoryBacking() { close_fd(); }
+        void close_fd() noexcept { if (fd >= 0) ::close(std::exchange(fd, -1)); }
         bool bound() const noexcept { return fd >= 0; }
         void bind(HistoryFactory supplied, std::uint64_t bytes,
                   const HistoryBacking* previous = nullptr) {
@@ -1402,16 +1403,19 @@ TradeLedger::TradeLedger(const TradeLedger& other)
     state_->cache_max_bytes = other.state_->cache_max_bytes;
     state_->cache_auto = other.state_->cache_auto;
     set_scratch_directory(other.state_->directory);
-    if (other.state_->history.bound()) {
-        state_->history.bind(other.state_->history.factory, other.state_->history.extent,
-                             &other.state_->history);
-    }
     if (other.state_->released) {
+        // Keep the next run's policy without acquiring storage for released results.
+        state_->history.factory = other.state_->history.factory;
+        state_->history.extent = other.state_->history.extent;
         state_->first = other.state_->first;
         state_->end = other.state_->end;
         state_->retiring = other.state_->retiring;
         release();
         return;
+    }
+    if (other.state_->history.bound()) {
+        state_->history.bind(other.state_->history.factory, other.state_->history.extent,
+                             &other.state_->history);
     }
     // A cold source remains unallocated. Reuse already cached source rows;
     // neither the source nor its copy allocates pages just for copying.
@@ -1469,8 +1473,9 @@ void TradeLedger::clear() {
     next->directory = state_->directory;
     next->index.set_directory(next->directory);
     next->payload.set_directory(next->directory);
-    if (state_->history.bound()) {
-        next->history.bind(state_->history.factory, state_->history.extent, &state_->history);
+    const auto& history = state_->history;
+    if (history.factory) {
+        next->history.bind(history.factory, history.extent, history.bound() ? &history : nullptr);
     }
     state_.swap(next);
 }
@@ -1479,6 +1484,7 @@ void TradeLedger::release() noexcept {
     auto& state = *state_;
     if (state.released) return;
     state.released = true;
+    state.history.close_fd();
     state.index.legacy.clear();
     state.payload.legacy.clear();
     state.rows.fill(State::Record{});
@@ -1525,6 +1531,7 @@ std::array<std::uint64_t, 2> TradeLedger::scratch_storage_bytes() const {
 }
 
 void TradeLedger::bind_retained_history(HistoryFactory factory, std::uint64_t extent) {
+    state_->check_not_released();
     if (state_->end != 0 || state_->index.opened() || state_->payload.opened()
         || state_->history.bound())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
