@@ -2459,9 +2459,9 @@
 //   Random45/1/0: boundary 0x2a1db551c125db4bull -> 0xc312df17771e754full; final 0xb8b16d27afb302c6ull -> 0xd79fde8123ee237full
 // expectation corrected (entry records for every declared quantity step, 28 of 276 rows, in 7 Random scenarios), because a run
 // that declares a step of 0.25 now keeps and folds the FIFO entry records too. The rows hold their trades and counts, except
-// that Random27 with the magnifier admits one more entry (trades 21 -> 22); the records fold into the boundary and rows
-// digests, and into the final hash of the 4 scenarios whose records survive the run. The tree before the rule passes the table
-// above. Harvested on e56ebcaa:
+// that Random27 with the magnifier admits one more entry (trades 21 -> 22): the tree without the rule books the same 22 trades
+// when that run declares a step of 0.01. The records move the boundary and rows digests, and the final hash of 4 scenarios.
+// The tree before the rule passes the table above. Harvested on e56ebcaa:
 //   Random09/0/0: boundary 0x26f5ebe03f90d9ddull -> 0x0dbf4f41ac5f5dcaull
 //   Random09/0/1: boundary 0x26f5ebe03f90d9ddull -> 0x0dbf4f41ac5f5dcaull; rows 0x329e1aae417aa455ull -> 0xedffae4394893363ull
 //   Random09/1/0: boundary 0x50f419dac7461356ull -> 0x6e5c2dfcd6ccc276ull
