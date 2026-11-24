@@ -8117,6 +8117,9 @@ bool PineExecutionAdapter::opposite_entry_opening_pending(bool is_long) const {
 void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_price,
                                  double stop_price, double qty, const std::string& comment,
                                  const std::string& oca_name, int oca_type, int qty_type) {
+    // Zero cash or zero percent buys no contracts at any fill price.
+    if (qty == 0.0 && (qty_type == static_cast<int>(QtyType::CASH)
+                       || qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY))) return;
     place_entry(id, is_long, limit_price, stop_price, qty, comment, oca_name, oca_type, qty_type);
     if (PF_RARE(!id_bound_exits_.empty())) rearm_id_bound_exits(id);
 }
@@ -23049,7 +23052,7 @@ void PineExecutionAdapter::observe_intraday_cap(
                 ? continuation_snapshot->frozen_market_own_units : kNaN;
             bool size_at_fill = false;
             if (continuation_snapshot && !finite_positive(continuation_units)) {
-                if (finite_positive(continuation_snapshot->requested_qty)) {
+                if (std::isfinite(continuation_snapshot->requested_qty)) {
                     if (has_requested_units(*continuation_snapshot))
                         continuation_units = continuation_snapshot->requested_qty;
                     else
