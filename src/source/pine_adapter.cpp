@@ -23490,12 +23490,7 @@ void PineExecutionAdapter::admit_deferred_open_marketable_sells() {
                      });
     for (auto& row : queued) {
         native_order::Request request;
-        if (row.snapshot.deferred_cohort || !std::isfinite(row.snapshot.requested_qty)) {
-            request.intent = native_order::HostSized{
-                native_order::HostSizedKind::Open, native_order::Side::Short};
-        } else {
-            request.intent = native_order::Transact{-std::abs(row.snapshot.requested_qty)};
-        }
+        request.intent = rebuilt_entry_intent(row.snapshot);
         request.label = row.snapshot.source_id;
         request.comment = row.snapshot.comment;
         request.trigger = native_order::Market{};
@@ -24837,14 +24832,7 @@ void PineExecutionAdapter::rearm_throttled_reopens() {
     const auto physical = detail::run_position(require_host());
     for (auto& snapshot : queued) {
         native_order::Request request;
-        if (snapshot.deferred_cohort || !std::isfinite(snapshot.requested_qty)) {
-            request.intent = native_order::HostSized{
-                native_order::HostSizedKind::Open,
-                snapshot.is_long ? native_order::Side::Long : native_order::Side::Short};
-        } else {
-            const double units = std::abs(snapshot.requested_qty);
-            request.intent = native_order::Transact{snapshot.is_long ? units : -units};
-        }
+        request.intent = rebuilt_entry_intent(snapshot);
         request.label = snapshot.source_id;
         request.comment = snapshot.comment;
         request.trigger = native_order::Stop{snapshot.exit_levels.stop};

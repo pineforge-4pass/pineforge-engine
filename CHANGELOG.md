@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- A stop entry deferred behind a marketable buy or rearmed after another entry was stopped out now keeps its cash or equity sizing at the eventual fill.
 - With an intraday filled-order limit, an opposite entry that follows a full close at the same price now spends its cash or equity budget on the new position.
 - A market entry queued behind a full close on the same bar now converts its cash or equity percentage at the opening fill.
 - Pending entry orders keep cash and equity percentages in their typed request fields; they no longer report those amounts as fixed contracts before the fill.
