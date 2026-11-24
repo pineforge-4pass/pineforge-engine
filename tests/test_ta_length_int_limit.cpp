@@ -17,16 +17,20 @@ using namespace pineforge;
 namespace {
 
 int failures = 0;
+int observations = 0;
+bool matched = false;
 const char* only_row = nullptr;
 
 bool selected(const char* row) {
     if (only_row != nullptr && std::strcmp(only_row, row) != 0) return false;
+    matched = true;
     std::printf("row %s\n", row);
     std::fflush(stdout);
     return true;
 }
 
 void expect_value(const char* row, double got, double want) {
+    ++observations;
     if (!is_na(got) && got == want) {
         std::printf("PASS %s: %.17g\n", row, got);
     } else {
@@ -36,6 +40,7 @@ void expect_value(const char* row, double got, double want) {
 }
 
 void expect_na(const char* row, double got) {
+    ++observations;
     if (is_na(got)) {
         std::printf("PASS %s: na\n", row);
     } else {
@@ -47,7 +52,11 @@ void expect_na(const char* row, double got) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc > 1) only_row = argv[1];
+    if (argc > 2) {
+        std::fprintf(stderr, "usage: %s [row]\n", argv[0]);
+        return 2;
+    }
+    if (argc == 2) only_row = argv[1];
 
     if (selected("ema")) {
         // alpha = 2 / (length + 1) = 2 / 2^31 = 2^-30, so one step from 0
@@ -107,6 +116,14 @@ int main(int argc, char** argv) {
                   when.compute(false, 1.0, -1));
         expect_na("valuewhen occurrence -1 after one occurrence",
                   when.compute(true, 2.0, -1));
+    }
+    if (only_row != nullptr && !matched) {
+        std::fprintf(stderr, "unknown row: %s\n", only_row);
+        return 2;
+    }
+    if (observations == 0) {
+        std::fprintf(stderr, "no observations for %s\n", only_row ? only_row : "any row");
+        return 1;
     }
     return failures == 0 ? 0 : 1;
 }
