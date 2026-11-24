@@ -801,9 +801,9 @@ enum class NativeRunSpecError : std::uint8_t {
     // are a separate contract; this is never silently promoted.
     SubscriptionFinerThanInput,
     // Two declared series of the same period whose `authoritative_bars`
-    // differ. Same-period series are otherwise independent instances, but the
-    // feed store is keyed by the timeframe's duration, so they could not own
-    // their own conflicting bars. Declaring the same bars twice, or leaving
+    // differ. Independent series share one feed for the same calendar unit
+    // and count (M = 1M), or for fixed periods of equal duration (1 = 60S).
+    // Declaring the same bars twice, or leaving
     // one (or both) empty, is accepted.
     DuplicateSubscriptionTimeframe,
     // Authoritative bars that are not strictly increasing in time.

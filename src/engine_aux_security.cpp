@@ -4,8 +4,8 @@
  */
 
 #include "engine_internal.hpp"
+#include "native_feed_period.hpp"
 #include <pineforge/cache_policy.hpp>
-#include <pineforge/native_calendar.hpp>
 #include <pineforge/run_failure.hpp>
 #include <pineforge/ta.hpp>
 
@@ -16,8 +16,8 @@
 
 namespace pineforge {
 
-// Match the duration used by native subscription validation. The legacy
-// conversion uses -1 for both months and a positive D/W count past int.
+// The stored duration preserves the full day/week count and the monthly
+// marker. Several different feed periods can have the same duration.
 static int64_t native_feed_seconds(const std::string& tf) {
     const int seconds = tf_to_seconds(tf);
     if (seconds == -1 && (tf.back() == 'D' || tf.back() == 'W')) {
@@ -92,9 +92,11 @@ static int64_t native_feed_seconds(const std::string& tf) {
 bool BacktestEngine::set_native_security_feed(const std::string& timeframe,
                                               const Bar* bars, int n) {
     guard_native_mutation("set_native_security_feed");
+    std::optional<internal::NativeFeedPeriod> key;
     int64_t seconds = 0;
     try {
-        seconds = native_calendar::parse_timeframe(timeframe) ? native_feed_seconds(timeframe) : 0;
+        key = internal::native_feed_period(timeframe);
+        if (key) seconds = native_feed_seconds(timeframe);
     } catch (...) {
         seconds = 0;
     }
@@ -106,7 +108,7 @@ bool BacktestEngine::set_native_security_feed(const std::string& timeframe,
     }
     auto existing = native_security_feeds_.begin();
     while (existing != native_security_feeds_.end()
-           && existing->seconds != seconds) {
+           && (existing->seconds != seconds || internal::native_feed_period(existing->tf) != key)) {
         ++existing;
     }
     if (n == 0) {
@@ -163,14 +165,9 @@ void BacktestEngine::prepare_native_security_feeds(const Bar* input_bars,
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     if (aux_security_feed_enabled() && input_bars != nullptr && n_input > 0
         && script_tf_seconds_ > 0) {
-        bool have_chart_tf_feed = false;
-        for (const auto& feed : native_security_feeds_) {
-            if (feed.seconds == script_tf_seconds_) {
-                have_chart_tf_feed = true;
-                break;
-            }
-        }
-        if (!have_chart_tf_feed) {
+        const auto chart_key = internal::native_feed_period(script_tf_);
+        if (chart_key && std::none_of(native_security_feeds_.begin(), native_security_feeds_.end(),
+                [&](const auto& feed) { return internal::native_feed_period(feed.tf) == chart_key; })) {
             NativeSecurityFeed chart_feed;
             chart_feed.tf = script_tf_;
             chart_feed.seconds = script_tf_seconds_;
@@ -210,6 +207,7 @@ void BacktestEngine::prepare_native_security_feeds(const Bar* input_bars,
     // bar stamped Sun 17:00 CT is Tuesday's). Both sequences are sorted, so
     // one merge pass over the input bars serves every stamp.
     struct NativePeriods {
+        std::optional<internal::NativeFeedPeriod> key;
         std::vector<int64_t> stamps;
         std::vector<int64_t> trade_instants;
     };
@@ -217,6 +215,7 @@ void BacktestEngine::prepare_native_security_feeds(const Bar* input_bars,
     for (std::size_t f = 0; f < native_security_feeds_.size(); ++f) {
         const auto& bars = native_security_feeds_[f].bars;
         NativePeriods& np = periods[f];
+        np.key = internal::native_feed_period(native_security_feeds_[f].tf);
         np.stamps.reserve(bars.size());
         np.trade_instants.reserve(bars.size());
         int j = 0;
@@ -243,7 +242,7 @@ void BacktestEngine::prepare_native_security_feeds(const Bar* input_bars,
     // other day keeps the day-stamp grid.
     std::vector<int64_t> late_day_opens;
     for (std::size_t f = 0; f < native_security_feeds_.size(); ++f) {
-        if (native_security_feeds_[f].seconds != kSecPerDay) continue;
+        if (periods[f].key != internal::daily_feed_period) continue;
         late_day_opens = native_late_day_opens(syminfo_.timezone, syminfo_.session,
                                                periods[f].stamps, input_bars, n_input);
         break;
@@ -252,6 +251,8 @@ void BacktestEngine::prepare_native_security_feeds(const Bar* input_bars,
         state.native_feed_index = -1;
         state.native_bars_by_label.clear();
         state.fixed_clock = FixedPeriodClock{};
+        const auto requested_key = internal::native_feed_period(state.tf);
+        if (!requested_key) continue;
         // Integer division used to erase a fractional HTF with ratio < 2.
         // Repair that routing only when authoritative bars opt into it; the
         // unbacked evaluator retains its established aggregate/passthrough.
@@ -260,8 +261,8 @@ void BacktestEngine::prepare_native_security_feeds(const Bar* input_bars,
             const auto requested = tf_to_seconds(state.tf);
             const auto input = tf_to_seconds(state.evaluator_input_tf);
             if (input > 0 && requested > input) {
-                for (const auto& feed : native_security_feeds_) {
-                    if (feed.seconds != requested) continue;
+                for (const auto& np : periods) {
+                    if (np.key != requested_key) continue;
                     state.aggregator = TimeframeAggregator(
                         state.tf, state.evaluator_input_tf, syminfo_.timezone, syminfo_.session);
                     state.aggregator.set_early_close_completes(session_template_knows_early_close());
@@ -274,13 +275,6 @@ void BacktestEngine::prepare_native_security_feeds(const Bar* input_bars,
         if (!state.aggregator.is_active()) {
             continue;
         }
-        int64_t requested_seconds = 0;
-        try {
-            requested_seconds = native_feed_seconds(state.tf);
-        } catch (...) {
-            requested_seconds = 0;
-        }
-        if (requested_seconds == 0) continue;
         // Before any label below is keyed: the grid an intraday evaluator
         // labels its buckets on starts from the late day opens (CALENDAR
         // and count-only aggregators ignore the call).
@@ -299,7 +293,7 @@ void BacktestEngine::prepare_native_security_feeds(const Bar* input_bars,
         // session the run's calendar coalesces) is the period's final print:
         // keep it.
         for (std::size_t i = 0; i < native_security_feeds_.size(); ++i) {
-            if (native_security_feeds_[i].seconds != requested_seconds) continue;
+            if (periods[i].key != requested_key) continue;
             state.native_feed_index = static_cast<int>(i);
             if (state.aggregator.calendar_period() != CalendarPeriod::NONE) {
                 state.aggregator.set_native_periods(
@@ -343,7 +337,7 @@ void BacktestEngine::prepare_native_security_feeds(const Bar* input_bars,
             continue;
         }
         for (std::size_t i = 0; i < native_security_feeds_.size(); ++i) {
-            if (native_security_feeds_[i].seconds != kSecPerDay) continue;
+            if (periods[i].key != internal::daily_feed_period) continue;
             state.aggregator.set_native_periods(periods[i].stamps,
                                                 periods[i].trade_instants,
                                                 CalendarPeriod::DAY);
@@ -398,7 +392,8 @@ void BacktestEngine::prepare_chart_day_partition(const Bar* input_bars,
     if (native_security_feeds_.empty()) return;
     if (calendar_period_for(input_tf_) != CalendarPeriod::NONE) return;
     for (const NativeSecurityFeed& feed : native_security_feeds_) {
-        if (feed.seconds != kSecPerDay || feed.bars.empty()) continue;
+        if (feed.bars.empty() || internal::native_feed_period(feed.tf) != internal::daily_feed_period)
+            continue;
         std::vector<int64_t> stamps;
         stamps.reserve(feed.bars.size());
         for (const Bar& bar : feed.bars) stamps.push_back(bar.timestamp);

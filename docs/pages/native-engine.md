@@ -2476,8 +2476,10 @@ identified by its own index — in `NativeTimeframeBarContext::subscription` and
 in `native_series_bar(index)`. Two `"60"` series over a 15-minute input
 deliver the same buckets twice, once per index, in declaration order. The one
 thing same-period instances cannot each own is a different
-`authoritative_bars` feed. The store compares day and week durations in full:
-`3551W` and `M` can each supply their own prices. Two conflicting feeds for
+`authoritative_bars` feed. Calendar feeds match by unit and count: `M` and
+`1M` share prices, while `3M`, `12M` and `3551W` each have their own. Fixed
+feeds match by duration: `60S` and `1` share prices, while `1440` and `D`
+are distinct. Two conflicting feeds for
 the same period are refused
 (`DuplicateSubscriptionTimeframe`), while declaring the same bars twice — or
 leaving one, or both, empty — is accepted.
@@ -2489,7 +2491,7 @@ with `input_tf` exactly as `script_tf` does. Named refusals:
 | --- | --- |
 | `InvalidSubscriptionTimeframe` | unparseable literal, or a pairing `script_tf` would not accept |
 | `SubscriptionFinerThanInput` | strictly finer than `input_tf` — a lower-timeframe array is a different contract and is not promoted |
-| `DuplicateSubscriptionTimeframe` | two series declaring **different** `authoritative_bars` for the same duration, or for two monthly literals (which share one feed slot) |
+| `DuplicateSubscriptionTimeframe` | two series declaring **different** `authoritative_bars` for the same calendar unit and count, or for fixed periods of equal duration |
 | `UnorderedSubscriptionBars` | `authoritative_bars` not strictly increasing in time |
 | `SubscriptionWithoutTimeframe` | declared together with `timeframe_undetected` |
 | `SubscriptionWithoutAuxiliaryFeed` | a series whose `source` is `AuxiliaryFeed` in a spec that declares no feed |

@@ -2,6 +2,7 @@
 #include <pineforge/native_bar_views.hpp>
 #include <pineforge/market_driver.hpp>
 #include <pineforge/native_calendar.hpp>
+#include "native_feed_period.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -159,31 +160,6 @@ bool valid_grid_rounding(NativeGridRounding rounding) noexcept {
         return true;
     }
     return false;
-}
-
-// The native security feed store keys one feed per timeframe DURATION, and
-// treats every monthly literal as one calendar period (tf_to_seconds returns
-// -1 for any "*M"). Two declared series that share this key are independent
-// evaluator instances, but they cannot own DIFFERENT authoritative bars, so
-// the spec refuses exactly that conflict. Overflow-safe: a count whose
-// duration is not representable answers 0, which never matches a valid key
-// and leaves the pairing check to name the failure.
-std::int64_t subscription_period_key(const native_calendar::Timeframe& tf) noexcept {
-    if (!tf.valid()) return 0;
-    std::int64_t unit_seconds = 0;
-    switch (tf.unit()) {
-    case native_calendar::TimeframeUnit::Second: unit_seconds = 1; break;
-    case native_calendar::TimeframeUnit::Minute: unit_seconds = 60; break;
-    case native_calendar::TimeframeUnit::Day: unit_seconds = 86400; break;
-    case native_calendar::TimeframeUnit::Week: unit_seconds = 604800; break;
-    case native_calendar::TimeframeUnit::Month: return -1;
-    }
-    const std::int64_t count = tf.count();
-    if (unit_seconds <= 0 || count <= 0
-        || count > std::numeric_limits<std::int64_t>::max() / unit_seconds) {
-        return 0;
-    }
-    return count * unit_seconds;
 }
 
 // Bitwise bar equality: two same-period series may share one feed, so the
@@ -424,7 +400,7 @@ Result subscription_pairings(const std::vector<NativeTimeframeSubscription>& sub
                              const native_calendar::Timeframe& input,
                              const native_calendar::Timeframe* auxiliary) {
     const Field active_field = Field::SubscriptionTimeframe;
-    std::vector<std::int64_t> keys;
+    std::vector<internal::NativeFeedPeriod> keys;
     // keys[k] is the period key of subscriptions[keyed[k]]: an InstrumentFeed
     // series pairs with nothing and shares no feed store, so it holds none.
     std::vector<std::size_t> keyed;
@@ -441,6 +417,7 @@ Result subscription_pairings(const std::vector<NativeTimeframeSubscription>& sub
         if (from_feed && auxiliary == nullptr) {
             return {Error::SubscriptionWithoutAuxiliaryFeed, Field::SubscriptionSource};
         }
+        const auto key = internal::native_feed_period(*requested);
         switch (native_calendar::compatibility(from_feed ? *auxiliary : input, *requested)
                     .pairing) {
         case native_calendar::TimeframePairing::Passthrough:
@@ -472,12 +449,11 @@ Result subscription_pairings(const std::vector<NativeTimeframeSubscription>& sub
             // Several instances can share one declared authoritative feed.
             // A non-multiple with no such payload retains its refusal.
             bool supplied = false;
-            const auto requested_key = subscription_period_key(*requested);
             for (const auto& other : subscriptions) {
                 if (other.source == NativeSeriesSource::InstrumentFeed
                     || other.authoritative_bars.empty()) continue;
                 const auto period = native_calendar::parse_timeframe(other.tf);
-                if (!period || subscription_period_key(*period) != requested_key) continue;
+                if (!period || internal::native_feed_period(*period) != key) continue;
                 for (const auto& bar : other.authoritative_bars) {
                     if (!native_bar_structurally_valid(bar))
                         return {Error::NotFinitePositive, Field::SubscriptionBars};
@@ -490,7 +466,6 @@ Result subscription_pairings(const std::vector<NativeTimeframeSubscription>& sub
         default:
             return {Error::InvalidSubscriptionTimeframe, active_field};
         }
-        const std::int64_t key = subscription_period_key(*requested);
         for (std::size_t seen = 0; seen < keys.size(); ++seen) {
             if (keys[seen] != key) continue;
             if (conflicting_bars(subscriptions[keyed[seen]].authoritative_bars,

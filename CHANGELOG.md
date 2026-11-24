@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- Installing or clearing a `3M` feed leaves `M` and `12M` prices intact. Each monthly request selects its own feed when supplied; `M` and `1M` still share a feed.
 - A market entry rebuilt after a full close keeps its OCA group, so its fill still cancels or reduces resting group members.
 - An entry whose call names a cash amount of zero or an equity percentage of zero places no order, including when another order closes the position on the same bar. An entry that leaves out its quantity under a declared default of zero is not changed.
 - The ABI receipt check names unusable CTest commands and malformed receipt arguments. It reports which inputs are present; only CTest results establish which rows executed. It does not know every argument that a row's own program requires, and it looks for the program only under an absolute path, so a row that lacks one of these can still be reported with its inputs present.

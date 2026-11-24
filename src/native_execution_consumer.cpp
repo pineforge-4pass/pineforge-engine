@@ -1,4 +1,5 @@
 #include "native_execution_consumer.hpp"
+#include "native_feed_period.hpp"
 #include "canonical_json.hpp"
 #include "native_issued_range_state.hpp"
 #include "engine_internal.hpp"
@@ -2804,13 +2805,12 @@ NativeExecutionConsumer::script_interval_resolved(std::int64_t timestamp) const 
 void NativeExecutionConsumer::prepare_day_labels(const BacktestEngine& engine,
                                                  const Bar* input_bars, int n_input) {
     day_labels_.clear();
-    if (!script_tf_.valid() || script_tf_.unit() != native_calendar::TimeframeUnit::Day
-        || script_tf_.count() != 1 || !input_tf_.is_fixed() || uses_raw_label_partition()) {
-        return;
-    }
+    if (!script_tf_.valid() || internal::native_feed_period(script_tf_) != internal::daily_feed_period
+        || !input_tf_.is_fixed() || uses_raw_label_partition()) return;
     const std::vector<Bar>* daily = nullptr;
     for (const auto& feed : engine.native_security_feeds_) {
         if (feed.seconds == kSecPerDay && !feed.bars.empty()) {
+            if (internal::native_feed_period(feed.tf) != internal::daily_feed_period) continue;
             daily = &feed.bars;
             break;
         }
