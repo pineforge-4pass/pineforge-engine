@@ -1296,7 +1296,10 @@ class RealTree(unittest.TestCase):
         # expectation corrected: 1641 -> 1644, because the exact window sum change adds
         # three OPEN groups, the Unix second time format change adds two, and the
         # pre-bar error prefix change retires two (U1102 and U1105); none is bounded.
-        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3 + 1 + 1 + 1 + 2 + 3
+        # expectation corrected: 1644 -> 1646, because the input rejection
+        # string (U1937) and the account currency capabilities vector (U1954)
+        # add one unreviewed group each. Both remain OPEN.
+        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3 + 1 + 1 + 1 + 2 + 3 + 2
         self.assertEqual(c['OPEN'], expected_open)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
