@@ -42,12 +42,214 @@ version number follows semantic versioning over the surfaces the
 - While an input is being consumed, the native accepted-input lookup now also answers the exact label that input arrived with, so an off-grid provider label (a `FeedTolerant` run) resolves to the interval of its slot; before, such a label returned no interval. The Pine adapter's fixed-period `request.security` clock reads the same lookup, so it now observes those inputs where it used to skip them (#718).
 - The fixed clock of a fixed-timeframe subscription, and the Pine adapter's fixed-period `request.security` clock of a request with lookahead off, now seat an input label that is not traded time on the next traded instant, and delivery keeps the accepted label: a label that precedes its slot's first traded instant, such as the nominal label of a slot that a break clips, is seated on that instant, and a provider label that lies inside a break after some traded time of its slot is seated on the start of the next traded span of its session day. An input whose seat reaches its horizon, because the next input arrives before the slot trades again, is not observed and does not start the clock. Before, a clock that was first seated on such a label stayed inside the break, where its first close never advanced it, so the subscription or the request site published nothing from then on (#718).
 - `BrokerStateHashSink::s`, the string writer a host calls in its `hash_host_extension`, now takes `std::string_view` instead of `const std::string&`, so writing a string literal no longer builds a temporary `std::string`. This is a public signature change. A `std::string` and a string literal compile as before, a `std::string_view` is now accepted, and a type with a `string()` member is written through that member. A host type that only converts to `std::string` no longer compiles as the argument: pass `std::string(value)` instead. The hashed bytes are unchanged.
-- A page of the native command journal that does not read back from its scratch file as it was written now fails the read with `report_sink_failed` (reason `scratch_io`) instead of being decoded. Before, a page that read back as zeros was decoded as events with ordinal 0 and no definition, so `native_events(after)` could return fewer command rows than the journal held, with no error; a partly overwritten page, or one whose page record no longer described it, was decoded the same way. Each page now ends with an 8-byte seal over its record and its events, written when the page is spilled and checked every time the page is loaded, before any event is decoded; an event lookup by ordinal and the retirement of acknowledged events load pages through the same check. A page that reads back intact gives the same events as before. The limit on one serialized event (32,768 bytes) is unchanged; a page takes 8 more bytes in its scratch file, and a journal that has prepared to spill holds 163,880 bytes of page buffers where it held 163,840 (#982).
+- A page of the native command journal that does not read back from its scratch file as it was written now fails the read with `report_sink_failed` (reason `scratch_io`) instead of being decoded. Before, a page that read back as zeros was decoded as events with ordinal 0 and no definition, so `native_events(after)` could return fewer command rows than the journal held, with no error; a partly overwritten page, or one whose page record no longer described it, was decoded the same way. Each page now ends with an 8-byte seal over its record and its events, written when the page is spilled and checked every time the page is loaded, before any event is decoded; an event lookup by ordinal and the retirement of acknowledged events load pages through the same check. A page that reads back intact gives the same events as before. A page takes 8 more bytes in its scratch file (an event larger than 32,768 bytes takes 8 more for each transfer it spans), and a journal that has prepared to spill holds 163,880 bytes of page buffers where it held 163,840 (#982).
+- `scripts/run_strategy.py` now honors JSON `true` and `false` for Pine boolean
+  inputs in `inputs.json`. Previously, it silently used the strategy's default
+  for those inputs (#920).
+- When the final sync of a report sink file fails, the engine now removes the completion trailer if it can truncate the file. The run still reports the sync error and leaves the receipt incomplete (#921).
+- Reading `strategy.avg_trade_percent`, `strategy.avg_winning_trade_percent`
+  or `strategy.avg_losing_trade_percent` no longer scans closed trades. The
+  cost of a read no longer grows with the trade count, with or without a
+  report sink. The averages use the same values and rounding as before (#930).
+- `scripts/run_strategy.py` keeps CSV timestamps as exact integer
+  milliseconds and reports the file and line for timestamps written with
+  a decimal point or exponent, with or without NumPy (#932).
+- Moved shipped changes out of Unreleased and restored the missing release
+  sections for 1.10.0 through 1.14.0 (#934).
+- A large event in the native command journal no longer blocks later orders.
+  For example, an accepted order with a 40,000-byte comment can now move to
+  scratch and be read back in full when the journal passes 2,048 events (#937).
+- The admission journal now reports an I/O error when it cannot read a field's
+  type tag. Previously it could report a valid record as corrupt (#939).
+- The engine now reports a corrupt exit scratch record if it contains fill
+  details for an order that was not placed during a fill, or a bar or time for
+  an order with no recorded origin. Previously it silently discarded those
+  fields when reading the record (#940).
+- Admission and native journal readers now keep the read error when a read
+  fails partway through an integer value. They could previously mistake the
+  incomplete value for a corrupt record (#941).
+- The native C++ journal now rejects an event that omits a required request
+  definition. Import returns `corrupt` without storing the event, and reading
+  the record directly returns `corrupt` too. Previously, looking up the request
+  for such an event could crash the process (#942).
+- Saving an exit request in scratch now preserves which openings it can close
+  when a C++ caller supplies the list separately. Previously, restoring the
+  request on its own or as part of a pending order lost the entire list (#943).
+- The Pine adapter now includes every selected opening in its state hash when
+  a queued order gets its opening list from an external reader. Previously,
+  any such list hashed like an empty one. The adapter currently builds these
+  lists inline for Pine strategies. (#945)
+- Baseline promotion no longer saves the tooling checkout's App token and installs dependencies before authenticating to GCP. Manual re-runs verify the supplied merge details against GitHub, and promotion requires both the latest verify and parity statuses on the engine PR head (#955).
+- A trusted caller can set `PINEFORGE_STRATEGY_SO_SHA256` to check the compiled
+  strategy library before it loads. If the digest differs, the JSON harness
+  returns a typed error before any constructor in the strategy library runs
+  (#956).
+- When CMake downloads Eigen 3.4.0 because no suitable system installation is available, it now rejects an archive whose SHA-256 does not match the pinned value (#959).
+- Backtests that read and update a Pine map on every bar no longer force its
+  scratch file to disk and discard cached pages every 64 KiB. The operating
+  system can keep frequently used map pages in memory for the run (#962).
+- When a C++ caller appends an encoded command, the admission journal now
+  checks the fill that caused the order. If that fill's fields fail the
+  reader's checks (for example, the first fill number is zero), append
+  returns `corrupt` without storing the record or consuming its sequence
+  (#968).
+- The C++ admission journal now refuses to store a book row whose draft has
+  an invalid command observation, review or sizing receipt. Previously a row
+  whose review named another command or had no command could enter the
+  journal and make its events unreadable. An empty draft is still valid (#969).
+- The C++ admission journal now rejects a record on append or decode if an
+  order birth unrelated to a fill carries fill details, or if an unattributed
+  birth carries a bar or timestamp other than its defaults. Previously, the
+  decoded event silently lost those values. An absent cursor price must match
+  the factory's quiet NaN bit for bit (#971).
+- The native and admission C++ journals now check the record they are about
+  to commit. If that record fails validation or carries a different admission
+  sequence, the append leaves the journal unchanged. If the bytes change
+  between reads, the native ordinal and admission rejection bar now reflect
+  the event actually stored (#972).
+- When C++ code calls `WorkingRequestCore` directly, submitting or replacing a request with an unknown command surface, or submitting one with an unknown origin, now throws `std::invalid_argument` before the command is recorded. Only a request from the margin model can produce a margin-call receipt (#974).
+- A native C++ host can now submit or replace a close that supplies its list
+  of openings through a readback. Live openings in the requested cycle are
+  accepted, and the close fills against the same lots as an inline list (#975).
+- Restoring a saved exit placement, request or pending order now reports a corrupt scratch record when an enum field contains an unknown value. For example, order family 9 used to be returned even though the last family is 8 (#977).
+- Restoring an exit from scratch storage now reports a damaged record if its
+  activation bounds or placement evidence are invalid. Previously, a C++
+  caller could read back an exit bound to position cycle zero or with a
+  direction of zero (#978).
+- Restoring an exit placement or pending order now rejects damaged scratch
+  records whose reservation or market admission details could never have been
+  set. For example, a reservation cannot name owner zero, and a review must
+  name the original command and come after it (#979).
+- The C++ source adapter now rejects a damaged saved placement or pending order
+  if its exit leg's target and current definition name different incarnations,
+  or if the target owner is negative (#980).
+- When a request stores its opening handles outside the inline list, the Pine adapter now counts them and keeps the placement rows and origins the request still needs. The native C working-order query now reports how many openings the request names and the first handle in kernel order. Previously these readers saw an empty list. Stock Pine and C submissions build inline lists (#981).
+- Backtests now stop and name the input when they read a malformed numeric or
+  boolean override. For example, `abc` no longer falls back to the script
+  default, and `12abc` or `12.5` is no longer read as the integer `12` (#918).
+- `scripts/run_strategy.py` now honors JSON `true` and `false` in
+  `strategy_overrides` in `inputs.json`. Before, `true` was read as false
+  for settings such as `process_orders_on_close` and `calc_on_order_fills` (#922).
+- Series-length `ta.sma`, `ta.highest`, `ta.lowest`, `ta.highestbars`,
+  `ta.lowestbars` and `ta.percentile_nearest_rank` can use more than 15,000 bars
+  of lookback. The default has no cap. Set `--limit-ta-lookback N` to cap the
+  lookback at N bars, or use `--tv-compat` for the 15,000-bar cap. An explicit
+  `0` overrides that cap. Without a cap these call sites keep their full
+  history (#931).
+- The live engine layout stamp advances from 5 to 6 because the consumer
+  retains the strategy's lookback setting. Rebuild live strategy modules
+  against the matching engine headers. Public C structures and ABI 5 are
+  unchanged.
+### State hashes
+- A positive series-length TA lookback cap is included in the continuation
+  hash. The unlimited setting adds no field to the hash.
+- Runs with bounded scratch tables no longer stop at 4,096 active order IDs
+  by default. A host can set a different limit with
+  `strategy_set_scratch_live_order_ids_limit_v1`, or with
+  `--limit-live-order-ids` in the jailed JSON runner. The limits on the
+  total distinct order IDs and their stored bytes still apply (#936).
+- The native order journal and the market admission journal now refuse imported
+  records that use undeclared enum values. An unknown group effect could
+  previously cancel a live sibling order even though nothing filled. Reading
+  such a record, or folding one into the admission digest, now reports `corrupt`
+  (#944).
+- A host-supplied exchange rate no longer changes profit when a Pine strategy's
+  account uses the chart's quote currency. Buying one unit at 100 and selling
+  it at 104 now earns 4 USDT in a USDT account, even with a rate of 1.25.
+  This also applies when `currency` is omitted or set to `currency.NONE` (#954).
+- The container checks a private copy of mounted `strategy.cpp` against the
+  same generated C++ rules used during Pine translation before compiling it.
+  Files that fail the check get a `run_request_invalid` error. A matching host
+  digest is still required unless the caller uses the local vouch opt-out (#958).
+- The run-failure catalog now lists four missing messages for rejected
+  intrabar paths, covering lower data source failures and bar magnifier
+  calendar, timestamp, and path count failures (#960).
+- A raw append to a native request journal now returns `ScratchStatus::corrupt`
+  without changing the journal if a request definition belongs to another run,
+  even when its event ordinal is newer (#967).
+- The admission journal now rejects a fill record whose cursor position is neither
+  `Point` nor `Segment`. Previously, it could read an invalid position as `Segment`
+  but hash the stored number, giving the same event two different digests (#970).
+- Reading a saved exit placement or pending order with an invalid birth cursor
+  or fill evaluation now throws `ExitScratchError` with status `corrupt`.
+  C++ callers no longer need a separate `std::invalid_argument` handler for
+  these damaged records (#973).
+- The native continuation hash and sibling claims now use the openings a close is bound to, including when the order core stores the list externally. The same list contributes the same hash in either form, and a sibling in the same cycle shares the claim only if its list matches. An unreadable list reports an error. Inline hashes keep their previous values (#976).
 
 ## 1.14.0 — 2026-11-20
 
+[Full 1.14.0 release notes](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.14.0)
+
+### Changed
+
 - The engine layout stamp that `pineforge-live` checks, `PF_STREAM_ENGINE_LAYOUT_VERSION`, is now 5. A strategy module built against 1.13.x headers declares stamp 4 and is refused by a 1.14.0 `pineforge-live` before it is created (`strategy engine layout mismatch: module=4 runtime=5`): rebuild such modules against the matching 1.14.0 headers. The earlier miss, disclosed: 1.13.0 changed the same internal layout without raising the stamp, so a module built against 1.12.x headers and loaded into a 1.13.x `pineforge-live` was not refused; rebuild such modules against matching headers too. `PF_ABI_VERSION` stays 5, and the C API and its caller-allocated structures are unchanged.
 - A new host helper, `strategy_convert_identity_or_warn`, lets generated code report `strategy.convert_to_account` and `strategy.convert_to_symbol` calls that had no account-currency rate: the value still comes back unchanged, and the run's warnings now list `currency_conversion_rate_unavailable` once for each such call site (#376).
+
+### Native live report storage
+
+- The native live runner can now keep its report's equity curve and settled report rows out of memory, so that its memory does not grow with the number of inputs it has processed. Pass `--native-event-retention window` to keep memory bounded. Without that option a module configured with `--native-config` keeps the whole event record its configuration declares, as in 1.13.0, and the runner's memory still grows with the inputs. `window` keeps only the unread window of that record; what it trades is described under the option below. With `window` the engine's per-bar equity curve and the curve of the exact ratios also leave the process, through an anonymous scratch file beside the ledger (24 bytes per report point, not counted by `--max-ledger-bytes`), and once the stream is realtime the engine releases its curve points as the report takes them, keeping only the newest; a release before the stream is realtime is refused with an internal error, and a whole-report read puts the released points back in front of the engine's curve before it reads. This is the `window` contract for that file: a failed write to it ends the run with exit status 1 before the input commits, and a restart replays the ledger; a write past the per-file size limit (`ulimit -f`) ends the process with SIGXFSZ unless the process ignores that signal. A ledger on a memory filesystem keeps the curve in memory under `window`, with a second warning on stderr. A default run keeps the curve in memory as 1.13.0 did. `commands` keeps the whole command journal and every account row, and `full` keeps every event; both grow with the inputs. Some state still grows under `window`: the engine's closed trades (older rows in its scratch files behind a fixed cache) and, with broker-state hash recording on, one 8-byte hash per script bar. The time of one input is still linear in its cursor for the default stream, because each cumulative line repeats every row so far and the default exact ratios walk the whole curve.
+- What changes by default, with no option, for a module with the matching engine-layout stamp, and what stays identical. In every mode the cumulative report document keeps only its scalar members and the rows of the newest input in the process: settled trade, curve and hash rows go to anonymous files beside the ledger, and each `--report-jsonl` line is written to stdout from those files instead of being rebuilt from a retained document, and a report checkpoint is folded through the same files. The curve for the exact ratios and the engine's own per-bar curve stay in memory by default, as in 1.13.0; only `--native-event-retention window` moves them out (see the first bullet). Report lines, ledger rows, checkpoint payload bytes and exports are byte-identical. In detail: (a) the runner creates anonymous spool files in the ledger's directory (opened with `O_TMPFILE`, or created and unlinked at once where that is not available), so they never show in the directory and are released when the runner exits; when that directory cannot hold such a file the runner prints a warning and keeps the settled rows in memory, as 1.13.0 did. The runner needs free disk beside the ledger for these files, about the size of one cumulative report, and `--max-ledger-bytes` does not count them. When a write to a spool file returns an error (a full disk, an exceeded quota, an I/O error), or would take the file past the process's per-file size limit (`ulimit -f`, RLIMIT_FSIZE; read before the write, so a spool never raises SIGXFSZ), the run does not stop: it prints one warning naming the cause, keeps the rows it could not write, and every later settled row, in memory, as 1.13.0 did, and goes on with the same bytes; from then on its memory grows with the inputs as in 1.13.0, in every mode, `--native-event-retention window` included. A read error of a spool file (the files the cumulative `--report-jsonl` lines are written from) is not covered and cannot fall back, since the bytes are only in the file: it ends the run with exit status 1 after the input is durable, and a restart replays the ledger (1.13.0 read no such files). The ledger is not covered by this: a write of it past such a limit ends the process with SIGXFSZ unless the process ignores that signal (the ledger's does so in 1.13.0). (b) A default run keeps the engine's own per-bar equity curve in memory as 1.13.0 did and creates no curve scratch file; the curve a run exports and every report byte are identical (a test pins a default run's equity export to the 1.13.0 build's). (c) A ledger directory on a memory filesystem prints a warning on stderr that the settled rows stay in memory. (d) A report checkpoint above cursor 512 is folded through spool files in the ledger's directory; where no such file can be created or written there, the fold keeps those rows in memory (with the one warning above) and the checkpoint is written as before. (e) A report checkpoint above cursor 512 now reads every report row from cursor 0, where 1.13.0 started from the nearest earlier checkpoint. Checkpoints sit at K, 2K, 4K, ... (K is `--checkpoint-interval`, 1024 by default, so every one is above 512), and the checkpoints up to 2^m·K read about K + 2K + ... + 2^m·K = (2^(m+1) − 1)·K rows in all, less than twice the cursor of the last one, where 1.13.0 read about that cursor once (2^m·K). The read no longer goes through the nearest earlier checkpoint, so that checkpoint's own verification (its payload hash and integrity digests) is no longer repeated by it; the bytes written are the same. The read runs inside the boundary input's own transaction, so that input's commit takes as long as the read. The BLOB checkpoint storage is not among these: it applies only with `--native-event-retention window`.
+- What is stored or written differently. With `--native-event-retention window`, a checkpoint payload above 1 MiB is also written into its row in pieces and stored as a BLOB, with the same bytes; under `--max-ledger-bytes` such a checkpoint is admitted whole before its first write and then written with SQLite's page spilling on, so it no longer waits in memory for its commit. Without that option the payload is built as one string and stored as TEXT, as in 1.13.0. The ledger's schema is unchanged: its `payload` column is declared TEXT and SQLite keeps each value's own type, so a ledger written with `window` can hold a BLOB payload for a large row, which `CAST(payload AS TEXT)` reads as text; a ledger of a run without the option has the 1.13.0 form; as before, export does not read a payload of that size. The spool files of the default (above) and the extra report rows a checkpoint above cursor 512 reads are the other differences in what the runner writes and reads.
+- Documentation: runner/README.md described a work deadline for the memory row and sizes it omitted, which the row at 1.13.0 no longer had (its sizes were 1,000, 10,000 and 100,000 inputs, every one run); it now describes the row as it is.
+- `--native-event-retention window|commands|full` is a new opt-in runner option (with `--native-config` only); without it nothing changes from 1.13.0 in what a native host reads from `native_events()`. `window` is what bounds memory, and what it trades: a host that polls `native_events()` without acknowledging no longer reads the whole run. Command events a host has not acknowledged are retired at each script bar when it has never acknowledged (acknowledging from its run begin, `native_acknowledge_events(0)`, keeps every unread command), and no driver point or account row is kept, acknowledged or not. `commands` keeps the whole command journal and every account row; `full` keeps every event of the run. The run spec, its digest, every state hash and every report byte are the same under each choice. `NativeStrategyHost::native_events_dropped(kind)` and the new C export `strategy_native_events_dropped_v1` count, per kind, every event a narrower retention let go unread; every existing export, `strategy_native_margin_call_v1` included, answers as before.
+
+### Higher timeframe security feeds
+
+- A `request.security()` call on a fixed timeframe that is not a multiple of the chart's, such as `"75"` on a 60-minute chart, now uses the bars the host supplied for that timeframe when they are present: each requested bar completes at its own close, clipped by the session, and is published on the chart bar that close belongs to. Before (engine 1.9.1 to 1.13.0), such a request was served from the chart's own bars, so a script that sized its entries from the requested close booked the wrong quantities. Requests the chart divides, calendar timeframes and requests without supplied bars keep their behaviour (#718).
+- When the host supplies bars for such a request and one of them is not on the requested timeframe's grid, the run is refused with run-failure code `security_feed_refused`, reason `native_feed_grid`, the requested timeframe as an argument and the message `native fixed-period bar is off the requested grid` (#718).
+- If a host adds, replaces or removes a native security feed with `set_native_security_feed` while a run is in progress, a run that reads a native security feed through `request.security()` with `lookahead = barmerge.lookahead_on` on a fixed timeframe higher than the chart's and not a multiple of it now stops with the error `native security feeds changed during the run` at its next read of those bars (#718).
+
+## 1.13.0 — 2026-11-18
+
+[Full 1.13.0 release notes](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.13.0)
+
+### Changed
+
+- N-day (count>1) Day period keys now restart on 1 January, matching TradingView and the interval bounds.
+- The engine adds the account-currency scalar rate setter and the
+  `currency_conversion_rate_unavailable` failure code for conversions that
+  have no supplied rate.
+
+## 1.12.0
+
+[Full 1.12.0 release notes](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.12.0)
+
+### Changed
+
+- An invalid timezone name can now stop a run with `pine_timezone_error`
+  instead of falling back to UTC.
+
+## 1.11.0
+
+[Full 1.11.0 release notes](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.11.0)
+
+### Changed
+
+- **Strategy modules built against 1.10.x must be rebuilt.** The C++ script
+  ABI epoch moves from `engine_script_run_v19` to `engine_script_run_v20`
+  (and `PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19` to `..._V20`) because
+  `PF_STREAM_ENGINE_LAYOUT_VERSION` moves from 3 to 4 and the layout of
+  `CacheDefaults` changed. This is an explicit exception to the earlier
+  promise of one epoch throughout 1.x, and the existing engine and codegen
+  pairing rule applies. The C API only gains functions; the caller-allocated
+  C report and trade layouts are unchanged, and the state-hash domain tags
+  keep their names.
+- The run-failure catalog adds typed failures for history budgets, map
+  capacity and selected-window capacity limits.
+
+## 1.10.0
+
+[Full 1.10.0 release notes](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.10.0)
+
+- The Linux x86_64 prebuilt archive uses glibc 2.38 symbols. Strategy modules
+  use stream layout stamp 3 and the `engine_script_run_v19` ABI epoch.
+
+## Notes collected through 1.14.0
+
+The following notes were accumulated under Unreleased without recording which
+version shipped each change. See the release notes linked above for the list
+of changes in each tag.
+
 - On a chart aggregated from a lower timeframe, an order that a fill places or replaces at the bar's open now starts working at that fill, as it does on the plain chart: for example the exits of an entry that fills there, or the exits a pyramiding add re-arms. Before, such an order started at the bar's close, so an exit that the same bar crosses after its open could fill on a later bar or point, and the trade's drawdown and run-up could differ from the plain chart's. This affects confirmed runs on aggregated charts whose entries or adds place or replace orders when they fill; plain charts and every other path are unchanged.
 
 - The engine gains the checked source adapters `pineforge::source::PineEma`, `PineTsi`, `PineMacd`, `PineKc` and `PineKcw` in `pineforge/source/pine_ta_length.hpp`. They stop a run with TradingView's error for an `na`, zero or negative length at the call's first execution, never at construction, and compute the values of `ta::EMA`, `ta::TSI`, `ta::MACD`, `ta::KC` and `ta::KCW` for a valid length. Code generated by the released code generator does not reference the new types. This is the engine half of [pineforge-codegen-oss #291](https://github.com/pineforge-4pass/pineforge-codegen-oss/issues/291); the code generator change that uses these types follows in a later release.
@@ -57,11 +259,6 @@ version number follows semantic versioning over the surfaces the
 - `ta.ema` now steps as `ema[1] + alpha * (src - ema[1])`, and `ta.sma` and `math.sum` now read the exact sum of their window, rounded once, so an all-zero window reads 0 and equal values read that value. Both follow TradingView's exact values captured on 2026-11-16 and 2026-11-17 and replace the sliding sum of September 2026. Biased `ta.stdev` is built on the same window sums and changes with them; it has not been measured against TradingView again (#731).
 - `ta.rma` now seeds with the exact sum of its first window, rounded once, the value `ta.sma` gives; the recursion after the seed is unchanged. It follows TradingView's exact values captured on 2026-11-18 for `ta.rma(close, 3)` on BINANCE:ETHUSDT.P 15m, where the running sum it replaces was one unit in the last place off on some windows. `ta.rsi`, `ta.atr`, `ta.dmi` and what is built on them seed through `ta.rma`, so their first values and what follows can differ in the last bit (#731).
 - The live runner now admits confirmed count-1 daily and weekly charts on daylight-saving calendars; other counts and tick/clock delivery on those calendars remain refused (#819).
-- The native live runner can now keep its report's equity curve and settled report rows out of memory, so that its memory does not grow with the number of inputs it has processed. Pass `--native-event-retention window` to keep memory bounded. Without that option a module configured with `--native-config` keeps the whole event record its configuration declares, as in 1.13.0, and the runner's memory still grows with the inputs. `window` keeps only the unread window of that record; what it trades is described under the option below. With `window` the engine's per-bar equity curve and the curve of the exact ratios also leave the process, through an anonymous scratch file beside the ledger (24 bytes per report point, not counted by `--max-ledger-bytes`), and once the stream is realtime the engine releases its curve points as the report takes them, keeping only the newest; a release before the stream is realtime is refused with an internal error, and a whole-report read puts the released points back in front of the engine's curve before it reads. This is the `window` contract for that file: a failed write to it ends the run with exit status 1 before the input commits, and a restart replays the ledger; a write past the per-file size limit (`ulimit -f`) ends the process with SIGXFSZ unless the process ignores that signal. A ledger on a memory filesystem keeps the curve in memory under `window`, with a second warning on stderr. A default run keeps the curve in memory as 1.13.0 did. `commands` keeps the whole command journal and every account row, and `full` keeps every event; both grow with the inputs. Some state still grows under `window`: the engine's closed trades (older rows in its scratch files behind a fixed cache) and, with broker-state hash recording on, one 8-byte hash per script bar. The time of one input is still linear in its cursor for the default stream, because each cumulative line repeats every row so far and the default exact ratios walk the whole curve.
-- What changes by default, with no option, for a module with the matching engine-layout stamp, and what stays identical. In every mode the cumulative report document keeps only its scalar members and the rows of the newest input in the process: settled trade, curve and hash rows go to anonymous files beside the ledger, and each `--report-jsonl` line is written to stdout from those files instead of being rebuilt from a retained document, and a report checkpoint is folded through the same files. The curve for the exact ratios and the engine's own per-bar curve stay in memory by default, as in 1.13.0; only `--native-event-retention window` moves them out (see the first bullet). Report lines, ledger rows, checkpoint payload bytes and exports are byte-identical. In detail: (a) the runner creates anonymous spool files in the ledger's directory (opened with `O_TMPFILE`, or created and unlinked at once where that is not available), so they never show in the directory and are released when the runner exits; when that directory cannot hold such a file the runner prints a warning and keeps the settled rows in memory, as 1.13.0 did. The runner needs free disk beside the ledger for these files, about the size of one cumulative report, and `--max-ledger-bytes` does not count them. When a write to a spool file returns an error (a full disk, an exceeded quota, an I/O error), or would take the file past the process's per-file size limit (`ulimit -f`, RLIMIT_FSIZE; read before the write, so a spool never raises SIGXFSZ), the run does not stop: it prints one warning naming the cause, keeps the rows it could not write, and every later settled row, in memory, as 1.13.0 did, and goes on with the same bytes; from then on its memory grows with the inputs as in 1.13.0, in every mode, `--native-event-retention window` included. A read error of a spool file (the files the cumulative `--report-jsonl` lines are written from) is not covered and cannot fall back, since the bytes are only in the file: it ends the run with exit status 1 after the input is durable, and a restart replays the ledger (1.13.0 read no such files). The ledger is not covered by this: a write of it past such a limit ends the process with SIGXFSZ unless the process ignores that signal (the ledger's does so in 1.13.0). (b) A default run keeps the engine's own per-bar equity curve in memory as 1.13.0 did and creates no curve scratch file; the curve a run exports and every report byte are identical (a test pins a default run's equity export to the 1.13.0 build's). (c) A ledger directory on a memory filesystem prints a warning on stderr that the settled rows stay in memory. (d) A report checkpoint above cursor 512 is folded through spool files in the ledger's directory; where no such file can be created or written there, the fold keeps those rows in memory (with the one warning above) and the checkpoint is written as before. (e) A report checkpoint above cursor 512 now reads every report row from cursor 0, where 1.13.0 started from the nearest earlier checkpoint. Checkpoints sit at K, 2K, 4K, ... (K is `--checkpoint-interval`, 1024 by default, so every one is above 512), and the checkpoints up to 2^m·K read about K + 2K + ... + 2^m·K = (2^(m+1) − 1)·K rows in all, less than twice the cursor of the last one, where 1.13.0 read about that cursor once (2^m·K). The read no longer goes through the nearest earlier checkpoint, so that checkpoint's own verification (its payload hash and integrity digests) is no longer repeated by it; the bytes written are the same. The read runs inside the boundary input's own transaction, so that input's commit takes as long as the read. The BLOB checkpoint storage is not among these: it applies only with `--native-event-retention window`.
-- What is stored or written differently. With `--native-event-retention window`, a checkpoint payload above 1 MiB is also written into its row in pieces and stored as a BLOB, with the same bytes; under `--max-ledger-bytes` such a checkpoint is admitted whole before its first write and then written with SQLite's page spilling on, so it no longer waits in memory for its commit. Without that option the payload is built as one string and stored as TEXT, as in 1.13.0. The ledger's schema is unchanged: its `payload` column is declared TEXT and SQLite keeps each value's own type, so a ledger written with `window` can hold a BLOB payload for a large row, which `CAST(payload AS TEXT)` reads as text; a ledger of a run without the option has the 1.13.0 form; as before, export does not read a payload of that size. The spool files of the default (above) and the extra report rows a checkpoint above cursor 512 reads are the other differences in what the runner writes and reads.
-- Documentation: runner/README.md described a work deadline for the memory row and sizes it omitted, which the row at 1.13.0 no longer had (its sizes were 1,000, 10,000 and 100,000 inputs, every one run); it now describes the row as it is.
-- `--native-event-retention window|commands|full` is a new opt-in runner option (with `--native-config` only); without it nothing changes from 1.13.0 in what a native host reads from `native_events()`. `window` is what bounds memory, and what it trades: a host that polls `native_events()` without acknowledging no longer reads the whole run. Command events a host has not acknowledged are retired at each script bar when it has never acknowledged (acknowledging from its run begin, `native_acknowledge_events(0)`, keeps every unread command), and no driver point or account row is kept, acknowledged or not. `commands` keeps the whole command journal and every account row; `full` keeps every event of the run. The run spec, its digest, every state hash and every report byte are the same under each choice. `NativeStrategyHost::native_events_dropped(kind)` and the new C export `strategy_native_events_dropped_v1` count, per kind, every event a narrower retention let go unread; every existing export, `strategy_native_margin_call_v1` included, answers as before.
 - Checkpoints for `ta.sma`, biased `ta.stdev`, `ta.bb`, `math.sum` and `ta.change` now copy contiguous owning window buffers and reuse them on restore, preserving the arithmetic and rewind rules (#809).
 - The JSON harness and live runner now forward the symbol's quantity-step metadata for default `strategy.entry(..., qty=na)` sizing (#716 item 1).
 - The same quantity-step metadata is now forwarded for explicit `strategy.entry(..., qty=...)` quantities (#716 item 2).
@@ -102,9 +299,6 @@ version number follows semantic versioning over the surfaces the
 - `strategy_get_run_warnings` exposes one named warning per `request.security` call site whose requested timeframe is not a multiple of its evaluator's feed timeframe; values, trades and run acceptance are unchanged (#718).
 - The Docker report and `scripts/run_strategy.py` now show the engine's run warnings as `diagnostics.warnings` when a run has any, and are unchanged otherwise (#718).
 - A native run started on a handle that is not ready, because it was never configured or its previous run already completed, is now refused with `native run requires configure_native before each run`, so the message names what to do. The earlier message, `native run requires configure_native`, is the start of the new one, and the run-failure catalog lists both under `engine_invariant`. The refusal itself is unchanged: its code, the handle's state and the retained rows are as before (#718).
-- If a host adds, replaces or removes a native security feed with `set_native_security_feed` while a run is in progress, a run that reads a native security feed through `request.security()` with `lookahead = barmerge.lookahead_on` on a fixed timeframe higher than the chart's and not a multiple of it now stops with the error `native security feeds changed during the run` at its next read of those bars (#718).
-- A `request.security()` call on a fixed timeframe that is not a multiple of the chart's, such as `"75"` on a 60-minute chart, now uses the bars the host supplied for that timeframe when they are present: each requested bar completes at its own close, clipped by the session, and is published on the chart bar that close belongs to. Before (engine 1.9.1 to 1.13.0), such a request was served from the chart's own bars, so a script that sized its entries from the requested close booked the wrong quantities. Requests the chart divides, calendar timeframes and requests without supplied bars keep their behaviour (#718).
-- When the host supplies bars for such a request and one of them is not on the requested timeframe's grid, the run is refused with run-failure code `security_feed_refused`, reason `native_feed_grid`, the requested timeframe as an argument and the message `native fixed-period bar is off the requested grid` (#718).
 - A percent-of-equity default quantity above 100 percent is now capped at 100 percent of equity when `margin_long` and `margin_short` are both 0 (#805).
 - `strategy.close(qty = ...)` now floors the quantity to the declared quantity step and closes that much, as TradingView does; a quantity that floors to zero or exceeds the entry id's position closes that whole position. Positive explicit `strategy.exit(qty = ...)` quantities now floor to the declared step; a quantity below one step is ignored unless `qty_percent` is below 100, so with the default `qty_percent = 100` the exit covers the whole position, as TradingView does; with `qty_percent` below 100 such a quantity is kept as given, as before. Measured against TradingView on one instrument and lot (a 0.00001 step, pyramiding 1, the default close rule, one entry id); not measured: `close_entries_rule = "ANY"`, pyramided entry ids, whole-unit steps, lots that are not a power of ten, and a sub-step `strategy.exit` quantity with `qty_percent` below 100 (#716).
 - A qualifying full-margin long position now marks and sells margin calls on the chart tick, rounds the requirement from the exact decimal product to ten significant digits but never more coarsely than one currency unit, and re-checks once after a call, carrying any further sale to the next waypoint unless that waypoint makes its own call; the further sale after a re-check is sized at that bar's close; a call at the bar's close is checked after the script's calculation of that bar, like the other checks at that close, and a margin sale earlier in the bar does not skip that close check (#812). Every margin requirement and margin deficit of a margin call, for longs and shorts, is now rounded the same way: ten significant digits, never more coarsely than one currency unit; values below 10^10 are unchanged. A long position qualifies when all of these hold: margin calls are on (the default); the account is unleveraged for longs (`margin_long` exactly 100) with no slippage, no fixed commission (none, or a percentage), a point value and an account currency rate of exactly 1 with no time-stamped rate changes, and no intraday loss, drawdown, consecutive-loss-days or filled-order limit; `pyramiding` is 0 or 1; orders are not processed on close, there is no recalculation on fills and no bar magnifier; the feed is not an observed-tick input, a quantity step is set and lies between zero and one unit and, multiplied by the bar's high, is still below one, and the minimum tick is finite and positive; the position is one long lot opened at a bar's open by an order with no limit or stop price and not placed by `strategy.order`; and no pending bracket leg, pending relative exit, live opening order or live limit-exit, stop-exit or trailing-exit order exists. A whole-position close placed on an earlier bar and still pending at the open runs before any call. Every other position keeps its previous margin-call behavior, apart from that rounding above 10^10.
@@ -133,15 +327,6 @@ version number follows semantic versioning over the surfaces the
   they returned 0 on that bar before; every later value is unchanged.
 - An exit given in ticks and without `from_entry` that follows a market entry in
   the same execution now takes effect when that entry fills, as a named exit does.
-- **Strategy modules built against 1.10.x must be rebuilt.** The C++ script
-  ABI epoch moves from `engine_script_run_v19` to `engine_script_run_v20`
-  (and `PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19` to `..._V20`) because
-  `PF_STREAM_ENGINE_LAYOUT_VERSION` moves from 3 to 4 and the layout of
-  `CacheDefaults` changed. This is an explicit exception to the earlier
-  promise of one epoch throughout 1.x, and the existing engine and codegen
-  pairing rule applies. The C API only gains functions; the caller-allocated
-  C report and trade layouts are unchanged, and the state-hash domain tags
-  keep their names.
 - `pineforge-live` status files now report `metrics.feed_idle_ms`, the
   milliseconds since the last feed arrival, or null before the first; the
   consumer owns freshness. HTTP and WebSocket feeds now also default to no
@@ -325,12 +510,6 @@ version number follows semantic versioning over the surfaces the
 - Known issue ([#836](https://github.com/pineforge-4pass/pineforge-engine/issues/836)): the parity scoreboard counts unmatched trades net instead of gross, so a probe with one engine-only and one TradingView-only trade still grades excellent; counted gross, 24 of the 7,989 graded probes (7,959 excellent and 30 strong instead of 7,983 and 6) and 10 of the 312 open reference probes (301 excellent instead of 311) grade one tier lower, with no trade list changed, and the corrected grader is planned for a release after 1.14.0.
 - `strategy_pending_order_fill_qty` reported a wrong `close_only` for some entries: 1 where the fill opens or reverses the position (a market entry followed by a priced stop on the same bar and a short-seed percent entry, #905; a pyramiding entry after a same-bar close; an entry probed inside the callback that queued it) and 0 where the fill only closes (a priced entry that replaced a same-id market order, a frozen reversal, whose reported quantity is now the frozen transaction, and a host-sized `strategy.order` against an opposite position). It now applies the fill's prior-cycle rule and shape rules for these cases. A `strategy.order` with its own quantity against an opposite position now reports the quantity its fill transacts, and `close_only` 1 exactly when that fill opens nothing. While a close the script placed on the same bar is still waiting to fill ahead of the order, the report instead gives the quantity as written, with `close_only` 0, or 1 when the order is in an OCA cancel group. That answer can differ from the fill: in an OCA cancel group it says `close_only` 1 although the fill opens if the close leaves the position flat; otherwise it says `close_only` 0 although the fill only closes if the close leaves a position at least as large as what the order transacts; and the fill can transact less than the quantity as written, for example when the quantity is floored to the quantity step, or when an OCA cancel-group order closes no more than the close leaves. The report is made before the fill and does not account for checks the fill makes at fill time against equity, price and margin (for example, an entry the account cannot afford in whole units). In those cases the fill can differ from the report. Not modelled: fill-time money guards (whole-lot tie, low-value or fractional lot), affordability, margin-call surplus, the close quantity a reversal keeps when a margin call was booked after the script, a refused signal price, an admission refusal, earlier fills of the same pass, and an entry that names its own quantity or a row whose request cannot be read, such as a row held in the source's shadow queue (judged by the prior-cycle rule alone). Fills are unchanged. (#905, #910)
 - The C header and docs documented partition 2 for a pure percent-of-equity stop; the engine returns 1 (measured on 1.13.0). The documentation now matches the returned value; behaviour and ABI are unchanged.
-
-## 1.13.0 — 2026-11-18
-
-### Changed
-
-- N-day (count>1) Day period keys now restart on 1 January, matching TradingView and the interval bounds.
 
 ## 1.9.1 — 2026-10-31
 
