@@ -29692,6 +29692,16 @@ int PendingIntentView::size() const noexcept {
     return owner_ ? owner_->projected_pending_size() : 0;
 }
 
+namespace {
+// A percentage close with no fixed units is sized on its live scope.
+double placed_close_units(const PlacementSnapshot& close) noexcept {
+    double units = close.projection_remaining_qty;
+    if (!std::isfinite(units)) units = close.requested_qty;
+    if (!std::isfinite(units)) units = close.frozen_market_transaction_units;
+    return units;
+}
+} // namespace
+
 int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
                                       int* close_only, int* partition) const noexcept {
     if (!owner_ || !qty || !close_only || !partition) return -1;
@@ -29776,8 +29786,12 @@ int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
         *qty = snapshot.sizing.frozen_units;
         *partition = 1;
         sized = true;
-    } else if (!sized && !default_stop_shape && unpriced_market
+    } else if (!sized && !default_stop_shape
+               && (snapshot.family == PineOrderFamily::Order
+                   ? !snapshot.sizing.at_fill : unpriced_market)
                && finite_positive(snapshot.sizing.frozen_units)) {
+        // A raw order can freeze its default money size even with a price.
+        // A recalculation that asked for at-fill sizing does not use it.
         *qty = snapshot.sizing.frozen_units;
         *partition = 1;
         sized = true;
@@ -29877,8 +29891,7 @@ int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
             // here. An own-quantity strategy.order is answered below.
             fill_close_only = prior_cycle_only();
         } else if (snapshot.family == PineOrderFamily::Order) {
-            // A host-sized strategy.order closes against an opposite position;
-            // one with its own quantity is bounded below.
+            // Refine this against the book left by preceding closes below.
             fill_close_only = opposite;
         } else if (snapshot.family != PineOrderFamily::Entry) {
             fill_close_only = false;
@@ -29902,47 +29915,34 @@ int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
     } catch (...) {
         fill_close_only = prior_cycle_only();
     }
-    // A strategy.order with its own quantity against an opposite position
-    // reports the kernel's plan for what its fill books (order_action::plan,
-    // the decomposition the settlement checks). An explicit Transact takes no
-    // shape decision at its fill (resolve_source_terms returns before one):
-    // the kernel books the units left on it as one signed transaction, which
-    // closes against the position and opens only what exceeds it. A cancel
-    // group's order is host-sized instead, and its fill closes its executable
-    // quantity, bounded by the position (resolve_source_terms, the Order
-    // rows). A row whose request was not read has no plan and keeps the
-    // answer above. No shape helper is used, so this also follows a fallback.
-    // A close the script placed before the order on the same bar that has not
-    // filled fills first: it is a market order, and at one point the book
-    // matches its oldest request first (RequestDefinition::priority). The
-    // order then meets the position that close leaves, not this one, so no
-    // plan is made against this one and the row keeps the answer above.
-    const auto close_pending_before = [&]() noexcept {
-        for (const auto& live_handle : owner_->live_handles_) {
-            const auto found = owner_->placement_.find(live_handle.incarnation);
-            if (found == owner_->placement_.end()) continue;
-            const PlacementSnapshot& prior = found->second;
-            if ((prior.family == PineOrderFamily::Close
-                 || prior.family == PineOrderFamily::CloseAll)
-                && !prior.immediately
-                && prior.placement_script_open_ms == snapshot.placement_script_open_ms
-                && prior.command_sequence < snapshot.command_sequence) return true;
-        }
-        return false;
-    };
+    // A raw order transacts the units left on its native request. A host-sized
+    // raw order (an OCA cancel order or one without an explicit qty) instead
+    // reduces up to its own size against an opposite book, or opens from flat.
     if (opposite && snapshot.family == PineOrderFamily::Order
-        && std::isfinite(snapshot.requested_qty) && !close_pending_before()) {
-        const double executable = std::max(0.0, snapshot.oca_type == 1
-            ? explicit_entry_quantity_floor(std::abs(snapshot.requested_qty),
-                                            owner_->staged_.quantity_grid)
-            : snapshot.requested_qty);
-        const auto booked = host_resolved
-            ? order_action::plan(physical.signed_units, order_action::Reduce{executable})
-            : order_action::plan(physical.signed_units, order_action::Transact{transaction});
-        if (booked) {
-            fill_close_only = booked->open_units() == 0.0;
-            *qty = host_resolved ? booked->close_units() : std::abs(transaction);
-            *partition = 0;
+        && (host_resolved || std::isfinite(transaction))) {
+        try {
+            const double before = position_before_order(
+                snapshot, handle, physical.signed_units);
+            double units = *qty;
+            if (host_resolved && std::isfinite(snapshot.requested_qty)) {
+                units = snapshot.oca_type == 1
+                    ? explicit_entry_quantity_floor(std::abs(snapshot.requested_qty),
+                                                    owner_->staged_.quantity_grid)
+                    : std::max(0.0, snapshot.requested_qty);
+            }
+            const bool reduce = host_resolved && before != 0.0;
+            const double signed_units = host_resolved
+                ? (snapshot.is_long ? units : -units) : transaction;
+            const auto booked = reduce
+                ? order_action::plan(before, order_action::Reduce{units})
+                : order_action::plan(before, order_action::Transact{signed_units});
+            if (booked) {
+                *qty = reduce ? booked->close_units() : std::abs(signed_units);
+                fill_close_only = booked->open_units() == 0.0;
+            }
+        } catch (...) {
+            // As for a request that could not be read above, retain the
+            // original sizing partition and flag if the book read failed.
         }
     }
     *close_only = (snapshot.affordability_close_only || fill_close_only
@@ -33272,5 +33272,70 @@ void visit_bound_openings(const native_order::BindOpenings& owner, const Visit& 
 }
 
 } // namespace
+
+// Project only live market closes ahead of the target in the working book.
+// Later/staged commands and priced closes do not have that ordering guarantee.
+double PendingIntentView::position_before_order(const PlacementSnapshot& target,
+        const native_order::RequestHandle& handle, double signed_position) const {
+    if (!owner_->has_live_family(PineOrderFamily::Close)
+        && !owner_->has_live_family(PineOrderFamily::CloseAll))
+        return signed_position;
+    auto* consumer = owner_->bound_consumer();
+    if (!consumer || handle.incarnation == 0) return signed_position;
+    const auto book = as_native_consumer(*consumer).request_core().live();
+    const auto prior_close = [&](const native_order::LiveRequest& live) -> const PlacementSnapshot* {
+        const auto& request = live.request();
+        if (!std::holds_alternative<native_order::Market>(request.trigger)
+            || std::holds_alternative<native_order::WaitForApplied>(request.owner)
+            || std::holds_alternative<native_order::Transact>(request.intent)) return nullptr;
+        const auto it = owner_->placement_.find(live.handle().incarnation);
+        if (it == owner_->placement_.end()) return nullptr;
+        const auto& close = it->second;
+        if ((close.family != PineOrderFamily::Close && close.family != PineOrderFamily::CloseAll)
+            || close.immediately || close.crosses_zero
+            || close.placement_script_open_ms != target.placement_script_open_ms
+            || close.command_sequence >= target.command_sequence) return nullptr;
+        return &close;
+    };
+    const auto close_units = [&](const PlacementSnapshot& close, double available) {
+        const double units = placed_close_units(close);
+        if (std::isfinite(units)) return std::clamp(units, 0.0, available);
+        if (!std::isfinite(close.qty_percent) || close.qty_percent >= 100.0) return available;
+        const double part = owner_->quantize_close_units(available, close.qty_percent);
+        return part >= available - internal::kQtyEpsilon ? available : part;
+    };
+    double remaining = std::abs(signed_position);
+    // Consecutive closes of a name consume its remaining lots. Keep one
+    // balance; if names interleave, recover that name's balance from the
+    // earlier market closes without building a second order or lot book.
+    const SourceId* name = nullptr;
+    double named_remaining = 0.0;
+    for (const auto& live : book) {
+        if (live.handle() == handle) return std::copysign(remaining, signed_position);
+        const auto* close = prior_close(live);
+        if (!close || remaining == 0.0) continue;
+        double available = remaining;
+        const bool named = owner_->config_.close_entries_rule_any && !close->from_entry.empty();
+        if (named) {
+            if (!name || *name != close->from_entry) {
+                named_remaining = owner_->cohort_exposure_for(close->from_entry);
+                if (name) {
+                    for (const auto& older : book) {
+                        if (older.handle() == live.handle()) break;
+                        const auto* prior = prior_close(older);
+                        if (prior && prior->from_entry == close->from_entry)
+                            named_remaining -= close_units(*prior, named_remaining);
+                    }
+                }
+                name = &close->from_entry;
+            }
+            available = std::min(remaining, named_remaining);
+        }
+        const double closed = close_units(*close, available);
+        remaining -= closed;
+        if (named) named_remaining -= closed;
+    }
+    return signed_position; // the target is not in this working book
+}
 
 } // namespace pineforge::source

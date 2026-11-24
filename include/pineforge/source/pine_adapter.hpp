@@ -1691,9 +1691,9 @@ public:
     int short_seed_collision_role(int index) const noexcept;
     int last_bar_dual_entry_path() const noexcept;
     double trail_best_price() const noexcept;
-
 private:
     friend class PineExecutionAdapter;
+    double position_before_order(const PlacementSnapshot&, const native_order::RequestHandle&, double held) const;
     const PineExecutionAdapter* owner_ = nullptr;
 };
 

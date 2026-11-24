@@ -350,15 +350,20 @@ account for checks the fill makes at fill time against equity, price and margin
 (for example, an entry the account cannot afford in whole units). In those
 cases the fill can differ from the report. The report also does not model a
 margin-call surplus, the close quantity a reversal keeps when a margin call was
-booked after the script, a refused signal price, or fills of other orders
-earlier in the same pass. An entry that names its own quantity, or a row whose
-request cannot be read (a row held in the source's shadow queue), is reported
-by the prior-cycle rule alone. A `strategy.order` with its own quantity against
-an opposite position reports the quantity its fill transacts, floored to the
-quantity step, and `close_only` 1 exactly when that fill opens nothing (in an
-OCA cancel group, always), unless a close the script placed on the same bar is
-still waiting to fill ahead of it: that close fills first, and the report then gives
-the order's quantity as written with `close_only` 0 (1 in an OCA cancel group).
+booked after the script, a refused signal price, or other competing fills
+outside the market closes described below. An entry that names its own
+quantity, or a row whose request cannot be read (a row held in the source's
+shadow queue), is reported by the prior-cycle rule alone.
+
+A `strategy.order` facing an opposite position reports the quantity it would
+transact. The report first deducts working market closes placed before the
+order on the same bar and ahead of it in the book. With `close_entries_rule = "ANY"`,
+a partial or full named close draws from that entry's remaining units.
+A plain order with an explicit size transacts its remaining units, opening any
+excess. An OCA cancel order or a default-sized order can only close what is
+left of the opposite position, but opens its size if the close left it flat.
+`close_only` is 1 when the planned fill has no opening leg. The plan does not
+predict races with staged or conditional closes.
 
 ## Evidence {#live_surface_evidence}
 
