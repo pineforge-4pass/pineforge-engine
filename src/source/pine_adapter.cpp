@@ -22917,9 +22917,13 @@ void PineExecutionAdapter::observe_intraday_cap(
             }
             double continuation_units = continuation_snapshot
                 ? continuation_snapshot->frozen_market_own_units : kNaN;
+            bool size_at_fill = false;
             if (continuation_snapshot && !finite_positive(continuation_units)) {
                 if (finite_positive(continuation_snapshot->requested_qty)) {
-                    continuation_units = std::abs(continuation_snapshot->requested_qty);
+                    if (has_requested_units(*continuation_snapshot))
+                        continuation_units = continuation_snapshot->requested_qty;
+                    else
+                        size_at_fill = true;
                 } else if (config_.default_qty_type == static_cast<int>(QtyType::FIXED)) {
                     continuation_units = config_.default_qty_value;
                 } else {
@@ -22928,14 +22932,13 @@ void PineExecutionAdapter::observe_intraday_cap(
             }
             if (candidates.size() != 1U) continuation.reset();
             if (candidates.size() == 1U && continuation && continuation_snapshot
-                && finite_positive(continuation_units)) {
+                && (size_at_fill || finite_positive(continuation_units))) {
                 const auto old = *continuation;
                 const auto cancelled = require_host().cancel(old);
                 if (cancelled.status == native_order::CancelStatus::Cancelled) retire(old);
                 native_order::Request request;
-                request.intent = native_order::Transact{
-                    continuation_snapshot->is_long
-                        ? continuation_units : -continuation_units};
+                request.intent = entry_transaction(*continuation_snapshot,
+                                                   size_at_fill ? kNaN : continuation_units);
                 request.label = continuation_snapshot->source_id;
                 request.comment = continuation_snapshot->comment;
                 request.trigger = native_order::Market{};
