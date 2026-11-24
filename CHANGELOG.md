@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- Pending entry orders keep cash and equity percentages in their typed request fields; they no longer report those amounts as fixed contracts before the fill.
 - C/C++ and Python citations must find the claimed code outside comments. A pinned C/C++ citation can still identify a comment explicitly.
 - The documentation anchor check reports when it finds no citations.
 - Preflight now lists both documentation history checks as skipped when HEAD is the tip of main and there are no commits to compare.

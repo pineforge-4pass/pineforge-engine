@@ -207,6 +207,13 @@ bool finite_non_negative(double value) noexcept {
     return std::isfinite(value) && value >= 0.0;
 }
 
+// Only an entry can name a cash or equity budget instead of contracts.
+bool has_requested_units(const PlacementSnapshot& row) noexcept {
+    return std::isfinite(row.requested_qty)
+        && (row.family != PineOrderFamily::Entry || row.qty_type < 0
+            || row.qty_type == static_cast<int>(QtyType::FIXED));
+}
+
 // ab9714be pine_strategy_commands.cpp:533-537: a non-NaN limit/stop is a
 // present price level, including 0.0.
 bool price_present(double value) noexcept { return !std::isnan(value); }
@@ -5204,7 +5211,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         observed->realized_equity = snapshot.sizing.equity;
         observed->placement_equity = snapshot.sizing.equity;
         observed->signal_close = snapshot.sizing.mark;
-        observed->quantized_fixed_quantity = std::isfinite(snapshot.requested_qty)
+        observed->quantized_fixed_quantity = has_requested_units(snapshot)
             ? snapshot.requested_qty : kNaN;
         if (!std::isfinite(snapshot.requested_qty)
             && std::holds_alternative<native_order::Market>(request.trigger)
@@ -5558,7 +5565,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
     }
     snapshot.opening = opening;
     if (!std::isfinite(snapshot.projection_remaining_qty)
-        && std::isfinite(snapshot.requested_qty)) {
+        && has_requested_units(snapshot)) {
         snapshot.projection_remaining_qty = snapshot.requested_qty;
     }
     // Only a leg that was never placed can hold a reserved exit-queue slot
@@ -29551,7 +29558,7 @@ int PendingIntentView::copy_v1(int index, pf_pending_order_v1_t* out) const noex
                         out->pine_frozen_market_instruction_target_id,
                         &out->pine_frozen_market_instruction_target_id_truncated,
                         &out->pine_frozen_market_instruction_target_id_hash64);
-    const bool explicit_units = std::isfinite(snapshot.requested_qty);
+    const bool explicit_units = has_requested_units(snapshot);
     const bool percentage = !explicit_units && std::isfinite(snapshot.qty_percent);
     out->quantity_intent_kind = explicit_units ? 2U : (percentage ? 3U : 1U);
     out->quantity_intent_units = explicit_units ? snapshot.requested_qty : 0.0;
