@@ -222,7 +222,10 @@ ceilings:
   # expectation corrected: 1465 -> 1467, because input rejection builds a
   # local diagnostic (U1937) and account currency setup reads a capabilities
   # receipt into a local vector (U1954). Both remain OPEN.
-  unreviewed: 1467
+  # expectation corrected: 1467 -> 1468, because materialize_relative_exits now
+  # returns its local list of consumed definitions by value (U1955, the
+  # declaration in include/pineforge/source/pine_adapter.hpp). It remains OPEN.
+  unreviewed: 1468
   pending-flat-memory: 179
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1928,3 +1931,4 @@ entries:
   - {id: "U1935", file: "src/ta_moving_averages.cpp", symbol: "<temp:vector>", ops: ["temp"], container: "unresolved by the index: std::vector<double>", owner: "ta-series", phase: "unclassified", state: "unreviewed", line: 668}
   - {id: "U1936", file: "src/ta_moving_averages.cpp", symbol: "seed_sources_", ops: ["grow"], container: "unresolved by the index: seed_sources_.push_back(...)", owner: "ta-series", phase: "unclassified", state: "unreviewed", line: 451}
   - {id: "U1954", file: "src/source/pine_account_currency.hpp", symbol: "receipt", ops: ["decl"], container: "std::vector<char>", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "When begin checks whether configured FX can be bypassed, the vector holds one v1 capabilities response including its NUL. The size query is checked against 1 MiB before allocating. The buffer and parsed document live only for the call; this is outside the gate's fixed-input proof. OPEN.", line: 36}
+  - {id: "U1955", file: "include/pineforge/source/pine_adapter.hpp", symbol: "materialize_relative_exits", ops: ["decl"], container: "std::vector<PendingRelativeExit>", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "Return type of materialize_relative_exits: the by-value list of the waiting exit definitions one entry fill consumed, at most the waiting definitions of that fill. The vector is moved out of an already populated local (U0912), so the return adds no element storage. The caller keeps it for the rest of one fill. This is outside the gate's fixed-input proof. OPEN.", line: 2625}
