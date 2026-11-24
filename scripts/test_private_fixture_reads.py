@@ -682,6 +682,42 @@ class KernelPythonSweepControls(unittest.TestCase):
         self.assertEqual(1, result.returncode, result.stdout + result.stderr)
         self.assertIn('e2e_fb2_python_reader', result.stdout)
 
+    def test_included_python_read_requires_its_own_skip(self):
+        self.cmake.write_text(
+            'file(GLOB LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/lanes.d/*.cmake")\n'
+            'list(SORT LANE_CMAKE)\nforeach(lane_file IN LISTS LANE_CMAKE)\n'
+            '    include("${lane_file}")\nendforeach()\n')
+        directory = self.cmake.parent / 'lanes.d'
+        directory.mkdir()
+        fragment = directory / 'reader.cmake'
+        fragment.write_text(
+            'add_test(NAME test_read_bars COMMAND ${Python3_EXECUTABLE} '
+            '${CMAKE_CURRENT_SOURCE_DIR}/read_bars.py)\n'
+            'add_test(NAME test_python_version COMMAND ${Python3_EXECUTABLE} '
+            '-c "import sys; print(sys.version)")\n')
+        reader = self.cmake.parent / 'read_bars.py'
+        reader.write_text('from pathlib import Path\n'
+                          'missing = 77\n'
+                          f'bars = Path("{REMOVED_EXAMPLE}/bars.csv")\n'
+                          'if not bars.exists():\n'
+                          '    print("SKIP private fixtures not present: " + str(bars))\n'
+                          '    raise SystemExit(missing)\n'
+                          'print(bars.read_text())\n')
+        result = self.run_sweep()
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn('reader.cmake:2: row test_python_version', result.stderr)
+        self.assertIn('names no .py script', result.stderr)
+        self.assertIn(f'test_read_bars: reads absent {REMOVED_EXAMPLE}/bars.csv', result.stdout)
+        fragment.write_text(fragment.read_text().splitlines(keepends=True)[0])
+        result = self.run_sweep()
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn(f'test_read_bars: reads absent {REMOVED_EXAMPLE}/bars.csv', result.stdout)
+        with fragment.open('a') as out:
+            out.write('set_tests_properties(test_read_bars PROPERTIES SKIP_RETURN_CODE 77)\n')
+        result = self.run_sweep()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn('kernel python rows reading an absent private file: 0', result.stdout)
+
     def test_unparseable_python_row_exits_2(self):
         self.cmake.write_text(
             'add_test(NAME e2e_fb2_python_unparseable\n'
