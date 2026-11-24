@@ -130,14 +130,14 @@ retiring readers can keep a preceding slab alive too.
 
 The native core's unbound request journal has a resident cap of 2,048 events
 in 32-event chunks. Spilling stops at or below 128 resident events; the last
-chunk can take it below 128 (`kKeepResident`, `src/native_order.cpp:1816`). It spills older events even
+chunk can take it below 128 (`kKeepResident`, `src/native_order.cpp:1898`). It spills older events even
 within one bar when that bar exceeds the cap before retirement. Pages hold up to
 32,768 bytes of events plus an 8-byte seal; the decoded cache has four slots.
 The bound `CommandScratchStore` codec instead uses its configured workspace.
 Its owning diagnostic decoder throws typed `out_of_memory` on allocation
 failure; the nonowning validation scan retains its `noexcept` status contract.
 
-A raw native journal append (`append_journal_record`, `src/native_order.cpp:2241`)
+A raw native journal append (`append_journal_record`, `src/native_order.cpp:2366`)
 checks each request definition's own session key and run number against the
 destination. A replacement must match in both definition slots. The check
 applies to the caller's input and to the bytes staged for commit. A mismatch

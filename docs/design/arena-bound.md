@@ -155,15 +155,15 @@ overrides or imported libraries, its receipt must bind those inputs too.
 
 The carried declaration fields are visible in `PineStrategyConfig` at
 `include/pineforge/source/pine_adapter.hpp:80`. Their `project` projection starts at
-`src/source/pine_adapter.cpp:3084`. The relevant rules are:
+`src/source/pine_adapter.cpp:3093`. The relevant rules are:
 
 | Declaration / native fact | Sizing consequence and evidence |
 | --- | --- |
-| pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset (the `max_open_lots` setting spelling is at `src/source/pine_adapter.cpp:3003`). Do not assume this caps strategy.order or use it as an unconditional H. |
-| calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard `kCoofLoopGuard` through the native cadence at `src/source/pine_adapter.cpp:3184`; the `kCoofLoopGuard` literal is declared at `include/pineforge/source/pine_adapter.hpp:78`. The native point budget is a callback bound, not a total fill bound. |
-| max_recalculations_per_point | Further executions still apply after callbacks stop; see the cadence comment and `max_recalculations_per_point` declaration at `include/pineforge/native_run_spec.hpp:686-695`. The actual counter check is `src/native_execution_consumer.cpp:8278`. |
+| pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset (the `max_open_lots` setting spelling is at `src/source/pine_adapter.cpp:3012`). Do not assume this caps strategy.order or use it as an unconditional H. |
+| calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard `kCoofLoopGuard` through the native cadence at `src/source/pine_adapter.cpp:3193`; the `kCoofLoopGuard` literal is declared at `include/pineforge/source/pine_adapter.hpp:78`. The native point budget is a callback bound, not a total fill bound. |
+| max_recalculations_per_point | Further executions still apply after callbacks stop; see the cadence comment and `max_recalculations_per_point` declaration at `include/pineforge/native_run_spec.hpp:686-695`. The actual counter check is `src/native_execution_consumer.cpp:8387`. |
 | first-open COOF chain | A second source-side guard exists at `src/source/pine_scheduler_native.cpp:984`. Count this source path; a native budget of 8 is not Pine's bound. |
-| process_orders_on_close | Adds a matching opportunity after calculation; projection at `src/source/pine_adapter.cpp:3173`. It does not impose an order/trade count. |
+| process_orders_on_close | Adds a matching opportunity after calculation; projection at `src/source/pine_adapter.cpp:3182`. It does not impose an order/trade count. |
 | default_qty, margin, initial capital | Admission/sizing predicates can tighten a separately proved schedule. They provide no universal positive minimum close quantity or minimum loss, hence no universal T. Margin can create additional reductions. |
 | max_bars_back | Series-history setting, not a run/trade limit. The native mapping explicitly rules it out at `docs/pages/pine-to-native.md:142`. |
 | timeframe, input sessions, magnifier | Determine script buckets, path/sub-bar matching opportunities and callbacks. A magnifier with many sub-bars must enter the fill/root proof even if S is unchanged. |
@@ -340,15 +340,15 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 | --- | --- | --- |
 | Equity writer / selected hold-back / SpillCurve | 24*E | `pf_equity_point_t` size assertion `include/pineforge/metrics_stream.hpp:16`; `src/report_scratch.cpp:238` |
 | Position tail | (30+L)*T | `src/source/pine_position_tail.hpp:20`; footer packing at `src/source/pine_position_tail.cpp:94` |
-| Cohort AVL and five-word summary | (96+L)*D + 1[D>0] | `Links` at `include/pineforge/detail/disk_id_table.hpp:28-32`, `end_` at `:537`; `CohortFacts::Record` at `include/pineforge/source/pine_adapter.hpp:2127-2130` |
-| Entry-rank AVL | (60+L)*J + 1[J>0] | `exit_rank_keys_` at `src/source/pine_adapter.cpp:7209-7210`; `Links` at `include/pineforge/detail/disk_id_table.hpp:28-32`, `end_` at `:537` |
+| Cohort AVL and five-word summary | (96+L)*D + 1[D>0] | `Links` at `include/pineforge/detail/disk_id_table.hpp:28-32`, `end_` at `:540`; `CohortFacts::Record` at `include/pineforge/source/pine_adapter.hpp:2128-2131` |
+| Entry-rank AVL | (60+L)*J + 1[J>0] | `exit_rank_keys_` at `src/source/pine_adapter.cpp:7256-7257`; `Links` at `include/pineforge/detail/disk_id_table.hpp:28-32`, `end_` at `:540` |
 | Erased minima data | (40+L)*D + (40+2*L)*Q | `erased_minima_` at `include/pineforge/source/pine_adapter.hpp:965`; 40-byte header at `include/pineforge/detail/id_pair_store.hpp:69` |
 | Erased minima index | indexPeak(D+Q) | 16-byte slot at `include/pineforge/detail/id_pair_store.hpp:69`; replacement at `:642` |
-| Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2935`; joined key at `src/source/pine_adapter.cpp:26756` |
+| Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2944`; joined key at `src/source/pine_adapter.cpp:26855` |
 | Consumed partial-cycle index | indexPeak(Q) | `include/pineforge/detail/id_pair_store.hpp:642` |
 | Ordered consumed-cycle fold | 136*leaves + 2088*branches + 2096*savedPath | `include/pineforge/detail/id_pair_ordered_fold.hpp:161`, `:165`, `:172`, size assertion for `Leaf`, `Branch` and `Snapshot` at `:183` |
-| Successor-root rows | 16*R | `SuccessorRootIndex` at `src/native_order.cpp:8545`, size assertion for `Row` at `:8550`, 64-row tail bound `kTailRows` at `:8551` |
-| Frozen external openings | **0 in this certified profile** | Stock source builds owned `BindOpenings` vectors at `src/source/pine_adapter.cpp:7499`, `:7492`, `:10208-10221`; generic external owners are excluded below |
+| Successor-root rows | 16*R | `SuccessorRootIndex` at `src/native_order.cpp:8546`, size assertion for `Row` at `:8547`, 64-row tail bound `kTailRows` at `:8552` |
+| Frozen external openings | **0 in this certified profile** | Stock source builds owned `BindOpenings` vectors at `src/source/pine_adapter.cpp:7508`, `:7501`, `:10217-10230`; generic external owners are excluded below |
 
 The AVL node is seven uint64 words = 56 bytes, then its value and exact key
 bytes. CohortFacts::Record is handle, cycle, origin_count, origin_digest and
@@ -376,12 +376,12 @@ exit_time (8), qty (8), entry_incarnation (8), side (1), margin flag (1)
 and ID length (4), after the ID bytes. This is not sizeof(Row).
 
 Successor rows are two uint64 values. The WorkingRequestCore method `index_committed`
-defined at `src/native_order.cpp:3374` omits kept-handle replacements and appends a
+defined at `src/native_order.cpp:3375` omits kept-handle replacements and appends a
 root only when a newly issued definition has one. The 64-row RAM tail makes
 charging every issued row conservative. Partial closes create one trade
 row per affected lot: `src/engine_execution.cpp:1241`. Bracket definitions
 have limit, stop and trailing families; per-entry expansion is visible at
-`src/source/pine_adapter.cpp:25167`. A closed-trade count cannot bound
+`src/source/pine_adapter.cpp:25266`. A closed-trade count cannot bound
 unfilled placement history or the replacement-root history.
 
 The ordered fold retains distinct-ever keys, including erased keys.
@@ -425,8 +425,8 @@ delegate through `IdPairScratchFile` to `ScratchFile`.
 
 External opening freezes have a separate lifetime envelope. Each retained
 frozen owner holds exactly `8*N` bytes; an active merge sort for N>=2 uses
-`16*N` bytes across retained/work regions (`src/native_order.cpp:60`,
-`:134`, `:160`). N=1 retains 8 bytes and opens a zero-length work region.
+`16*N` bytes across retained/work regions (`src/native_order.cpp:62`,
+`:136`, `:162`). N=1 retains 8 bytes and opens a zero-length work region.
 For simultaneous retained owners N_i and an active freeze of size N, the
 generic logical peak is `8*sum(N_i) + (16*N if N>=2 else 8*N)`.
 The sum excludes the active owner, counted by the latter term.
@@ -439,7 +439,7 @@ The certified **stock-source EngineRecorded** profile excludes external
 `ExitScratchVersionsProduction::freeze_openings`
 (`src/source/exit_scratch_versions_production.cpp:745`) likewise builds an owned
 vector rather than an external readback, as does the C-ABI translator's
-`BindOpenings` (`src/native_c_host.cpp:2356`).
+`BindOpenings` (`src/native_c_host.cpp:2357`).
 Consequently `per_user_bytes` explicitly emits `openings=0`, with that
 reason in the implementation. This zero does not certify a generic C++
 host supplying `BindOpenings.external_openings`; such a host needs the
@@ -560,8 +560,8 @@ non-command certificates exactly.
 
 These formulas apply to the EngineRecorded streamed invocation. The
 selected recorder appends its anchor and selected observations in one
-writer (`equity_scratch` append at `src/engine_report.cpp:1563`), and capture transfers that writer as `metric_curve`
-instead of copying its prefix (`src/native_execution_consumer.cpp:13727`).
+writer (`equity_scratch` append at `src/engine_report.cpp:1579`), and capture transfers that writer as `metric_curve`
+instead of copying its prefix (`src/native_execution_consumer.cpp:13920`).
 HostRecorded array presentation and a second full curve are outside this
 profile. Adding another persistent scratch user requires another term and
 rounding region.
@@ -634,7 +634,7 @@ nX = S*tracePerBar + traceFixed            if trace else 0
 nH = S*hashesPerBar + hashesFixed          if hashes else 0
 ```
 
-K is at most one by `src/report_sink_writer.cpp:705`. The compiler can
+K is at most one by `src/report_sink_writer.cpp:726`. The compiler can
 tighten other counts only with a proof; finite E/T does not bound event
 or trace calls made inside an unknown loop.
 
@@ -649,11 +649,11 @@ becomes at most six JSON bytes, plus two quotes; see
 | --- | --- | --- |
 | E | 154 | `src/report_sink_writer.cpp:563` |
 | T | 675 + 12*L + 6*commentBytes | `src/report_sink_writer.cpp:587` |
-| O | 60 + 65*seriesSlots | `src/report_sink_writer.cpp:669` |
-| V | 239 + 6*messageBytes | `src/report_sink_writer.cpp:682` |
-| K | 6 + 65*constantSlots | `src/report_sink_writer.cpp:702` |
-| X | 110 + 6*traceNameBytes | `src/report_sink_writer.cpp:711` |
-| H | 25 | `src/report_sink_writer.cpp:722` |
+| O | 60 + 65*seriesSlots | `src/report_sink_writer.cpp:690` |
+| V | 239 + 6*messageBytes | `src/report_sink_writer.cpp:703` |
+| K | 6 + 65*constantSlots | `src/report_sink_writer.cpp:723` |
+| X | 110 + 6*traceNameBytes | `src/report_sink_writer.cpp:732` |
+| H | 25 | `src/report_sink_writer.cpp:743` |
 
 For variable-width rows use min(expression,1048576). Missing comment,
 message or trace-name byte proofs use the existing full-line ceiling,
