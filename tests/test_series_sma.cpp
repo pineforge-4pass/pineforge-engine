@@ -300,21 +300,28 @@ void precision_and_order() {
     // The two large values cancel, as do 1 and -1. A single compensation
     // term loses the third addend when it is rounded into 1.
     constexpr double tiny = 1e-16;
-    constexpr double window[] = {1e16, 1.0, tiny, -1e16, -1.0};
+    const double window[] = {1e16, na<double>(), 1.0, tiny, -1e16, -1.0,
+                             na<double>(), 1e16, -0.0};
     SeriesSma variable;
     pineforge::ta::SMA fixed(5);
     double series_mean = na<double>();
     double fixed_mean = na<double>();
-    for (double value : window) {
-        series_mean = variable.compute(value, 5);
-        fixed_mean = fixed.compute(value);
+    int differences = 0;
+    for (std::size_t i = 0; i < sizeof window / sizeof *window; ++i) {
+        series_mean = variable.compute(window[i], 5);
+        fixed_mean = fixed.compute(window[i]);
+        // expectation corrected: tiny / 5 -> +0 on the fifth observation,
+        // because C rounds 1 + tiny to 1, leaving S + C = -1 + 1.
+        // The following na holds that result. Warm-up uses the same na bits.
+        if (i == 5 || i == 6) assert(fixed_mean == 0.0 && !std::signbit(fixed_mean));
+        if (std::memcmp(&series_mean, &fixed_mean, sizeof fixed_mean) != 0) {
+            std::fprintf(stderr, "FAIL constant SMA bar=%zu series=%a fixed=%a\n",
+                         i, series_mean, fixed_mean);
+            ++differences;
+        }
     }
-    // expectation corrected: tiny / 5 -> 0 for fixed SMA, because adding
-    // tiny to its unit correction rounds back to 1 before the cancellation.
-    assert(fixed_mean == 0.0);
-    // expectation corrected: fixed_mean -> tiny / 5, because the series-length
-    // adapter still sums this window exactly, independently of fixed SMA.
-    assert(series_mean == tiny / 5.0);
+    assert(differences == 0);
+    std::puts("PASS constant SMA through warm-up, cancellation and missing sources");
 }
 
 void retained_history_and_storage() {
@@ -493,6 +500,8 @@ void constant_length_corpus_comparison() {
     }
     if (std::fflush(stdout) != 0 || std::ferror(stdout))
         throw std::runtime_error("ARITHMETIC_DIFFERENCE stdout flush failed");
+    // Both classes made the same two-sum updates in the same order.
+    assert(differences == 0);
 }
 
 }  // namespace
