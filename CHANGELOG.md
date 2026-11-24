@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- The design inventory follows kernel registration branches, checks primary rows and executable aliases, and states when no CTest listing was compared.
 - The private-fixture check inspects each discovered Python module, applies skip properties only to the tests they name, and reports when there are no Python programs to compare.
 - With pyramiding above one and the first-in-first-out close rule, an entry whose own named tick bracket filled no longer counts against the pyramiding limit in a run that declares no quantity step, as in a run that declares one.
 - A cash or equity entry now keeps its place beside two fixed entries at the close. At the next open, a budget entry gets its margin check even when an opposite fixed entry is waiting at the same price.
