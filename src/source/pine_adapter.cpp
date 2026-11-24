@@ -2479,8 +2479,8 @@ void PineExecutionAdapter::retire_cancelled_exits(
 void PineExecutionAdapter::purge_brackets_after_applied_reversal(
         const PlacementSnapshot& reversal, const native_order::ExecutionAppliedEvent& fill) {
     const bool prior_long = fill.opened_units < 0.0;
-    const auto closed_side = prior_long ? PositionSide::LONG : PositionSide::SHORT;
     auto& host = require_host();
+    const auto& book = detail::run_consumer(host).request_core();
     const auto targets_prior = [&](const PlacementSnapshot& leg) {
         if (leg.from_entry.empty() || leg.void_issue) return false;
         const auto cohort = cohorts_by_id_.find(leg.from_entry);
@@ -2488,7 +2488,6 @@ void PineExecutionAdapter::purge_brackets_after_applied_reversal(
             || !cohort_opened_on_side(cohort->second, prior_long)) {
             return false;
         }
-
         // An accepted opening cannot belong to the new side if the ID only
         // ever opened on the old side. Require a binding: an unbound leg
         // waiting for a staged order can share an ID with a retired opening.
@@ -2519,11 +2518,12 @@ void PineExecutionAdapter::purge_brackets_after_applied_reversal(
             }
             parent = &order->second;
         }
-        if (*parent == fill.handle() || !host.native_working_request(*parent)) return false;
+        if (*parent == fill.handle() || !book.find_live(*parent)) return false;
         const auto placed = placement_.find(parent->incarnation);
         return placed != placement_.end() && placed->second.opening
             && placed->second.source_id == leg.from_entry && placed->second.is_long == prior_long;
     };
+    const auto closed_side = prior_long ? PositionSide::LONG : PositionSide::SHORT;
     std::vector<native_order::RequestHandle> stale;
     for (const auto& handle : live_handles_) {
         const auto found = placement_.find(handle.incarnation);
@@ -2540,8 +2540,8 @@ void PineExecutionAdapter::purge_brackets_after_applied_reversal(
                 : margin_side == closed_side);
         if ((exit && targets_prior(candidate)) || stale_margin) stale.push_back(handle);
     }
-    for (const auto& handle : stale) {  // a cancel of an ended request would journal NotWorking
-        if (host.native_working_request(handle)) (void)host.cancel(handle);
+    for (const auto& handle : stale) {
+        if (book.find_live(handle)) (void)host.cancel(handle);
         retire(handle);
     }
     const auto held = cohorts_by_id_.held_rows();
@@ -12018,18 +12018,18 @@ void PineExecutionAdapter::settle_void_global_exits(bool market_entry) {
         if (row != placement_.end() && voided(row->second)) handles.push_back(handle);
     }
     if (handles.empty()) return;
-    const auto working = require_host().native_working_requests();
+    auto& host = require_host();
+    const auto& book = detail::run_consumer(host).request_core();
+    // Leave previously ended legs to their receipts. A leg live on entry
+    // leaves the projection here even if an earlier cancel ends it.
     handles.erase(std::remove_if(handles.begin(), handles.end(),
         [&](const native_order::RequestHandle& handle) {
-            return std::none_of(working.begin(), working.end(),
-                [&](const NativeWorkingRequest& request) {
-                    return request.definition->handle == handle;
-                });
+            return !book.find_live(handle);
         }), handles.end());
     if (handles.empty()) return;
     for (const auto& handle : handles) {
-        const auto result = require_host().cancel(handle);
-        if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
+        if (book.find_live(handle)) (void)host.cancel(handle);
+        retire(handle);
     }
     for (auto family = bracket_families_.begin(); family != bracket_families_.end();) {
         family->second.remove_all(handles);
@@ -25333,19 +25333,19 @@ PineExecutionAdapter::scoped_per_entry_child_legs(
 void PineExecutionAdapter::cancel_working_legs(
         const detail::ExitScratchRows<native_order::RequestHandle>& legs, bool retire_ended) {
     if (legs.empty()) return;
-    detail::ExitScratchIndex working(legs.context());  // Its writes count toward the scratch state hash.
+    detail::ExitScratchIndex visible(legs.context());  // Its writes count toward the scratch state hash.
     detail::exit_scratch_working(legs.context(), require_host(),
         [&](const NativeWorkingRequest& request) {
-        working.put(request.definition->handle.incarnation, 0);
+        visible.put(request.definition->handle.incarnation, 0);
         return true;
     });
+    // The reader omits an unarmed leg, and a cancel can end the next leg
+    // in the list. Consult the book at the point of cancellation.
+    auto& host = require_host();
+    const auto& book = detail::run_consumer(host).request_core();
     for (const auto& handle : legs) {
-        // A reversal must see hidden legs and the effects of each earlier cancel.
-        const bool still_working = retire_ended
-            ? detail::run_consumer(require_host()).request_core().find_live(handle) != nullptr
-            : working.find(handle.incarnation) != detail::ExitScratchIndex::absent;
-        if (still_working) {
-            const auto result = require_host().cancel(handle);
+        if (book.find_live(handle)) {
+            const auto result = host.cancel(handle);
             if (!retire_ended && result.status != native_order::CancelStatus::Cancelled) continue;
         } else if (!retire_ended) continue;
         retire(handle);

@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- When a C++ host makes an exit leg wait for another order, an entry reversal now cancels the hidden leg of the entry it closed. A market opening also withdraws a hidden global exit placed while flat with no pending entry, and switching between a whole-position bracket and per-entry orders withdraws the old hidden leg.
 - A historical daily `lookahead_on` projection now keeps the Unix epoch bar in its exchange day, including when midnight falls at a different UTC hour.
 - `strategy.entry` now places no order when it omits `qty` under a declared cash or percent-of-equity default of zero. A resting order with the same ID keeps its price and place in the book.
 - The observation counters in `ta.atr`, `ta.tr` and `ta.tsi` now stop at 2147483647 instead of overflowing on the next increment.
@@ -67,7 +68,7 @@ version number follows semantic versioning over the surfaces the
 - For C++ callers, `ta::StdDev(0, false)` now returns `na` on recalculation without removing a value from an empty window.
 - At length 2147483647, `ta.rising` and `ta.falling` now compare adjacent values in a full window, and `ta.percentrank` counts preceding values without overflowing the window bound.
 - `ta.rci` now evaluates its denominator in double precision, avoiding integer overflow from length 1291. Shorter lengths are unchanged. Computing a group’s average rank now also avoids integer overflow from length 1073741825.
-- When a C++ host makes a global exit leg wait for another order, a Pine entry reversal now cancels the leg even if it is hidden. If cancelling its parent already ended the leg, the reversal no longer records an extra `NotWorking` event. A hidden leg of an exit that names its entry, one that a C++ host made wait for another order, is not cancelled by a reversal.
+- When a C++ host makes a global exit leg wait for another order, a Pine entry reversal now cancels the leg even if it is hidden. If cancelling its parent already ended the leg, the reversal no longer records an extra `NotWorking` event.
 - A buy stop accepted while flat that later reverses a short now removes the short’s pending margin call. The same rule applies when a sell reverses a long.
 - A market entry now arms both legs of a `strategy.exit` that mixes prices and ticks at its fill (#694).
 - With pyramiding, a full named tick bracket on chart bars now measures `profit` and `loss` from each entry’s fill price when no other exit reserves its units, `process_orders_on_close` and `calc_on_order_fills` are off, and the call names neither `qty` nor an OCA group. FIFO can still book the close against an older trade (#694).
