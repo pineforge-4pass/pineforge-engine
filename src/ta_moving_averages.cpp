@@ -69,37 +69,12 @@ void KahanWindowSum::ensure_room() {
 }
 
 bool KahanWindowSum::add(double v) noexcept {
-    const double next = sum_ + v;
-    if (!std::isfinite(next)) return false;
-    const double bb = next - sum_;
-    const double error = (sum_ - (next - bb)) + (v - bb);
-    comp_ += error;
-    sum_ = next;
-    return std::isfinite(comp_);
+    return detail::add_window_value(sum_, comp_, v);
 }
 
 void KahanWindowSum::recover() noexcept {
-    // Two-sum has no error term for infinity or an overflowing intermediate.
-    // Rebuild only on that exceptional path. Once the active sources permit
-    // finite arithmetic, start carrying their chronological sum and errors.
-    sum_ = comp_ = 0.0;
-    exact_recovery_ = false;
-    for (std::size_t i = size_; i != 0; --i) {
-        if (add(window_[index(i - 1)])) continue;
-        detail::ExactWindowSum exact;
-        std::size_t read = 0;
-        while (read < size_ && exact.add(window_[index(read)])) ++read;
-        if (read == size_ && exact.rounded(sum_)) {
-            comp_ = 0.0;
-            exact_recovery_ = true;
-            return;
-        }
-        // Preserve the previous newest-first IEEE fallback (opposite
-        // infinities give NaN). A nonfinite S forces a retry on the next push.
-        sum_ = comp_ = 0.0;
-        for (std::size_t j = 0; j < size_; ++j) sum_ += window_[index(j)];
-        return;
-    }
+    detail::recover_window_sum(sum_, comp_, exact_recovery_, size_,
+                               [this](std::size_t i) { return window_[index(i)]; });
 }
 
 double KahanWindowSum::push(double src) {

@@ -492,7 +492,8 @@ C ABI remains 5.
 Recompile C++ objects that embed a series-length TA adapter or
 `ta::PercentileWindow` as well: the adapters now store the captured cap, and
 the percentile window uses size-based indices. Regenerate and relink strategy
-modules with the paired engine and code generator.
+modules with the paired engine and code generator. The series-length SMA also
+stores its running sum, before and after the current bar.
 
 | Matrix role | Internal identity |
 | --- | --- |

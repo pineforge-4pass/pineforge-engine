@@ -150,4 +150,46 @@ public:
     }
 };
 
+// Keep the rounding error of each addition in a separate running double.
+// Emitting sum + correction never folds the correction back into sum.
+inline bool add_window_value(double& sum, double& correction, double value) noexcept {
+    const double next = sum + value;
+    if (!std::isfinite(next)) return false;
+    const double bb = next - sum;
+    const double error = (sum - (next - bb)) + (value - bb);
+    correction += error;
+    sum = next;
+    return std::isfinite(correction);
+}
+
+// After an overflowing prefix, try *all* raw sources in integer units.
+// If a source is infinite or the result cannot round to a finite double,
+// preserve newest-first IEEE addition, including inf - inf.
+template <class Source>
+bool exact_or_ieee_window_sum(double& sum, std::size_t size, const Source& newest) {
+    ExactWindowSum exact;
+    std::size_t read = 0;
+    while (read < size && exact.add(newest(read))) ++read;
+    if (read == size && exact.rounded(sum)) return true;
+    sum = 0.0;
+    for (std::size_t i = 0; i < size; ++i) sum += newest(i);
+    return false;
+}
+
+// A chronological retry can resume two-sum immediately. An exactly recovered
+// total has lost its split into S and C, so rebuild again when the window next
+// changes. A backed history reader may throw; the fixed window's reader cannot.
+template <class Source>
+void recover_window_sum(double& sum, double& correction, bool& exact_recovery,
+                        std::size_t size, const Source& newest) {
+    sum = correction = 0.0;
+    exact_recovery = false;
+    for (std::size_t i = size; i != 0; --i) {
+        if (add_window_value(sum, correction, newest(i - 1))) continue;
+        correction = 0.0;
+        exact_recovery = exact_or_ieee_window_sum(sum, size, newest);
+        return;
+    }
+}
+
 }  // namespace pineforge::detail
