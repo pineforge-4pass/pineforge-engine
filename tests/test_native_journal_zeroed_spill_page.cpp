@@ -48,13 +48,13 @@
 //
 // What the zeroed read can do, and what this row makes of it:
 //   wrong command rows, no error   the defect is real: the row fails, exit 1;
-//   a coded failure                the page was detected: the row passes;
+//   the scratch I/O seal error     the page was detected: the row passes;
 //   the right rows                 the first rows of the answer are stored
 //                                  nowhere but in the zeroed page, so this
 //                                  read did not come from the file and the
 //                                  measurement proves nothing: INVALID,
 //                                  exit 2, never a pass;
-//   anything else                  an exception without a code: the row fails,
+//   anything else                  an unexpected failure: the row fails,
 //                                  exit 3; std::terminate: the handler names
 //                                  the read it interrupted, then aborts.
 // A run that did not spill, files that cannot be told apart, a first row
@@ -93,7 +93,7 @@ constexpr std::size_t kOrders = 3000;
 // first_command_after reads this many events back from the tail before it
 // bisects what is left of the window.
 constexpr std::size_t kTailWalk = 33;
-// The most one page holds: JournalStore::kChunk events, kSpillPageBytes bytes.
+// Bounds for this fixture's short submit/cancel events, which never span transfers.
 constexpr std::uint64_t kPageEvents = 32;
 constexpr std::uint64_t kPageBytes = 32768 + 8;  // Event bytes plus the seal.
 
@@ -404,6 +404,7 @@ struct Answer {
     bool threw = false;
     bool coded = false;          // the exception carried a run failure code
     std::string code;            // that code's catalog name
+    std::string args;            // its canonical arguments
     std::string text;            // what() of the exception
     std::vector<Row> rows;       // the command rows, in the order returned
     std::size_t other_rows = 0;  // rows of another kind
@@ -432,6 +433,7 @@ Answer ask(const BatchHost& host, std::uint64_t after, const char* step) {
         if (const auto* info = dynamic_cast<const RunFailureInfo*>(&error)) {
             answer.coded = true;
             answer.code = run_failure_code_name(info->run_failure_code());
+            if (info->run_failure().args) answer.args = *info->run_failure().args;
         }
     } catch (...) {
         answer.threw = true;
@@ -487,13 +489,19 @@ struct Reading {
     std::string detail;   // the failure's text, when there is one
 };
 
+Reading coded_reading(const std::string& code, const std::string& args, const std::string& text) {
+    const bool seal = code == "report_sink_failed"
+        && args.find("\"reason\":\"scratch_io\"") != std::string::npos
+        && text.find("native o1 journal page does not read back as written") != std::string::npos;
+    return {seal ? Outcome::Coded : Outcome::Other, "coded:" + code + " args=" + args, text};
+}
+
 Reading classify(const Answer& answer, const BatchHost& host, const Match& match) {
     Reading reading;
     if (answer.threw) {
         reading.detail = answer.text;
         if (answer.coded) {
-            reading.outcome = Outcome::Coded;
-            reading.name = "coded:" + answer.code;
+            return coded_reading(answer.code, answer.args, answer.text);
         } else {
             reading.outcome = Outcome::Other;
             reading.name = "other";
@@ -503,10 +511,8 @@ Reading classify(const Answer& answer, const BatchHost& host, const Match& match
     // A read that was refused through the run's state rather than by a throw.
     const RunFailureValue failure = run_failure_value_of(host);
     if (failure.code != RunFailureCode::none) {
-        reading.outcome = Outcome::Coded;
-        reading.name = std::string("coded:") + run_failure_code_name(failure.code);
-        reading.detail = host.last_error();
-        return reading;
+        return coded_reading(run_failure_code_name(failure.code),
+                             failure.args ? *failure.args : "{}", host.last_error());
     }
     reading.outcome = match.exact ? Outcome::Right : Outcome::Wrong;
     reading.name = match.exact ? "right" : "wrong";
@@ -703,6 +709,7 @@ int run_measurement() {
     wrong.threw = wrong.coded = true;
     wrong.code = run_failure_code_name(RunFailureCode::engine_invariant);
     wrong.text = answer.threw ? answer.text : host.last_error();
+    wrong.args = answer.threw ? answer.args : run_failure_args_of(host);
     if (classify(wrong, host, match).outcome == Outcome::Coded) {
         std::printf("SPILL_PAGE FAIL: an unrelated failure code passed the seal check\n");
         return 1;
@@ -747,8 +754,8 @@ int run_measurement() {
     case Outcome::Other:
         break;
     }
-    std::printf("SPILL_PAGE summary verdict=OTHER the zeroed read failed without a coded"
-                " failure: %s\n", reading.detail.c_str());
+    std::printf("SPILL_PAGE summary verdict=OTHER expected the scratch I/O page-seal failure;"
+                " got %s (%s)\n", reading.name.c_str(), reading.detail.c_str());
     return 3;
 }
 
