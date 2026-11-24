@@ -8119,9 +8119,10 @@ bool PineExecutionAdapter::opposite_entry_opening_pending(bool is_long) const {
 void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_price,
                                  double stop_price, double qty, const std::string& comment,
                                  const std::string& oca_name, int oca_type, int qty_type) {
-    // Zero cash or zero percent buys no contracts at any fill price.
-    if (qty == 0.0 && (qty_type == static_cast<int>(QtyType::CASH)
-                       || qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY))) return;
+    const bool use_default = !std::isfinite(qty);
+    const auto type = static_cast<QtyType>(use_default ? config_.default_qty_type : qty_type);
+    if ((use_default ? config_.default_qty_value : qty) == 0.0
+        && (type == QtyType::CASH || type == QtyType::PERCENT_OF_EQUITY)) return;
     place_entry(id, is_long, limit_price, stop_price, qty, comment, oca_name, oca_type, qty_type);
     if (PF_RARE(!id_bound_exits_.empty())) rearm_id_bound_exits(id);
 }
@@ -8131,9 +8132,8 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
                                        const std::string& oca_name, int oca_type, int qty_type) {
     require_cohort_ticket(&id);
     native_order::Request request;
-    // An infinite quantity trades the default quantity, as na does (lab tv
-    // tailc-a-qty-nonfinite2: +-Infinity and na legs all enter at the
-    // strategy's default; the placement and recalculation correction).
+    // Both infinities and na use the declared quantity, as exercised by
+    // test_nonfinite_entry_qty_tape.
     fold_source_money();
     const bool default_sized = !std::isfinite(qty);
     const bool priced = !std::isnan(limit_price) || !std::isnan(stop_price);

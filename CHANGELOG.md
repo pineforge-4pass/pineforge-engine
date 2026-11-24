@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- `strategy.entry` now places no order when it omits `qty` under a declared cash or percent-of-equity default of zero. A resting order with the same ID keeps its price and place in the book.
 - The observation counters in `ta.atr`, `ta.tr` and `ta.tsi` now stop at 2147483647 instead of overflowing on the next increment.
 - When the 2147483647-sample window of `ta.stdev(..., biased = false)` is full, the next valid input evicts the oldest sample. The window stays seeded when that input is recalculated with another valid value or followed by `na`.
 - The ABI receipt check now names a missing required option or an unavailable relative command before reporting receipt and compile database files as present.
@@ -21,7 +22,7 @@ version number follows semantic versioning over the surfaces the
 - `str.format_time` now formats the second containing a negative Unix timestamp, including in named timezones. For example, −1 ms formats as 1969-12-31 23:59:59 UTC. (#938)
 - Installing or clearing a `3M` feed leaves `M` and `12M` prices intact. Each monthly request selects its own feed when supplied; `M` and `1M` still share a feed.
 - A market entry rebuilt after a full close keeps its OCA group, so its fill still cancels or reduces resting group members.
-- An entry whose call names a cash amount of zero or an equity percentage of zero places no order, including when another order closes the position on the same bar. An entry that leaves out its quantity under a declared default of zero is not changed.
+- An entry whose call names a cash amount of zero or an equity percentage of zero places no order, including when another order closes the position on the same bar.
 - The ABI receipt check names unusable CTest commands and malformed receipt arguments. It reports which inputs are present; only CTest results establish which rows executed.
 - The design inventory follows kernel registration branches, checks primary rows and executable aliases, and states when no CTest listing was compared. Preflight gives the inventory no CTest listing, so that part reads `NOT COMPARED` there.
 - The private-fixture check inspects each discovered Python module, applies skip properties only to the tests they name, and reports when there are no Python programs to compare. It does not read a Python command that is registered through a CMake variable, it accepts a skip by its text without proving that the skip guards the read, and it does not ask whether a test property stands in an active branch.
