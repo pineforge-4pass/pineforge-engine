@@ -368,10 +368,13 @@ public:
         const double fast = fast_.compute(bar.close);
         const double slow = slow_.compute(bar.close);
         const bool cross = trend_.compute(fast, slow);
-        const bool add = rally_.compute(bar.close, fast);
         const double held = signed_position_size();
         if (held == 0) next_entry_ = pine_bar_index() + 1;
-        if (cross || (held > 0 && add)) strategy_entry("Long", true);
+        // The script asks for the second crossover only when the first is false
+        // and a position is open, so its history holds those bars alone.
+        if (cross || (held > 0 && rally_.compute(bar.close, fast))) {
+            strategy_entry("Long", true);
+        }
         strategy_exit("Long exit", "Long", kNaN, kNaN, kNaN, kNaN, kNaN, 100, "", kNaN,
                       "", 50000, 50000);
     }
@@ -615,8 +618,8 @@ int main() {
             partial.after_orders = [](PyramidHost& host, int bar) {
                 if (bar == 5) host.strategy_close("L", "", 1);
             };
-            check_trades(units ? "control.reissue-qty" : "control.reissue-qty-percent",
-                         "control", partial, bars,
+            check_trades(units ? "control.reissue-qty" : "reissue-qty-percent",
+                         units ? "control" : "red-on-base", partial, bars,
                          {expect(100, 110, 1, true, 1, 5), expect(100, 114.5, 1, true, 1, 6)});
         }
         auto reverse = script_of(true, false, {{0, 1.0}, {2, 1.0}},

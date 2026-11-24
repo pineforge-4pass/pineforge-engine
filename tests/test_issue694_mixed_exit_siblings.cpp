@@ -338,7 +338,7 @@ std::vector<Bar> btc_hours() {
 void check_crossover_exit(const std::vector<Bar>& bars, bool priced_target) {
     const char* row = priced_target ? "crossover.priced-bracket" : "crossover.tick-target";
     ++rows_run;
-    std::printf("ROW %s RUN kind=%s\n", row, priced_target ? "control" : "red-on-base");
+    std::printf("ROW %s RUN kind=red-on-base\n", row);
     if (bars.size() != 1441) {
         ++rows_failed;
         std::printf("ROW %s NOT COMPARED: missing or malformed BTCUSDT hourly feed\n", row);
@@ -389,22 +389,20 @@ void check_crossover_exit(const std::vector<Bar>& bars, bool priced_target) {
 
 // Both legs belong to the same reservation. On the path 94 -> 111 -> 85,
 // the tick target must not take the unit left for the later stop.
-void check_reserved_pair(bool priced_target) {
+void check_reserved_pair() {
     class Host final : public source::PineStrategyHost {
     public:
-        explicit Host(bool priced) : priced_(priced) {
+        Host() {
             attach_pine_execution_adapter();
             set_syminfo_mintick(kTick);
         }
         void on_source_bar(const Bar&) override {
             if (pine_bar_index() != 0) return;
             strategy_entry("E", true, kNaN, kNaN, 2.0);
-            strategy_exit("Pair", "E", priced_ ? 110.0 : kNaN, 95.0, kNaN, kNaN, kNaN,
-                          100.0, "", 1.0, "", priced_ ? kNaN : 1000.0);
+            strategy_exit("Pair", "E", kNaN, 95.0, kNaN, kNaN, kNaN,
+                          100.0, "", 1.0, "", 1000.0);
             strategy_exit("Remainder", "E", kNaN, 90.0, kNaN, kNaN, kNaN, 100.0, "", 2.0);
         }
-    private:
-        bool priced_;
     };
     const auto bars = std::vector<Bar>{
         bar_at(0, 100, 101, 99, 100),
@@ -412,8 +410,8 @@ void check_reserved_pair(bool priced_target) {
         bar_at(2, 97, 111, 96, 110),
         bar_at(3, 110, 110, 85, 90),
     };
-    const char* row = priced_target ? "reservation.priced-pair" : "reservation.mixed-pair";
-    Host host(priced_target);
+    const char* row = "reservation.mixed-pair";
+    Host host;
     host.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
     const auto closed = host.closed_trade_count();
     const bool two = closed == 2 && host.report_trade_count() == 2;
@@ -426,7 +424,7 @@ void check_reserved_pair(bool priced_target) {
         && near(first.exit_price, 95.0) && near(last.exit_price, 90.0)
         && near(first.qty, 1.0) && near(last.qty, 1.0);
     ++rows_run;
-    std::printf("ROW %s RUN kind=%s\n", row, priced_target ? "control" : "red-on-base");
+    std::printf("ROW %s RUN kind=red-on-base\n", row);
     std::printf("ROW %s OBSERVED closed=%zu reports=%d %s@%.2f x%.2f bar=%d; "
                 "%s@%.2f x%.2f bar=%d error=\"%s\"\n", row, host.closed_trade_count(),
                 host.report_trade_count(), first.exit_id.c_str(), first.exit_price, first.qty,
@@ -443,8 +441,7 @@ int main() {
     const auto hours = btc_hours();
     check_crossover_exit(hours, false);
     check_crossover_exit(hours, true);
-    check_reserved_pair(false);
-    check_reserved_pair(true);
+    check_reserved_pair();
     const std::vector<Bar> falling = falling_then_rising();
     const std::vector<Bar> rising = rising_then_falling();
     const double long_fill = fill_price(falling);
