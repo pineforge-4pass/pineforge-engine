@@ -91,9 +91,9 @@ unreadable or malformed change lists also require it; established docs-only
 and `.github/`-only PRs set it false and skip the leg. The PR workflow now publishes this output. The base classifier
 computes it on both compare reads. When it is true, the existing `legs` and
 `result` gates require arm success and reject a skip, failure or cancellation.
-The job uses `ubuntu-24.04-arm`, installs the post-arm dependencies and
-runs the complete `ci_verify.py debug` profile, building every Debug test
-target and running that profile's CTest selection before merge. An irrelevant arm leg may skip while the other proof legs still run.
+On `ubuntu-24.04-arm` the job configures a Debug build, builds the
+`pineforge_pr_smoke` target and runs `ctest --test-dir build -L '^fast$'`.
+An irrelevant arm leg may skip while the other proof legs still run.
 
 `--tier github-only` runs `shellcheck-version`, `actionlint-runner-labels`,
 `runner-allowlist`, `workflow-lint`, `ci-workflow-contract`, `docs-workflow-contract`,

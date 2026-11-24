@@ -26,9 +26,11 @@ std::string tradingview_intrabar_timeframe(std::string_view chart_tf);
 /// `timezone`), as bars for IntrabarPath::lower_tf on the input's own grid.
 ///
 /// TradingView's intrabars are the symbol's regular bars at the table's
-/// timeframe: anchored at the session day's open, cut at its close, and each
-/// owned by the chart bar that holds its LAST minute, so on a 15-minute chart
-/// a 2-minute intrabar that straddles a chart boundary belongs to the later
+/// timeframe. Fixed slots count from the session open except on `1800-1700`,
+/// which counts from 17:00 but trades from 18:00, and `0930-1200,1300-1600`,
+/// which counts from 09:00 but opens its first bar at 09:30. Slots are cut at
+/// the session close and owned by the chart bar that holds their LAST minute,
+/// so on a 15-minute chart a 2-minute intrabar across a boundary belongs to the later
 /// bar. A chart bar's path is its own open, its owned intrabars (each open a
 /// discrete point, then its extremes and close), then its own close. Here
 /// that is:

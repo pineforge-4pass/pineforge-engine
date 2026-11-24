@@ -778,15 +778,15 @@ void test_native_fixed_period_grid_and_session_controls() {
     }
 }
 
-// A 180-minute request on a 0930-1200,1300-1600 session, 60-minute input, 120-minute
-// chart. The row [12:30, 15:30) is complete when the 14:30 input closes, and the 14:30
-// input also seals the chart bar that opened at 13:30: that bar reads the row. The chart
-// bar is picked by its open; its close is not asserted.
+constexpr char kBreakSession[] = "0930-1200,1300-1615";  // Fixed periods count from the 09:30 open.
+
 std::int64_t break_session_at(int hour, int minute) {
     return tv_fixed_period_75_fact::kOriginMs
         + (hour * 60 + minute) * tv_fixed_period_75_fact::kMinuteMs;
 }
 
+// The 14:30 input closes at 15:30, completing the 180-minute row labelled 12:30
+// and sealing the 120-minute chart bar labelled 13:30. Pick that chart bar by its open.
 void check_row_across_a_break(const std::vector<Bar>& bars) {
     const auto at = break_session_at;
     const std::vector<Bar> rows = {
@@ -797,7 +797,7 @@ void check_row_across_a_break(const std::vector<Bar>& bars) {
     FixedPeriodProbe host;
     host.requested = "180";
     host.set_syminfo_timezone("UTC");
-    host.set_syminfo_session("0930-1200,1300-1600");
+    host.set_syminfo_session(kBreakSession);
     install_fixed_native(host, rows);
     host.run(bars.data(), static_cast<int>(bars.size()), "60", "120",
              false, 4, MagnifierDistribution::ENDPOINTS);
@@ -843,12 +843,12 @@ void test_native_fixed_period_nominal_label_of_a_clipped_slot() {
     });
 }
 
-// A request of 75 or 105 minutes on chart = input = 60 and the session 0930-1200,1300-1600: the
-// bars its site evaluated, in order. `rows` is the native feed; `run` names the run on a failure.
-// Another session with a break, or a chart coarser than the 60-minute input, can be named.
+// Return the requested bars in evaluation order. By default the 60-minute inputs
+// are also the chart bars on kBreakSession. Callers can choose another session or
+// chart timeframe; `run` identifies the tape in failure diagnostics.
 std::vector<Bar> published_across_a_break(const char* requested, const std::vector<Bar>& rows,
                                           const std::vector<Bar>& bars, const char* run,
-                                          const char* session = "0930-1200,1300-1600",
+                                          const char* session = kBreakSession,
                                           const char* chart = "60") {
     FixedPeriodProbe host;
     host.requested = requested;

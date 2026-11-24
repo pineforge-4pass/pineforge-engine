@@ -7883,6 +7883,50 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
         "PF_ISSUE_956_TEST=\"${CMAKE_CURRENT_SOURCE_DIR}/test_run_json_strategy_digest.py\"")
 endif()
 # --- lane issue-956 end ---
+# --- lane native-chart-grid begin ---
+add_executable(native_chart_grid_probe test_native_chart_grid.cpp)
+target_link_libraries(native_chart_grid_probe PRIVATE pineforge)
+target_compile_options(native_chart_grid_probe PRIVATE -ffp-contract=off)
+if(PINEFORGE_CHART_GRID_BUILD_ID)
+    target_compile_definitions(native_chart_grid_probe PRIVATE "PF_GRID_BUILD=${PINEFORGE_CHART_GRID_BUILD_ID}")
+endif()
+add_test(NAME test_native_chart_grid_batch COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/native_chart_grid_e2e.py --route batch --probe $<TARGET_FILE:native_chart_grid_probe>)
+add_test(NAME test_native_chart_grid_api_bars COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/native_chart_grid_e2e.py --route api-bars --probe $<TARGET_FILE:native_chart_grid_probe>)
+add_test(NAME test_native_chart_grid_api_ticks COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/native_chart_grid_e2e.py --route api-ticks --probe $<TARGET_FILE:native_chart_grid_probe>)
+if(PINEFORGE_BUILD_LIVE_RUNNER AND UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(native_chart_grid_observer MODULE test_native_chart_grid.cpp)
+    target_link_libraries(native_chart_grid_observer PRIVATE pineforge)
+    target_compile_options(native_chart_grid_observer PRIVATE -fvisibility=hidden -ffp-contract=off)
+    target_compile_definitions(native_chart_grid_observer PRIVATE PF_GRID_NATIVE_MODULE)
+    if(PINEFORGE_CHART_GRID_BUILD_ID)
+        target_compile_definitions(native_chart_grid_observer PRIVATE "PF_GRID_BUILD=${PINEFORGE_CHART_GRID_BUILD_ID}")
+    endif()
+    add_test(NAME test_native_chart_grid_cli_bars COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/native_chart_grid_e2e.py --route cli-bars
+        --runner $<TARGET_FILE:pineforge-live> --native $<TARGET_FILE:native_chart_grid_observer>)
+    add_test(NAME test_native_chart_grid_cli_ticks COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/native_chart_grid_e2e.py --route cli-ticks
+        --runner $<TARGET_FILE:pineforge-live> --native $<TARGET_FILE:native_chart_grid_observer>)
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        add_library(pine_chart_grid_observer MODULE test_native_chart_grid.cpp)
+        target_link_libraries(pine_chart_grid_observer PRIVATE pineforge)
+        target_compile_options(pine_chart_grid_observer PRIVATE -fvisibility=hidden -ffp-contract=off)
+        target_compile_definitions(pine_chart_grid_observer PRIVATE PF_GRID_PINE_MODULE)
+        if(PINEFORGE_CHART_GRID_BUILD_ID)
+            target_compile_definitions(pine_chart_grid_observer PRIVATE "PF_GRID_BUILD=${PINEFORGE_CHART_GRID_BUILD_ID}")
+        endif()
+        add_test(NAME test_pine_chart_grid_cli_ticks COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/native_chart_grid_e2e.py --route pine-ticks
+            --runner $<TARGET_FILE:pineforge-live> --pine $<TARGET_FILE:pine_chart_grid_observer>)
+        add_test(NAME test_pine_chart_grid_cli_bars_refusal COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/native_chart_grid_e2e.py --route pine-bars-refusal
+            --runner $<TARGET_FILE:pineforge-live> --pine $<TARGET_FILE:pine_chart_grid_observer>)
+    endif()
+endif()
+# --- lane native-chart-grid end ---
 
 # --- lane scratch-directory-resolution-and-fallback begin ---
 # Scratch resolution: only these opted-in existing targets need the interposer's linkage.
@@ -8673,6 +8717,80 @@ if(TARGET test_issue_937_journal_comment)
     set_tests_properties(test_issue_937_spanning_page_seal PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 # --- lane issue-937 end ---
+# --- lane issue-810-case-a begin ---
+# Each case runs the executable registered by the lane include above.
+if(TARGET test_issue810_case_a)
+    add_test(NAME test_issue810_case_a_g2_end_close_stale
+        COMMAND test_issue810_case_a g2_end_close_stale)
+    add_test(NAME test_issue810_case_a_g2_end_close_final_position
+        COMMAND test_issue810_case_a g2_end_close_final_position)
+
+    add_test(NAME test_issue810_case_a_g3_live_entry_odd_steps_limit_first
+        COMMAND test_issue810_case_a g3_live_entry_odd_steps_limit_first)
+    add_test(NAME test_issue810_case_a_g3_live_entry_odd_steps_stop_first
+        COMMAND test_issue810_case_a g3_live_entry_odd_steps_stop_first)
+    add_test(NAME test_issue810_case_a_g3_live_entry_whole_steps_limit_first
+        COMMAND test_issue810_case_a g3_live_entry_whole_steps_limit_first)
+    add_test(NAME test_issue810_case_a_g3_live_entry_whole_steps_stop_first
+        COMMAND test_issue810_case_a g3_live_entry_whole_steps_stop_first)
+
+    add_test(NAME test_issue810_case_a_g4_live_entry_odd_steps_limit_first
+        COMMAND test_issue810_case_a g4_live_entry_odd_steps_limit_first)
+    add_test(NAME test_issue810_case_a_g4_live_entry_odd_steps_stop_first
+        COMMAND test_issue810_case_a g4_live_entry_odd_steps_stop_first)
+    add_test(NAME test_issue810_case_a_g4_live_entry_whole_steps_limit_first
+        COMMAND test_issue810_case_a g4_live_entry_whole_steps_limit_first)
+    add_test(NAME test_issue810_case_a_g4_live_entry_whole_steps_stop_first
+        COMMAND test_issue810_case_a g4_live_entry_whole_steps_stop_first)
+
+    add_test(NAME test_issue810_case_a_f3_exact_entry_fill_bar
+        COMMAND test_issue810_case_a f3_exact_entry_fill_bar)
+    add_test(NAME test_issue810_case_a_f3_exact_entry_fill_phase
+        COMMAND test_issue810_case_a f3_exact_entry_fill_phase)
+    add_test(NAME test_issue810_case_a_f3_exact_entry_fill_price
+        COMMAND test_issue810_case_a f3_exact_entry_fill_price)
+    add_test(NAME test_issue810_case_a_f3_exact_partial_exit_bar
+        COMMAND test_issue810_case_a f3_exact_partial_exit_bar)
+    add_test(NAME test_issue810_case_a_f3_exact_partial_exit_price
+        COMMAND test_issue810_case_a f3_exact_partial_exit_price)
+    add_test(NAME test_issue810_case_a_f3_exact_remainder_exit_bar
+        COMMAND test_issue810_case_a f3_exact_remainder_exit_bar)
+    add_test(NAME test_issue810_case_a_f3_exact_remainder_exit_price
+        COMMAND test_issue810_case_a f3_exact_remainder_exit_price)
+
+    add_test(NAME test_issue810_case_a_f3_a_absolute_control_entry_fill_bar
+        COMMAND test_issue810_case_a f3_a_absolute_control_entry_fill_bar)
+    add_test(NAME test_issue810_case_a_f3_a_absolute_control_entry_fill_phase
+        COMMAND test_issue810_case_a f3_a_absolute_control_entry_fill_phase)
+    add_test(NAME test_issue810_case_a_f3_a_absolute_control_entry_fill_price
+        COMMAND test_issue810_case_a f3_a_absolute_control_entry_fill_price)
+    add_test(NAME test_issue810_case_a_f3_a_absolute_control_partial_exit_bar
+        COMMAND test_issue810_case_a f3_a_absolute_control_partial_exit_bar)
+    add_test(NAME test_issue810_case_a_f3_a_absolute_control_partial_exit_price
+        COMMAND test_issue810_case_a f3_a_absolute_control_partial_exit_price)
+    add_test(NAME test_issue810_case_a_f3_a_absolute_control_remainder_exit_bar
+        COMMAND test_issue810_case_a f3_a_absolute_control_remainder_exit_bar)
+    add_test(NAME test_issue810_case_a_f3_a_absolute_control_remainder_exit_price
+        COMMAND test_issue810_case_a f3_a_absolute_control_remainder_exit_price)
+
+    add_test(NAME test_issue810_case_a_f3_b_market_add_control_base_entry_bar
+        COMMAND test_issue810_case_a f3_b_market_add_control_base_entry_bar)
+    add_test(NAME test_issue810_case_a_f3_b_market_add_control_base_entry_price
+        COMMAND test_issue810_case_a f3_b_market_add_control_base_entry_price)
+    add_test(NAME test_issue810_case_a_f3_b_market_add_control_separate_market_add_bar
+        COMMAND test_issue810_case_a f3_b_market_add_control_separate_market_add_bar)
+    add_test(NAME test_issue810_case_a_f3_b_market_add_control_separate_market_add_price
+        COMMAND test_issue810_case_a f3_b_market_add_control_separate_market_add_price)
+    add_test(NAME test_issue810_case_a_f3_b_market_add_control_market_add_close_bar
+        COMMAND test_issue810_case_a f3_b_market_add_control_market_add_close_bar)
+    add_test(NAME test_issue810_case_a_f3_b_market_add_control_market_add_close_price
+        COMMAND test_issue810_case_a f3_b_market_add_control_market_add_close_price)
+    add_test(NAME test_issue810_case_a_f3_b_market_add_control_base_close_bar
+        COMMAND test_issue810_case_a f3_b_market_add_control_base_close_bar)
+    add_test(NAME test_issue810_case_a_f3_b_market_add_control_base_close_price
+        COMMAND test_issue810_case_a f3_b_market_add_control_base_close_price)
+endif()
+# --- lane issue-810-case-a end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))

@@ -1462,6 +1462,7 @@ private:
         int64_t ordinal = 0;
         // native_calendar::fixed_bucket_ms(script_tf_).
         int64_t bucket_ms = 0;
+        int64_t stamp_lead_ms = 0;
         std::vector<std::pair<int64_t, int64_t>> spans;
     };
     // The certified cycle holding `ms`, or nullptr when it is not certified:
@@ -1473,11 +1474,9 @@ private:
         return certify_cycle(ms);
     }
     const CertifiedCycle* certify_cycle(int64_t ms) const;
-    // The session point present_session_day reads for `ms` on its certified
-    // cycle, into `point`, when the cycle alone decides it: in session in a
-    // span, out of session when the script interval holding `ms` meets none.
-    // false for an interval that reaches a span from outside every span: the
-    // calendar then answers.
+    // The cycle alone answers for points in its spans and for cells wholly
+    // outside them. A cell reaching a span, or a point in the pre-open part
+    // of the next stamp day, defers to the exact calendar lookup.
     bool certified_point(const CertifiedCycle& cycle, int64_t ms, SessionPoint& point) const {
         for (const auto& span : cycle.spans) {
             if (span.first <= ms && ms < span.second) {
@@ -1485,6 +1484,8 @@ private:
                 return true;
             }
         }
+        if (cycle.stamp_lead_ms != 0 && ms >= cycle.next_origin_ms - cycle.stamp_lead_ms)
+            return false;
         if (certified_interval_meets_span(cycle, ms)) return false;
         point = {false, cycle.ordinal};
         return true;
@@ -3165,9 +3166,19 @@ public:
         unsigned char boundary = 0U;
     };
 
+    // What follows an input, as the cursor's holder knows it: the open of the input after the
+    // one at `position`, or 0 when it is not known. A cursor given one tells a fixed-width
+    // aggregator that open, so a bucket no later input falls in ends at a session break while
+    // one that still takes inputs after the break runs on to its own end. Without one the
+    // aggregator is told nothing, as it was before, and waits in both cases.
+    struct After {
+        std::int64_t (*open)(const void* holder, std::size_t position);
+        const void* holder;
+    };
+
     explicit ScriptBucketCursor(const NativeRunSpec&,
         std::shared_ptr<TimeframeAggregator::PeriodSource> source = {},
-        std::int64_t first_ms = 0, std::int64_t last_ms = 0);
+        std::int64_t first_ms = 0, std::int64_t last_ms = 0, After after = {});
     Flags next(const Bar&);
     void reset();
     std::size_t position() const noexcept { return position_; }
@@ -3182,6 +3193,7 @@ private:
     std::shared_ptr<TimeframeAggregator::PeriodSource> source_;
     std::int64_t first_ms_ = 0;
     std::int64_t last_ms_ = 0;
+    After after_{};
     std::size_t position_ = 0;
     Flags last_{};
 };

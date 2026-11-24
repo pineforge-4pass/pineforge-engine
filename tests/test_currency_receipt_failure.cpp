@@ -11,7 +11,8 @@
 namespace {
 enum class Fault {
     size_query, changed_size, no_size, no_nul, invalid_json, missing_field,
-    unresolved_not_array, unresolved_member_not_string, currency_not_string
+    unresolved_not_array, unresolved_member_not_string, currency_not_string,
+    unresolved_declarations_number, unresolved_declarations_missing, unresolved_declarations_array
 };
 
 class ReceiptHost final : public pineforge::source::PineStrategyHost {
@@ -34,6 +35,12 @@ std::string_view payload(Fault fault) {
     if (fault == Fault::currency_not_string)
         return R"({"declarations":{"currency":null},"requests":[],"requirements":{},)"
                R"("unresolved":[],"version":1})";
+    if (fault == Fault::unresolved_declarations_number)
+        return R"({"declarations":42,"requests":[],"requirements":{},"unresolved":["currency"],"version":1})";
+    if (fault == Fault::unresolved_declarations_missing)
+        return R"({"requests":[],"requirements":{},"unresolved":["currency"],"version":1})";
+    if (fault == Fault::unresolved_declarations_array)
+        return R"({"declarations":[],"requests":[],"requirements":{},"unresolved":["currency"],"version":1})";
     return R"({"declarations":{"currency":"currency.NONE"},"unresolved":[],"version":1})";
 }
 
@@ -83,6 +90,9 @@ int main() {
         {Fault::unresolved_not_array, "unresolved is not an array", malformed},
         {Fault::unresolved_member_not_string, "unresolved contains a non-string", malformed},
         {Fault::currency_not_string, "resolved currency is not a string", malformed},
+        {Fault::unresolved_declarations_number, "unresolved currency with numeric declarations", malformed},
+        {Fault::unresolved_declarations_missing, "unresolved currency without declarations", malformed},
+        {Fault::unresolved_declarations_array, "unresolved currency with array declarations", malformed},
     };
     int compared = 0;
     for (const auto& row : rows) {
@@ -104,7 +114,7 @@ int main() {
             expect("FAIL", row.name, "text", result(strategy_get_last_error(handle)), row.error) &&
             expect("FAIL", row.name, "evaluated bars", host.bars, 0)) ++compared;
     }
-    if (compared != 9) return 1;
-    std::cout << "PASS #954: 9 currency receipt refusals\n";
+    if (compared != 12) return 1;
+    std::cout << "PASS: " << compared << " currency receipt refusals\n";
     return 0;
 }

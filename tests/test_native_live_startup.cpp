@@ -504,10 +504,17 @@ void chart_calendar_admission() {
     require_chart_calendar("60", "UTC", start, "0900-1200,1300-1500:23456");
     // A reopen 210 minutes after the first opening is on the 15- and 30-minute
     // grids only, so Tokyo and Hong Kong lunch breaks refuse 45, 60 and 120. The
-    // 120 rows are conservative: the bucket that holds the reopen has already
+    // Tokyo 120 row is conservative: the bucket that holds the reopen has already
     // traded before the break, keeps its nominal label, and the engine would run
     // it. The check refuses it by name at startup, never mid-run, until
     // calendar-aware chart labels ship.
+    // expectation corrected: the reason of the Hong Kong rows, "the reopen is off
+    // the chart grid" -> "the check measures the reopen from the first opening",
+    // because that session's bars are now counted from 09:00 (TradingView's
+    // HKEX:700 charts open 60-minute bars 09:30, 10:00, 11:00, 13:00, 14:00, 15:00
+    // and 240-minute bars 09:30, 13:00). Its 13:00 reopen is a bar open at 60 and
+    // 120 minutes, so those two rows are conservative too; at 45 it is still
+    // inside a bar that opens in the break. The check itself is unchanged.
     for (const auto* timeframe : {"45", "60", "120"}) {
         CHECK(throws_containing([&] { require_chart_calendar(timeframe, "Asia/Tokyo", start, "0900-1130,1230-1500:23456"); },
                                "its bars do not tile the calendar's trading days"));

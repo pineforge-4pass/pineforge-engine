@@ -137,7 +137,7 @@ rather than defaulted.
 | `margin_short` | `NativeMarginModel::initial_short` native_run_spec.hpp:242 | `margin_initial_short` native_c_api.h:2348 | `native_margin_strategy.cpp` | Per side, unlike the one-scalar `initial_margin_fraction` native_run_spec.hpp:666 the model replaces. `maintenance_long` native_run_spec.hpp:243 / `maintenance_short` native_run_spec.hpp:244 add the liquidation half Pine has no word for. |
 | `close_entries_rule` | none — a native close names the lots it closes | — | `native_selected_strategy.cpp` | Pine picks FIFO or ANY for the whole script. A native reduce is explicit instead: `BindOpening` native_order.hpp:467 closes one opening's lots, `BindOpenings` native_order.hpp:513 a chosen set, a bare `Reduce` native_order.hpp:242 the book in FIFO order. The adapter keeps the run-level rule (`close_entries_rule` pine_adapter.hpp:92-106). |
 | `backtest_fill_limits_assumption` | none — a generic limit fills when the level is reached | — | `tests/test_native_order_core.cpp` | TradingView's assumption is "the price must exceed the limit by *n* ticks". The generic knob beside it is `Limit::fill_through` native_order.hpp:261, which makes a limit market-if-touched; the *n*-tick assumption itself is a TradingView rule and stays in the adapter. |
-| `use_bar_magnifier` | `IntrabarPath` native_run_spec.hpp:378 | `intrabar_kind` native_c_api.h:2387 | `tests/test_native_calc_timing.cpp` | The host owns the lower bars, as `lower_tf` native_run_spec.hpp:394 or `synthesized` native_run_spec.hpp:408. The C magnifier arguments of `run_backtest_full` pineforge.h:615 configure a *compiled Pine strategy*, never a native host; its lower bars are TradingView's own intrabars, built from the finer feed at TradingView's table's timeframe (2 minutes on a 15-minute chart) and owned by the chart bar holding their last minute (`tradingview_magnifier_bars` magnifier_intrabars.hpp:46, @ref magnifier_intrabars). |
+| `use_bar_magnifier` | `IntrabarPath` native_run_spec.hpp:378 | `intrabar_kind` native_c_api.h:2387 | `tests/test_native_calc_timing.cpp` | The host owns the lower bars, as `lower_tf` native_run_spec.hpp:394 or `synthesized` native_run_spec.hpp:408. The C magnifier arguments of `run_backtest_full` pineforge.h:615 configure a *compiled Pine strategy*, never a native host; its lower bars are TradingView's own intrabars, built from the finer feed at TradingView's table's timeframe (2 minutes on a 15-minute chart) and owned by the chart bar holding their last minute (`tradingview_magnifier_bars` magnifier_intrabars.hpp:48, @ref magnifier_intrabars). |
 | `fill_orders_on_standard_ohlc` | none — the kernel matches the bars you feed it | — | — | TradingView's switch exists because a Heikin-Ashi chart's candles are not the traded prices. A native host feeds the standard OHLC it wants matched, and derives any transformed series itself. |
 | `max_bars_back` | none — a native host owns its own history | — | `hello_kernel.cpp` | Pine infers a buffer length for every series. `pineforge::Series<T>` series.hpp:474 is a fixed-capacity ring you size yourself, so nothing is inferred and nothing silently truncates. |
 | `risk_free_rate` | none — the ratio is a report field with TradingView's fixed rate | `sharpe_monthly` pineforge.h:290 | `native_sized_report_strategy.cpp` | `pf_metrics_t::equity.sharpe_monthly` and `pf_metrics_t::equity.sortino_monthly` (`sortino_monthly` pineforge.h:296) use a fixed 2 %/yr, the TradingView default; nothing in the kernel takes a declared rate. In v0.13.1, the last 0.x release, they were spelled `sharpe_tv` / `sortino_tv`; v1.0.0 renames them at the same offsets, and the serialized report keys stay `sharpe_tv` / `sortino_tv`. A host that needs another rate computes it from `pf_report_t::equity_curve`. |
@@ -715,7 +715,10 @@ it, so a valid length gives that class's values. The adapters do not touch
 
 `pineforge::source::SeriesSma` (include/pineforge/source/pine_ta_length.hpp:524)
 provides an SMA with a length supplied on every evaluation in the Pine source
-adapter. The paired code generator uses it for series-length `ta.sma`. Keep
+adapter. The paired code generator uses it for series-length `ta.sma`. For
+finite inputs without intermediate overflow, fixed-length `ta.sma` follows
+TradingView's running sum and series-length `ta.sma` sums the window exactly
+before division, so the same window can round to different averages. Keep
 one instance per written call site and evaluation context. Its public signatures are below.
 
 ```cpp
@@ -734,7 +737,7 @@ Transport numeric Pine operands through the existing `ta_number` overloads
 for `double`, `int` and `std::int64_t`, so integer `na` sentinels reach the
 adapter as a double NaN.
 
-`compute` (src/source/pine_ta_length.cpp:558) makes one logical update per call,
+`compute` (src/source/pine_ta_length.cpp:563) makes one logical update per call,
 starting at the site's first execution. A non-`na` source appends one retained
 observation; an `na` source contributes no sample. Each call uses its current
 length to select the last N non-`na` observations and returns `na` while fewer
@@ -756,7 +759,7 @@ selects 15,000 unless a cap was supplied; `--limit-ta-lookback 0` selects
 unlimited. Invalid calls leave the logical checkpoint unchanged.
 For a valid length, warm-up returns `na` until N non-`na` samples are retained.
 
-`recompute` (src/source/pine_ta_length.cpp:581) replaces the most recent logical
+`recompute` (src/source/pine_ta_length.cpp:586) replaces the most recent logical
 update from its pre-update ring head/count, including the oldest value evicted
 by a full-ring push. Replacing a value with `na` restores that evicted value;
 replacing `na` with a value inserts one observation, evicting the oldest if

@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_indivisible_hour_completion)
+pineforge_add_unit_test(test_indivisible_hour_completion)

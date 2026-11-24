@@ -176,6 +176,11 @@ public:
         return retained_.input_tf.empty() || retained_.script_tf.empty()
             || retained_.input_tf == retained_.script_tf;
     }
+    // The open of the retained input after the one at `position`, for a script-bucket cursor
+    // this scheduler made (`scheduler` is the scheduler itself): 0 where a stream's warmup ends,
+    // because its next bar is not known yet, and the largest instant where a batch ends,
+    // because nothing follows it.
+    static std::int64_t retained_open_after(const void* scheduler, std::size_t position) noexcept;
     // The open of the script bar published last, before the run's first none.
     std::optional<std::int64_t> last_published_script_open() const noexcept {
         if (last_published_script_open_ms_ == std::numeric_limits<std::int64_t>::min())

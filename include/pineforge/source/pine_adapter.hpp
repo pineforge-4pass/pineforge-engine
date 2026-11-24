@@ -2240,9 +2240,13 @@ private:
         // entry order was working, which TradingView voids
         // (PlacementSnapshot::void_global_issue): no entry's fill arms it.
         bool void_global = false;
-        // A queue slot reserved for the definition; zero when it holds none,
-        // and the parent's fill then ranks its legs as they are submitted.
+        // A queue slot reserved for the definition; zero while it holds none,
+        // and the parent's fill then ranks its legs as they are submitted. A
+        // partial percentage definition that names no quantity gets its slot
+        // when a later exit of the same entry, neither void nor made at the
+        // fill, is sized: it then holds a share and ranks those legs.
         std::uint64_t reservation_sequence = 0;
+        bool has_ranked_share(const SourceId& entry) const;
     };
 
     // One relative leg of a queued strategy.exit, spelled as the
@@ -2394,7 +2398,8 @@ private:
                                   double percentage_basis,
                                   double& reserved_qty,
                                   std::uint64_t& reservation_sequence,
-                                  bool whole_position_percent = false) const;
+                                  bool whole_position_percent,
+                                  double pending_market_units) const;
     void reconcile_deferred_exit_reservations(const SourceId& from_entry,
                                                double live_basis);
     void reconcile_exit_reservations_after_margin();
@@ -2616,8 +2621,9 @@ private:
     void retire_in_position_exits_at_flat(bool preserve_pending_parents,
                                           bool dormant_rows_only,
                                           const PlacementSnapshot* paired_close);
-    void materialize_relative_exits(PlacementSnapshot,
-                                   const native_order::ExecutionAppliedEvent&);
+    // The consumed definitions identify which legs acquired units at this fill.
+    std::vector<PendingRelativeExit> materialize_relative_exits(
+        PlacementSnapshot, const native_order::ExecutionAppliedEvent&);
     void withdraw_anchored_relative_legs(const SourceId* exit_id,
                                          const SourceId* from_entry);
     void withdraw_anchored_relative_readers(const detail::ScratchByteSource* exit_id,

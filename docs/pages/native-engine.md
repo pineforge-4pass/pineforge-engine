@@ -1518,7 +1518,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:19539-19579`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:19636-19676`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
@@ -2596,7 +2596,7 @@ TradingView-calibrated, and a host that supplies them inherits its rules:
   and an intraday series lays that day's grid from the stamp: NSE's Muhurat
   session of 2025-10-21 opens 13:45 IST, so its `"60"` bucket is one bar
   stamped 13:45, not 13:15 and 14:15 from the 09:15 day stamp. Every other
-  day keeps the day-stamp grid.
+  day keeps the symbol's usual intraday grid.
 - The installed **daily** bars also date the run's own `"D"` script bars when
   an intraday input aggregates into them: each stamp labels the bar holding
   the session instant it covers (the stamp inside a session, else the next
@@ -4593,9 +4593,9 @@ type itself lives in the adapter (`IntradayCap` `intraday_cap.hpp:84`).
 
 Nor is there a build-level one. The two source sets are disjoint:
 `PINEFORGE_SOURCE_LAYER_SOURCES` (`CMakeLists.txt:92`) holds all six
-`src/compat/pine/` units and all fourteen `src/source/` ones, and
+`src/compat/pine/` units and all sixteen `src/source/` ones, and
 `PINEFORGE_KERNEL_SOURCES` (`CMakeLists.txt:119`) holds the kernel's own
-forty-five, which are what `add_library` (`CMakeLists.txt:187`) compiles into
+sixty-six, which are what `add_library` (`CMakeLists.txt:186`) compiles into
 `pineforge_kernel`. `libpineforge.a` still carries both sets when
 `PINEFORGE_BUILD_SOURCE_LAYER` is ON, which is the default; the kernel archive
 exists either way. The installed-header closure is clean too, which the

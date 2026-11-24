@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_calendar_day_open_ms)
+pineforge_add_unit_test(test_calendar_day_open_ms)

@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <ctime>
 #include <string>
@@ -43,6 +44,11 @@ constexpr int64_t kCivilSpan = int64_t{1} << 40;
 
 bool in_civil_span(int64_t secs) {
     return secs > -kCivilSpan && secs < kCivilSpan;
+}
+
+int64_t floor_div(int64_t a, int64_t b) {
+    const int64_t q = a / b;
+    return (a % b != 0 && (a < 0) != (b < 0)) ? q - 1 : q;
 }
 
 // gmtime_r's nine ISO fields of `secs` (in_civil_span only): the date is
@@ -368,6 +374,15 @@ int local_weekofyear(int64_t bar_ms, const std::string& tz) {
     return (t.tm_yday + 7 - ((t.tm_wday + 6) % 7)) / 7;
 }
 
+static int64_t calendar_boundary_ms_from_seconds(int64_t seconds) {
+    if (seconds < std::numeric_limits<int64_t>::min() / 1000
+        || seconds > std::numeric_limits<int64_t>::max() / 1000) {
+        throw coded<std::system_error>(RunFailureCode::engine_unclassified_error, {},
+            std::system_error(EOVERFLOW, std::generic_category(), "calendar boundary in milliseconds"));
+    }
+    return seconds * 1000;
+}
+
 // Under the caller's ScopedTimezone. Preserve libc's normalization and the
 // input DST hint. Only a conversion error calls for a later hour.
 static int64_t zoned_calendar_boundary_ms(const std::tm& date, int retry_hours = 0) {
@@ -381,7 +396,7 @@ static int64_t zoned_calendar_boundary_ms(const std::tm& date, int retry_hours =
         const time_t seconds = std::mktime(&fields);
         const int error = errno;
         if (seconds != static_cast<time_t>(-1) || error == 0)
-            return static_cast<int64_t>(seconds) * 1000;
+            return calendar_boundary_ms_from_seconds(seconds);
         if (hour == retry_hours)
             throw coded<std::system_error>(RunFailureCode::engine_unclassified_error, {},
                 std::system_error(error, std::generic_category(), "mktime"));
@@ -395,15 +410,15 @@ int64_t calendar_day_open_local_ms(int64_t bar_ms, const std::string& tz) {
     // ScopedTimezone(UTC) here keeps the process TZ from flipping to UTC every
     // bar (which would re-slow the strategy's hour()/minute() zone).
     if (utc_zone(tz)) {
-        time_t secs = static_cast<time_t>(bar_ms / 1000);
-        return static_cast<int64_t>((secs / 86400) * 86400) * 1000;
+        const int64_t day = floor_div(bar_ms, kMsPerDay);
+        return calendar_boundary_ms_from_seconds(day * kSecPerDay);
     }
     return calendar_day_open_local_ms_tz(bar_ms, tz);
 }
 
 static int64_t calendar_day_open_local_ms_tz(int64_t bar_ms, const std::string& tz) {
     tz_util::ScopedTimezone guard(tz);
-    time_t secs = static_cast<time_t>(bar_ms / 1000);
+    const time_t secs = static_cast<time_t>(floor_div(bar_ms, 1000));
     struct tm local_tm {};
     localtime_r(&secs, &local_tm);
     return zoned_calendar_boundary_ms(local_tm, /*retry_hours=*/2);
@@ -856,11 +871,6 @@ bool read_arg_session(const std::string& session, ArgSession& out) {
         out.windows.push_back({sm, length, em <= sm && em > 0 ? -1 : 0});
     }
     return !out.windows.empty();
-}
-
-int64_t floor_div(int64_t a, int64_t b) {
-    const int64_t q = a / b;
-    return (a % b != 0 && (a < 0) != (b < 0)) ? q - 1 : q;
 }
 
 // The epoch instant of a wall-clock minute in `tz` (days since 1970-01-01 *

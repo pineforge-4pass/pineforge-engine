@@ -9285,6 +9285,7 @@ NativeExecutionConsumer::certify_cycle(int64_t ms) const {
             kept.spans.assign(certificate->spans.begin(), certificate->spans.end());
             kept.ordinal = certificate->ordinal;
             kept.bucket_ms = native_calendar::fixed_bucket_ms(script_tf_);
+            kept.stamp_lead_ms = certificate->stamp_lead_ms;
             kept.origin_ms = certificate->origin_ms;
             kept.next_origin_ms = certificate->next_origin_ms;
             kept.certified = true;
@@ -9302,20 +9303,19 @@ NativeExecutionConsumer::certify_cycle(int64_t ms) const {
 }
 
 // Whether the script interval holding the out-of-session instant `ms` meets
-// a span of its certified cycle: the day's bucket holding `ms`, then
-// first_overlap_open's test. interval_containing answers nothing for a
-// timeframe that is not valid or a bucket past the last representable
-// instant, and `ms` is then read at itself, out of session.
+// a span of its certified trading cycle. The caller resolves the next stamp
+// day exactly. Invalid and overflowing fixed buckets meet no span.
 bool NativeExecutionConsumer::certified_interval_meets_span(const CertifiedCycle& cycle,
                                                             int64_t ms) const {
     const int64_t bucket = cycle.bucket_ms;
     if (bucket <= 0 || !input_tf_.valid()) return false;
-    const int64_t open = cycle.origin_ms + ((ms - cycle.origin_ms) / bucket) * bucket;
+    const int64_t stamp = cycle.origin_ms - cycle.stamp_lead_ms;
+    const int64_t open = stamp + ((ms - stamp) / bucket) * bucket;
     if (open > std::numeric_limits<int64_t>::max() - bucket) return false;
-    const int64_t raw_end = open + bucket;
-    for (const auto& span : cycle.spans) {
-        if (std::max(open, span.first) < std::min(raw_end, span.second)) return true;
-    }
+    const int64_t end = cycle.stamp_lead_ms == 0 ? open + bucket
+        : std::min(open + bucket, cycle.next_origin_ms - cycle.stamp_lead_ms);
+    for (const auto& span : cycle.spans)
+        if (std::max(open, span.first) < std::min(end, span.second)) return true;
     return false;
 }
 
@@ -15083,19 +15083,19 @@ void NativeExecutionConsumer::set_script_period_source(
 
 ScriptBucketCursor::ScriptBucketCursor(const NativeRunSpec& spec,
         std::shared_ptr<TimeframeAggregator::PeriodSource> source,
-        std::int64_t first_ms, std::int64_t last_ms)
+        std::int64_t first_ms, std::int64_t last_ms, After after)
     : script_tf_(spec.script_tf), input_tf_(spec.input_tf), timezone_(spec.timezone),
       session_(spec.session), aggregator_(script_tf_, input_tf_, timezone_, session_),
-      source_(std::move(source)), first_ms_(first_ms), last_ms_(last_ms) {
+      source_(std::move(source)), first_ms_(first_ms), last_ms_(last_ms), after_(after) {
     if (source_) aggregator_.set_native_period_source(source_);
 }
 
 ScriptBucketCursor::Flags ScriptBucketCursor::next(const Bar& bar) {
-    // With a generated partition, use its next-period comparison rather
-    // than the nominal one-day close projection of a DAY aggregator.
-    const auto next_ms = source_
-        ? bar.timestamp + static_cast<std::int64_t>(tf_to_seconds(input_tf_)) * 1000
-        : 0;
+    // A generated partition compares its next period; a cursor told what follows passes that open.
+    const bool told = !source_ && after_.open && aggregator_.supports_fixed_completion();
+    if (told) aggregator_.set_early_close_completes(false);  // its other next-input rules stay off
+    const auto next_ms = told ? after_.open(after_.holder, position_) : !source_ ? 0
+        : bar.timestamp + static_cast<std::int64_t>(tf_to_seconds(input_tf_)) * 1000;
     const AggregatedBar aggregate = aggregator_.feed(bar, next_ms);
     last_.complete = aggregate.is_complete ? 1U : 0U;
     last_.boundary = aggregate.is_complete

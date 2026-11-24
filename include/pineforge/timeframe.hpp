@@ -104,15 +104,15 @@ inline bool tf_is_daily_or_higher(const std::string& tf) {
 /// Check if two timestamps (Unix milliseconds) fall in different calendar periods.
 bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period);
 
-/// Timezone/session-aware variants. The tz-less forms above evaluate the
-/// calendar in UTC and intraday buckets from each UTC midnight. Session symbols
-/// (equities RTH, forex) anchor HTF buckets on the exchange clock instead:
-/// daily boundaries at symbol-local midnight, intraday buckets offset by the
-/// symbol's day stamp -- the session open, except OANDA's 1800-1700 metals
-/// session whose day (and TradingView's "45"/"240" grid) rolls at the 17:00
-/// ET forex roll one hour before it opens (session_day_stamp_offset_minutes
-/// in timeframe.cpp cites the pin). With tz="UTC" and session ""/"24x7"
-/// these use the same UTC daily grid as the tz-less forms.
+/// Timezone/session-aware variants. The tz-less forms above evaluate the calendar in UTC and
+/// intraday buckets from each UTC midnight. Session symbols (equities RTH, forex) anchor HTF
+/// buckets on the exchange clock instead: daily boundaries at symbol-local midnight, intraday
+/// buckets offset by the symbol's day stamp -- the session open, except OANDA's 1800-1700
+/// metals session whose day (and TradingView's "45"/"240" grid) rolls at the 17:00 ET forex
+/// roll one hour before it opens (session_day_stamp_offset_minutes in timeframe.cpp cites the
+/// pin). One session's grid leads its stamp: "0930-1200,1300-1600" counts its buckets from
+/// 09:00 and opens the day's first at 09:30 (session_grid_lead_ms in timeframe.cpp cites it).
+/// With tz="UTC" and session ""/"24x7" these use the same UTC daily grid as the tz-less forms.
 bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period,
                       const std::string& tz, const std::string& session);
 bool tf_change(int64_t prev_ms, int64_t curr_ms, const std::string& tf,
@@ -172,8 +172,8 @@ int64_t session_period_open_ms(int64_t ms, const std::string& tz,
 /// time("60") on NYSE:F is 09:30 / 10:30 / .. / 15:30 ET, time("240") on
 /// NSE:NIFTY 09:15 / 13:15 IST, on OANDA:XAUUSD 17:00 ET + 4h*k). With
 /// tz="UTC" and session ""/"24x7" the declared origin is UTC midnight;
-/// widths dividing 24h also equal the continuous epoch grid.
-/// bucket_sec <= 0 returns `ms`. Under the calling
+/// widths dividing 24h also equal the continuous epoch grid. On "0930-1200,1300-1600" buckets
+/// count from 09:00, the first opening at 09:30. bucket_sec <= 0 returns `ms`. Under the calling
 /// thread's native daily partition for this clock (below), a session-day
 /// that opened late -- NativeDayPartition::late_opens -- starts its grid at
 /// its own open instead of the day stamp, as tf_change's intraday form does.
@@ -387,10 +387,12 @@ public:
     /// Thursday 15:45 bar before a holiday Friday, the 15:45 CT bar closing
     /// an overnight CME session-day (lab tv wm-security-buckets tapes,
     /// 2026-09-05). CALENDAR mode therefore also completes the running
-    /// bucket when the next input bar opens a new period. RATIO and
-    /// PASSTHROUGH ignore the hint, and so do ""/"24x7" sessions (a data
-    /// hole before a 24x7 midnight is not an early close), so every caller
-    /// passing 0 and every session-less feed stay bit-identical. The rule
+    /// bucket when the next input bar opens a new period. A fixed intraday
+    /// bucket can also close early on the last input of a session-day, and at
+    /// a session break if it ends at or before the reopen or its known
+    /// successor is at or beyond its end; otherwise it can still take input
+    /// after the break. PASSTHROUGH ignores the successor. 0 is unknown on
+    /// either side of the Unix epoch. The exchange early-close rule
     /// applies where TradingView's session template knows the early close
     /// -- exchange calendars; set_early_close_completes(false) switches a
     /// symbol whose template does not (OANDA's cfd / forex streams) back to
@@ -403,9 +405,10 @@ public:
     /// the chart bar this input bar belongs to -- the input bar's own end
     /// on a single-feed run, the native D/W/M chart bar's session close on
     /// the split-feed path, where a finer auxiliary slice advances
-    /// request.security. Read only by the OTC rule
-    /// (set_early_close_completes(false)): TradingView surfaces a D/W/M
-    /// value on the chart bar whose time_close reaches the period's
+    /// request.security. A fixed bucket can close on its last input when
+    /// this close reaches the bucket end and the successor leaves the bucket.
+    /// For the OTC rule (set_early_close_completes(false)), TradingView
+    /// surfaces a D/W/M value on the chart bar whose time_close reaches the period's
     /// nominal close, and the daily bar of an early-close day keeps its
     /// nominal time_close -- on the OANDA:XAUUSD 1D chart a Friday
     /// daily bar whose feed ends early still closes at 17:00 ET, so

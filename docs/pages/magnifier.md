@@ -51,7 +51,7 @@ strategy_set_magnifier_volume_weighted(s, 1);
 When the input feed is finer than the script timeframe, a compiled Pine
 strategy's magnifier does not walk the input bars: it walks the intrabars
 TradingView's bar magnifier walks, which the Pine host builds from the input
-(`tradingview_magnifier_bars` magnifier_intrabars.hpp:46). TradingView's help
+(`tradingview_magnifier_bars` magnifier_intrabars.hpp:48). TradingView's help
 centre ("What is bar magnifier backtesting mode") fixes the intrabar timeframe
 per chart timeframe, each row covering the charts from it up to the next row
 (`tradingview_intrabar_timeframe` magnifier_intrabars.hpp:21):
@@ -71,9 +71,12 @@ per chart timeframe, each row covering the charts from it up to the next row
 
 Passing the intrabar timeframe itself as input is refused when it does not divide the chart timeframe (2 minutes for a 15-minute chart), so pass 1-minute input to build those intrabars.
 
-Each intrabar is the symbol's regular bar of that timeframe — anchored at the
-session day's open (00:00 UTC on a 24x7 symbol, 09:15 on NSE, 09:30 on NYSE)
-and cut at the session's close — and belongs to the chart bar that holds its
+Each intrabar is the symbol's regular bar of that timeframe. Fixed intrabars count
+from the session open on a 24x7 UTC symbol (00:00), NSE (09:15) and NYSE (09:30).
+On `0930-1200,1300-1600` they count from 09:00, with the first bar opening at 09:30.
+On `1800-1700` they count from 17:00: the first 4-hour cell holds the traded
+minutes from 18:00 through 20:59. Each intrabar is cut at the session close
+and belongs to the chart bar that holds its
 **last** minute. On a 15-minute chart the 2-minute intrabar from 10:14 to 10:16
 belongs to the 10:15 bar, so a chart bar's path is its own open, the intrabars
 it owns (each an open, its nearer extreme, its other extreme, its close), then

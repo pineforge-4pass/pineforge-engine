@@ -55,10 +55,10 @@ static bool compiled_account_uses_quote(BacktestEngine& host, const std::string&
         if (field.kind != live::Json::Kind::String) refuse_currency_receipt(invalid);
         if (field.value == "currency") currency_unresolved = true;
     }
-    if (currency_unresolved) return false;
     const auto* declarations = document.find("declarations");
     if (!declarations || declarations->kind != live::Json::Kind::Object)
         refuse_currency_receipt(invalid);
+    if (currency_unresolved) return false;
     const auto* currency = declarations->find("currency");
     if (!currency || currency->kind != live::Json::Kind::String)
         refuse_currency_receipt(invalid);

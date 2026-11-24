@@ -2,6 +2,7 @@
 #include <pineforge/session_time.hpp>
 #include <pineforge/native_calendar.hpp>
 #include <pineforge/run_failure.hpp>
+#include "session_grid_policy.hpp"
 #include "runtime_ambient.hpp"
 #include <cctype>
 #include <ctime>
@@ -15,7 +16,6 @@
 #include <limits>
 #include "timezone.hpp"
 namespace pineforge {
-
 // ─── Auto-detect timeframe from bar timestamps ────────────────────────────────
 
 std::string detect_timeframe(const Bar* bars, int n, int max_samples) {
@@ -273,9 +273,9 @@ static int first_window_length_minutes(const std::string& session);
 static int session_length_minutes(const std::string& session);
 static int64_t floor_div_day(int64_t ms);
 
-/// Minutes from symbol-local midnight to the symbol's DAY STAMP: the instant
-/// its daily bar starts, which is where TradingView anchors the intraday HTF
-/// grid ("45", "240", ...) and where the session-day ordinal below rolls.
+/// Minutes from symbol-local midnight to the symbol's DAY STAMP: the instant its daily bar
+/// starts, which is where TradingView anchors the intraday HTF grid ("45", "240", ...) and
+/// where the session-day ordinal below rolls (one session's grid leads it: session_grid_lead_ms).
 /// For every declared session that is the session open -- 09:30 ET on NYSE
 /// RTH, 09:15 IST on NSE, 17:00 CT on CME 1700-1600, 17:00 ET on OANDA forex
 /// 1700-1700, midnight on 24x7 -- with ONE exception the engine has to know
@@ -305,11 +305,11 @@ static int64_t floor_div_day(int64_t ms);
 /// with breaks is not that session.
 static int session_day_stamp_offset_minutes(const std::string& session) {
     const int open = session_open_offset_minutes(session);
-    if (open == 18 * 60
-        && (open + first_window_length_minutes(session)) % 1440 == 17 * 60) {
-        return 17 * 60;
-    }
-    return open;
+    if (open != session_grid_policy::metals_open_minutes) return open;
+
+    // Keep the legacy first-window parser, even for noncanonical spellings.
+    return open - session_grid_policy::stamp_lead_minutes(
+        open, (open + first_window_length_minutes(session)) % 1440);
 }
 
 /// Session clock: exchange-tz milliseconds since (local-midnight + the
@@ -327,8 +327,8 @@ namespace {
 
 /// The chart symbol's late day opens (NativeDayPartition::late_opens) when
 /// the calling thread's partition keys this clock; nullptr otherwise.
-const std::vector<int64_t>* chart_late_day_opens(const std::string& tz,
-                                                 const std::string& session);
+const std::vector<int64_t>* chart_late_day_opens(const std::string& tz, const std::string& session);
+int64_t session_grid_lead_ms(const std::string& session);  // a recorded lead; defined last
 
 struct IntradayBucketKey {
     int64_t session_day;
@@ -356,11 +356,11 @@ struct IntradayBucket {
 ///
 /// A declared late open owns bucket zero, including any earlier inputs in
 /// that session-day. Its end is origin + width, capped at the session end.
-/// The ONE exception to origin-anchored opens is that bucket's observed
-/// prefix: its first actual input stamp is supplied by the aggregator,
-/// never recovered from a relabeled bar or inferred here. Stamp-only
-/// readers supply their query as point context for the prefix open; that
-/// query may be a grid label and is NOT claimed to be a raw first input.
+/// The exceptions to origin-anchored opens: under a recorded lead (session_grid_lead_ms) the day's
+/// first bucket opens at the day stamp, after its grid cell; and that late-open bucket's observed
+/// prefix, whose first actual input stamp is supplied by the aggregator, never recovered from a
+/// relabeled bar or inferred here. Stamp-only readers supply their query as point context for the
+/// prefix open; that query may be a grid label and is NOT claimed to be a raw first input.
 ///
 /// EXPECTATION: engine behaviour, not a TradingView measurement. Previously
 /// a 13:30 prefix under a 13:45 late open had bounds 13:15/14:15, versus
@@ -383,7 +383,7 @@ IntradayBucket intraday_bucket(int64_t ms, int64_t bucket_sec,
     const int64_t day_end = day_start + std::min(
         kMsPerDay, static_cast<int64_t>(session_open_offset_minutes(session)
                                      - stamp_minutes + session_length_minutes(session)) * 60000);
-    int64_t origin = day_start;
+    int64_t origin = day_start - session_grid_lead_ms(session);  // a recorded lead, else 0
     if (late_opens != nullptr) {
         // Include the declared open even when the query precedes it: every
         // prefix input and every post-open member must use the same key/end.
@@ -391,7 +391,7 @@ IntradayBucket intraday_bucket(int64_t ms, int64_t bucket_sec,
         if (it != late_opens->end() && *it < day_end) origin = *it;
     }
     const int64_t ordinal = ms < origin ? 0 : (ms - origin) / bucket_ms;
-    const int64_t grid_open = origin + ordinal * bucket_ms;
+    const int64_t grid_open = std::max(origin + ordinal * bucket_ms, day_start);
     // Validate the caller's prefix-open context; do not infer a first input.
     // A query outside the retained observation's day/bucket has only its
     // own point context, just as a stamp-only caller does.
@@ -399,7 +399,7 @@ IntradayBucket intraday_bucket(int64_t ms, int64_t bucket_sec,
         && prefix_open_ms >= day_start && prefix_open_ms < origin
         && prefix_open_ms <= ms;
     const int64_t actual_open = observed_prefix ? prefix_open_ms : std::min(ms, grid_open);
-    const int64_t capped_end = std::min(grid_open + bucket_ms, day_end);
+    const int64_t capped_end = std::min(origin + (ordinal + 1) * bucket_ms, day_end);
     // The session-end cap applies to valid session members. An out-of-session
     // point whose open is past that cap is clamped to empty, not negative length.
     return {{day, ordinal}, actual_open, std::max(actual_open, capped_end)};
@@ -1048,16 +1048,17 @@ int64_t session_period_last_traded_close_ms(int64_t ms, const std::string& tz,
     return session_day_close_real_ms(last, tz, session);
 }
 
-/// Exclusive close (real epoch ms) of the session WINDOW that holds `ms`,
-/// where an intraday bucket is clipped: the session-day's close
-/// (session_period_last_traded_close_ms, DAY) for a session without breaks
-/// and for the day's last window; the break that ends an earlier window
-/// otherwise -- 11:30 for a 10:45 bar of 0900-1130,1230-1500, and 15:00 for
-/// its 12:45 bar, not the 11:30 that closed its first window. A bar inside a
-/// break reads the break it follows, as a bar after the day's close reads
-/// that close.
+/// Exclusive close (real epoch ms) of the session WINDOW that holds `ms`, where an intraday bucket
+/// that ends at `bucket_end_ms` is clipped: the session-day's close for a session without breaks
+/// and for the day's last window; the break that ends an earlier window otherwise -- 11:30 for a
+/// 10:45 bar of 0900-1130,1230-1500, and 15:00 for its 12:45 bar. A break the bucket trades past
+/// does not clip it: in that session's "240" 09:00 bucket, which ends at 13:00, the 10:45 bar
+/// reads 15:00 as well. If a known successor is at or beyond the bucket's end, no further input
+/// can join it, so every break ahead clips it. A bar inside a break reads the break it
+/// follows, as a bar after the day's close reads that close.
 static int64_t session_window_close_ms(int64_t ms, const std::string& tz,
-                                       const std::string& session) {
+                                       const std::string& session, int64_t bucket_end_ms,
+                                       std::optional<int64_t> next_input_ms) {
     const int64_t day_close =
         session_period_last_traded_close_ms(ms, tz, session, CalendarPeriod::DAY);
     SessionDaySchedule breaks;
@@ -1065,11 +1066,12 @@ static int64_t session_window_close_ms(int64_t ms, const std::string& tz,
     const int64_t origin =
         session_day_open_nominal_ms(session_day_index_nominal(ms, tz, session), session);
     const int64_t at = calendar_clock_ms(ms, tz) - origin;
+    const bool last_input = next_input_ms && *next_input_ms >= bucket_end_ms;
     for (int i = 0; i + 1 < breaks.count; ++i) {
-        if (at < static_cast<int64_t>(breaks.opens()[i + 1]) * 60000) {
+        const int64_t reopen = origin + static_cast<int64_t>(breaks.opens()[i + 1]) * 60000;
+        if (at < reopen - origin && (nominal_to_real_ms(reopen, tz) >= bucket_end_ms || last_input))
             return nominal_to_real_ms(
                 origin + static_cast<int64_t>(breaks.closes()[i]) * 60000, tz);
-        }
     }
     return day_close;
 }
@@ -1266,9 +1268,15 @@ void TimeframeAggregator::observe_fixed(
     ++clock.observed_count;
 }
 
+// 0 is no successor, on either side of the Unix epoch.
+static std::optional<int64_t> known_successor(int64_t ms) {
+    return ms == 0 ? std::nullopt : std::optional<int64_t>{ms};
+}
+
 std::optional<AggregatedBar> TimeframeAggregator::next_fixed_completion(
         FixedPeriodClock& clock, int64_t horizon_ms,
-        int64_t input_ms, int64_t next_input_ms) const {
+        int64_t input_ms, int64_t next_input) const {
+    const auto next_input_ms = known_successor(next_input);
     if (!supports_fixed_completion() || !clock.cursor_ms) return std::nullopt;
     while (*clock.cursor_ms < horizon_ms) {
         const auto cursor = *clock.cursor_ms;
@@ -1295,13 +1303,13 @@ std::optional<AggregatedBar> TimeframeAggregator::next_fixed_completion(
                 continue;
             }
         }
-        const auto prefix = clock.observed_count > 0
-            ? clock.observed.timestamp : cursor;
+        const auto prefix = clock.observed_count > 0 ? clock.observed.timestamp : cursor;
         const auto bucket = intraday_bucket(cursor, target_seconds_,
             anchor_tz_, anchor_session_, &native_late_opens_, prefix);
         auto close = bucket.end_ms;
         if (target_seconds_ < kSecPerDay && has_trading_session(anchor_session_))
-            close = std::min(close, session_window_close_ms(cursor, anchor_tz_, anchor_session_));
+            close = std::min(close, session_window_close_ms(cursor, anchor_tz_, anchor_session_,
+                                                           close, next_input_ms));
         if (close <= cursor) return std::nullopt;
         if (close > horizon_ms) {
             // Exchange early close: feed_ratio_mode's rule for a merged bucket
@@ -1317,10 +1325,10 @@ std::optional<AggregatedBar> TimeframeAggregator::next_fixed_completion(
             const bool session_final = clock.observed_count > 0
                 && early_close_completes_ && target_seconds_ < kSecPerDay
                 && has_trading_session(anchor_session_)
-                && input_ms < horizon_ms && next_input_ms > input_ms
+                && input_ms < horizon_ms && next_input_ms && *next_input_ms > input_ms
                 && !(intraday_bucket(input_ms, target_seconds_, anchor_tz_, anchor_session_,
                                      &native_late_opens_, prefix).key != bucket.key)
-                && crosses_boundary(input_ms, next_input_ms, CalendarPeriod::DAY,
+                && crosses_boundary(input_ms, *next_input_ms, CalendarPeriod::DAY,
                                     anchor_tz_, anchor_session_);
             if (!session_final) return std::nullopt;
         }
@@ -1420,7 +1428,7 @@ AggregatedBar feed_passthrough_mode(const Bar& input_bar, FeedState s) {
 AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
                                int ratio, int64_t target_seconds,
                                int64_t input_seconds,
-                               int64_t next_input_ms,
+                               std::optional<int64_t> next_input_ms,
                                int64_t calling_close_ms) {
     AggregatedBar result;
     if (target_seconds > 0 && s.sub_bar_count > 0) {
@@ -1434,6 +1442,7 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
         const IntradayBucket input_bucket = intraday_bucket(
             input_bar.timestamp, target_seconds, atz, asess, s.late_opens, s.observed_first_ms);
         const bool boundary = input_bucket.key != current_bucket.key;
+        const bool has_later_input = next_input_ms && *next_input_ms > input_bar.timestamp;
 
         if (boundary) {
             if (s.current_emitted_complete) {
@@ -1456,8 +1465,8 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
                     const int64_t next_ms =
                         input_bar.timestamp + input_seconds * 1000;
                     singleton_session_final =
-                        next_ms >= session_window_close_ms(
-                            input_bar.timestamp, atz, asess);
+                        next_ms >= session_window_close_ms(input_bar.timestamp, atz, asess,
+                            input_bucket.end_ms, next_input_ms);
                     // Early close (round 8, family U): the session's last
                     // chart bar can also be the FIRST bar of the bucket it
                     // leaves open -- the 12:00 CT bar of a 12:15 CT
@@ -1472,9 +1481,9 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
                     // bar opening a later session-day (early_close_completes,
                     // family P); apply the same rule to the singleton.
                     if (!singleton_session_final
-                        && next_input_ms > input_bar.timestamp
+                        && has_later_input
                         && (!s.agg || s.agg->early_close_completes())
-                        && crosses_boundary(input_bar.timestamp, next_input_ms,
+                        && crosses_boundary(input_bar.timestamp, *next_input_ms,
                                             CalendarPeriod::DAY, atz, asess)) {
                         singleton_session_final = true;
                     }
@@ -1509,9 +1518,9 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
         // bucket the count is never matched again.
         bool complete = false;
         if (!s.current_emitted_complete) {
-            // A folded prefix can make bucket zero longer than one width.
-            // Its ordinary count shortcut must not finalize it before its end.
-            complete = (s.sub_bar_count == ratio
+            // Count proves completion only for an exact ratio and a bucket
+            // no wider than usual (a folded prefix can extend bucket zero).
+            complete = (s.sub_bar_count == ratio && ratio * input_seconds == target_seconds
                 && input_bucket.end_ms - input_bucket.open_ms <= target_seconds * 1000);
             // Real-end completion (finding 467): TradingView finalizes an
             // intraday HTF bucket on the chart bar whose close reaches the
@@ -1543,12 +1552,12 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
             // and finalized on the 11:15 bar, while the buckets after the
             // 12:30 reopen run to their count, real end or the day's close
             // (session_window_close_ms; the day's own close for one window).
+            // A bucket that trades on after a break is not clipped; with no input to come, it is.
             if (!complete && input_seconds > 0 && target_seconds < kSecPerDay
                 && has_trading_session(asess)) {
                 const int64_t next_ms = input_bar.timestamp + input_seconds * 1000;
-                if (next_ms >= session_window_close_ms(input_bar.timestamp, atz, asess)) {
-                    complete = true;
-                }
+                complete = next_ms >= session_window_close_ms(input_bar.timestamp, atz, asess,
+                    input_bucket.end_ms, next_input_ms);
             }
             // Chart-close completion (round 8, family P): TradingView
             // finalizes an intraday HTF bucket -- and the chart timeframe's
@@ -1568,9 +1577,9 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
             // bit-identical: its input bar is the chart bar, whose own end
             // the real-end rule already tests.
             if (!complete && input_seconds > 0 && calling_close_ms > 0
-                && next_input_ms > input_bar.timestamp && s.agg) {
+                && has_later_input && s.agg) {
                 const IntradayBucket next_bucket = intraday_bucket(
-                    next_input_ms, target_seconds, atz, asess, s.late_opens, next_input_ms);
+                    *next_input_ms, target_seconds, atz, asess, s.late_opens, *next_input_ms);
                 if (calling_close_ms >= input_bucket.end_ms
                     && next_bucket.key != input_bucket.key) {
                     complete = true;
@@ -1592,9 +1601,9 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
             // period's nominal close exactly as its D/W/M buckets do.
             if (!complete && input_seconds > 0 && target_seconds < kSecPerDay
                 && has_trading_session(asess)
-                && next_input_ms > input_bar.timestamp
+                && has_later_input
                 && (!s.agg || s.agg->early_close_completes())
-                && crosses_boundary(input_bar.timestamp, next_input_ms,
+                && crosses_boundary(input_bar.timestamp, *next_input_ms,
                                     CalendarPeriod::DAY, atz, asess)) {
                 complete = true;
             }
@@ -1636,7 +1645,7 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
 AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
                                   CalendarPeriod cal_period,
                                   int64_t input_seconds,
-                                  int64_t next_input_ms,
+                                  std::optional<int64_t> next_input_ms,
                                   int64_t calling_close_ms,
                                   const native_calendar::NativeInterval* interval = nullptr,
                                   int64_t input_close_ms = 0, int weeks = 1) {
@@ -1653,6 +1662,7 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
     const std::string& atz = s.anchor_tz ? *s.anchor_tz : anchor_utc();
     const std::string& asess = s.anchor_session ? *s.anchor_session : empty_session();
     const bool native_periods = s.agg && s.agg->has_native_periods();
+    const bool has_later_input = next_input_ms && *next_input_ms > input_bar.timestamp;
     // An explicit interval retains the target's unit AND count. Compare the
     // actual first input, rather than a compatibility bar label in a session
     // gap, with these bounds.
@@ -1751,14 +1761,14 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
         // the requested period only if that close reaches the requested
         // interval's end of trading, including on a bucket's first input.
         complete = input_close_ms >= interval->last_traded_close_ms;
-    } else if (native_periods && next_input_ms > input_bar.timestamp) {
+    } else if (native_periods && has_later_input) {
         // TradingView's own period partition is installed and the next input
         // bar is known: the bucket completes on the last input bar before
         // the next native stamp -- and only there. The nominal rules below
         // are not consulted: they would close a CME holiday session at its
         // 12:00 CT pause or split it from the 17:00 reopen, where TradingView
         // keeps one daily bar (lab tv esd pin, 2026-09-05).
-        complete = s.agg->period_changes(input_bar.timestamp, next_input_ms);
+        complete = s.agg->period_changes(input_bar.timestamp, *next_input_ms);
     } else if (weeks > 1) {
         // Only the final week's close can seal this group. With an installed
         // partition and a known successor, its stamps have precedence above.
@@ -1813,7 +1823,7 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
     }
     const bool early_close_completes = !s.agg || s.agg->early_close_completes();
     if (!complete && !native_periods
-        && next_input_ms > input_bar.timestamp
+        && has_later_input
         && has_trading_session(asess)
         && (early_close_completes || calling_close_ms > 0)) {
         // The nominal rules above end a period at its scheduled close and
@@ -1852,14 +1862,14 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
         // (session_period_last_traded_close_ms); without it (0: the input
         // bar is the chart bar, whose own end the nominal rules above
         // already tested) the bucket waits, bit-identical to before.
-        if (interval ? !in_interval(next_input_ms)
-                     : s.agg->period_changes(input_bar.timestamp, next_input_ms)) {
+        if (interval ? !in_interval(*next_input_ms)
+                     : s.agg->period_changes(input_bar.timestamp, *next_input_ms)) {
             complete = early_close_completes
                 || calling_close_ms >= (interval ? interval->last_traded_close_ms : nominal_close());
         }
     }
     if (!complete && native_periods && cal_period == CalendarPeriod::DAY
-        && input_seconds > 0 && next_input_ms <= input_bar.timestamp) {
+        && input_seconds > 0 && !has_later_input) {
         // The feed's last bar under a native period partition (no next bar
         // to compare): a bar whose close reaches its session-day's close is
         // the day's last chart bar on a wrapped session too -- ES1! "D"
@@ -1884,11 +1894,11 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
     // holds the next input bar, and when it lies in this period this bar is
     // not the period's last; its own period key decides, the same key the
     // boundary branch above splits on.
-    if (complete && next_input_ms > input_bar.timestamp) {
-        const bool next_in_later_period = interval ? !in_interval(next_input_ms)
+    if (complete && has_later_input) {
+        const bool next_in_later_period = interval ? !in_interval(*next_input_ms)
             : s.agg != nullptr
-            ? s.agg->period_changes(input_bar.timestamp, next_input_ms)
-            : crosses_boundary(input_bar.timestamp, next_input_ms, cal_period,
+            ? s.agg->period_changes(input_bar.timestamp, *next_input_ms)
+            : crosses_boundary(input_bar.timestamp, *next_input_ms, cal_period,
                                atz, asess);
         if (!next_in_later_period) complete = false;
     }
@@ -1926,8 +1936,9 @@ AggregatedBar TimeframeAggregator::feed(const Bar& input_bar,
 }
 
 AggregatedBar TimeframeAggregator::feed(const Bar& input_bar,
-                                        int64_t next_input_ms,
+                                        int64_t next_input,
                                         int64_t calling_close_ms) {
+    const auto next_input_ms = known_successor(next_input);
     FeedState s{current_bar_, observed_first_ms_, sub_bar_count_, current_emitted_complete_,
                 last_completed_bar_, has_completed_,
                 &anchor_tz_, &anchor_session_, this, &native_late_opens_};
@@ -1978,7 +1989,7 @@ AggregatedBar TimeframeAggregator::feed(const Bar& input_bar, int64_t next_input
                 last_completed_bar_, has_completed_,
                 &anchor_tz_, &anchor_session_, this, &native_late_opens_};
     return feed_calendar_mode(input_bar, s, cal_period_, input_seconds_,
-                              next_input_ms, calling_close_ms, &*target_interval,
+                              known_successor(next_input_ms), calling_close_ms, &*target_interval,
                               input_interval->last_traded_close_ms);
 }
 
@@ -2282,6 +2293,23 @@ bool SessionDaySchedule::parse_many(const std::string& session) {
         ++count;
     }
     return true;
+}
+
+// A recorded lead of the intraday grid ahead of the day stamp, in ms; 0 for
+// every session but one. The grid of "0930-1200,1300-1600" counts from 09:00,
+// thirty minutes before its 09:30 day stamp, and the day's first bucket opens
+// at the stamp: 60-minute bars open 09:30, 10:00, 11:00, 13:00, 14:00, 15:00
+// and 240-minute bars 09:30, 13:00, as TradingView's 60- and 240-minute charts
+// of HKEX:700 open them. Counted from the 09:30 open they opened 09:30, 10:30
+// .. 15:30 and 09:30, 13:30: one inside the lunch break, one across it.
+// Only those two widths are read; every other width that does not divide
+// thirty minutes follows the same grid by extension. The entry reads the
+// literal windows, alone or before a ":days" list, as the 1800-1700 day stamp
+// reads its own: any other spelling, and every other session with a break,
+// keeps its grid at the day stamp. The native calendar uses the same
+// session_grid_policy entry for its fixed buckets.
+int64_t session_grid_lead_ms(const std::string& session) {
+    return session_grid_policy::grid_lead_minutes(session) * 60000;
 }
 
 }  // namespace
