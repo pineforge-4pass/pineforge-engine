@@ -308,7 +308,7 @@ double Rising::compute(double src) {
     }
 
     // Check if each consecutive pair is rising
-    for (int i = 1; i < (int)buffer_.size(); i++) {
+    for (std::size_t i = 1; i < buffer_.size(); ++i) {
         if (buffer_[i] <= buffer_[i - 1]) {
             return 0.0;
         }
@@ -327,7 +327,7 @@ double Falling::compute(double src) {
     }
 
     // Check if each consecutive pair is falling
-    for (int i = 1; i < (int)buffer_.size(); i++) {
+    for (std::size_t i = 1; i < buffer_.size(); ++i) {
         if (buffer_[i] >= buffer_[i - 1]) {
             return 0.0;
         }
@@ -390,7 +390,7 @@ double RCI::calculate() {
         while (j + 1 < n && buffer_[order_[j + 1]] == buffer_[order_[i]]) {
             j++;
         }
-        double avg_rank = (i + j) / 2.0;
+        const double avg_rank = (static_cast<double>(i) + j) / 2.0;
         for (int k = i; k <= j; k++) {
             price_rank_[order_[k]] = avg_rank;
         }

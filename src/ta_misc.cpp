@@ -96,8 +96,7 @@ double PercentRank::compute(double src) {
 
     double current = buffer_.back();
     int count = 0;
-    int start = (int)buffer_.size() - 1 - length_;
-    for (int i = start; i < (int)buffer_.size() - 1; i++) {
+    for (std::size_t i = 0; i + 1 < buffer_.size(); ++i) {
         if (percentrank_less_equal(buffer_[i], current)) {
             count++;
         }
@@ -299,8 +298,7 @@ double PercentRank::recompute(double src) {
 
     double current = buffer_.back();
     int count = 0;
-    int start = (int)buffer_.size() - 1 - length_;
-    for (int i = start; i < (int)buffer_.size() - 1; i++) {
+    for (std::size_t i = 0; i + 1 < buffer_.size(); ++i) {
         if (percentrank_less_equal(buffer_[i], current)) count++;
     }
     // Denominator is LENGTH, not the non-na count — same TV rule as compute()
