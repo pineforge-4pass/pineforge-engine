@@ -1301,7 +1301,12 @@ class RealTree(unittest.TestCase):
         # add one unreviewed group each. Both remain OPEN.
         # expectation corrected: 1646 -> 1647, because materialize_relative_exits
         # returns its list of consumed definitions by value (U1955). It remains OPEN.
-        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3 + 1 + 1 + 1 + 2 + 3 + 2 + 1
+        # expectation corrected: 1647 -> 1653, because eight groups are added and
+        # two retired: the facts of an opening's exits (U1959, U1962) replace the
+        # shadowed-opening set (U0268, U0811); a named tick exit stores its texts in
+        # one string (U1957, U1958); three lists of one call (U1960, U1961, U1963)
+        # and one list of a state fold (U1964) are new. All remain OPEN.
+        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3 + 1 + 1 + 1 + 2 + 3 + 2 + 1 + 6
         self.assertEqual(c['OPEN'], expected_open)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
