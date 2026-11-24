@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- With FIFO and pyramiding above one, spending an entry’s last units frees its slot on any declared quantity step, including 0.25, and when no step is declared. A partial debit still occupies one slot. (#694).
 - On ordinary chart bars with pyramiding and FIFO, a full named tick exit that omits `qty` and specifies an OCA name prices its orders from the individual entries when their units are unreserved. A fill reduces its working siblings; a later call can reissue an unfilled bracket, while a bracket that fired stays spent. (#694).
 - With `calc_on_order_fills` alone, a full named tick exit without `qty` or an OCA name keeps each FIFO entry’s fill price and unspent bracket through recalculations. Changing one tick distance leaves the other working leg in place. (#694).
 - With `process_orders_on_close` alone, a full named tick bracket without `qty` or an OCA name measures its levels from each FIFO entry’s fill at the close. Earlier prices on the entry bar cannot trigger that entry’s bracket. (#694).
@@ -32,7 +33,6 @@ version number follows semantic versioning over the surfaces the
 - The ABI receipt check names unusable CTest commands and malformed receipt arguments. It reports which inputs are present; only CTest results establish which rows executed.
 - The design inventory follows kernel registration branches, checks primary rows and executable aliases, and states when no CTest listing was compared. Preflight gives the inventory no CTest listing, so that part reads `NOT COMPARED` there.
 - The private-fixture check inspects each discovered Python module, applies skip properties only to the tests they name, and reports when there are no Python programs to compare. It reads Python commands assembled from variables in the same CMake file and reports unresolved command variables as `NOT COMPARED`; it accepts a skip by its text without proving that the skip guards the read, and it does not ask whether a test property stands in an active branch.
-- With pyramiding above one and the first-in-first-out close rule, a run that declares no quantity step now counts open entries as a run does whose declared step is a power of ten from 1e-12 to 1e6, such as 0.01: an entry whose own exit or close filled frees its slot even when an older trade was closed instead (#694). A run with another declared step, such as 0.25, is not changed.
 - A cash or equity entry now keeps its place beside two fixed entries at the close. At the next open, a budget entry gets its margin check even when an opposite fixed entry is waiting at the same price.
 - Replacing a resting entry sized in cash or percent of equity no longer reports its amount as contracts taken from the close ledger. A replaced entry sized in contracts is not changed.
 - Preflight accepts a private-fixture skip only from the native-version guard, on a complete line naming one of its missing inputs.

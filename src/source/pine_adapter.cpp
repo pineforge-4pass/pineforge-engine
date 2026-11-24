@@ -2970,8 +2970,8 @@ PineExecutionAdapter::refresh_configuration_scopes(const PineStrategyConfig& con
         && staged_scopes_.unit_money;
     unified_configured_ = lot_grid_pinned_ && !config.calc_on_order_fills && commission_free
         && one_lot_cap && staged_scopes_.unit_money && staged_scopes_.mintick;
-    ledger_records_configured_ = config.pyramiding > 1 && !config.close_entries_rule_any
-        && (lot_grid_pinned_ || !staged_.quantity_grid);
+    // Records count opening fills; their units have already been sized.
+    ledger_records_configured_ = config.pyramiding > 1 && !config.close_entries_rule_any;
     pooc_fee_configured_ = config.process_orders_on_close
         && config.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
         && config.commission_value > 0.0
@@ -9789,8 +9789,11 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
             : explicit_entry_quantity_floor(std::abs(qty), staged_.quantity_grid);
         if (!finite_positive(own_units)) return;
         double projected_units = current;
-        std::size_t projected_entries = current == 0.0 ? 0U
-            : accepted_entries_in_cycle(current > 0.0, id);
+        std::size_t projected_entries = 0;
+        if (current != 0.0) {
+            const auto records = open_ledger_records();
+            projected_entries = records ? *records : accepted_entries_in_cycle(current > 0.0, id);
+        }
         // A same-id reissue replaces its earlier row; project only the remaining rows.
         for (const auto& pending : pending_same_bar_commands_) {
             const auto& prior = pending.snapshot;
@@ -10571,7 +10574,7 @@ void PineExecutionAdapter::book_close_ledger(const SourceId& id, double units) {
 // books that opening's record first, then the named id's records oldest
 // first, then every record in fill order. Only under pyramiding above one,
 // where it can decide.
-// With no quantity step, the records retain the units as filled.
+// The records retain the units as filled, whatever the quantity step.
 void PineExecutionAdapter::credit_pyramiding_record(const SourceId& id, std::uint64_t incarnation,
                                                     double units) {
     if (!ledger_records_configured_ || !(units > 0.0)) return;
@@ -20514,11 +20517,8 @@ bool PineExecutionAdapter::unified_admission_terms(
 
 // The instruments these rules are pinned on: a lot grid that is a power
 // of ten (every tape's -- 1, 0.01, 0.0001, 1e-05 -- and every population
-// member's). Another grid keeps the engine's earlier rules, and so does a
-// continuous quantity except for the entry records
-// (ledger_records_configured_), which the script recorded for #694 decides
-// there. The synthetic fuzz batteries (tests/test_publication_witness.cpp's
-// 0.25 lot, test_adapter_live_state_equivalence's continuous one) pin both.
+// member's). Other steps and continuous quantities stay outside the rules
+// that use this predicate. Counting open entry records does not use it.
 // Formed once per staged configuration (set_staged_configuration).
 [[gnu::always_inline]] inline bool PineExecutionAdapter::pinned_lot_grid() const {
     return lot_grid_pinned_;
