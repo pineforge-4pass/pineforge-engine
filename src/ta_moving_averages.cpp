@@ -226,17 +226,24 @@ inline double ema_step(double alpha, double src, double previous) {
     return previous + alpha * (src - previous);
 }
 
-double ema_seed_sum(const std::vector<double>& sources, double fallback) {
+double ema_seed_sum(const std::vector<double>& sources) {
     double partials[detail::kWindowSumPartialCapacity];
     std::size_t parts = 0;
     const auto partial = [&partials](std::size_t i) -> double& { return partials[i]; };
-    for (double src : sources) {
-        if (!detail::expand_window_sum(src, parts, partial)) return fallback;
+    std::size_t i = 0;
+    for (; i < sources.size(); ++i) {
+        if (!detail::expand_window_sum(sources[i], parts, partial)) break;
     }
-    const double sum = detail::round_window_sum(parts, partial).sum;
-    // Keep the previous result for nonfinite or overflowing seeds and
-    // normalize an exact zero the same way as fixed SMA.
-    return std::isfinite(sum) ? sum + 0.0 : fallback;
+    if (i == sources.size()) {
+        const double sum = detail::round_window_sum(parts, partial).sum;
+        if (std::isfinite(sum)) return sum + 0.0;
+    }
+    // The expansion could not represent the seed. Retry all retained
+    // sources, including any cancellation after an overflowing prefix.
+    double sum;
+    detail::exact_or_ieee_window_sum(sum, sources.size(),
+        [&](std::size_t back) { return sources[sources.size() - 1 - back]; });
+    return sum;
 }
 
 }  // namespace
@@ -297,8 +304,9 @@ double EMA::compute(double src, bool input_ready) {
             if (bar_count < length_) {
                 return na<double>();
             }
-            // This seed sums its retained sources exactly, rounding once.
-            const double seed_sum = seed_sources_.empty() ? sum : ema_seed_sum(seed_sources_, sum);
+            // Round the finite seed sum before division. The empty prefix
+            // can occur after a nonfinite output, outside the initial seed.
+            const double seed_sum = seed_sources_.empty() ? sum : ema_seed_sum(seed_sources_);
             output_val = seed_sum / static_cast<double>(length_);
             return output_val;
         }
