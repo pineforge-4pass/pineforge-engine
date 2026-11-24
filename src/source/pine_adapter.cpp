@@ -10521,6 +10521,7 @@ void PineExecutionAdapter::book_close_ledger(const SourceId& id, double units) {
 void PineExecutionAdapter::credit_pyramiding_record(const SourceId& id, std::uint64_t incarnation,
                                                     double units) {
     if (!ledger_records_configured_ || !(units > 0.0)) return;
+    if (pyramiding_records_.empty()) pyramiding_records_diverged_ = false;
     pyramiding_records_.push_back({id, incarnation, units});
 }
 
@@ -10528,11 +10529,13 @@ void PineExecutionAdapter::book_pyramiding_records(const SourceId& id, std::uint
                                                    double units) {
     if (!(units > 0.0) || pyramiding_records_.empty()) return;
     double left = units;
-    const auto take = [&left](PyramidingRecord& record) {
+    const PyramidingRecord* last = nullptr;
+    const auto take = [&](PyramidingRecord& record) {
         if (!(left > internal::kQtyEpsilon) || !(record.units > 0.0)) return;
         const double amount = std::min(record.units, left);
         record.units -= amount;
         left -= amount;
+        if (!last || &record > last) last = &record;
     };
     if (armed_for != 0) {
         for (auto& record : pyramiding_records_)
@@ -10541,6 +10544,10 @@ void PineExecutionAdapter::book_pyramiding_records(const SourceId& id, std::uint
     for (auto& record : pyramiding_records_)
         if (record.id == id) take(record);
     for (auto& record : pyramiding_records_) take(record);
+    for (const auto& record : pyramiding_records_) {
+        if (!last || &record >= last) break;
+        if (record.units > internal::kQtyEpsilon) pyramiding_records_diverged_ = true;
+    }
     pyramiding_records_.erase(
         std::remove_if(pyramiding_records_.begin(), pyramiding_records_.end(),
                        [](const PyramidingRecord& record) {
@@ -10567,29 +10574,6 @@ std::optional<std::size_t> PineExecutionAdapter::held_ledger_records() const {
     for (const auto& record : pyramiding_records_) units += record.units;
     if (!(std::abs(units - held) <= std::max(1e-9, held * 1e-12))) return std::nullopt;
     return pyramiding_records_.size();
-}
-
-// The state digest folds the records of a declared step whenever there are
-// any, and the others once they are not the open lots, one for one: until a
-// close books another opening than the one it drained, the lots say it all.
-[[gnu::noinline]]
-bool PineExecutionAdapter::folds_pyramiding_records() const {
-    if (pyramiding_records_.empty() || lot_grid_pinned_) return !pyramiding_records_.empty();
-    struct Walk {
-        const std::vector<PyramidingRecord>& records;
-        std::size_t next = 0;
-        bool same = true;
-    } walk{pyramiding_records_};
-    (void)require_host().visit_native_open_lot_values(
-        &walk, [](void* context, std::uint64_t origin, double, double units) {
-            auto& at = *static_cast<Walk*>(context);
-            at.same = at.next < at.records.size()
-                && at.records[at.next].incarnation == origin
-                && same_double_bits(at.records[at.next].units, std::abs(units));
-            ++at.next;
-            return at.same;
-        });
-    return !walk.same || walk.next != pyramiding_records_.size();
 }
 
 // The incarnation of the newest opening of `from_entry` this cycle, 0 when

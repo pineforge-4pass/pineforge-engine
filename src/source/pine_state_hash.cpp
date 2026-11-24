@@ -664,7 +664,10 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     }
     // The pyramiding records, unmerged, kept only under pyramiding above one;
     // folded only while there are any, so every other run keeps its digest.
-    if (folds_pyramiding_records()) {
+    // Without a declared step they are the open lots until a close books one out
+    // of fill order.
+    if (!pyramiding_records_.empty()
+        && (staged_.quantity_grid.has_value() || pyramiding_records_diverged_)) {
         f.s("pineforge-pyramiding-records/v1");
         f.u(pyramiding_records_.size());
         for (const auto& record : pyramiding_records_) {

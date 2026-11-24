@@ -2449,7 +2449,6 @@ private:
     void book_pyramiding_records(const SourceId& id, std::uint64_t armed_for, double units);
     std::optional<std::size_t> open_ledger_records() const;
     std::optional<std::size_t> held_ledger_records() const;
-    bool folds_pyramiding_records() const;
     std::uint64_t entry_incarnation_of(const SourceId& from_entry) const;
     bool exit_tombstoned(const SourceId& exit_id, const SourceId& from_entry) const;
     bool unified_placement_book_clear() const;
@@ -2988,6 +2987,9 @@ private:
     std::unordered_map<SourceId, std::uint64_t> exit_tombstones_;
     std::map<std::uint64_t, CloseCallsiteState> close_batch_callsites_;
     std::int32_t close_batch_bar_ = -1;
+    // Whether a close has booked a pyramiding record while an earlier one kept
+    // units: until then the records are the open lots, oldest first.
+    bool pyramiding_records_diverged_ = false;
     std::uint64_t close_batch_queue_sequence_ = 0;
     double close_batch_pending_debt_ = 0.0;
     double close_batch_admitted_total_ = 0.0;
