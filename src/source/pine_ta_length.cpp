@@ -538,13 +538,16 @@ double SeriesSma::mean(std::uint64_t requested) const {
         return (sum + 0.0) / static_cast<double>(length);
     }
 
-    // Preserve the previous series result for nonfinite sources or an
-    // intermediate overflow, outside the qualified window arithmetic.
+    // Retry the window in integer units. Keep the previous fallback in the
+    // same scan for nonfinite sources or a sum that rounds to infinity.
+    ::pineforge::detail::ExactWindowSum exact;
+    bool all_finite = true;
     double sum = 0.0;
     double correction = 0.0;
     for (std::size_t i = 0; i != length; ++i) {
         const double value = source(i);
         if (is_na(value)) return na<double>();
+        all_finite = all_finite && exact.add(value);
         const double next = sum + value;
         if (std::fabs(sum) >= std::fabs(value))
             correction += (sum - next) + value;
@@ -552,7 +555,9 @@ double SeriesSma::mean(std::uint64_t requested) const {
             correction += (value - next) + sum;
         sum = next;
     }
-    return (sum + correction) / static_cast<double>(length);
+    double rounded;
+    if (!all_finite || !exact.rounded(rounded)) rounded = sum + correction;
+    return rounded / static_cast<double>(length);
 }
 
 double SeriesSma::compute(double source, double current_length) {
