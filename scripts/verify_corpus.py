@@ -240,7 +240,7 @@ def _ohlcv_span_ms(strategy_dir: Path) -> tuple[int | None, int | None, int]:
 
 # Match window for time-based alignment (matches parent project's gate).
 MATCH_WINDOW_SECONDS = 3600    # 1 hour
-ENTRY_PRICE_GATE     = 3.00    # $3 — defends against same-bar duplicates
+ENTRY_PRICE_GATE_RATIO = 0.0015
 
 # TradingView "Date and time" columns are bare wall-clock strings with no
 # timezone marker. They reflect the chart's display timezone at export.
@@ -1095,9 +1095,13 @@ def tv_timezone_offset(meta: dict) -> int:
     return TV_TZ_BY_NAME.get(tz_name, TV_CSV_TZ_OFFSET_HOURS)
 
 
+def entry_price_gate(tv_entry_price: float) -> float:
+    return ENTRY_PRICE_GATE_RATIO * abs(tv_entry_price)
+
+
 def align_by_time(tv: list[TradePair], eng: list[TradePair]) -> list[tuple[TradePair, TradePair]]:
     """Greedy time-window alignment: pair TV[i] with the closest engine trade
-    that has the same direction and an entry within MATCH_WINDOW_SECONDS.
+    with the same direction and an entry within the time and price limits.
     """
     matched: list[tuple[TradePair, TradePair]] = []
     used_eng: set[int] = set()
@@ -1116,7 +1120,7 @@ def align_by_time(tv: list[TradePair], eng: list[TradePair]) -> list[tuple[Trade
                 break
             if e.direction != tv_t.direction:
                 continue
-            if abs(e.entry_price - tv_t.entry_price) > ENTRY_PRICE_GATE:
+            if abs(e.entry_price - tv_t.entry_price) > entry_price_gate(tv_t.entry_price):
                 continue
             dt = abs(e.entry_time - tv_t.entry_time)
             if dt < best_dt:

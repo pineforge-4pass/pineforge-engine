@@ -345,7 +345,8 @@ The hard lane combines <!-- pf:scoreboard.hardLane.corpusProbes|int -->309<!-- /
 
 ### How a probe is graded
 
-Every script is exported from TradingView as-is (its own inputs, its own defaults) with the chart's trade list at full precision, transpiled with [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss), and run by this engine on the same OHLCV bars. The two trade lists are aligned trade-for-trade and graded by [`scripts/verify_corpus.py`](scripts/verify_corpus.py):
+Every script is exported from TradingView as-is (its own inputs, its own defaults) with the chart's trade list at full precision, transpiled with [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss), and run by this engine on the same OHLCV bars. The two trade lists are aligned trade-for-trade and graded by [`scripts/verify_corpus.py`](scripts/verify_corpus.py).
+Two trades can pair if they have the same direction, their entry times are at most one hour apart, and the engine's entry price is within 0.15% of TradingView's entry price.
 
 - **excellent** — zero unmatched gated trades on either side, ≥ 99% of TradingView's trades matched, the distinct-entry identity check passed, entry and exit prices within 0.01% and PnL within 1% at the 90th percentile (trailing-stop scripts are graded on the *production* profile: exits within 0.02% and PnL within 1%, since a trail fill depends on TradingView's sub-bar path);
 - **strong** — ≥ 95% matched, gross unmatched trades below 6% of the larger gated trade count, entries within 0.1% and exits within 0.5% at p90;

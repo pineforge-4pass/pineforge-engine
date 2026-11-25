@@ -10,6 +10,7 @@ version number follows semantic versioning over the surfaces the
 - `request.security_lower_tf` does less bookkeeping for each lower-timeframe bar it delivers, and a script with a `request.*` call does less of it on every chart bar; results are unchanged. (#965)
 
 ### Fixed
+- The corpus grader scales the entry price tolerance for pairing trades to 0.15% of TradingView's entry price, replacing the fixed three-unit limit. (#836)
 - Corrected the parity grading for the historical population reported in [#836](https://github.com/pineforge-4pass/pineforge-engine/issues/836) on 2026-11-11: counting unmatched trades net instead of gross overstated the excellent tier by 10 of 312 reference probes (311 instead of 301) and by 24 of 7,989 graded probes. The trade data is unchanged. Measured on 2026-11-19 on the pinned reference corpus (93d956a2): 303 excellent and 8 strong with one declared anomaly, where the net count gave 311 excellent and 0 strong; all 312 pinned trade outputs still match their baseline hashes.
 - The corpus grader counts every unmatched gated trade on either side as a gross mismatch. One engine-only trade and one TradingView-only trade count as two mismatches, so equal list sizes cannot satisfy the excellent count gate. The same gross count, divided by the larger gated trade count (zero for two empty pools), supplies the percentage for strong-tier grading and fragmented-FIFO eligibility; thresholds are unchanged (#836).
 
