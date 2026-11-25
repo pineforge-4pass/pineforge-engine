@@ -8,7 +8,7 @@ from io import BytesIO, StringIO
 from zipfile import Path, ZipFile
 
 from verify_corpus import (
-    TradePair, analyze_strategy, has_cross_entry_fifo_allocation,
+    TradePair, analyze_strategy, distinct_entry_fill_mismatches, has_cross_entry_fifo_allocation,
 )
 
 
@@ -179,6 +179,28 @@ class MoneyTests(unittest.TestCase):
                 r = grade(tv, [replace(t, exit_price=price, pnl=.9) for t in tv])
                 self.assert_pairs(r, 6)
                 self.assertEqual(r.pnl_deltas, [0. if allowed else 1 / 10] * 6)
+
+    def test_relative_price_uses_the_actual_nonzero_scale(self):
+        # Exercise identity directly: a five-percent entry miss is also
+        # outside the separate gate that pairs trades.
+        for tv_price, price, mismatches in ((1e-12, 1.05e-12, 1),
+                                            (1e-12, 1.00005e-12, 0), (0, 0, 0)):
+            with self.subTest(entry=(tv_price, price)):
+                tv = [lot(0, entry_price=tv_price, entry_signal=s) for s in ("A", "B")]
+                eng = [lot(0, entry_price=price, entry_identity=s) for s in ("1", "2")]
+                self.assertEqual(distinct_entry_fill_mismatches(
+                    tv, eng, {(0, tv_price, "long")}), mismatches)
+
+        # Identical entries admit every pair so the tiny exits really get scored.
+        for close, price, delta, tier in ((1e-12, 1.05e-12, 1 / 21, "moderate"),
+                                          (1e-12, 1.00005e-12, 1 / 20001, "excellent"),
+                                          (0, 1e-14, 1, "moderate"), (0, 0, 0, "excellent")):
+            with self.subTest(exit=(close, price)):
+                tv = [lot(i * 900, exit_price=close) for i in range(6)]
+                r = grade(tv, [replace(t, exit_price=price) for t in tv])
+                self.assert_pairs(r, 6)
+                self.assertEqual(r.exit_deltas, [delta] * 6)
+                self.assertEqual((r.exit_p90, r.label), (delta, tier))
 
 
 if __name__ == "__main__":
