@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- `ta.rci` now returns `na` when a full window of two or more values is flat, matching TradingView.
 - A requested EMA first evaluated when a sparse chart bar is published now uses the same seed as during the original requested evaluation. (#994)
 - A runtime-selected `request.security` timeframe now omits the bucket that opened before the declared origin and uses the requested context's EMA seed. (#994)
 - An EMA evaluated on another symbol's installed bars now uses the requested context's seed when a series origin is declared. (#994)

@@ -169,6 +169,8 @@ struct RefRCI {
         // m distinct ranks by their mean removes m*(m*m-1)/12 of their spread.
         const double time_ss = n * (n * n - 1) / 12.0;
         const double price_ss = time_ss - tie_loss;
+        // expectation corrected: 50 -> na, because TradingView's ta.rci is na on a flat window (recorded 2026-11-25)
+        if (price_ss == 0.0) return na<double>();
         if (tie_loss > 0.0 && price_ss > 0.0) {
             const double cross = (time_ss + price_ss - sum_d2) / 2.0;
             return 100.0 * cross / std::sqrt(time_ss * price_ss);

@@ -478,7 +478,8 @@ static double rci_pairwise_reference(const std::deque<double>& window) {
     }
     // expectation corrected: rank distance -> rank correlation, because
     // average ranks have less variance on a nonconstant window with ties.
-    return price_ss == 0.0 ? 50.0 : 100.0 * cross / std::sqrt(time_ss * price_ss);
+    // expectation corrected: 50 -> na, because TradingView's ta.rci is na on a flat window (recorded 2026-11-25)
+    return price_ss == 0.0 ? na<double>() : 100.0 * cross / std::sqrt(time_ss * price_ss);
 }
 
 static int test_rci_live_window_values() {
