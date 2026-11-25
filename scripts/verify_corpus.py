@@ -949,6 +949,7 @@ def consolidate_fragments(
             pnl_pct=pnl_pct,
             mfe=sum(m.mfe for m in members),
             mae=sum(m.mae for m in members),
+            open_mark=all(m.open_mark for m in members),
         ))
     out.sort(key=lambda t: t.entry_time)
     return out
@@ -1343,8 +1344,6 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     # P&L deltas — TV held the position to the end and the engine did not,
     # which is a real divergence; unmatched, it leaves the coverage
     # denominator below, as it always has.
-    _open_keys = {(t.entry_time, t.entry_price, t.direction)
-                  for t in tv_raw_all if t.open_mark}
     exit_deltas  = [relative_max(t.exit_price,  e.exit_price)  for t, e in gating_matched]
     # PnL p90 uses *relative-to-tv_pnl*, with near-zero trades excluded so
     # scratch trades don't blow up the ratio. Mirrors canonical line ~1136.
@@ -1472,12 +1471,9 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     # open row (engine opened AND closed the position for real past window) is
     # a legitimate matched trade and is kept. This never touches the matcher,
     # the count gate, or entry/exit/pnl -- only the coverage denominator.
-    # (_open_keys — the UNPAIRED Open rows — is resolved above, with the
-    # exit/pnl deltas; a paired mark is a matched trade on both sides.)
     _matched_tv_ids = {id(t) for t, _ in matched}
     def _is_dropped_open(t):
-        return ((t.entry_time, t.entry_price, t.direction) in _open_keys
-                and id(t) not in _matched_tv_ids)
+        return t.open_mark and id(t) not in _matched_tv_ids
     if bounds is not None:
         tv_cov_denom = [t for t in tv
                         if is_interior(t.entry_time * 1000, bounds) and not _is_dropped_open(t)]
