@@ -2563,11 +2563,11 @@ void PineExecutionAdapter::purge_brackets_after_applied_reversal(
                 const auto lot = host.closed_trade(fill.first_trade_index + i);
                 if (parent->incarnation ? lot.entry_incarnation == parent->incarnation : lot.entry_id == leg.from_entry)
                     return lot.is_long == prior_long;
-                // A whole ANY bracket can still name the unfilled order
+                // A whole named bracket can still name the unfilled order
                 // that its entry replaced. The trade names the successor.
                 const auto& levels = leg.exit_levels;
                 if (parent->incarnation && parent->incarnation < lot.entry_incarnation
-                    && config_.close_entries_rule_any && !config_.process_orders_on_close
+                    && !config_.process_orders_on_close
                     && !bar_magnifier_ && !stream_mode_ && lot.is_long == prior_long
                     && leg.command_sequence < reversal.command_sequence
                     && leg.from_entry == reversal.source_id && lot.entry_id == leg.from_entry
