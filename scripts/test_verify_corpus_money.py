@@ -94,6 +94,40 @@ class MoneyTests(unittest.TestCase):
                 self.assertAlmostEqual(r.pnl_p90, residual / tv_pnl)
                 self.assertEqual(r.label, "strong" if residual else "excellent")
 
+    def test_exit_drift_explains_only_the_signed_money_change(self):
+        for direction, side in (("long", 1), ("short", -1)):
+            tv = [lot(i * 900, direction=direction, entry_price=1000 - side * .125,
+                      exit_price=1000, pnl=.125) for i in range(6)]
+            for proceeds, residual in ((.0625, .0625), (.140625, .015625),
+                                       (.1875, 0), (.190625, 0), (.125, 0)):
+                with self.subTest(direction=direction, proceeds=proceeds):
+                    eng = [replace(t, exit_price=1000 + side * .0625, pnl=proceeds) for t in tv]
+                    r = grade(tv, eng)
+                    self.assert_pairs(r, 6)
+                    self.assertTrue(r.exit_ok)
+                    self.assertEqual(r.pnl_deltas, [residual / .125] * 6)
+                    self.assertEqual(r.label, "strong" if residual else "excellent")
+
+        # With 101 engine units, only the comparison scaled to 100 TV units
+        # explains the three-dollar improvement from a three-cent better exit.
+        tv = [lot(i * 900, entry_price=1001, exit_price=1000, qty=100, pnl=-100)
+              for i in range(6)]
+        eng = [replace(t, qty=101, exit_price=1000.03, pnl=-97.97) for t in tv]
+        r = grade(tv, eng)
+        self.assert_pairs(r, 6)
+        self.assertEqual((r.pnl_deltas, r.label), ([0.] * 6, "excellent"))
+
+        # Outside the sizing band only the eight actual engine units can
+        # explain an improvement: eight sixteenths of a dollar, not ten.
+        tv = [lot(i * 900, entry_price=999.875, exit_price=1000, qty=10, pnl=1.25)
+              for i in range(6)]
+        for proceeds, delta in ((1.75, 0), (1.875, .625 / 1.25)):
+            with self.subTest(proceeds=proceeds):
+                eng = [replace(t, qty=8, exit_price=1000.0625, pnl=proceeds) for t in tv]
+                r = grade(tv, eng)
+                self.assert_pairs(r, 6)
+                self.assertEqual(r.pnl_deltas, [delta] * 6)
+
 
 if __name__ == "__main__":
     unittest.main()
