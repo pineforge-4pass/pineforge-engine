@@ -9832,17 +9832,17 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         current, limit_price, stop_price, default_sized, priced, reverses,
         opposite_opening_pending, pure_stop_entry, coof_market_next_open,
         coof_priced_next_open, coof_market_at_second_extreme, paired_all_in_reentry};
-    if (preceding_close_all.incarnation != 0 && (close_all_precedes || (!bar_magnifier_ && !priced))) {
-        for (auto& prior : pending_entries_) {
-            if (prior.replacement_key != id
-                || prior.snapshot.paired_reversal_parent != preceding_close_all) continue;
-            // The first order is still queued, so capture its kind before replacing it.
-            if (reverses) {
-                snapshot.replaced_opening = true;
-                snapshot.replacement_predecessor_market =
-                    std::holds_alternative<native_order::Market>(prior.request.trigger);
-            }
-            pending_write(prior) = PendingEntry{std::move(request), std::move(snapshot), id};
+    if (close_all_precedes && preceding_close_all.incarnation != 0) {
+        // A full close moved the prior entry out of the live/batched book.
+        // Replace it where it waits for that close, before selecting a new
+        // batch or appending a second definition behind the same parent.
+        auto queued = std::find_if(pending_entries_.begin(), pending_entries_.end(),
+            [&](const PendingEntry& prior) {
+                return prior.replacement_key == id
+                    && prior.snapshot.paired_reversal_parent == preceding_close_all;
+            });
+        if (queued != pending_entries_.end()) {
+            pending_write(*queued) = PendingEntry{std::move(request), std::move(snapshot), id};
             return;
         }
     }
@@ -18625,18 +18625,18 @@ bool PineExecutionAdapter::prior_cycle_close_only(const PlacementSnapshot& sourc
 std::optional<native_order::OpeningShape> PineExecutionAdapter::opposite_opening_shape(
         const PlacementSnapshot& source, std::uint64_t target_incarnation, double signed_units,
         bool market_trigger, std::int32_t created_side, bool after_close) const {
-    if (signed_units == 0.0 || ((signed_units > 0.0) == source.is_long)) return std::nullopt;
+    const bool opposite_at_fill = signed_units != 0.0
+        && ((signed_units > 0.0) != source.is_long);
+    if (!opposite_at_fill) return std::nullopt;
     const bool closes_only = prior_cycle_close_only(source, signed_units, created_side);
-    // A market reversal carries what the named close left in its original
-    // position cycle. A same-ID market amendment transacts only its own units.
-    const bool reverses_remaining = !bar_magnifier_ && market_trigger && source.close_first_entry
-        && source.reverse_to && source.placement_cycle == current_position_cycle_
-        && !finite_positive(source.exit_levels.limit) && !finite_positive(source.exit_levels.stop);
-    const bool replacement_transaction = source.reverse_to && source.replaced_opening
+    const bool source_close_precedes = after_close;
+    const bool replacement_transaction = source.reverse_to
+        && source.replaced_opening
         && source.replacement_predecessor_market
         && (market_trigger
             || (!source.is_long && !std::isfinite(source.requested_qty)
-                && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)));
+                && config_.default_qty_type
+                    == static_cast<int>(QtyType::PERCENT_OF_EQUITY)));
     // A flat stop entry is kept while a live or queued entry shares its
     // placement bar (erase_retired_rows, K8).
     const auto dual_stop_peer = [&](std::uint64_t incarnation, const PlacementSnapshot& peer) {
@@ -18658,7 +18658,7 @@ std::optional<native_order::OpeningShape> PineExecutionAdapter::opposite_opening
     const bool flat_dual_stop = flat_dual_candidate
         && std::any_of(placement_.begin(), placement_.end(),
             [&](const auto& row) { return dual_stop_peer(row.first, row.second); });
-    return (after_close && !reverses_remaining) || replacement_transaction
+    return source_close_precedes || replacement_transaction
         ? native_order::OpeningShape::Transact
         : closes_only
         ? native_order::OpeningShape::CloseOpposite

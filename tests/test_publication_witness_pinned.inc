@@ -1008,9 +1008,6 @@
 //   ConfigFlags115M: digest 0xf05fb093f1e4c5c3 -> 0xdea4f04f5f697c71
 //   ConfigFlags116: digest 0x0ae98aba51b53286 -> 0xf31fe8b40f25b93f
 //   ConfigFlags116M: digest 0xf72c7811b608605a -> 0xdb8a787342b9430f
-// expectation corrected (a market entry that reverses what a named close leaves, 1 of 156 runs moves): ConfigFlags104 admits one
-// more trade (14 -> 15). The build of the commit before that rule passes the table above. Harvested on 703795a1:
-//   ConfigFlags104: digest 0x7fbab759a0fec0a6 -> 0x562c50a440e7d266; trades 14 -> 15
 constexpr Pinned kPinned[] = {
     {"Config01", 0x5cd164c7f6bab7f6ull, 144, 44, 144},
     {"ConfigFlags101", 0x7ebdae61786f437bull, 145, 45, 144},
@@ -1025,7 +1022,7 @@ constexpr Pinned kPinned[] = {
     {"Config03M", 0x26d55c1f7a1df2c8ull, 144, 55, 144},
     {"ConfigFlags103M", 0x354763fa54d56a45ull, 182, 64, 144},
     {"Config04", 0x99eaeb147526e85cull, 144, 21, 144},
-    {"ConfigFlags104", 0x562c50a440e7d266ull, 48, 15, 48},
+    {"ConfigFlags104", 0x7fbab759a0fec0a6ull, 48, 14, 48},
     {"Config04M", 0x698f1fef05e55db1ull, 144, 21, 144},
     {"ConfigFlags104M", 0x937347d2331c2a4dull, 48, 14, 48},
     {"Config05", 0xb80d859c01e7e0d6ull, 48, 12, 48},

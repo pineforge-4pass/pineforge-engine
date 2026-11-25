@@ -46,15 +46,11 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/source/pine_strategy_host.hpp>
 
-#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <iostream>
 #include <limits>
-#include <string>
-#include <tuple>
 #include <variant>
 #include <vector>
 
@@ -904,170 +900,6 @@ void check_scope_row(const ScopeRow& row) {
     CHECK(strategy_pending_orders_len(&host) == 0);
 }
 
-// A named close can release an opposite market entry with another FIFO lot
-// still open. A single entry reverses that lot. A same-ID amendment spends
-// its own units once; only the excess over the surviving lot can open.
-struct TwoLotCase {
-    const char* name;
-    bool close_base, amend;
-    double seed, amended_qty;
-    double base_closed_by_turn, extra_closed_by_turn, turn_opened;
-};
-
-constexpr TwoLotCase two_lot_cases[] = {
-    //                         commands       units        closed      opened
-    {"E1",                     false, false, 1,   missing, 1,   1,    1},
-    {"E2",                     false, true,  1,   missing, 1,   0,    0},
-    {"B1",                     true,  false, 1,   missing, 0,   1,    1},
-    {"B2",                     true,  true,  1,   missing, 0,   1,    0},
-    {"B1-scaled",              true,  false, 2.5, missing, 0,   2.5,  2.5},
-    {"B2-smaller-amendment",   true,  true,  2.5, 1.5,     0,   1.5,  0},
-    {"B2-crossing-amendment",  true,  true,  2.5, 4,       0,   2.5,  1.5},
-};
-
-constexpr std::int64_t interval = 15 * 60'000;
-using Lot = std::tuple<std::string, double>; // ID, signed units
-using Fill = std::tuple<std::int64_t, std::string, double, double>; // open ms, ID, closed, opened
-using Leg = std::tuple<std::int64_t, std::string, std::int64_t, std::string, double>;
-
-class TwoLotHost final : public source::PineStrategyHost {
-public:
-    TwoLotHost(const TwoLotCase& row, bool long_first) : row(row), long_first(long_first) {
-        attach_pine_execution_adapter();
-        source::PineStrategyConfig config;
-        config.initial_capital = 100'000;
-        config.pyramiding = 3;
-        config.default_qty_value = row.seed;
-        configure_pine_strategy(config); // fixed units, FIFO, next open, 100% margins
-        set_syminfo_mintick(0.01);
-        set_syminfo_metadata("qty_step", 0.0001);
-        fixture_retain_all_events();
-    }
-
-    void on_source_bar(const Bar&) override {
-        switch (pine_bar_index()) {
-        case 0: strategy_entry(base, long_first); break;
-        case 1: strategy_entry(extra, long_first); break;
-        case 3:
-            before = book();
-            if (row.close_base) strategy_close(base);
-            strategy_entry(turn, !long_first);
-            if (row.amend) strategy_entry(turn, !long_first, missing, missing, row.amended_qty);
-            break;
-        case 4:
-            after = book();
-            after_units = physical_position().signed_units;
-            break;
-        case 6: strategy_close("", "end"); break;
-        }
-    }
-
-    const TwoLotCase& row;
-    const bool long_first;
-    const std::string base = row.seed == 1 ? "base" : "older";
-    const std::string extra = row.seed == 1 ? "extra" : "later";
-    const std::string turn = row.seed == 1 ? "turn" : "reverse";
-    std::vector<Lot> before, after;
-    double after_units = missing;
-
-private:
-    std::vector<Lot> book() const {
-        std::vector<Lot> lots;
-        for (std::size_t i = 0; i < physical_position().lot_count; ++i) {
-            lots.emplace_back(open_trade_entry_id(static_cast<int>(i)),
-                              open_trade_size(static_cast<int>(i)));
-        }
-        return lots;
-    }
-};
-
-template <class T>
-void expect_rows(const char* what, std::vector<T> expected, std::vector<T> actual) {
-    std::sort(expected.begin(), expected.end());
-    std::sort(actual.begin(), actual.end());
-    if (expected == actual) return;
-    ++failures;
-    std::cerr << "FAIL [" << row_name << "] " << what << '\n';
-    const auto print = [](const char* side, const auto& rows) {
-        std::cerr << "  " << side << " (" << rows.size() << "):";
-        for (const auto& row : rows) {
-            std::cerr << " [";
-            std::apply([](const auto&... values) { ((std::cerr << ' ' << values), ...); }, row);
-            std::cerr << " ]";
-        }
-        std::cerr << '\n';
-    };
-    print("expected", expected);
-    print("observed", actual);
-}
-
-void check_two_lots(const TwoLotCase& row, bool long_first) {
-    TwoLotHost host(row, long_first);
-    std::vector<Bar> bars;
-    for (int i = 0; i < 9; ++i) {
-        const double open = 100.0 + i;
-        bars.push_back({open, open + 1.0, open - 1.0, open + 0.5, 100, start + i * interval});
-    }
-    host.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false);
-    CHECK(host.last_error().empty());
-    const double sign = long_first ? 1.0 : -1.0;
-    const auto at = [&](int i) { return bars[i].timestamp; };
-    const auto& base = host.base;
-    const auto& extra = host.extra;
-    const auto& turn = host.turn;
-    const std::string close = "__close__" + base;
-    const std::string end = "__pine_close_all";
-
-    expect_rows<Lot>("seed lots before orders", {{base, sign * row.seed}, {extra, sign * row.seed}},
-                     host.before);
-    const double base_left = row.close_base ? 0.0 : row.seed - row.base_closed_by_turn;
-    const double extra_left = row.seed - row.extra_closed_by_turn;
-    std::vector<Lot> survivors;
-    if (base_left) survivors.emplace_back(base, sign * base_left);
-    if (extra_left) survivors.emplace_back(extra, sign * extra_left);
-    if (row.turn_opened) survivors.emplace_back(turn, -sign * row.turn_opened);
-    expect_rows("lots immediately after turn", survivors, host.after);
-    const double expected_units = sign * (base_left + extra_left - row.turn_opened);
-    if (host.after_units != expected_units) {
-        std::fprintf(stderr, "FAIL [%s] position after turn: expected %g, observed %g\n",
-                     row_name, expected_units, host.after_units);
-        ++failures;
-    }
-
-    std::vector<Fill> fills{{at(1), base, 0, sign * row.seed}, {at(2), extra, 0, sign * row.seed}};
-    if (row.close_base) fills.emplace_back(at(4), close, row.seed, 0);
-    fills.emplace_back(at(4), turn, row.base_closed_by_turn + row.extra_closed_by_turn,
-                       -sign * row.turn_opened);
-    if (expected_units) fills.emplace_back(at(7), end, std::abs(expected_units), 0);
-    std::vector<Fill> actual_fills;
-    for (const auto& event : host.native_events(0)) {
-        if (!event.command) continue;
-        if (const auto* f = std::get_if<native_order::ExecutionAppliedEvent>(&*event.command)) {
-            actual_fills.emplace_back(f->interval_open_ms(), f->request().label, f->closed_units,
-                                      f->opened_units);
-        }
-    }
-    expect_rows("applied fills (bar ms, ID, closed, signed opened)", fills, actual_fills);
-
-    std::vector<Leg> legs, actual_legs; // entry and exit keyed by epoch and ID, signed entry qty
-    if (row.close_base) legs.emplace_back(at(1), base, at(4), close, sign * row.seed);
-    if (row.base_closed_by_turn)
-        legs.emplace_back(at(1), base, at(4), turn, sign * row.base_closed_by_turn);
-    if (row.extra_closed_by_turn)
-        legs.emplace_back(at(2), extra, at(4), turn, sign * row.extra_closed_by_turn);
-    if (base_left) legs.emplace_back(at(1), base, at(7), end, sign * base_left);
-    if (extra_left) legs.emplace_back(at(2), extra, at(7), end, sign * extra_left);
-    if (row.turn_opened) legs.emplace_back(at(4), turn, at(7), end, -sign * row.turn_opened);
-    for (int i = 0; i < host.trade_count(); ++i) {
-        const auto t = host.get_trade(i);
-        actual_legs.emplace_back(t.entry_time, t.entry_id, t.exit_time, t.exit_id,
-                                 t.is_long ? t.qty : -t.qty);
-        if (t.exit_id == end) CHECK(t.exit_comment == "end");
-    }
-    expect_rows("booked trades (entry ms/ID, exit ms/ID, signed qty)", legs, actual_legs);
-    CHECK(host.physical_position().lot_count == 0);
-}
-
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1088,20 +920,6 @@ int main(int argc, char** argv) {
         check_scope_row(row);
         std::fprintf(stderr, "[%s] %s (%d failed checks)\n",
                      row.name, failures == before ? "PASS" : "FAIL", failures - before);
-    }
-    if (argc == 1 || std::strcmp(argv[1], "two-lot-market") == 0) {
-        matched = true;
-        for (bool long_first : {true, false}) {
-            for (const auto& row : two_lot_cases) {
-                const std::string label = std::string(long_first ? "long/" : "short/") + row.name;
-                row_name = label.c_str();
-                const int before = failures;
-                check_two_lots(row, long_first);
-                std::fprintf(stderr, "[%s] %s (%d failed checks)\n", row_name,
-                             failures == before ? "PASS" : "FAIL", failures - before);
-            }
-        }
-        row_name = "";
     }
     if (!matched) {
         std::fprintf(stderr, "unknown pending-order row\n");
