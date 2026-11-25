@@ -7523,6 +7523,8 @@ static const native_order::RequestHandle* ended_without_fill(const Event& e) noe
                   || std::is_same_v<Event, native_order::NoEffectEvent>) {
         return &e.handle();
     }
+    if constexpr (std::is_same_v<Event, native_order::ReplacedEvent>)
+        return e.kept_handle() ? nullptr : &e.predecessor();
     return nullptr;
 }
 
@@ -7616,6 +7618,17 @@ void PineExecutionAdapter::observe_terminal_receipts() {
                         placement->second.requested_qty, kNaN};
                     retire(handle);
                     if (opening) cancel_bracket_origin(handle);
+                }
+            } else if constexpr (std::is_same_v<Event, native_order::ReplacedEvent>) {
+                // Script replacement retired its predecessor at placement.
+                // A host can replace the close directly, outside that path.
+                if (ended_parent && magnified_fifo_closes(host, config_, bar_magnifier_)) {
+                    const auto found = placement_.find(ended_parent->incarnation);
+                    if (found != placement_.end()
+                        && (found->second.family == PineOrderFamily::Close || found->second.family == PineOrderFamily::CloseAll)
+                        && std::find(live_handles_.begin(), live_handles_.end(), *ended_parent) != live_handles_.end()) {
+                        retire(*ended_parent);
+                    }
                 }
             } else if constexpr (std::is_same_v<Event, native_order::ActivatedEvent>) {
                 if (std::holds_alternative<native_order::StopLimitLive>(event.after)) {
