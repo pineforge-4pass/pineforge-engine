@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import math
 import sys
 import tempfile
 import unittest
@@ -202,28 +201,25 @@ class FragmentConsolidationIdentityTests(unittest.TestCase):
                 tv_rows, engine_rows, preserve), 1)
 
     def test_tolerant_projection_uses_strict_boundary(self) -> None:
-        tv_rows = [
-            trade(1, 100, 100.0, 200, 102.0, entry_signal="A"),
-            trade(2, 100, 100.0, 200, 102.0, entry_signal="B"),
-        ]
-        last_inside = 100.0 / (1.0 - STRICT_ENTRY_DELTA)
-        first_outside = math.nextafter(last_inside, math.inf)
-        self.assertLess(
-            relative_max(100.0, last_inside), STRICT_ENTRY_DELTA)
-        self.assertGreaterEqual(
-            relative_max(100.0, first_outside), STRICT_ENTRY_DELTA)
-        preserve = distinct_entry_fill_keys(tv_rows)
-
-        def mismatches_at(price: float) -> int:
+        def mismatches_at(tv_price: float, price: float) -> int:
+            tv_rows = [
+                trade(1, 100, tv_price, 200, 102.0, entry_signal="A"),
+                trade(2, 100, tv_price, 200, 102.0, entry_signal="B"),
+            ]
             engine_rows = [
                 trade(1, 100, price, 200, 102.0, entry_identity="41"),
                 trade(2, 100, price, 200, 102.0, entry_identity="42"),
             ]
             return distinct_entry_fill_mismatches(
-                tv_rows, engine_rows, preserve)
+                tv_rows, engine_rows, {(100, tv_price, "long")})
 
-        self.assertEqual(mismatches_at(last_inside), 0)
-        self.assertEqual(mismatches_at(first_outside), 1)
+        for price, expected in ((9.999, 1), (9.999001, 0), (9.998999, 1)):
+            with self.subTest(price=price):
+                self.assertEqual(mismatches_at(10, price), expected)
+        # Above 100 the larger denominator is the engine price: the upper
+        # boundary is 1000000/9999, between these adjacent printed prices.
+        self.assertEqual(mismatches_at(100, 100.0100010001), 0)
+        self.assertEqual(mismatches_at(100, 100.01000100010002), 1)
 
     def test_tolerant_projection_fails_closed_on_non_transitive_overlap(
         self,
