@@ -463,7 +463,8 @@ static int test_rci_constructor_workspace() {
 
 static double rci_pairwise_reference(const std::deque<double>& window) {
     const int n = static_cast<int>(window.size());
-    double squared = 0.0;
+    const double mean = (n - 1) / 2.0;
+    double cross = 0.0, time_ss = 0.0, price_ss = 0.0;
     for (int i = 0; i < n; ++i) {
         int less = 0, equal = 0;
         for (double value : window) {
@@ -471,10 +472,13 @@ static double rci_pairwise_reference(const std::deque<double>& window) {
             equal += value == window[i];
         }
         const double rank = less + (equal - 1) / 2.0;
-        const double difference = static_cast<double>(i) - rank;
-        squared += difference * difference;
+        cross += (i - mean) * (rank - mean);
+        time_ss += (i - mean) * (i - mean);
+        price_ss += (rank - mean) * (rank - mean);
     }
-    return (1.0 - 6.0 * squared / (n * (n * n - 1))) * 100.0;
+    // expectation corrected: rank distance -> rank correlation, because
+    // average ranks have less variance on a nonconstant window with ties.
+    return price_ss == 0.0 ? 50.0 : 100.0 * cross / std::sqrt(time_ss * price_ss);
 }
 
 static int test_rci_live_window_values() {
