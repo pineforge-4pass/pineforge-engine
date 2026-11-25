@@ -2575,8 +2575,9 @@ void source::PineRuntimeSecurityCursor::feed(
         }
         try {
             PineRequestDeliveryScope delivery_scope(*owner, *this, facts, bar.timestamp);
-            // Preserve BASE's actual completion forwarding independently of
-            // the selection descriptor (including a replay's ineligibility).
+            internal::AmbientEmaSeedingScope warmup(
+                NativeExecutionConsumer::bound(*owner).pump_ambient(),
+                owner->security_range_start_na_warmup_);
             deliver(bar, complete);
         } catch (...) {
             selected_request_available = previous_selected;
@@ -2593,6 +2594,8 @@ void source::PineRuntimeSecurityCursor::feed(
     }
     prior_input = event.bar.timestamp;
     if (no_loaded_bars) return;
+    if (owner && owner->security_range_start_na_warmup_ &&
+        aggregator.bucket_open_ms(event.bar.timestamp) < owner->security_range_start_ms_) return;
     if (subdivision) {
         for (const auto& sub_bar : runtime_subdivide(event.bar, *subdivision)) {
             slot_new = true;
