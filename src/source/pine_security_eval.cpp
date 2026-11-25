@@ -77,6 +77,13 @@ void ensure_supported_lower_tf_emulation_flags(bool lookahead_on, bool gaps_on) 
 
 
 // --- register_security_eval ---
+void source::PineStrategyHost::register_security_chart_eval(
+        int sec_id, const std::string& requested_tf, const std::string& input_tf,
+        bool lookahead_on, bool gaps_on, bool heikinashi) {
+    register_security_eval(sec_id, requested_tf, input_tf, lookahead_on, gaps_on, heikinashi, true);
+    pine_security_state(sec_id).separate_chart_publication = true;
+}
+
 void source::PineStrategyHost::register_security_eval(
         int sec_id, const std::string& requested_tf, const std::string& input_tf,
         bool lookahead_on, bool gaps_on, bool heikinashi) {
@@ -249,7 +256,7 @@ source::PineRequestReadBinding source::PineStrategyHost::current_request_read(
 
 void source::PineStrategyHost::dispatch_pine_request(
         SecurityEvalState& state, const Bar& bar, bool publication,
-        std::int64_t requested_slot, bool actual_complete) {
+        std::int64_t requested_slot, bool actual_complete, const Bar* chart_bar) {
     PineSecurityEvalState foreign_sidecar;
     auto found = pine_security_states_.find(state.sec_id);
     PineSecurityEvalState& pine = found == pine_security_states_.end()
@@ -297,6 +304,17 @@ void source::PineStrategyHost::dispatch_pine_request(
     try {
         PineRequestDeliveryScope delivery_scope(*this, state.sec_id, delivery, bar.timestamp);
         dispatch_security_eval(state, bar, publication, requested_slot);
+        if (chart_bar) {
+            if (auto* publisher = dynamic_cast<PineSecurityChartPublisher*>(this)) {
+                internal::AmbientBarContextScope bar_scope(
+                    NativeExecutionConsumer::bound(*this).pump_ambient(), requested_slot, 0);
+                // A sparse bucket can start trading after its requested label.
+                // Project the values, not the first child's chart timestamp.
+                Bar projected = *chart_bar;
+                projected.timestamp = bar.timestamp;
+                publisher->publish_security_chart(state.sec_id, projected);
+            }
+        }
     } catch (...) {
         pine.selected_request_available = previous_selected;
         pine.selected_request_delivery = previous_selected_delivery;
@@ -1020,6 +1038,10 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         return projection.first_child_ms <= input_bar.timestamp ? &projection : nullptr;
     };
 
+    // The new mode reads the same table, but never consumes an entry as a
+    // real delivery. Its aggregator and fixed clock take their ordinary paths.
+    const auto* chart_projection = pine.separate_chart_publication ? projection_at_input() : nullptr;
+    const Bar* chart_bar = chart_projection ? &chart_projection->bar : nullptr;
     if (pine_native_fixed_security_clock(state)) {
         const auto& consumer = NativeExecutionConsumer::bound(*this);
         const Bar* calling = nullptr;
@@ -1071,7 +1093,14 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
                 } else {
                     ++state.eval_partial_count;
                 }
-                dispatch_pine_request(state, bar, complete, slot, complete);
+                // Catch-up deliveries of other native periods already carry
+                // their final value. Only the selected period reads ahead.
+                const Bar* visible = chart_bar;
+                if (visible && (period != label
+                    || state.aggregator.bucket_open_ms(visible->timestamp) != label)) {
+                    visible = &bar;
+                }
+                dispatch_pine_request(state, bar, complete, slot, complete, visible);
                 delivered_earlier_period = period < label;
             };
             const auto publish_native_through = [&](std::int64_t through) {
@@ -1117,7 +1146,8 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
             // A historical projection is itself a deliberate aggregate of
             // chart inputs. It can fill the selected period even when the
             // finer feed has no observations there.
-            const auto* projection = state.native_bars_by_label.count(label) == 0
+            const auto* projection = !pine.separate_chart_publication
+                && state.native_bars_by_label.count(label) == 0
                 ? projection_at_input() : nullptr;
             if (projection && state.aggregator.bucket_open_ms(projection->bar.timestamp) != label)
                 projection = nullptr;
@@ -1196,7 +1226,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         return;
     }
 
-    if (historical_security_lookahead_projection_active_
+    if (!pine.separate_chart_publication && historical_security_lookahead_projection_active_
             && !pine.historical_projections.empty()) {
         const auto* projection = projection_at_input();
         state.feed_count++;
@@ -1344,8 +1374,11 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
             state.current_sub_bar_count = 2;
         }
         pine.last_published_label = ab.bar.timestamp;
+        // A lazy completion belongs to the previous period. The fresh peek
+        // below is the first delivery that can publish this input's projection.
         dispatch_pine_request(state, ab.bar, publish,
-                              state.eval_complete_count - 1, true);
+                              state.eval_complete_count - 1, true,
+                              chart_bar && boundary_emission ? &ab.bar : chart_bar);
         if (boundary_emission) {
             Bar fresh = state.aggregator.current();
             if (pine.heikinashi) apply_ha(fresh, /*commit=*/false);
@@ -1355,7 +1388,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
             const bool peek_publish = pine.publish_gate_tf_seconds > 0
                 && calling_bar_complete;
             dispatch_pine_request(state, fresh, peek_publish,
-                                  state.eval_complete_count, false);
+                                  state.eval_complete_count, false, chart_bar);
         }
     } else if (pine.lookahead_on) {
         if (pine.heikinashi) apply_ha(ab.bar, /*commit=*/false);
@@ -1368,7 +1401,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
             && calling_bar_complete;
         // Partial (in-progress) bucket: the index the completion will carry.
         dispatch_pine_request(state, ab.bar, publish,
-                              state.eval_complete_count, false);
+                              state.eval_complete_count, false, chart_bar);
     } else {
         state.current_bar = ab.bar;
         if (pine.gaps_on) {

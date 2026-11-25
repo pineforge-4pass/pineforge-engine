@@ -1271,6 +1271,7 @@ void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const
             if (pine.historical_lookahead_projection) {
                 f.s("historical-lookahead-site/v1");
             }
+            if (pine.separate_chart_publication) f.s("security-chart-publication/v1");
             if (pine.native_gap_chart_open) {
                 f.s("native-gap-chart/v1");
                 f.b(pine.native_gap_chart_open.has_value());
