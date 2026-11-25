@@ -2546,45 +2546,47 @@ void PineExecutionAdapter::purge_brackets_after_applied_reversal(
         const PlacementSnapshot& reversal, const native_order::ExecutionAppliedEvent& fill) {
     const bool prior_long = fill.opened_units < 0.0;
     auto& host = require_host();
-    const auto& book = detail::run_consumer(host).request_core();
+    const auto& consumer = detail::run_consumer(host);
     const auto targets_prior = [&](const PlacementSnapshot& leg) {
         if (leg.from_entry.empty() || leg.void_issue) return false;
         const auto cohort = cohorts_by_id_.find(leg.from_entry);
-        if (cohort == cohorts_by_id_.end()
-            || !cohort_opened_on_side(cohort->second, prior_long)) {
-            return false;
-        }
-        // An accepted opening cannot belong to the new side if the ID only
-        // ever opened on the old side. Require a binding: an unbound leg
-        // waiting for a staged order can share an ID with a retired opening.
+        if (cohort == cohorts_by_id_.end() || !cohort_opened_on_side(cohort->second, prior_long)) return false;
+        // An unbound leg can share an ID with a retired opening.
         const auto* parent = &leg.bracket_origin;
-        const bool held_in_closed_cycle = !leg.pending_bound_exit
-            && cohort->second.cycle == fill.cycle_before;
+        const bool held_in_closed_cycle = !leg.pending_bound_exit && cohort->second.cycle == fill.cycle_before;
         if ((parent->incarnation != 0 || held_in_closed_cycle)
             && !cohort_opened_on_side(cohort->second, !prior_long)) return true;
         if (!leg.pending_bound_exit) {
             if (*parent == fill.handle()) return false;
-            // The opening that filled no longer needs to be working. For a
-            // whole exit without a handle, its closed lot takes precedence
-            // over a different order now resting under that ID.
+            // A closed lot takes precedence over a different order now resting under that ID.
             for (std::size_t i = 0; i < fill.closed_trade_count; ++i) {
                 const auto lot = host.closed_trade(fill.first_trade_index + i);
-                const bool owns_lot = parent->incarnation != 0
-                    ? lot.entry_incarnation == parent->incarnation : lot.entry_id == leg.from_entry;
-                if (owns_lot) return lot.is_long == prior_long;
+                if (parent->incarnation ? lot.entry_incarnation == parent->incarnation : lot.entry_id == leg.from_entry)
+                    return lot.is_long == prior_long;
+                // A whole ANY bracket can still name the unfilled order
+                // that its entry replaced. The trade names the successor.
+                const auto& levels = leg.exit_levels;
+                if (parent->incarnation && parent->incarnation < lot.entry_incarnation
+                    && config_.close_entries_rule_any && !config_.process_orders_on_close
+                    && !bar_magnifier_ && !stream_mode_ && lot.is_long == prior_long
+                    && leg.command_sequence < reversal.command_sequence
+                    && leg.from_entry == reversal.source_id && lot.entry_id == leg.from_entry
+                    && !price_present(reversal.exit_levels.limit) && !price_present(reversal.exit_levels.stop)
+                    && finite_positive(levels.limit) && finite_positive(levels.stop) && std::isnan(levels.trail_offset)
+                    && whole_level_exit(levels.limit, levels.stop, levels.trail_points, levels.trail_price,
+                                        levels.profit_ticks, levels.loss_ticks, leg.requested_qty, leg.qty_percent)
+                    && consumer.same_request_chain(*parent, {fill.handle().run, lot.entry_incarnation}))
+                    return true;
             }
         }
         // Only an exit waiting for the ID follows its order through replacement.
         if (leg.pending_bound_exit || parent->incarnation == 0) {
             const auto order = live_by_source_key_.find(checked_live_key(leg.from_entry));
-            // With no pending parent, a whole exit of the old cycle ends
-            // even when another ID supplied the last lot the fill closed.
-            if (order == live_by_source_key_.end()) {
-                return held_in_closed_cycle;
-            }
+            // Without a pending parent, a whole exit follows its closed cycle.
+            if (order == live_by_source_key_.end()) return held_in_closed_cycle;
             parent = &order->second;
         }
-        if (*parent == fill.handle() || !book.find_live(*parent)) return false;
+        if (*parent == fill.handle() || !consumer.request_core().find_live(*parent)) return false;
         const auto placed = placement_.find(parent->incarnation);
         return placed != placement_.end() && placed->second.opening
             && placed->second.source_id == leg.from_entry && placed->second.is_long == prior_long;
@@ -2598,7 +2600,6 @@ void PineExecutionAdapter::purge_brackets_after_applied_reversal(
         const bool exit = candidate.family == PineOrderFamily::ExitLimit
             || candidate.family == PineOrderFamily::ExitStop
             || candidate.family == PineOrderFamily::ExitTrail;
-        // A call staged while flat for a pending entry keeps its placement rule.
         const auto margin_side = static_cast<PositionSide>(candidate.projection_position_side);
         const bool stale_margin = candidate.family == PineOrderFamily::Margin
             && (margin_side == PositionSide::FLAT
@@ -2607,15 +2608,14 @@ void PineExecutionAdapter::purge_brackets_after_applied_reversal(
         if ((exit && targets_prior(candidate)) || stale_margin) stale.push_back(handle);
     }
     for (const auto& handle : stale) {
-        if (book.find_live(handle)) (void)host.cancel(handle);
+        if (consumer.request_core().find_live(handle)) (void)host.cancel(handle);
         retire(handle);
     }
     const auto held = cohorts_by_id_.held_rows();
     for (auto at = held.begin(); at != held.end();) {
         const auto current = at++;
         auto& cohort = *current;
-        // The flip cleared every held cohort before this opening was credited,
-        // so the reversal's cohort can only hold the new credit.
+        // The reversal's cohort now holds only the new credit.
         if (cohort.first == reversal.source_id) continue;
         if (cohort_opened_on_side(cohort.second, prior_long)) {
             if (position_tail_summary_) {

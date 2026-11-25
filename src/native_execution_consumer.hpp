@@ -722,13 +722,13 @@ public:
     void set_settlement_carry(bool enabled) noexcept { settlement_carry_ = enabled; }
     uint64_t carried_settlements() const noexcept { return carried_settlements_; }
 
-    // The request core, read-only: tests/test_native_definition_index.cpp
-    // holds its cohort receipts, rosters and membership answers -- the chain
-    // index V19-B keeps in the core -- against an oracle folded over the whole
-    // journal. No host reaches it.
+    // The request book and the replacement identity used for cohort membership.
     const native_order::WorkingRequestCore& request_core() const noexcept { return requests_; }
-    // Private-header bridge for the host integration stage. No Pine-specific
-    // adapter dependency or installed/public provider setter is introduced.
+    bool same_request_chain(const native_order::RequestHandle& a, const native_order::RequestHandle& b) const {
+        const auto root = requests_.canonical_cohort_origin(a);
+        return root && root == requests_.canonical_cohort_origin(b);
+    }
+    // Borrow the history owner for the current run.
     const detail::NativeHistoryOwner* managed_history_owner() const noexcept {
         return requests_.managed_history_owner();
     }
