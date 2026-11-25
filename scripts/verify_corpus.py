@@ -225,8 +225,9 @@ def _ohlcv_span_ms(strategy_dir: Path) -> tuple[int | None, int | None, int]:
                     second = v
                 last = v
             bar_ms = (second - first) if (first is not None and second is not None) else 0
-            # Normalize seconds to ms if it looks like seconds.
-            if first is not None and first < 10**12:
+            # Infer seconds only when both endpoints fit in ten digits.
+            # Magnitude alone cannot distinguish the units near the epoch.
+            if first is not None and last is not None and max(abs(first), abs(last)) < 10**10:
                 first *= 1000
                 if last is not None:
                     last *= 1000
