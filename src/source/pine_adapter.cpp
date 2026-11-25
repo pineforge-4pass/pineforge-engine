@@ -3978,6 +3978,9 @@ native_order::Group PineExecutionAdapter::group_for(const std::string& name, int
 void PineExecutionAdapter::remember(const native_order::RequestHandle& handle,
                                     PlacementSnapshot&& snapshot) {
     snapshot.filled_exit = false;
+    // A re-armed default entry cannot inherit its predecessor's closing fill.
+    if (snapshot.family == PineOrderFamily::Entry && !std::isfinite(snapshot.requested_qty))
+        snapshot.frozen_reversal_transaction = kNaN;
     // Most rows arrive above the high water. An anchored leg can be adopted
     // later: K3 must compare that new peer against old (even resolved)
     // candidates too. A wholesale rewrite invalidates the immutable-field
@@ -17190,16 +17193,23 @@ void PineExecutionAdapter::apply_frozen_reversal_close(
 }
 
 namespace {
-bool declined_stop_from_flat(const PlacementSnapshot& row, double book,
-                            const native_order::Trigger& trigger) noexcept {
+bool declined_default_stop_reversal(const PlacementSnapshot& row,
+                                    const native_order::Trigger& trigger) noexcept {
     // A default percent stop up to 100% has its own placement check.
     // Explicit quantities, fixed, cash and larger percentages use the general policy.
-    return book == 0.0 && row.affordability_close_only && !row.affordability_policy_active
+    return row.family == PineOrderFamily::Entry && !std::isfinite(row.requested_qty)
+        && row.affordability_close_only && !row.affordability_policy_active
         && std::isnan(row.exit_levels.limit) && finite_positive(row.exit_levels.stop)
         && std::holds_alternative<native_order::Stop>(trigger)
         && row.projection_position_side == static_cast<std::int32_t>(
             row.is_long ? PositionSide::SHORT : PositionSide::LONG)
         && finite_positive(row.projection_tv_carry_qty);
+}
+
+bool declined_stop_from_flat(const PlacementSnapshot& row, double book,
+                            const native_order::Trigger& trigger) noexcept {
+    return book == 0.0 && finite_positive(row.frozen_reversal_transaction)
+        && declined_default_stop_reversal(row, trigger);
 }
 } // namespace
 
@@ -18572,10 +18582,10 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         }
         if (affordability_close_only) {
             if (!opposite) {
-                // The declined leg contributes no units. The stop can still
-                // transact the quantity it was placed to close.
+                // Only a protective stop that closed the placement position
+                // leaves its closing quantity executable from flat.
                 result.units = declined_stop_from_flat(source, facts.position.signed_units, trigger)
-                    ? source.projection_tv_carry_qty : 0.0;
+                    ? source.frozen_reversal_transaction : 0.0;
                 return result;
             }
             result.units = keep_mc_close_surplus ? 1.0
@@ -27258,6 +27268,26 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         adopted.sizing = sizing_snapshot();
         placement_.try_emplace(event.handle().incarnation, adopted); invalidate_retirement();
         placement_snapshot = adopted;
+    }
+    if (placement_snapshot && placement_snapshot->family == PineOrderFamily::ExitStop
+        && (std::isfinite(placement_snapshot->exit_levels.stop)
+            || finite_positive(placement_snapshot->exit_levels.loss_ticks))
+        && event.closed_units > 0.0 && event.cycle_before > 0 && event.cycle_after == 0
+        && has_live_family(PineOrderFamily::Entry)) {
+        // Freeze only the closing quantity of reversals placed on the cycle
+        // this stop ended. A partial fill or a stop on a later position cannot
+        // give an older reversal a transaction. A trail with no stop or loss
+        // can use a native stop too, but is not the protective stop leg.
+        const auto& placements = std::as_const(placement_);
+        for (const auto& order : detail::run_consumer(require_host()).request_core().live()) {
+            const auto id = order.handle().incarnation;
+            const auto found = placements.find(id);
+            if (found == placements.end()) continue;
+            const auto& row = found->second;
+            if (row.placement_cycle == event.cycle_before
+                && declined_default_stop_reversal(row, order.request().trigger))
+                placement_.at(id).frozen_reversal_transaction = row.projection_tv_carry_qty;
+        }
     }
     if (placement_snapshot && event.opened_units != 0.0
         && (placement_snapshot->family == PineOrderFamily::Entry
