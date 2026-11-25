@@ -79,6 +79,12 @@ class EntryPriceGateTests(unittest.TestCase):
             # The downward gap of 0.017578125 is exactly on the TV limit.
             (11.71875, [11.73575, 11.73634, 11.701171875],
              [(11.71875, 11.73575), (11.71875, 11.701171875)]),
+            # At 100 the inclusive limit is 0.15 in either direction.
+            (100, [100.149999, 100.15, 100.150001, 99.85],
+             [(100, 100.149999), (100, 100.15), (100, 99.85)]),
+            # A 0.15 gap is just outside the limit below 100.
+            (99.99999999999982, [99.99999999999982, 99.84999999999982],
+             [(99.99999999999982, 99.99999999999982)]),
         ]
         for tv_price, engine_prices, expected in cases:
             with self.subTest(tv_price=tv_price):
