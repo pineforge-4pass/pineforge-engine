@@ -128,6 +128,31 @@ class MoneyTests(unittest.TestCase):
                 self.assert_pairs(r, 6)
                 self.assertEqual(r.pnl_deltas, [delta] * 6)
 
+    def test_profit_p90_is_strict_at_the_decimal_limit(self):
+        for n in (6, 7):
+            tv = [lot(i * 900, pnl=10) for i in range(n)]
+            for proceeds, millionths, allowed in (
+                (10.10, 100000, False), (10.099999, 99999, True),
+                (10.100001, 100001, False),
+            ):
+                with self.subTest(n=n, proceeds=proceeds):
+                    r = grade(tv, [replace(t, pnl=proceeds) for t in tv])
+                    self.assert_pairs(r, n)
+                    self.assertEqual(len(r.pnl_deltas), n)
+                    self.assertEqual(r.pnl_ok, allowed)
+                    self.assertAlmostEqual(r.pnl_p90, millionths / 10000000)
+                    if proceeds == 10.10:
+                        self.assertEqual(r.pnl_p90, 1 / 100)
+                    self.assertEqual(r.label, "excellent" if allowed else "strong")
+
+        # At index 4.5 the two different endpoints must still interpolate.
+        tv = [lot(i * 900, pnl=10) for i in range(6)]
+        eng = [replace(t, pnl=amount) for t, amount in zip(tv, (10, 10, 10, 10, 11, 12))]
+        r = grade(tv, eng)
+        self.assert_pairs(r, 6)
+        self.assertEqual(len(r.pnl_deltas), 6)
+        self.assertAlmostEqual(r.pnl_p90, (1 + 2) / (2 * 10))
+
 
 if __name__ == "__main__":
     unittest.main()
