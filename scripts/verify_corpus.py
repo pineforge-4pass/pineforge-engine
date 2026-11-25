@@ -92,7 +92,7 @@ _PINE_NON_CODE_PATTERN = re.compile(
     r"|(?P<quote>\"\"\"|'''|\"|')(?:\\.|(?!(?P=quote))[^\\])*(?P=quote)",
     re.DOTALL,
 )
-_TRAIL_PATTERN = re.compile(r"\btrail_(?:points|offset|price)\s*=(?!=)")
+_TRAIL_PATTERN = re.compile(r"\btrail_(?:points|offset|price)\s*:?=(?![=>])")
 
 # Per-strategy near-zero PnL filter: trades whose |tv_pnl| < $0.01 are
 # excluded from pnl p90 so scratch trades don't blow up the per-trade ratio.
