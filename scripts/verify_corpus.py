@@ -37,6 +37,8 @@ from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
+from fractions import Fraction
+from math import isfinite
 from pathlib import Path
 
 from parity_paths import resolve_paths
@@ -246,6 +248,7 @@ def _ohlcv_span_ms(
 # Margin after the last matched entry in the common comparison window.
 MATCH_WINDOW_SECONDS = 3600    # 1 hour
 ENTRY_PRICE_GATE_RATIO = 0.0015
+_DECIMAL_ENTRY_PRICE_GATE_RATIO = Fraction(str(ENTRY_PRICE_GATE_RATIO))
 
 # TradingView "Date and time" columns are bare wall-clock strings with no
 # timezone marker. They reflect the chart's display timezone at export.
@@ -1100,8 +1103,15 @@ def tv_timezone_offset(meta: dict) -> int:
     return TV_TZ_BY_NAME.get(tz_name, TV_CSV_TZ_OFFSET_HOURS)
 
 
-def entry_price_gate(tv_entry_price: float) -> float:
-    return ENTRY_PRICE_GATE_RATIO * abs(tv_entry_price)
+def _decimal_entry_price(price: float) -> Fraction | float:
+    # Use the round-trip decimal quote for finite prices.
+    return Fraction(str(price)) if isfinite(price) else price
+
+
+def entry_price_gate(tv_entry_price: Fraction | float) -> Fraction | float:
+    ratio = (_DECIMAL_ENTRY_PRICE_GATE_RATIO if isinstance(tv_entry_price, Fraction)
+             else ENTRY_PRICE_GATE_RATIO)
+    return ratio * abs(tv_entry_price)
 
 
 def align_by_time(tv: list[TradePair], eng: list[TradePair]) -> list[tuple[TradePair, TradePair]]:
@@ -1112,6 +1122,8 @@ def align_by_time(tv: list[TradePair], eng: list[TradePair]) -> list[tuple[Trade
     used_eng: set[int] = set()
     j_start = 0
     for tv_t in tv:
+        tv_quote = _decimal_entry_price(tv_t.entry_price)
+        price_limit = entry_price_gate(tv_quote)
         # Advance the engine cursor to the first plausibly-matching candidate.
         while j_start < len(eng) and eng[j_start].entry_time < tv_t.entry_time:
             j_start += 1
@@ -1125,7 +1137,7 @@ def align_by_time(tv: list[TradePair], eng: list[TradePair]) -> list[tuple[Trade
                 break
             if e.direction != tv_t.direction:
                 continue
-            if abs(e.entry_price - tv_t.entry_price) > entry_price_gate(tv_t.entry_price):
+            if abs(_decimal_entry_price(e.entry_price) - tv_quote) > price_limit:
                 continue
             price_gap = abs(e.entry_price - tv_t.entry_price)
             if best_price_gap is None or price_gap < best_price_gap:
