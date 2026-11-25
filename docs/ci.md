@@ -362,8 +362,8 @@ fail the multi-shard accounting. Excluded runs use the strict skip policy
 above, including when `minTests` is null. The unsupported-WebSocket allowance
 remains confined to full runs without the overlay.
 
-Every shard reports the same **undivided** `minTests`: Release 945 with the
-overlay or 636 without it (309 pinned placeholders), kernel 368 with the
+Every shard reports the same **undivided** `minTests`: Release 941 with the
+overlay or 634 without it (307 pinned placeholders), kernel 368 with the
 overlay or 337 without it (31 pinned placeholders). Debug, sanitizers and native
 default to JSON null; live-only floors stay 21 (20 without transport.cpp). An explicit
 floor can raise minimums; a multi-shard run refuses a lower profile floor.
@@ -501,7 +501,7 @@ For `N > 1`, global floors and local accounting are separate obligations:
   registry's runnable capacity. Without the overlay, capacity is the full
   registered count minus the registered pinned private-fixture names;
   with the overlay it is the full registered count. The
-  floor itself remains fixed at 636/337 absent or 945/368 present for
+  floor itself remains fixed at 634/337 absent or 941/368 present for
   Release/kernel, or the explicit `--min-tests` value. It is never divided by
   the shard count or lowered by an observed skip.
 * Each shard requires `ran + permitted skips = its own selected count`, with
@@ -769,7 +769,7 @@ observed skips:
 
 | profile | floor, overlay present | floor, overlay absent | registered floor basis (present / absent) |
 |---|---|---|---|
-| `release` | 945 | 636 | 945 / 945 |
+| `release` | 941 | 634 | 941 / 941 |
 | `kernel` | 368 | 337 | 368 / 368 |
 
 With the variable set and non-empty (the private-fixture overlay is present in
@@ -809,8 +809,8 @@ The PR registration floors are the keys of `EXCLUDED_REGISTERED_MIN` in
 `scripts/ci_verify.py`, one for each profile whose pull-request leg excludes
 the label; their values are in
 [PR tier versus MAIN/RELEASE](#pr-tier-versus-mainrelease-what-is-excluded-where).
-The full-run release and kernel floors are the table's own numbers above (636
-and 337 rows absent, 945 and 368 with the overlay present). A pull request's
+The full-run release and kernel floors are the table's own numbers above (634
+and 337 rows absent, 941 and 368 with the overlay present). A pull request's
 release and kernel legs exclude the label and are held to the registration
 floor instead; the full runs on push and dispatch exclude no label and are
 held to these run floors.
@@ -1514,7 +1514,7 @@ same offset would give 309 for `kernel`, 17 rows below the kernel registry at
 that vintage (326), so the original `kernel` key took 337: 34 below the 371
 registered in every sampled pull-request and push run. The lab job's `ctest -N`
 confirms both or moves them. The
-run floors in the table above (945 and 368 with the overlay present, 636 and
+run floors in the table above (941 and 368 with the overlay present, 634 and
 337 absent) are not read on an excluded run; push, dispatch and every other
 full run still enforce them.
 
