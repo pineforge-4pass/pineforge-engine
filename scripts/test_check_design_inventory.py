@@ -69,6 +69,18 @@ Columns: **Feature** · **Native today** · **Class** · **Lane** · **Sources**
 TAIL = '\n## 2. Structural work\n\nnothing here.\n'
 
 
+UNIT_HELPER = """function(pineforge_add_unit_test test_name)
+    add_executable(${test_name} ${test_name}.cpp)
+    add_test(NAME ${test_name} COMMAND ${test_name})
+endfunction()
+"""
+
+UNIT_LOOP = """foreach(test_name ${TEST_SOURCES})
+    pineforge_add_unit_test(${test_name})
+endforeach()
+"""
+
+
 def design(*rows: str) -> str:
     return HEAD + ''.join(row.rstrip('\n') + '\n' for row in rows) + TAIL
 
@@ -310,6 +322,112 @@ class MustNotFire(unittest.TestCase):
         with tree(design(row)) as made:
             code, out = made.run()
         self.assertEqual(code, 0, out)
+
+
+class SelectedRegistrations(unittest.TestCase):
+    def test_explicit_unit_registration_after_the_source_list_loop(self):
+        cmake = UNIT_HELPER + """set(TEST_SOURCES test_kernel_one test_via_local test_adapter_one)
+if(NOT PINEFORGE_BUILD_SOURCE_LAYER)
+    set(_pf_source_bound_tests test_via_local test_adapter_one)
+    if(_pf_source_bound_tests)
+        list(REMOVE_ITEM TEST_SOURCES ${_pf_source_bound_tests})
+    endif()
+endif()
+""" + UNIT_LOOP
+        fragment = """list(APPEND TEST_SOURCES test_via_local)
+pineforge_add_unit_test(test_via_local)
+if(TARGET test_via_local)
+    add_test(NAME read_clock COMMAND test_via_local --clock)
+endif()
+"""
+        # The local header reaches the adapter. Registration alone cannot
+        # make this file a source-free witness for the document.
+        row = '| AB | clock | **no** (`tests/test_via_local.cpp`) |'
+        primary = 'Test #1: test_kernel_one\nTest #2: test_via_local\n'
+        header = '#ifdef WITH_ADAPTER\n' + LOCAL_FIXTURE + '#endif\n'
+        with tree(design(row), cmake=cmake + INCLUDES, extra={
+                'tests/lanes.d/clock.cmake': fragment,
+                'tests/shared_fixture.hpp': header}) as made:
+            listing = made.root / 'listing.txt'
+            listing.write_text(primary + 'Test #3: read_clock\n')
+            code, out = made.run('--ctest-list', str(listing))
+            self.assertEqual(code, 0, out)
+
+            listing.write_text(primary)
+            code, out = made.run('--ctest-list', str(listing))
+            self.assertEqual(code, 1, out)
+            self.assertIn('kernel build did not register (test_via_local.cpp: read_clock)', out)
+
+            # Appending a TU after the loop without calling the helper does
+            # not register it. A supplied listing must still expose that row.
+            (made.root / 'tests/lanes.d/clock.cmake').write_text(
+                fragment + 'list(APPEND TEST_SOURCES test_kernel_two)\n')
+            listing.write_text(primary + 'Test #3: read_clock\nTest #4: test_kernel_two\n'
+                               'Test #5: test_adapter_one\n')
+            code, out = made.run('--ctest-list', str(listing))
+            self.assertEqual(code, 1, out)
+            self.assertIn('compiled CTest rows missing from the kernel inventory: test_kernel_two', out)
+            self.assertIn('the reach walk calls source-bound (test_adapter_one)', out)
+
+            (made.root / guard.DESIGN).write_text(design(
+                '| AB | clock | **no** **Closed:** (`tests/test_kernel_two.cpp`) |'))
+            code, out = made.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('no kernel-profile test', out)
+
+    def test_script_registration_uses_the_selected_module_provider(self):
+        command = ('add_test(NAME clock_read COMMAND ${CMAKE_COMMAND} -E env '
+                   '"CLOCK=$<TARGET_FILE:clock_plugin>" ${Python3_EXECUTABLE} '
+                   '${CMAKE_CURRENT_SOURCE_DIR}/read_clock.py)\n')
+        # The provider can be defined after add_test. Its sources are not a
+        # test executable, and the library has no CTest row of its own.
+        provider = 'add_library(clock_plugin MODULE clock_plugin.cpp test_clock_step.cpp)\n'
+        row = '| AB | clock | **no** (`tests/test_clock_step.cpp`) |'
+        cmake = UNIT_HELPER + 'set(TEST_SOURCES test_kernel_one)\n' + UNIT_LOOP
+        baseline = 'Test #1: test_kernel_one\n'
+        with tree(design(row), cmake=cmake + command + provider, extra={
+                'tests/clock_plugin.cpp': 'int clock_step();\n'
+                                          'extern "C" int clock_read() { return 16 + clock_step(); }\n',
+                'tests/test_clock_step.cpp': 'int clock_step() { return 1; }\n',
+                'tests/read_clock.py': 'import ctypes, os\n'
+                                       'assert ctypes.CDLL(os.environ["CLOCK"]).clock_read() == 17\n'
+        }) as made:
+            listing = made.root / 'listing.txt'
+            listing.write_text(baseline + 'Test #2: clock_read\n')
+            code, out = made.run('--ctest-list', str(listing))
+            self.assertEqual(code, 0, out)
+
+            listing.write_text(baseline)
+            code, out = made.run('--ctest-list', str(listing))
+            self.assertEqual(code, 1, out)
+            self.assertIn('kernel build did not register (clock_plugin.cpp: clock_read)', out)
+
+            (made.root / guard.TESTS_CMAKE).write_text(
+                cmake + 'if(PINEFORGE_BUILD_SOURCE_LAYER)\n' + command + provider + 'endif()\n')
+            listing.write_text(baseline + 'Test #2: clock_read\n')
+            code, out = made.run('--ctest-list', str(listing))
+            self.assertEqual(code, 1, out)
+            self.assertIn('compiled CTest rows missing from the kernel inventory: clock_read', out)
+
+            (made.root / guard.TESTS_CMAKE).write_text(cmake + command + 'if(UNKNOWN)\n'
+                                                      + provider + 'endif()\n')
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code, _ = made.run('--ctest-list', str(listing))
+            self.assertEqual(code, 2)
+            self.assertIn('NOT COMPARED:', err.getvalue())
+            self.assertIn('UNKNOWN', err.getvalue())
+
+            for bad_provider in (provider.replace('test_clock_step.cpp', 'missing.cpp'),
+                                 'if(OFF)\n' + provider + 'endif()\n'):
+                with self.subTest(provider=bad_provider):
+                    (made.root / guard.TESTS_CMAKE).write_text(cmake + command + bad_provider)
+                    err = io.StringIO()
+                    with contextlib.redirect_stderr(err):
+                        code, _ = made.run('--ctest-list', str(listing))
+                    self.assertEqual(code, 2)
+                    self.assertIn('NOT COMPARED:', err.getvalue())
+                    self.assertIn('clock_plugin', err.getvalue())
 
 
 class Shape(unittest.TestCase):
