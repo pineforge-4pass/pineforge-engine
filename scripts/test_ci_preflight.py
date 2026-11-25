@@ -743,6 +743,7 @@ class AppTokenEnvironments(unittest.TestCase):
         expected = {
             ('release.yml', 'release'): ['release'],
             ('release.yml', 'notify-hub'): ['release'],
+            ('release.yml', 'prebuilt-x86'): ['release-prebuilt-x86'],
             ('release-ruleset-probe.yml', 'probe'): ['release'],
             ('promote-baseline.yml', 'promote'): ['release-bot'],
         }
