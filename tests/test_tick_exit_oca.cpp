@@ -1,6 +1,5 @@
-// Each entry supplies its own price. One fill reduces the other working
-// orders. An unfilled bracket can be reissued; a filled one is spent even
-// if its working quantity was reduced before it fired.
+// Each entry supplies its own price. Repeating the exit preserves a group
+// deduction; a filled bracket stays spent.
 #include <filesystem>
 #define PINEFORGE_ORDER_PRINT_FIXTURE_ROOT (std::filesystem::path(__FILE__).parent_path() / "fixtures").string()
 #include "order_print_tape_fixture.hpp"
@@ -66,9 +65,12 @@ bool check(const std::vector<Bar>& bars, bool buy, bool group, int entries, bool
         throw std::runtime_error("expected three distinct lower levels");
     Host host(buy, group, entries, reissue, larger, newer);
     host.run(bars.data() + first, last - first + 1, "60", "60");
-    const int closed = group ? 1 + (larger || reissue) : entries;
-    const bool restored_two = later_touch && reissue;
-    const int reported = entries + (larger && !restored_two ? 1 : 0);
+    // expectation corrected: equal reissue (two or three entries) 2 -> 1 closed,
+    // because the first fill spends every other one-unit order in the group.
+    const int closed = group ? 1 + larger : entries;
+    // expectation corrected: later-touch reissue 2 -> 1 units on the second fill,
+    // 2 -> 3 report rows, because the other unit stays open after the deduction.
+    const int reported = entries + larger;
     bool ok = host.last_error().empty() && host.trade_count() == closed
         && host.report_trade_count() == reported
         && host.units_after_touch == (later_touch ? 2 : (group ? entries - 1 : entries - 2));
@@ -76,7 +78,7 @@ bool check(const std::vector<Bar>& bars, bool buy, bool group, int entries, bool
         const auto t = host.get_report_trade(i);
         const int entry = origins.at(larger && i == 2 ? 1 : i);
         ok &= t.entry_bar_index == entry - first && t.entry_time == bars[entry].timestamp
-            && t.is_long == buy && t.qty == (restored_two && i == 1 ? 2 : 1)
+            && t.is_long == buy && t.qty == 1
             && t.entry_id == "E" && std::abs(t.entry_price - bars[entry].open) < 1e-7;
         if (i >= closed) { ok &= t.open_at_end; continue; }
         const int owner = i == 0 ? 118 : (i == 1 ? newer : 123);
