@@ -113,6 +113,22 @@ class SameBarTests(unittest.TestCase):
         self.assertEqual((r.tv_gate_count, r.eng_gate_count, r.count_abs_delta), (1, 1, 0))
         self.assertEqual((r.coverage_tv_count, r.coverage, r.coverage_ok, r.label),
                          (2, 1 / 2, True, "excellent"))
+        self.assertEqual((r.unmatched_total, r.coverage_ok, r.label), (1, False, "weak"))
+
+        for total, expected_tier in (
+            (100, "excellent"), (99, "strong"), (20, "strong"), (19, "moderate"),
+        ):
+            with self.subTest(total=total):
+                tv = [trade(15 * i) for i in range(total)]
+                engine = [trade(15 * i) for i in range(1, total)]
+                result = self.analyze(tv, engine)
+                self.assertEqual((result.matched_count, result.tv_gate_count, result.eng_gate_count),
+                                 (total - 1, total - 1, total - 1))
+                self.assertEqual((result.count_abs_delta, result.coverage_tv_count,
+                                  result.unmatched_total, result.coverage),
+                                 (0, total, 1, (total - 1) / total))
+                self.assertEqual((result.coverage_ok, result.label),
+                                 (expected_tier == "excellent", expected_tier))
 
     def assert_tv_tail(self, delay, tv_count, gross, label):
         r = self.analyze([*forty(), trade(39 * 15 + delay, 500)], forty())
