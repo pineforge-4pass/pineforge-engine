@@ -106,6 +106,35 @@ class TradePoolTests(unittest.TestCase):
                                  (pairs / 2, 2 - pairs, 2 - pairs))
                 self.assertEqual(r.label, tier)
 
+    def test_mark_only_interior_excludes_exterior_close_metrics(self):
+        bars = range(0, 105, 15)  # Trimming two bars keeps minutes 30 through 60.
+        for name, mark in (("inside close", False), ("inside mark", True), ("exterior FIFO", True)):
+            with self.subTest(name=name):
+                tv = [trade(0), trade(15), trade(75), trade(90), trade(90, price=110)]
+                engine = [replace(t, exit_price=t.exit_price + 4, pnl=5) for t in tv]
+                if name == "exterior FIFO":
+                    # The minute-zero entry splits its close; the second half
+                    # closes with the minute-15 entry. Both tapes agree on it.
+                    first = replace(tv[0], qty=0.5, pnl=0.5)
+                    tv[:1] = [first, replace(first, exit_time=tv[1].exit_time)]
+                    engine = [replace(t, entry_price=t.entry_price + 0.01) for t in tv]
+                r = analyze([*tv, trade(45, mark=mark)], [*engine, trade(45, mark=mark)],
+                            trim=2, bars=bars)
+                self.assertEqual((r.matched_count, r.open_mark_pairs, r.gating_matched_count),
+                                 (6, int(mark), 1))
+                self.assertEqual((r.count_abs_delta, r.coverage_tv_count, r.coverage), (0, 1, 1.0))
+                exterior = [(t.entry_price, e.entry_price, t.pnl, e.pnl) for t, e in r.matched
+                            if t.entry_time == START + 75 * 60]
+                self.assertEqual(exterior, [(100, 100.01, 1, 1)] if name == "exterior FIFO"
+                                 else [(100, 100, 1, 5)])
+                row = r.report_row()
+                self.assertEqual(row["metric_observations"],
+                                 {"entry": 1, "exit": int(not mark), "pnl": int(not mark)})
+                self.assertEqual(row["entry_p100"], 0.0)
+                self.assertEqual((row["exit_p100"], row["pnl_p100"]),
+                                 (None, None) if mark else (0.0, 0.0))
+                self.assertEqual(r.label, "excellent")
+
 
 if __name__ == "__main__":
     unittest.main()
