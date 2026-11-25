@@ -37,6 +37,7 @@ from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
+from decimal import Decimal
 from fractions import Fraction
 from math import isfinite
 from pathlib import Path
@@ -1376,14 +1377,16 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         if abs(t.pnl) < PNL_NEAR_ZERO_USD:
             continue
         abs_diff = abs(t.pnl - e.pnl)
-        if (t.qty > 1e-9 and e.qty > 1e-9
-                and abs(t.qty / e.qty - 1.0) <= QTY_NORM_BAND):
+        if t.qty > 1e-9 and e.qty > 1e-9 and t.qty != e.qty:
+            tv_qty, eng_qty = Decimal(str(t.qty)), Decimal(str(e.qty))
             # Qty-normalized comparison isolates per-unit price/commission
             # parity from tiny equity-derived sizing drift between two
             # independently compounded simulations — but ONLY inside
             # QTY_NORM_BAND: a large sizing divergence is a bug the PnL gate
             # must surface, not rescale away.
-            abs_diff = min(abs_diff, abs(t.pnl - e.pnl * (t.qty / e.qty)))
+            if (eng_qty.is_finite()
+                    and abs(tv_qty - eng_qty) <= Decimal(str(QTY_NORM_BAND)) * eng_qty):
+                abs_diff = min(abs_diff, abs(t.pnl - e.pnl * (t.qty / e.qty)))
         if abs_diff < TV_PNL_ROUNDING_EPSILON_USD:
             pnl_deltas.append(0.0)
             continue
