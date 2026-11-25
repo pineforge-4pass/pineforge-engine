@@ -15942,17 +15942,17 @@ void PineExecutionAdapter::flush_pending_same_bar_commands(
         && std::count_if(queued.begin(), queued.end(), [](const auto& command) {
             return command.snapshot.frozen_market_targeted_close;
         }) == 1;
-    // The full close is already on the broker book, ahead of every request
-    // this batch will publish. Walk from its result: a named close of the
-    // retired side cannot reduce the new lot. A canceled close has no effect.
+    // The full close is on the book ahead of this batch. An entry of this bar opens
+    // from its result, and a named close of the retired side must not reduce that
+    // lot. Closes alone keep their own orders. A canceled full close has no effect.
     const auto script_open = queued.front().snapshot.placement_script_open_ms;
-    const bool opens_after_flatten = batch_start != 0.0
-        && close_all_pending_script_bar_ == script_open
-        && any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) {
-            return row.family == PineOrderFamily::CloseAll && !row.immediately
-                && !row.crosses_zero
-                && row.placement_script_open_ms == script_open;
-        });
+    const auto opens = [&](const auto& row) { return row.opening && row.placement_script_open_ms == script_open; };
+    const auto held = [&](const auto& item) { return opens(item.snapshot); };
+    const bool opens_after_flatten = batch_start != 0.0 && close_all_pending_script_bar_ == script_open
+        && any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) { return !row.immediately
+            && !row.crosses_zero && row.family == PineOrderFamily::CloseAll && row.placement_script_open_ms == script_open; })
+        && (any_live_row(live_handles_, placement_, opens) || std::any_of(queued.begin(), queued.end(), held)
+            || std::any_of(pending_entries_.begin(), pending_entries_.end(), held));
     double simulated = opens_after_flatten ? 0.0 : batch_start;
     std::optional<native_order::RequestHandle> short_seed_long;
     std::optional<native_order::RequestHandle> short_seed_materialize;
