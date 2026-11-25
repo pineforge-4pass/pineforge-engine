@@ -215,6 +215,8 @@ struct PineSecurityEvalState {
     bool gaps_on = false;
     // Project this site's historical higher-timeframe values from the first chart child.
     bool historical_lookahead_projection = false;
+    // Publish the projection separately while the evaluator keeps its real input clock.
+    bool separate_chart_publication = false;
     // Native fixed-period publication clears once per observable chart,
     // independently of how many finer evaluator inputs that chart contains.
     std::optional<std::int64_t> native_gap_chart_open;
@@ -972,6 +974,11 @@ protected:
     void register_security_eval(int sec_id, const std::string& requested_tf,
                                 const std::string& input_tf, bool lookahead_on, bool gaps_on,
                                 bool heikinashi, bool historical_lookahead_projection);
+    // Same-symbol registration with independent historical chart publication.
+    // A host without a PineSecurityChartPublisher keeps just the real deliveries.
+    void register_security_chart_eval(int sec_id, const std::string& requested_tf,
+                                      const std::string& input_tf, bool lookahead_on,
+                                      bool gaps_on, bool heikinashi);
     // request.security of ANOTHER symbol (lane XSYM-D): `symbol` is the
     // run-time string the script passes. The site reads the feed installed
     // for (symbol, requested_tf) through a kernel InstrumentFeed series: its
@@ -1163,7 +1170,8 @@ private:
                                   std::uint64_t chart_caller) noexcept;
     void reset_request_delivery_state() noexcept;
     void dispatch_pine_request(SecurityEvalState&, const Bar&, bool publication,
-                               std::int64_t requested_slot, bool actual_complete);
+                               std::int64_t requested_slot, bool actual_complete,
+                               const Bar* chart_bar = nullptr);
     std::uint64_t request_caller_id(const RequestCallerKey&);
     std::uint64_t request_chart_caller_for(std::int64_t script_open_ms);
     std::uint64_t request_input_caller(const NativeInputContext&);
@@ -1768,6 +1776,16 @@ using PineNativeHost = PineStrategyHost;
 using FixtureIntentRow = PineStrategyHost::FixtureIntentRow;
 using FixtureIntentKind = PineStrategyHost::FixtureIntentKind;
 
+// Optional second base of a generated host. Called after evaluate_security,
+// in that delivery's requested slot. Write only the chart result; the Bar
+// is borrowed for this call and its OHLCV is not another history sample.
+class PineSecurityChartPublisher {
+public:
+    virtual void publish_security_chart(int sec_id, const Bar& projected) = 0;
+protected:
+    ~PineSecurityChartPublisher() = default;
+};
+
 } // namespace pineforge::source
 
 // This header declares PineStrategyHost's host-input currency conversions
@@ -1778,3 +1796,4 @@ using FixtureIntentKind = PineStrategyHost::FixtureIntentKind;
 #define PINEFORGE_HAS_HOST_CURRENCY_CONVERSION_V1 1
 // PineStrategyHost::strategy_convert_identity_or_warn is declared (#376).
 #define PINEFORGE_HOST_CONVERT_IDENTITY_OR_WARN 1
+#define PINEFORGE_HAS_SECURITY_CHART_PUBLICATION_V1 1

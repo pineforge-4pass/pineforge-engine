@@ -1,4 +1,5 @@
 #include <pineforge/source/pine_strategy_host.hpp>
+#include <pineforge/native_calendar.hpp>
 #include <pineforge/timeframe.hpp>
 
 #include <algorithm>
@@ -105,10 +106,25 @@ void PineStrategyHost::prepare_historical_security_lookahead_projections(
             static_cast<std::size_t>(projection_count / expected_children) + 1 + forming_tail);
         pine.historical_projection_cursor = 0;
         pine.historical_projection_dispatched = false;
+        // The ordinary evaluator uses counted calendar intervals for nD/nW/nM.
+        // Keep the separate chart value on its slot even across a unit boundary.
+        const auto counted = pine.separate_chart_publication && period != CalendarPeriod::NONE
+            && !state.aggregator.has_native_periods()
+            ? native_calendar::parse_timeframe(state.tf) : std::nullopt;
+        const auto calendar = counted && counted->count() > 1
+            ? native_calendar::parse_session(syminfo_.session, syminfo_.timezone) : std::nullopt;
         // Both times are known. The session-day ordinal keeps even the last millisecond of a day.
         auto crosses_requested_boundary = [&](std::int64_t from_ms, std::int64_t to_ms) {
             if (state.aggregator.has_native_periods())
                 return state.aggregator.period_changes(from_ms, to_ms);
+            if (calendar) {
+                const auto key = [&](std::int64_t ms) {
+                    return native_calendar::period_key(*calendar, *counted,
+                        session_covered_instant_ms(ms, syminfo_.timezone, syminfo_.session));
+                };
+                const auto first = key(from_ms), next = key(to_ms);
+                if (first && next) return *first != *next;
+            }
             if (period == CalendarPeriod::DAY)
                 return session_day_index(from_ms, syminfo_.timezone, syminfo_.session)
                     != session_day_index(to_ms, syminfo_.timezone, syminfo_.session);
@@ -126,6 +142,18 @@ void PineStrategyHost::prepare_historical_security_lookahead_projections(
         auto publish_group = [&](int begin, const Bar& aggregate, bool complete) {
             pine.historical_projections.push_back(
                 HistoricalSecurityProjection{aggregate, child_instant_ms(begin), complete});
+            // Resolve the chart's official OHLCV once. Live substitutions and
+            // their diagnostic counts still belong to the real completion.
+            if (pine.separate_chart_publication && state.native_feed_index >= 0
+                && (!forming_tail || complete)) {
+                const auto native = state.native_bars_by_label.find(
+                    state.aggregator.bar_label_ms(aggregate.timestamp));
+                if (native != state.native_bars_by_label.end()) {
+                    auto& bar = pine.historical_projections.back().bar;
+                    bar = native->second;
+                    bar.timestamp = aggregate.timestamp;
+                }
+            }
         };
 
         int group_begin = projection_begin;
