@@ -402,7 +402,8 @@ double RCI::calculate() {
     // Averaging a tie reduces the spread of the price ranks. The squared
     // rank-distance shortcut below assumes both sets of ranks have equal spread.
     const double nd = static_cast<double>(n);
-    if (has_ties && buffer_[order_[0]] != buffer_[order_[n - 1]]) {
+    if (has_ties) {
+        if (buffer_[order_[0]] == buffer_[order_[n - 1]]) return na<double>();
         const double mean = (nd - 1.0) / 2.0;
         const double time_ss = nd * (nd * nd - 1.0) / 12.0;
         double cross = 0.0;
@@ -415,8 +416,7 @@ double RCI::calculate() {
         return 100.0 * cross / std::sqrt(time_ss * price_ss);
     }
 
-    // Preserve the previous rounding for distinct ranks and the existing
-    // flat-window result (correlation has no denominator on a flat window).
+    // Preserve the previous rounding for distinct ranks.
     double sum_d2 = 0.0;
     for (int t = 0; t < n; t++) {
         double d = (double)t - price_rank_[t];
