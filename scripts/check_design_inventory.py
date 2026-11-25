@@ -725,8 +725,8 @@ def check(root: Path, listing: str | None = None) -> tuple[list[str], dict]:
         if row.verdict in ('no', 'partial') and witnesses and not row.marked:
             findings.append(
                 f'{DESIGN}:{row.line}: row {row.id} reads **{row.verdict}** while '
-                f'{", ".join("tests/" + name for name in witnesses)} runs are registered '
-                'for the kernel profile. Execution is not checked. Append the closure '
+                f'{", ".join("tests/" + name for name in witnesses)} can be matched to '
+                'test names registered for the kernel profile. Execution is not checked. Append the closure '
                 'marker the table already uses ("**Closed:** <what landed> (`tests/…`)").')
         if row.marked and row.verdict in ('no', 'partial') and not witnesses:
             named = (', '.join('tests/' + name for name in row.tests)

@@ -165,13 +165,14 @@ struct RefRCI {
             const double d = static_cast<double>(t) - price_rank[t];
             sum_d2 += d * d;
         }
-        // expectation corrected: raw -> tie-adjusted rank distance. Replacing
-        // m distinct ranks by their mean removes m*(m*m-1)/12 of their spread.
+        // expectation corrected: raw -> tie-adjusted rank distance. In Spearman's correlation,
+        // averaging m tied ranks removes m*(m*m-1)/12 from the sum of squared rank deviations.
         const double count = static_cast<double>(n);
         const double rank_denominator = count * (count * count - 1.0);
         const double time_ss = rank_denominator / 12.0;
         const double price_ss = time_ss - tie_loss;
-        // expectation corrected: 50 -> na, because TradingView's ta.rci is na on a flat window (recorded 2026-11-25)
+        // expectation corrected: 50 -> na, because a flat window has zero price-rank variance.
+        // Agreement with TradingView's RCI values is unverified.
         if (price_ss == 0.0) return na<double>();
         if (tie_loss > 0.0 && price_ss > 0.0) {
             const double cross = (time_ss + price_ss - sum_d2) / 2.0;

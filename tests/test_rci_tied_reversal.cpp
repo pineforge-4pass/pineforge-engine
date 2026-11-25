@@ -2,8 +2,8 @@
 // Spearman's rank correlation between the window's values and their bar
 // order, times 100. Tied values take the average of the ranks they span, as
 // Spearman's coefficient prescribes for ties; a window whose values are all
-// equal has zero rank variance, so the correlation is undefined and the
-// result is na. TradingView's recorded values agree with this definition.
+// equal has zero price-rank variance, so the correlation is undefined and
+// the result is na. Agreement with TradingView's RCI values is unverified.
 
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/ta.hpp>

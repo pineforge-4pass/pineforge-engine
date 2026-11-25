@@ -92,6 +92,9 @@ PY="${PYTHON:-python3}"
 # because the excellent-only rule requires zero gross unmatched TV + engine
 # trades (#836); measured 2026-11-19 on corpus 93d956a2, and all 312 pinned
 # strategy trade outputs still match the baseline hashes.
+# expectation corrected: excellent=303, strong=8 -> excellent=304, strong=7,
+# because tied-rank RCI changed the output of ta-rci-14-zero-cross-01.
+# No other strategy output moved; the verifier total anomaly=1 is unchanged.
 # scripts/verify_corpus.py prints this line verbatim.
 EXPECTED_VERIFY="${EXPECTED_VERIFY:-Verified 312 strategies — excellent=304, strong=7, moderate=0, weak=0, minimal=0, anomaly=1, engine_only=0, missing=0}"
 

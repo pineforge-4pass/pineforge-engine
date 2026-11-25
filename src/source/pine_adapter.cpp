@@ -9275,7 +9275,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
             // decimal stop. It still rests from the extreme. Arm a limit
             // there or pin a trail there at the stop's distance: no better
             // print follows on this bar. on_bar_open restores the plain stop.
-            // Both stop-entry directions are recorded in the refill tests.
+            // The refill test covers only the sell stop entry.
             if (pure_limit) {
                 request.trigger = native_order::StopLimit{waypoint, limit_price};
             } else {
@@ -27274,7 +27274,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             || finite_positive(placement_snapshot->exit_levels.loss_ticks))
         && event.closed_units > 0.0 && event.cycle_before > 0 && event.cycle_after == 0
         && has_live_family(PineOrderFamily::Entry)) {
-        // Freeze only the closing quantity of reversals placed on the cycle
+        // Freeze the quantity carried when each reversal was placed on the cycle
         // this stop ended. A partial fill or a stop on a later position cannot
         // give an older reversal a transaction. A trail with no stop or loss
         // can use a native stop too, but is not the protective stop leg.

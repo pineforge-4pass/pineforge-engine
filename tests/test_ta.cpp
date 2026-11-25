@@ -476,9 +476,9 @@ static double rci_pairwise_reference(const std::deque<double>& window) {
         time_ss += (i - mean) * (i - mean);
         price_ss += (rank - mean) * (rank - mean);
     }
-    // expectation corrected: rank distance -> rank correlation, because
-    // average ranks have less variance on a nonconstant window with ties.
-    // expectation corrected: 50 -> na, because TradingView's ta.rci is na on a flat window (recorded 2026-11-25)
+    // expectation corrected: rank distance -> Spearman's correlation, because ties take average ranks.
+    // expectation corrected: 50 -> na, because a flat window has zero price-rank variance.
+    // Agreement with TradingView's RCI values is unverified.
     return price_ss == 0.0 ? na<double>() : 100.0 * cross / std::sqrt(time_ss * price_ss);
 }
 

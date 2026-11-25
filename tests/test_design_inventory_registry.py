@@ -26,7 +26,8 @@ class InventoryRegistry(unittest.TestCase):
                     code, out = made.run()
                 self.assertEqual(code, 1, out)
                 self.assertIn('no kernel-profile test' if marker else
-                              'row AB reads **no** while tests/test_clock.cpp runs', out)
+                              'row AB reads **no** while tests/test_clock.cpp can be matched to '
+                              'test names registered for the kernel profile.', out)
 
     def test_an_unknown_witness_condition_names_the_comparison_it_prevents(self):
         with tree(design('| AB | clock | **yes** |'), cmake=CMAKE + INCLUDES, extra={
