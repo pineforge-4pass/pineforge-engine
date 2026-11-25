@@ -106,6 +106,8 @@ COMMAND_CENSUS_EXEMPTIONS = (
     ('scripts/test_verify_corpus_count_rule.py', 'unnamed before this change'),
     ('scripts/test_verify_corpus_metrics.py', 'unnamed before this change'),
     ('scripts/test_verify_corpus_open_mark.py', 'unnamed before this change'),
+    ('scripts/test_verify_corpus_price_gate.py', 'runs as the CTest row test_verify_corpus_price_gate'),
+    ('scripts/test_verify_corpus_same_bar.py', 'runs as the CTest row test_verify_corpus_same_bar'),
     ('scripts/test_verify_corpus_trail_profile.py', 'unnamed before this change'),
 )
 NON_LINUX_COMMAND_CENSUS_EXEMPTIONS = (
