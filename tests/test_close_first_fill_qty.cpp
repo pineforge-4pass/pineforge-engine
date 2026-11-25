@@ -160,6 +160,60 @@ int check_case(const OrderSizes& sizes, bool held_long, Prefix prefix, bool retr
     std::printf("%s %s\n", check.failures ? "FAIL" : "PASS", check.row.c_str());
     return check.failures;
 }
+
+// A bar that only closes: strategy.close(id) keeps its own order beside
+// strategy.close_all(), in either call order. The next entry is then the
+// run's fourth order.
+class ClosesOnly final : public source::PineStrategyHost {
+public:
+    ClosesOnly(bool held_long, bool named_first) : held_long(held_long), named_first(named_first) {
+        source::PineStrategyConfig config;
+        config.initial_capital = 100000.0;
+        config.default_qty_value = 1.0;
+        configure_pine_strategy(config);
+        set_syminfo_timezone("UTC");
+        set_syminfo_session("24x7");
+        set_syminfo_mintick(0.01);
+        set_syminfo_metadata("qty_step", 0.0001);
+    }
+
+    void on_source_bar(const Bar&) override {
+        const int i = pine_bar_index();
+        if (i == 0) strategy_entry("base", held_long, missing, missing, 1.0);
+        if (i == 2) {
+            if (named_first) strategy_close("base", "named", missing, missing, false, 1);
+            strategy_close("", "all");
+            if (!named_first) strategy_close("base", "named", missing, missing, false, 1);
+        }
+        if (i == 4) strategy_entry("next", held_long, missing, missing, 1.0);
+    }
+
+    bool held_long, named_first;
+    std::uint64_t next_order = 0;
+
+private:
+    void on_native_applied_event(const native_order::ExecutionAppliedEvent& e,
+                                 const NativeDecisionContext&) override {
+        if (e.request().label == "next") next_order = e.handle().incarnation;
+    }
+};
+
+int check_closes_only(bool held_long, bool named_first) {
+    Checks check{std::string("closes-only") + (held_long ? "/sell" : "/buy")
+        + (named_first ? "/named-first" : "/full-first")};
+    std::array<Bar, bar_count> bars;
+    for (int i = 0; i < bar_count; ++i) {
+        const double open = 100.0 + i;
+        bars[i] = {open, open + 1, open - 1, open, 1000.0, start + i * interval};
+    }
+    ClosesOnly host(held_long, named_first);
+    host.run(bars.data(), bar_count, "15", "15", false);
+    check.label("engine error", host.last_error(), "");
+    check.number("closed trades", host.closed_trade_count(), 1);
+    check.number("order number of the next entry", static_cast<double>(host.next_order), 4);
+    std::printf("%s %s\n", check.failures ? "FAIL" : "PASS", check.row.c_str());
+    return check.failures;
+}
 } // namespace
 
 int main() {
@@ -185,5 +239,7 @@ int main() {
             failures += check_case(row, held_long, Prefix::CanceledFlatten, true);
         }
     }
+    for (bool held_long : {true, false})
+        for (bool named_first : {true, false}) failures += check_closes_only(held_long, named_first);
     return failures == 0 ? 0 : 1;
 }
