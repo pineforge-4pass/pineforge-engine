@@ -11,8 +11,8 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
-- With `close_entries_rule = "ANY"`, a market reversal that reuses an entry ID now retires the stop and limit attached to the unfilled order that the closed entry replaced. Those orders could close the new position on its entry bar.
-- With the bar magnifier using finer bars, FIFO closes and default order timing, an entry waiting for a close that ends without a fill no longer stays in the pending orders list.
+- With `close_entries_rule = "ANY"`, a market reversal that reuses an entry ID now retires the whole stop and limit (both levels above zero) placed with the unfilled order that the closed entry replaced. Those orders could close the new position on its entry bar. Runs with the bar magnifier, with orders processed on the close or on a live stream are not changed.
+- With the bar magnifier using finer bars, FIFO closes and default order timing, an entry waiting for a close that ends without a fill is withdrawn when the pending entries are next processed, instead of staying in the pending orders list. A script that reads the list on that same bar can still see it.
 - When a session's opening fixed chart cell is cut short at the session open, the next bar also opens the session day, and the opening bar also closes it when that next cell reaches the day's close. `session.isfirstbar`, `session.islastbar`, their `_regular` forms and the native session-day facts of HKEX:700 on 60 and 240 minutes now equal TradingView's recorded flags.
 - `strategy_pending_order_fill_qty` now accounts for a market close queued by a fill recalculation before a limit order that fills later, and treats a remainder within the fill's quantity tolerance as flat.
 - With finer bars supplied to the bar magnifier, a repeated FIFO `strategy.close(id)` no longer closes the new position or prevents a market reversal from opening it. (#966)
