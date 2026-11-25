@@ -58,8 +58,8 @@ void PineStrategyHost::prepare_historical_security_lookahead_projections(
         if (!historical_security_lookahead_projection_ && !pine.historical_lookahead_projection)
             continue;
         const int requested_seconds = tf_to_seconds(state.tf);
-        const bool calendar_month = requested_seconds == -1
-            && calendar_period_for(state.tf) == CalendarPeriod::MONTH;
+        const auto period = calendar_period_for(state.tf);
+        const bool calendar_month = requested_seconds == -1 && period == CalendarPeriod::MONTH;
         const bool eligible = !pine.lower_tf_requested && !pine.lower_tf_emulation
             && !pine.lower_tf_use_input && pine.lookahead_on && !pine.gaps_on
             && !pine.heikinashi
@@ -69,7 +69,7 @@ void PineStrategyHost::prepare_historical_security_lookahead_projections(
         // Without a native clock, a chart bar straddling two fixed periods cannot
         // supply their closes. With that clock, a projection fills only missing rows.
         if (!historical_security_lookahead_projection_
-            && calendar_period_for(state.tf) == CalendarPeriod::NONE
+            && period == CalendarPeriod::NONE
             && calendar_period_for(script_tf_) == CalendarPeriod::NONE
             && requested_seconds % script_seconds != 0
             && !pine_native_fixed_security_clock(state)) {
@@ -105,17 +105,17 @@ void PineStrategyHost::prepare_historical_security_lookahead_projections(
             static_cast<std::size_t>(projection_count / expected_children) + 1 + forming_tail);
         pine.historical_projection_cursor = 0;
         pine.historical_projection_dispatched = false;
-
+        // Both times are known. The session-day ordinal keeps even the last millisecond of a day.
         auto crosses_requested_boundary = [&](std::int64_t from_ms, std::int64_t to_ms) {
-            if (from_ms != 0 && to_ms != 0) {
-                if (state.aggregator.has_native_periods())
-                    return state.aggregator.period_changes(from_ms, to_ms);
-                return tf_change(from_ms, to_ms, state.tf,
-                                 syminfo_.timezone, syminfo_.session);
-            }
-            const std::int64_t requested_ms =
-                static_cast<std::int64_t>(requested_seconds) * 1000;
-            return requested_ms > 0 && from_ms / requested_ms != to_ms / requested_ms;
+            if (state.aggregator.has_native_periods())
+                return state.aggregator.period_changes(from_ms, to_ms);
+            if (period == CalendarPeriod::DAY)
+                return session_day_index(from_ms, syminfo_.timezone, syminfo_.session)
+                    != session_day_index(to_ms, syminfo_.timezone, syminfo_.session);
+            if (period != CalendarPeriod::NONE)
+                return crosses_boundary(from_ms, to_ms, period, syminfo_.timezone, syminfo_.session);
+            return internal::intraday_bucket_changes(from_ms, to_ms, requested_seconds,
+                                                     syminfo_.timezone, syminfo_.session);
         };
         auto merge = [](Bar& aggregate, const Bar& child) {
             aggregate.high = std::max(aggregate.high, child.high);

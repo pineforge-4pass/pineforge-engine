@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import check_abi_receipt_skips as checker
+from test_abi_receipt_skips import receipt_command
 
 
 class ReceiptRegistry(unittest.TestCase):
@@ -42,40 +43,43 @@ class ReceiptRegistry(unittest.TestCase):
                 self.assertIn('command', out)
 
     def test_receipt_mode_requires_an_input_and_complete_path_arguments(self):
+        command = receipt_command(self.build, 'check_script_cpp_abi.py', [], '--require-receipts')
         for flags, reason in (
-                (['--receipt', str(self.receipt)], 'input receipt'),
+                ([], '--v18-frozen-receipt'),
                 (['--base-receipt'], '--base-receipt'),
                 (['--base-receipt', '--receipt', str(self.receipt)], '--base-receipt'),
                 (['--base-receipt', ''], '--base-receipt'),
                 (['--base-receipt', str(self.receipt), '--compile-commands'], '--compile-commands'),
                 (['--base-receipt', str(self.receipt), '--skip-if-receipt-missing'], 'mode')):
             with self.subTest(flags=flags):
-                code, out = self.inspect({'name': 'gated', 'command': [
-                    sys.executable, 'check.py', '--require-receipts', *flags]})
+                code, out = self.inspect({'name': 'gated', 'command': command + flags})
                 self.assertEqual(code, 2, out)
                 self.assertIn('NOT COMPARED', out)
                 self.assertIn('gated', out)
                 self.assertIn(reason, out)
 
     def test_a_directory_cannot_supply_an_input_file(self):
-        code, out = self.inspect({'name': 'budget', 'command': [
-            sys.executable, 'check.py', '--require-receipts', '--base-receipt', str(self.build)]})
+        command = receipt_command(self.build, 'check_script_cpp_abi.py',
+                                  ['--v18-frozen-receipt', str(self.build)])
+        code, out = self.inspect({'name': 'budget', 'command': command})
         self.assertEqual(code, 1, out)
         self.assertIn('budget', out)
         self.assertIn('receipt missing', out)
 
     def test_relative_inputs_belong_to_the_registered_working_directory(self):
+        command = receipt_command(self.build, 'check_script_cpp_abi.py',
+                                  ['--v18-frozen-receipt', self.receipt.name])
         code, out = self.inspect({
-            'name': 'relative', 'command': [sys.executable, 'check.py', '--require-receipts',
-                                             '--base-receipt', self.receipt.name],
+            'name': 'relative', 'command': command,
             'properties': [{'name': 'WORKING_DIRECTORY', 'value': str(self.build)}]})
         self.assertEqual(code, 0, out)
         self.assertRegex(out, r'inputs present +relative')
 
     def test_present_inputs_do_not_prove_the_command_executed(self):
-        code, out = self.inspect({'name': 'would_fail', 'command': [
-            sys.executable, '-c', 'raise SystemExit(1)', '--require-receipts',
-            '--base-receipt', str(self.receipt)]})
+        # The empty include directory has no source-host headers for this program.
+        command = receipt_command(self.build, 'check_script_cpp_abi.py',
+                                  ['--v18-frozen-receipt', str(self.receipt)])
+        code, out = self.inspect({'name': 'would_fail', 'command': command})
         self.assertEqual(code, 0, out)
         self.assertRegex(out, r'inputs present +would_fail')
         self.assertIn('execution: NOT COMPARED', out)

@@ -1518,7 +1518,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:19771-19811`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:20179-20219`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
@@ -2476,8 +2476,10 @@ identified by its own index — in `NativeTimeframeBarContext::subscription` and
 in `native_series_bar(index)`. Two `"60"` series over a 15-minute input
 deliver the same buckets twice, once per index, in declaration order. The one
 thing same-period instances cannot each own is a different
-`authoritative_bars` feed. The store compares day and week durations in full:
-`3551W` and `M` can each supply their own prices. Two conflicting feeds for
+`authoritative_bars` feed. Calendar feeds match by unit and count: `M` and
+`1M` share prices, while `3M`, `12M` and `3551W` each have their own. Fixed
+feeds match by duration: `60S` and `1` share prices, while `1440` and `D`
+are distinct. Two conflicting feeds for
 the same period are refused
 (`DuplicateSubscriptionTimeframe`), while declaring the same bars twice — or
 leaving one, or both, empty — is accepted.
@@ -2489,7 +2491,7 @@ with `input_tf` exactly as `script_tf` does. Named refusals:
 | --- | --- |
 | `InvalidSubscriptionTimeframe` | unparseable literal, or a pairing `script_tf` would not accept |
 | `SubscriptionFinerThanInput` | strictly finer than `input_tf` — a lower-timeframe array is a different contract and is not promoted |
-| `DuplicateSubscriptionTimeframe` | two series declaring **different** `authoritative_bars` for the same duration, or for two monthly literals (which share one feed slot) |
+| `DuplicateSubscriptionTimeframe` | two series declaring **different** `authoritative_bars` for the same calendar unit and count, or for fixed periods of equal duration |
 | `UnorderedSubscriptionBars` | `authoritative_bars` not strictly increasing in time |
 | `SubscriptionWithoutTimeframe` | declared together with `timeframe_undetected` |
 | `SubscriptionWithoutAuxiliaryFeed` | a series whose `source` is `AuxiliaryFeed` in a spec that declares no feed |
@@ -3082,7 +3084,7 @@ each feed's key, sha256 and bar count in the run provenance.
 
 A host that wants only the running aggregate — no series instance, no
 `gaps`/`lookahead` rule, nothing folded into the continuation identity —
-aggregates the input itself. `TimeframeAggregator` (`timeframe.hpp:358`) is
+aggregates the input itself. `TimeframeAggregator` (`timeframe.hpp:366`) is
 public and engine-free; feed it from `on_native_input`, which runs once per
 accepted confirmed input bar before that bar is aggregated or matched
 (`on_native_input` `native_host.hpp:895`). Include
@@ -3688,10 +3690,10 @@ A native C++ host can submit or replace a `BindOpenings` close with either an
 inline list or an external reader. The order core freezes the accepted handles
 in canonical order. The continuation hash includes the same count and handles
 in either form, both for the request owner (`hash_owner`,
-`src/native_execution_consumer.cpp:813`) and for its authority (`hash_authority`,
-`src/native_execution_consumer.cpp:894`). Two such closes share a sibling claim
+`src/native_execution_consumer.cpp:814`) and for its authority (`hash_authority`,
+`src/native_execution_consumer.cpp:895`). Two such closes share a sibling claim
 only when their cycles and canonical lists match (`same_reduction_scope`,
-`src/native_execution_consumer.cpp:723`). If a required handle cannot be read,
+`src/native_execution_consumer.cpp:724`). If a required handle cannot be read,
 the hash or sizing call reports the failure without returning a partial result.
 The host builds its opening observations from the supplied handles. C callers
 pass them as an array of opening incarnation numbers in `owner_incarnations`

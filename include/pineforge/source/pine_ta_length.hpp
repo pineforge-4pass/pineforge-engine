@@ -511,20 +511,22 @@ private:
 // A valid call records only non-na sources, retaining them all by default
 // or the last cap + 1 samples when capped. Warm-up returns na.
 // Finite fractions truncate toward zero; changing length preserves the ring.
-// recompute replaces the most recent logical update: restore its pre-update
-// head/count and any evicted oldest value, then record only a non-na source.
-// Repeated recompute uses that same checkpoint; unused instances start there.
-// Cache capacity controls residency only. For finite inputs without overflow,
-// divide the exact window sum, rounded once, by the length.
-// Finite TV clock/source-na evidence supports sample
-// membership only; numerical order/domains, runtime overrides, whole-history
-// TV parity and repeated/requested-context Pine clocks/rollback are unqualified.
-// Copy/assignment preserve the ring and complete pre-update checkpoint;
-// storage detaches on mutation.
+// The running order was recorded on TradingView in November 2026. Before
+// inserting a source, remove or bring back older observations, oldest first,
+// to keep length - 1 previous sources (or all that exist). With na, adjust
+// to length instead and insert nothing. Each step adds its two-sum error to
+// a separate double C. Emit (S + C) / length without folding C back into S.
+// Overflow and retained infinities use the fixed window's recovery rule.
+// Recompute starts from the same pre-bar sum, correction, active count and
+// history even when the length changes. Copies retain that checkpoint;
+// storage detaches on mutation. Cache capacity controls residency only.
 class SeriesSma {
 public:
     SeriesSma() : SeriesSma(window_cache_capacity()) {}
     explicit SeriesSma(WindowCacheCapacity cache) : history_(cache) {}
+    // Copy even from an rvalue: the source's counts still name its history.
+    SeriesSma(const SeriesSma&) = default;
+    SeriesSma& operator=(const SeriesSma&) = default;
     double compute(double source, double current_length);
     double recompute(double source, double current_length);
     void observe_owned_storage(OwnedStorage& out) const noexcept {
@@ -534,11 +536,20 @@ public:
 private:
     std::uint64_t checked_length(double current_length) const;
     void ensure_capacity(std::size_t count);
-    double mean(std::uint64_t length) const;
+    double update(double source, std::uint64_t length, bool replace);
+
+    struct Window {
+        double sum = 0.0;
+        double correction = 0.0;
+        std::size_t count = 0;
+        bool exact_recovery = false;
+    };
 
     ::pineforge::detail::WindowValues<double> history_;
     std::size_t head_ = 0; // next write; one past storage if it has to grow
     std::size_t count_ = 0;
+    Window active_;
+    Window pre_update_active_;
     std::size_t pre_update_head_ = 0;
     std::size_t pre_update_count_ = 0;
     double pre_update_evicted_ = na<double>();

@@ -34,9 +34,8 @@ decision rather than guessing at it. Two halves:
 
 1. **Registration.** ``TEST_SOURCES`` is built by one ``set()`` plus a series
    of ``list(APPEND …)`` / ``list(REMOVE_ITEM …)`` calls. Those are replayed
-   here for that one variable (and for the one helper list a ``REMOVE_ITEM``
-   expands, ``L3A_LEGACY_OWNER_TEST_SOURCES``), so the result is the same set
-   CMake computes.
+   in source order, including writes to helper lists. An undecidable helper
+   cannot supply a registration or a closure witness.
 2. **Reach.** ``pineforge_test_reaches_source_layer`` walks a TU's transitive
    *quoted* include closure and answers TRUE as soon as a line matches
    ``pineforge/(source|compat/pine)/``. With
@@ -160,6 +159,13 @@ def guarded(commands):
         raise ShapeError(f'{source}:{start.line}: unterminated if()')
 
 
+def list_value(lists, name):
+    value = lists.get(name)
+    if isinstance(value, ShapeError):
+        raise value
+    return value
+
+
 def _condition(body, root, lists, targets, unit=None):
     """Kernel Release configuration. None means this condition is not modelled."""
     body = ' '.join(body.split())
@@ -192,12 +198,12 @@ def _condition(body, root, lists, targets, unit=None):
         elif m := re.fullmatch(r'EXISTS "\$\{(PROJECT_SOURCE_DIR|CMAKE_CURRENT_SOURCE_DIR)\}/([^"$]+)"', term):
             value = ((root if m[1] == 'PROJECT_SOURCE_DIR' else root / 'tests') / m[2]).exists()
         elif m := re.fullmatch(r'EXISTS \$\{(\w+)\}', term):
-            paths = lists.get(m[1], [])
+            paths = list_value(lists, m[1]) or []
             value = (_condition(f'EXISTS "{paths[0]}"', root, lists, targets)
                      if len(paths) == 1 and paths[0].startswith(
                          ('${PROJECT_SOURCE_DIR}/', '${CMAKE_CURRENT_SOURCE_DIR}/')) else None)
         elif m := re.fullmatch(r'([\w.-]+) IN_LIST _pf_kernel_absent_rows', term):
-            value = (m[1] in lists.get('_pf_source_bound_private_rows', ()) or
+            value = (m[1] in (list_value(lists, '_pf_source_bound_private_rows') or ()) or
                      reaches_source_layer(root / 'tests' / (m[1] + '.cpp')))
         elif m := re.fullmatch(r'TARGET (test_[\w.-]+)', term):
             value = m[1] in targets
@@ -247,7 +253,7 @@ def registrations(root: Path):
     cmake = root / TESTS_CMAKE
     if not cmake.is_file():
         raise ShapeError('no such file: ' + TESTS_CMAKE)
-    lists: dict[str, list[str]] = {}
+    lists: dict[str, list[str] | ShapeError] = {}
     direct: set[str] = set()
     built: set[str] = set()
     targets: dict[str, list[str]] = {}
@@ -319,37 +325,53 @@ def registrations(root: Path):
                     raise ShapeError(f'{source}:{cmd.line}: endforeach() without foreach()')
                 loops.pop()
                 continue
-            if name == 'set' and words:
-                if (words[0].endswith(('TEST_SOURCES', '_command'))
-                        and not selected(guards, root, lists, built)):
-                    continue
-                lists[words[0]] = words[1:]
-            elif (name == 'list' and len(words) >= 2 and words[0] == 'APPEND'
-                  and words[1].endswith('_command')):
-                if selected(guards, root, lists, built):
-                    lists.setdefault(words[1], []).extend(words[2:])
-            elif name == 'list' and len(words) >= 2 and words[1].endswith('TEST_SOURCES'):
-                operation, key = words[:2]
-                if words[2:] == ['${_pf_source_bound_tests}'] and operation == 'REMOVE_ITEM':
-                    continue  # kernel_units applies the include walk.
-                if not selected(guards, root, lists, built):
-                    continue
-                items = []
-                for word in words[2:]:
-                    ref = re.fullmatch(r'\$\{(\w+)\}', word)
-                    if ref and ref[1] not in lists:
-                        raise ShapeError(f'{source}:{cmd.line}: unknown source list {word}')
-                    items.extend(lists[ref[1]] if ref else [word])
-                current = lists.setdefault(key, [])
-                if operation.upper() == 'APPEND':
-                    current.extend(items)
-                elif operation.upper() == 'REMOVE_ITEM':
-                    lists[key] = [entry for entry in current if entry not in items]
+            if (name in ('set', 'unset') and words) or (name == 'list' and len(words) >= 2):
+                if name == 'list':
+                    operation, key, *values = words
+                    operation = operation.upper()
+                    if operation in ('LENGTH', 'GET', 'JOIN', 'SUBLIST', 'FIND'):
+                        key = words[-1]  # These write an output, not the source list.
                 else:
-                    raise ShapeError(f'{source}:{cmd.line}: unhandled list({operation}) on {key}')
+                    operation = name.upper()
+                    key, *values = words
+                if (operation == 'REMOVE_ITEM' and key == 'TEST_SOURCES'
+                        and values == ['${_pf_source_bound_tests}']):
+                    continue  # kernel_units applies the include walk.
+                try:
+                    if not selected(guards, root, lists, built):
+                        lists.setdefault(key, [])  # A disabled write supplies no value.
+                        continue
+                    if loops or operation not in ('SET', 'UNSET', 'APPEND', 'REMOVE_ITEM'):
+                        raise ShapeError(f'unmodelled {name}({cmd.body.strip()})')
+                    if ('CACHE' in values or 'PARENT_SCOPE' in values
+                            or (operation == 'UNSET' and values)):
+                        raise ShapeError(f'unmodelled variable scope for {key}')
+                    items = []
+                    for word in values:
+                        ref = re.fullmatch(r'\$\{(\w+)\}', word)
+                        if ref and ref[1] not in ('CMAKE_COMMAND', 'Python3_EXECUTABLE'):
+                            value = list_value(lists, ref[1])
+                            if value is None:
+                                raise ShapeError(f'unknown source list {word}')
+                            items.extend(value)
+                        else:
+                            items.append(word)
+                    if key.endswith('TEST_SOURCES'):
+                        for item in items:
+                            if not re.fullmatch(r'[\w.+-]+', item):
+                                raise ShapeError(f'unsupported source name {item!r}')
+                    if operation in ('SET', 'UNSET'):
+                        lists[key] = items
+                    elif operation == 'APPEND':
+                        lists[key] = (list_value(lists, key) or []) + items
+                    else:
+                        lists[key] = [v for v in (list_value(lists, key) or []) if v not in items]
+                except ShapeError as error:
+                    # Only consumers need a decidable value. A later set() can replace it.
+                    lists[key] = ShapeError(f'{source}:{cmd.line}: cannot determine {key}: {error}')
             elif name == 'pineforge_add_unit_test' and selected(guards, root, lists, built):
                 if words == ['${test_name}']:  # The TEST_SOURCES registration loop.
-                    for target in lists['TEST_SOURCES']:
+                    for target in list_value(lists, 'TEST_SOURCES') or []:
                         register_unit(target)
                 elif len(words) == 1 and re.fullmatch(r'[\w.+-]+', words[0]):
                     register_unit(words[0])
@@ -362,7 +384,13 @@ def registrations(root: Path):
                     sources = []
                     for word in words[1:]:
                         var = re.fullmatch(r'\$\{(\w+)\}', word)
-                        sources.extend(lists.get(var[1], [word]) if var else [word])
+                        if var:
+                            value = list_value(lists, var[1])
+                            if value is None:
+                                raise ShapeError(f'{source}:{cmd.line}: unknown executable sources {word}')
+                            sources.extend(value)
+                        else:
+                            sources.append(word)
                     targets[words[0]] = [s for s in sources if s.endswith(('.cpp', '.c'))]
                     if not targets[words[0]]:
                         raise ShapeError(f'{source}:{cmd.line}: unmodelled sources of {words[0]}')
@@ -380,9 +408,10 @@ def registrations(root: Path):
                     if ref and ref[1] not in ('Python3_EXECUTABLE', 'CMAKE_COMMAND'):
                         if not selected(guards, root, lists, built):
                             continue
-                        if not lists.get(ref[1]):
+                        launcher = list_value(lists, ref[1])
+                        if not launcher:
                             raise ShapeError(f'{source}:{cmd.line}: unsupported command for {row}: {args[0]}')
-                        args = [*lists[ref[1]], *args[1:]]
+                        args = [*launcher, *args[1:]]
                     owners = command_targets(args, source, cmd.line)
                     available = True
                 # An optional script-only registration cannot supply a TU witness.
@@ -400,9 +429,10 @@ def registrations(root: Path):
         raise ShapeError(str(error)) from error
     if loops or function:
         raise ShapeError(f'{cmake}: unterminated registration loop or function')
-    if 'TEST_SOURCES' not in lists:
+    sources = list_value(lists, 'TEST_SOURCES')
+    if sources is None:
         raise ShapeError('TEST_SOURCES is not set in ' + TESTS_CMAKE)
-    return direct.union(lists['TEST_SOURCES']), targets, commands, declared
+    return direct.union(sources), targets, commands, declared
 
 
 def kernel_units(root: Path, members: set[str], targets: dict[str, list[str]]) -> set[str]:

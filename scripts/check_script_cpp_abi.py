@@ -23,8 +23,8 @@ def verify_source_shape(include: Path) -> None:
         raise PairingError("retired source order header remains installed")
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+def parse_args(argv=None, *, parser_class=argparse.ArgumentParser):
+    parser = parser_class(description=__doc__)
     parser.add_argument("--compiler", required=True)
     parser.add_argument("--library", type=Path, required=True)
     parser.add_argument("--include", type=Path, required=True)
@@ -35,7 +35,11 @@ def main() -> int:
     receipt_mode = parser.add_mutually_exclusive_group()
     receipt_mode.add_argument("--skip-if-receipt-missing", action="store_true")
     receipt_mode.add_argument("--require-receipts", action="store_true")
-    args = parser.parse_args()
+    return parser.parse_args(argv)
+
+
+def main() -> int:
+    args = parse_args()
     try:
         mode = enforce_receipt_mode(
             (args.v18_frozen_receipt,), skip=args.skip_if_receipt_missing,

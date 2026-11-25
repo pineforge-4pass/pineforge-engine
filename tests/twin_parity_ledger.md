@@ -711,3 +711,16 @@ does not waive any assertion in Appendix 5.
 | `tests/test_run_inputs_overrides.cpp:115` | `bad="abc"` (int64) | `8` | rejection at base `:126`, twin `:140` |
 | `tests/test_run_inputs_overrides.cpp:135` | `weird="yes"` | `true` | rejection at base `:146`, twin `:160` |
 | `tests/test_run_inputs_overrides.cpp:136` | `weird="yes"` | `false` | rejection at base `:147`, twin `:161` |
+
+Issue #810 changes a percentage exit that is re-issued while same-id entries
+are added. TradingView's recorded list for case C of that issue has one order
+for each entry, sized from that entry. The base test and its L4d twin pinned
+one shared order of 5 units for three entries of 10. Both now check three
+fills of 5 units at the limit and 15 units left open. The base manifest
+re-records this one family; its assertions still use ordinary literal
+matching, and this record does not waive any assertion in Appendix 5.
+
+| base check | Shape | Old result | Corrected base / L4d twin |
+| --- | --- | --- | --- |
+| `tests/test_full_close_while_pyramiding.cpp:212` | 50% limit over three same-id entries | 1 trade | 3 trades at base `:212`, twin `:225` |
+| `tests/test_full_close_while_pyramiding.cpp:217` | the same | 25 units left | 15 units left at base `:217`, twin `:230` |

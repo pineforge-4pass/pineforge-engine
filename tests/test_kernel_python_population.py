@@ -56,6 +56,41 @@ class PythonPopulation(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn(f'nested: reads absent {self.absent} ({reader}:1)', out)
 
+    def test_command_variable_selects_the_program_at_registration(self):
+        reader = self.tests / 'bars.py'
+        reader.write_text(f'open("{self.absent}").read()\n')
+        witness = 'add_test(NAME public COMMAND ${Python3_EXECUTABLE} -c "pass")\n'
+        commands = (witness + 'set(script ${CMAKE_CURRENT_SOURCE_DIR}/bars.py)\n'
+                    'set(python ${Python3_EXECUTABLE})\n'
+                    'set(driver ${CMAKE_COMMAND} -E env MODE=test)\n'
+                    'list(APPEND driver ${python} -B ${script})\n'
+                    'set(script other.py)\n'
+                    'add_test(NAME bars COMMAND ${driver})\n'
+                    'set(driver native)\n')
+        count = 'kernel python rows reading an absent private file: '
+        for present in (False, True):
+            with self.subTest(fixture_present=present):
+                if present:
+                    fixture = self.root / self.absent
+                    fixture.parent.mkdir()
+                    fixture.write_text('bars\n')
+                code, out = self.check(commands)
+                self.assertEqual(code, 0 if present else 1, out)
+                self.assertIn(count + ('0' if present else '1'), out.splitlines())
+                if not present:
+                    self.assertIn(f'bars: reads absent {self.absent} ({reader}:1) '
+                                  f'without printing {sweep.SKIP_LITERAL!r} and skipping',
+                                  out.splitlines())
+
+        for name, expected in (('bars', 2), ('bars_${case}', 0)):
+            with self.subTest(unresolved=name):
+                code, out = self.check(witness + 'foreach(case IN ITEMS first second)\n'
+                                       f'add_test(NAME {name} COMMAND ${{driver}})\nendforeach()\n')
+                self.assertEqual(code, expected, out)
+                self.assertIn(f'NOT COMPARED: {self.cmake}:3: row {name} command ${{driver}}',
+                              out.splitlines())
+                self.assertEqual(count + '0' in out.splitlines(), expected == 0)
+
     def test_dependency_does_not_inherit_the_owners_skip(self):
         (self.tests / 'bars.py').write_text(
             'from pathlib import Path\n'

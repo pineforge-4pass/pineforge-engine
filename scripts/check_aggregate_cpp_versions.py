@@ -115,8 +115,8 @@ def check(root: Path = ROOT) -> None:
         raise ValueError("stream v19 fold must be unconditional")
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+def parse_args(argv=None, *, parser_class=argparse.ArgumentParser):
+    parser = parser_class(description=__doc__)
     parser.add_argument("--compiler")
     parser.add_argument("--library", type=Path)
     parser.add_argument("--include", type=Path)
@@ -127,7 +127,17 @@ def main() -> int:
     receipt_mode = parser.add_mutually_exclusive_group()
     receipt_mode.add_argument("--skip-if-receipt-missing", action="store_true")
     receipt_mode.add_argument("--require-receipts", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    runtime = ('compiler', 'library', 'include', 'generated_include', 'v18_frozen_receipt')
+    if any(getattr(args, name) is not None for name in runtime):
+        missing = ['--' + name.replace('_', '-') for name in runtime if getattr(args, name) is None]
+        if missing:
+            parser.error('runtime ABI control requires ' + ', '.join(missing))
+    return args
+
+
+def main() -> int:
+    args = parse_args()
     try:
         mode = enforce_receipt_mode(
             (args.v18_frozen_receipt,), skip=args.skip_if_receipt_missing,
@@ -135,11 +145,7 @@ def main() -> int:
         if mode is not None:
             return mode
         check(args.include.resolve().parent if args.include else ROOT)
-        requested = [args.compiler, args.library, args.include, args.generated_include,
-                     args.v18_frozen_receipt]
-        if any(value is not None for value in requested):
-            if not all(value is not None for value in requested):
-                raise PairingError("runtime ABI control requires compiler, library, include, generated include, and v18 receipt")
+        if args.compiler is not None:
             result = execute_frozen_pair(
                 compiler=args.compiler,
                 extra_flags=args.extra_flag,

@@ -189,7 +189,7 @@ CalendarPeriod calendar_period_for(const std::string& tf) {
 }
 
 static void decompose_utc(int64_t ms, struct tm& out) {
-    time_t secs = static_cast<time_t>(ms / 1000);
+    const time_t secs = static_cast<time_t>(ms / 1000 - (ms % 1000 < 0));
     gmtime_r(&secs, &out);
 }
 
@@ -203,6 +203,7 @@ static void decompose_utc(int64_t ms, struct tm& out) {
 // dividing 24h also reproduce the continuous epoch grid.
 
 static int64_t utc_floor_day_ms(int64_t ms) {
+    if (ms < 0) return calendar_day_open_local_ms(ms, "UTC");
     return (ms / kMsPerDay) * kMsPerDay;
 }
 
@@ -1106,8 +1107,8 @@ bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period,
     struct tm prev_tm, curr_tm;
     const int64_t pf_prev_clock = intraday_clock_ms(prev_ms, tz, session);
     const int64_t pf_curr_clock = intraday_clock_ms(curr_ms, tz, session);
-    if (security_trace_enabled() && curr_ms - prev_ms <= 3600000
-        && (curr_ms - prev_ms != 0)) { // PF_SEC_TRACE: show the session clock used for each bar.
+    if (security_trace_enabled() && curr_ms != prev_ms
+        && (curr_ms < prev_ms || static_cast<uint64_t>(curr_ms) - static_cast<uint64_t>(prev_ms) <= 3600000)) {
         std::fprintf(stderr,
             "[xsb] prev=%lld clock=%lld | curr=%lld clock=%lld\n",
             (long long)prev_ms, (long long)pf_prev_clock,
@@ -1168,6 +1169,11 @@ bool tf_change(int64_t prev_ms, int64_t curr_ms, const std::string& tf,
     }
     int secs = tf_to_seconds(tf);
     if (secs <= 0) return false;
+    return internal::intraday_bucket_changes(prev_ms, curr_ms, secs, tz, session);
+}
+
+bool internal::intraday_bucket_changes(int64_t prev_ms, int64_t curr_ms, int secs,
+                                      const std::string& tz, const std::string& session) {
     const std::vector<int64_t>* late_opens = chart_late_day_opens(tz, session);
     return intraday_bucket(prev_ms, secs, tz, session, late_opens, prev_ms).key !=
            intraday_bucket(curr_ms, secs, tz, session, late_opens, curr_ms).key;

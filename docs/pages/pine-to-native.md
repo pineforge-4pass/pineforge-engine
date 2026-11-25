@@ -713,13 +713,13 @@ it, so a valid length gives that class's values. The adapters do not touch
 
 ### Series-length SMA source adapter {#pine_to_native_series_sma}
 
-`pineforge::source::SeriesSma` (include/pineforge/source/pine_ta_length.hpp:524)
+`pineforge::source::SeriesSma` (include/pineforge/source/pine_ta_length.hpp:523)
 provides an SMA with a length supplied on every evaluation in the Pine source
-adapter. The paired code generator uses it for series-length `ta.sma`. For
-finite inputs without intermediate overflow, fixed-length `ta.sma` follows
-TradingView's running sum and series-length `ta.sma` sums the window exactly
-before division, so the same window can round to different averages. Keep
-one instance per written call site and evaluation context. Its public signatures are below.
+adapter. The paired code generator uses it for series-length `ta.sma`. Both
+length forms carry the same running sum and correction. A series length
+held constant gives the fixed-length result on every bar, including `na`
+source bars. Keep one instance per written call site and evaluation context.
+Its public signatures are below.
 
 ```cpp
 SeriesSma();
@@ -737,7 +737,7 @@ Transport numeric Pine operands through the existing `ta_number` overloads
 for `double`, `int` and `std::int64_t`, so integer `na` sentinels reach the
 adapter as a double NaN.
 
-`compute` (src/source/pine_ta_length.cpp:563) makes one logical update per call,
+`compute` (src/source/pine_ta_length.cpp:578) makes one logical update per call,
 starting at the site's first execution. A non-`na` source appends one retained
 observation; an `na` source contributes no sample. Each call uses its current
 length to select the last N non-`na` observations and returns `na` while fewer
@@ -759,43 +759,58 @@ selects 15,000 unless a cap was supplied; `--limit-ta-lookback 0` selects
 unlimited. Invalid calls leave the logical checkpoint unchanged.
 For a valid length, warm-up returns `na` until N non-`na` samples are retained.
 
-`recompute` (src/source/pine_ta_length.cpp:586) replaces the most recent logical
+`recompute` (src/source/pine_ta_length.cpp:582) replaces the most recent logical
 update from its pre-update ring head/count, including the oldest value evicted
 by a full-ring push. Replacing a value with `na` restores that evicted value;
 replacing `na` with a value inserts one observation, evicting the oldest if
 full. Repeated recomputations use the same checkpoint and this call's N.
+The checkpoint includes the pre-bar sum, correction, active count and whether
+the sum needs to be rebuilt on the next window change.
 On an unused instance it creates the first logical update. Copy construction
 and assignment preserve the ring, head/count, saved eviction and replacement
 state, with storage detached before mutation.
 
-`mean` (src/source/pine_ta_length.cpp:517) sums the selected window afresh.
-For finite sources without intermediate overflow, it rounds the exact sum
-once, then divides by N. When its window is full, fixed SMA subtracts the
-oldest source before adding the incoming source. It accumulates each step's
-rounding error in a separate double and divides the total plus correction by N.
-The two paths can round differently. The finite TradingView clock/source-`na`
-packet supports the non-`na` sample membership correction; its complete prefix
-through bar 16 is embedded in `tv_clock_na_prefix`
-(tests/test_series_sma.cpp:242). This evidence does not qualify runtime
-overrides, all numeric domains, numerical order, cross-platform precision,
-whole-history parity or rollback in Pine evaluation contexts. Fractional
-transport, infinity, overflow and signed zero remain unqualified. Sparse-call
-routing, repeated calls of the same site within a bar, same-bar re-execution
-after multiple calls and requested-context clocks require separate
-qualification. These ordinary C++ API rules do not establish Pine overload
-admission or TradingView parity for those contexts. Constant-length calls
-continue to use `ta::SMA`. The unit test covers a cancellation where only the
-series-length path retains a tiny addend. Its separate 1441-row feed comparison
+The order in `update` (src/source/pine_ta_length.cpp:517) was
+recorded on TradingView in November 2026.
+Across 400 bars the source repeated `1e16, 1, 1e-16, -1e16, -1`; the
+length held at 5, alternated between 5 and 3, or held at 7 in successive
+24-bar blocks. Start with two zero doubles, S and C. Before adding a source,
+adjust the previous window to N − 1 observations, or as many as exist.
+Subtract excess observations oldest first; when growing, add the missing
+older observations farthest first. Then add the new source. On an `na`
+source, adjust to N and add nothing. Each addition updates S and adds its
+two-sum rounding error to C. Return (S + C) / N without folding C back
+into S. In particular, adding `1e-16` to a correction of 1 can lose it.
+
+If a two-sum step overflows, both paths retry the active window in time
+order. If a step still fails, they round the exact sum of finite sources
+once if it fits. Otherwise they add the active sources newest first with
+ordinary IEEE arithmetic: a retained infinity counts as a source, and
+opposite infinities give `na`. Arithmetic can resume after eviction.
+The earlier recording through bar 16 in `tv_clock_na_prefix`
+(tests/test_series_sma.cpp:242) shows how a missing source affects membership.
+The recordings do not cover runtime overrides, whole-history parity across
+platforms or rollback in Pine evaluation contexts. Fractional
+transport, infinity, overflow and signed zero were not established by these
+recordings. Sparse-call routing, repeated calls of the same site within a
+bar, same-bar re-execution after multiple calls and requested-context
+clocks require separate qualification. These ordinary C++ API rules do not
+establish Pine overload admission or TradingView parity for those contexts. Constant-length calls
+continue to use `ta::SMA`. The unit test checks both paths bit for bit through
+cancellation and missing sources. Its separate 1441-row feed comparison
 at N=20 reports difference counts and maximum ULP distance against fixed
 `ta::SMA`. If values differ, it prints the first differing row and the row
 with the largest ULP distance, with timestamps and hexadecimal values. The
-comparison calls the two C++ implementations directly.
+comparison calls the two C++ implementations directly and requires zero differences.
 
 `ensure_capacity` (src/source/pine_ta_length.cpp:506) grows the ring as
 non-`na` samples arrive, up to L + 1 when capped. Rollback needs only a
-scalar checkpoint. The cache policy controls residency, and summation uses
-bounded local scratch and takes O(N) work. `observe_owned_storage`
-(include/pineforge/source/pine_ta_length.hpp:530) reports owned history through
+scalar checkpoint. The cache policy controls residency. On ordinary finite
+inputs the arithmetic cost is constant for a constant length. A length change
+costs one addition per source removed or brought back, up to the retained
+history size in one bar. Exceptional recovery scans the active window, and
+growing the backing storage copies the retained history. `observe_owned_storage`
+(include/pineforge/source/pine_ta_length.hpp:532) reports owned history through
 the existing storage accounting. Allocation, capacity and scratch I/O failures
 propagate. Ring/checkpoint fields are published after required writes
 succeed, including restoration of an evicted oldest value.

@@ -237,11 +237,11 @@ struct PlacementSnapshot {
     // and a cancel and re-entry of the id. Cleared when the id fills, which
     // binds the exit to that fill's lot (ExitBindingRuleSwitches).
     bool pending_bound_exit = false;
-    // A leg of one entry's bracket of a from_entry "" exit that covers the
-    // position entry by entry (ExitBindingRuleSwitches::
-    // global_exit_per_entry_levels): the incarnation of the entry order whose
-    // fill price set its level, and that entry's quantity, which is all the
-    // leg closes. Zero for every other row.
+    // The opening that owns this leg and the units it can close. A tick
+    // bracket takes its level from that opening; a named percentage target
+    // takes its quantity from it. FIFO can book either against an older lot.
+    // A pending add keeps the same identity when its fill arms the leg.
+    // Orders without per-opening sizing or pricing have an origin of zero.
     std::uint64_t per_entry_origin = 0;
     double per_entry_units = std::numeric_limits<double>::quiet_NaN();
     // Sized when it was placed and executed as a plain market transaction:
@@ -1691,9 +1691,9 @@ public:
     int short_seed_collision_role(int index) const noexcept;
     int last_bar_dual_entry_path() const noexcept;
     double trail_best_price() const noexcept;
-
 private:
     friend class PineExecutionAdapter;
+    double position_before_order(const PlacementSnapshot&, const native_order::RequestHandle&, double held) const;
     const PineExecutionAdapter* owner_ = nullptr;
 };
 
@@ -2295,11 +2295,20 @@ private:
         // A named exit covers an order at its fill only if the call followed the order.
         std::uint64_t last_call = 0;
         std::int64_t cycle = 0;
-        bool long_side = true;
+        // The old side flag and its alignment padding occupy this word.
+        std::uint64_t long_side : 1;
+        std::uint64_t group_bytes : 63;
         double profit_ticks = std::numeric_limits<double>::quiet_NaN();
         double loss_ticks = std::numeric_limits<double>::quiet_NaN();
-        std::string comment;
+        std::string text;  // group followed by comment; neither needs a delimiter
         std::vector<PerEntryExitChild> children;
+        PerEntryExit() : long_side(true), group_bytes(0) {}
+        std::string_view group() const { return std::string_view(text).substr(0, group_bytes); }
+        std::string_view comment() const { return std::string_view(text).substr(group_bytes); }
+        void set_text(const std::string& name, const std::string& note) {
+            text.assign(name).append(note);
+            group_bytes = name.size();
+        }
     };
 
     struct PendingCoofRequest {
@@ -2403,6 +2412,9 @@ private:
                                   std::uint64_t& reservation_sequence,
                                   bool whole_position_percent,
                                   double pending_market_units) const;
+    void withdraw_percent_limits(const SourceId& exit_id, const SourceId& from_entry,
+                                 std::optional<std::uint64_t> origin);
+    double completed_opening_units(std::uint64_t origin, bool long_side, const SourceId& from_entry);
     void reconcile_deferred_exit_reservations(const SourceId& from_entry,
                                                double live_basis);
     void reconcile_exit_reservations_after_margin();
@@ -2827,7 +2839,8 @@ private:
                              double qty, const std::string& oca_name, double profit_ticks,
                              double loss_ticks, std::uint64_t command_sequence);
     void submit_per_entry_child(const PerEntryExit& exit, const PerEntryExitChild& child,
-                                std::uint64_t command_sequence);
+                                std::uint64_t command_sequence,
+                                std::optional<PineOrderFamily> only_leg = std::nullopt);
     void per_entry_exits_at_entry_fill(const PlacementSnapshot& opening,
                                        const native_order::ExecutionAppliedEvent& event);
     void per_entry_exits_after_fill(const std::optional<PlacementSnapshot>& placement,
@@ -2948,9 +2961,20 @@ private:
     // then suppress just that duplicate debit at notification delivery.
     std::unordered_set<std::uint64_t> current_debited_applied_ordinals_;
     std::unordered_set<std::uint64_t> intraday_loss_relabel_ordinals_;
+    // Positive: the position cycle. Negative: the last order of a split
+    // percentage target filled at the negated Applied ordinal.
     pineforge::detail::IdPairStore<std::int64_t, true> consumed_partial_exit_cycles_{
         pineforge::detail::IdTableReadCache::kPairCacheBytes};
-    std::unordered_set<std::uint64_t> bracket_shadowed_openings_;
+    // Incarnation zero (never an opening) dates the first percentage TP fill
+    // this cycle. Only openings after it need a date. Units are the basis
+    // before FIFO cuts. Shadowed lots retain the existing slot-retirement rule.
+    struct OpeningExitFacts {
+        std::uint64_t applied = 0;
+        double units = 0.0;
+        bool shadowed = false;
+    };
+    std::unordered_map<std::uint64_t, OpeningExitFacts> opening_exit_facts_;
+    void forget_opening(std::uint64_t origin);
     std::unordered_map<SourceId, NamedEntryCancelToken> named_entry_cancel_tokens_;
     // An exit bound to its entry id whose working order a strategy.cancel of
     // the id withdrew (PlacementSnapshot::pending_bound_exit): TradingView

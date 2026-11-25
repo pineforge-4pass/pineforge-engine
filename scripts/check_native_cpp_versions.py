@@ -225,6 +225,7 @@ BAR_VIEW_READS = {
         'path.bars = tradingview_magnifier_bars(',
         'args.bars, args.n, spec.input_tf, spec.script_tf, spec.session,',
         'const bool inactive_sampler_path = inert != nullptr && inert->bars.empty()',
+        'return borrowed ? borrowed->count() != 0 : !lower->bars.empty();',
     ),
     'src/source/pine_scheduler_native.cpp': (
         'if (args.bars && args.n > 0) {',

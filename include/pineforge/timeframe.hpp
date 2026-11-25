@@ -1,12 +1,14 @@
 #pragma once
 #include <string>
 #include <cstdint>
+#include <limits>
 #include <vector>
 #include <memory>
 #include <optional>
 #include "bar.hpp"
 #include <pineforge/detail/feed_projection.hpp>
 #include <pineforge/owned_storage.hpp>
+#include <pineforge/run_failure.hpp>
 
 namespace pineforge {
 // ─── Day-length constants ──────────────────────────────────────────────────────
@@ -40,11 +42,17 @@ struct FixedPeriodClock {
 int tf_to_seconds(const std::string& tf);
 
 /// Extract the numeric multiplier from a TF string (e.g. "15" -> 15, "D" -> 1).
+/// A leading decimal count that cannot fit in int throws std::out_of_range.
 inline int tf_multiplier(const std::string& tf) {
     int val = 0;
     for (char c : tf) {
-        if (c >= '0' && c <= '9') val = val * 10 + (c - '0');
-        else break;
+        if (c < '0' || c > '9') break;
+        const int digit = c - '0';
+        if (val > (std::numeric_limits<int>::max() - digit) / 10) {
+            throw coded<std::out_of_range>(RunFailureCode::pine_invalid_argument,
+                {{"argument", "timeframe"}, {"rule", "unparseable"}}, "timeframe multiplier out of int range");
+        }
+        val = val * 10 + digit;
     }
     return val > 0 ? val : 1;
 }
@@ -70,7 +78,7 @@ inline bool tf_is_seconds(const std::string& tf) {
     return tf.find('S') != std::string::npos;
 }
 
-/// Check if prev/curr timestamps cross a timeframe boundary.
+/// Check for a timeframe change; zero in either argument denotes an unknown timestamp.
 bool tf_change(int64_t prev_ms, int64_t curr_ms, const std::string& tf);
 
 /// Compute how many input bars fit into one target bar.
@@ -703,5 +711,11 @@ private:
     // native_index would answer -1.
     bool native_source_period(int64_t ms, int64_t& stamp) const;
 };
+
+namespace internal {
+/// Compare the intraday bucket keys of two known timestamps on the symbol clock.
+bool intraday_bucket_changes(int64_t prev_ms, int64_t curr_ms, int secs,
+                             const std::string& tz, const std::string& session);
+} // namespace internal
 
 } // namespace pineforge

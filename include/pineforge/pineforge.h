@@ -1439,23 +1439,23 @@ typedef enum pf_fill_qty_partition_e {
  *  than the live position still opens the remainder, so a consumer compares
  *  @p qty with the live position. A replaced default-percent short is dispatched
  *  with its `frozen_default_qty`: @p qty is that transaction, @p close_only 0.
- *  For a `strategy.order` with its own quantity against an opposite position,
- *  @p qty is the quantity its fill transacts and @p close_only is 1 exactly when
- *  that fill opens nothing (in an OCA cancel group, always), unless a close the
- *  script placed before it on the same bar is still pending: that close fills
- *  first, and the report is then the qty as written with @p close_only 0 (1 in
- *  an OCA cancel group). The probe answers for the order filling against the
- *  CURRENT book and position. The report is made before the fill and does not
- *  account for checks the fill makes at fill time against equity, price and
- *  margin (for example, an entry the account cannot afford in whole units). In
- *  those cases the fill can differ from the report. Not modelled: the fill-time
- *  money guards (whole-lot tie, low-value or fractional lot), affordability at
- *  the fill, the margin-call surplus, the close quantity a reversal keeps when a
- *  margin call was booked after the script, a refused signal price, an admission
- *  refusal, fills that an earlier order in the same pass would make first, and an
- *  entry that names its own quantity or a row whose request cannot be read (one
- *  held in the source's shadow queue), which is judged by the prior-cycle rule
- *  alone.
+ *  For a `strategy.order` facing an opposite position, @p qty is the planned
+ *  transaction and @p close_only is 1 if it opens nothing. Earlier working
+ *  market closes placed on the same bar reduce the planned position first.
+ *  Under ANY a named close consumes only what its entry still holds. An OCA
+ *  cancel order or an order without its own quantity can only reduce the
+ *  opposite balance that remains; if flat, it opens its own size. A plain
+ *  explicit order transacts its remaining units. Within the fill's quantity tolerance the balance
+ *  is flat. If a fill recalculation queues a market close before a limit order, the close counts
+ *  when the rest of the bar and, if known, the next open miss the limit. This report does not account
+ *  for checks the fill makes at fill time against equity, price and margin (for example, an entry
+ *  the account cannot afford in whole units). In those cases the fill can differ from the report.
+ *  Not modelled: the fill-time money guards (whole-lot tie, low-value or fractional lot),
+ *  affordability at the fill, the margin-call surplus, the close quantity a reversal keeps when a
+ *  margin call was booked after the script, a refused signal price, an admission refusal, other
+ *  competing fills (including other staged closes and conditional closes), and an entry that names
+ *  its own quantity or a row whose request cannot be read (one held in the source's shadow queue),
+ *  which is judged by the prior-cycle rule alone.
  *  NOT folded into @p qty: the deferred-flip carry (`tv_carry_qty`, added on
  *  a priced entry from FLAT whose placement side is the opposite of the
  *  requested side) -- read `tv_carry_qty` / `created_position_side` from

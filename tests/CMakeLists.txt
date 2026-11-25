@@ -8813,6 +8813,15 @@ if(TARGET test_issue810_case_a)
         COMMAND test_issue810_case_a f3_b_market_add_control_base_close_price)
 endif()
 # --- lane issue-810-case-a end ---
+# --- lane unequal-percent-after-fill begin ---
+# One named row of test_exit_bracket_pending_entry_leg, whose no-argument row
+# still runs every row. The main file owns that source-bound target, so this
+# row only reads its built file, and only where the source layer is built.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_test(NAME test_exit_bracket_pending_entry_leg_unequal_percent_after_fill
+        COMMAND $<TARGET_FILE:test_exit_bracket_pending_entry_leg> unequal-percent-after-fill)
+endif()
+# --- lane unequal-percent-after-fill end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))

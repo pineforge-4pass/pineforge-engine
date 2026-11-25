@@ -313,20 +313,19 @@ public:
             model_.bind("waiting-parent");
             read_counts("unbound filed on bind");
             bound_ = true;
-            cancel_legs("waiting-parent", base_);
+            // Let the priced legs reach the opened cycle; their retention
+            // and release are the lookup behavior this fixture measures.
+            for (int i = 0; i < base_ + 2; ++i)
+                strategy_exit_cancel_bracket(leg_id("waiting-parent", 2, i), "waiting-parent");
             strategy_close_all();
         }
         if (bar == 7) {
             check(live_position_size() == 0.0, "bound parent closed", "bound rows retired", __LINE__);
             check((adapter_.*access(CycleTag{})) == lifecycle_.swept_cycle,
                   "flat did not advance the cycle", "bound rows retired", __LINE__);
-            // At the parent fill the delay block (gated by partial_prearmed_parent)
-            // moves the priced children to the delayed queue. They are still queued
-            // after exit_cancel_bracket and release_delayed_orders submits them at
-            // the next bar open (bar 3).
-            // submit_or_replace stamps the opened cycle; the K1 clause in
-            // sweep_retired_rows retains their new rows at flat. The original
-            // trails still belong to the pre-opening cycle.
+            // The parent fill parks its priced children for the next open.
+            // The K1 clause retains their new rows in the opened cycle at
+            // flat. The trails still belong to the pre-opening cycle.
             read_retained_binding_counts("bound rows retired");
             retired_ = true;
         }
@@ -361,13 +360,9 @@ private:
         return families[kind];
     }
 
-    // Models uniform child quantities for these same-bar prearmed commands,
-    // with no child fills, script withdrawal or superseding exit calls.
-    // The engine decides per parent: any same-bar finite limit/stop child
-    // below the opened units sets partial_prearmed_parent, and the delay block
-    // then moves every same-bar limit/stop child of that parent to the queue. Trailing activation is not
-    // delayed. The uniform quantities here let each child use the same test,
-    // independent of child multiplicity or observed rows.
+    // Models uniform child quantities for these same-bar prearmed commands.
+    // A partial priced child parks all the priced legs of the parent at its
+    // fill. The trail rows are never delayed or readmitted.
     static bool retained_prearmed_leg(source::PineOrderFamily family,
                                      double requested_units, double parent_units,
                                      const BindingLifecycle& state) {
@@ -376,9 +371,7 @@ private:
         const bool delayed_at_fill = state.parent_filled && fixed_price_leg
             && std::isfinite(requested_units) && requested_units < parent_units;
         // These commands start in cycle zero. submit_or_replace stamps the
-        // fill-delayed copies with the parent-fill cycle; the original trails
-        // keep cycle zero. The copies remain queued after exit_cancel_bracket
-        // and release_delayed_orders submits them at the next bar open.
+        // uncanceled delayed copies with the parent-fill cycle on release.
         const auto placement_cycle = delayed_at_fill ? state.parent_fill_cycle : 0;
         // At both read points the old parent is flat, with no remaining roots
         // or supersessors. The K1 cycle clause in sweep_retired_rows decides

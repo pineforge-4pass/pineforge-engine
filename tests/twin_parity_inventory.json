@@ -1,6 +1,7 @@
 {
   "base": "ab9714beccb62b796c122cf68986ec9e7dbf4a67",
   "baseRefreshNotes": {
+    "test_full_close_while_pyramiding": "#810 corrects two assertions in the base source and its required L4d twin. Appendix 6 of tests/twin_parity_ledger.md records the corrections; ordinary literal matching still applies to all 12 assertions.",
     "test_run_inputs_overrides": "#918 corrects seven fallback assertions in the base source and its required L4d twin. Appendix 6 of tests/twin_parity_ledger.md records the corrections; ordinary literal matching still applies to all 70 assertions."
   },
   "families": {

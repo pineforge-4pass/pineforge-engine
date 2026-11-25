@@ -1,4 +1,5 @@
 #include "native_execution_consumer.hpp"
+#include "native_feed_period.hpp"
 #include "canonical_json.hpp"
 #include "native_issued_range_state.hpp"
 #include "engine_internal.hpp"
@@ -2804,13 +2805,12 @@ NativeExecutionConsumer::script_interval_resolved(std::int64_t timestamp) const 
 void NativeExecutionConsumer::prepare_day_labels(const BacktestEngine& engine,
                                                  const Bar* input_bars, int n_input) {
     day_labels_.clear();
-    if (!script_tf_.valid() || script_tf_.unit() != native_calendar::TimeframeUnit::Day
-        || script_tf_.count() != 1 || !input_tf_.is_fixed() || uses_raw_label_partition()) {
-        return;
-    }
+    if (!script_tf_.valid() || internal::native_feed_period(script_tf_) != internal::daily_feed_period
+        || !input_tf_.is_fixed() || uses_raw_label_partition()) return;
     const std::vector<Bar>* daily = nullptr;
     for (const auto& feed : engine.native_security_feeds_) {
         if (feed.seconds == kSecPerDay && !feed.bars.empty()) {
+            if (internal::native_feed_period(feed.tf) != internal::daily_feed_period) continue;
             daily = &feed.bars;
             break;
         }
@@ -9111,7 +9111,7 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
 // holiday). With nothing held, the neighbour is the calendar's previous or
 // next eligible input slot, except at the run's own edges: its first bar opens
 // its session day, and a batch's final bar closes it because batch input is
-// complete. A stream reads on. A declared break does not split a session day.
+// complete. A stream reads on. Clipped chart cells can share a day edge.
 void NativeExecutionConsumer::present_session_day(NativeDecisionContext& context,
                                                   int64_t label) const {
     context.in_session = false;
@@ -9173,7 +9173,7 @@ void NativeExecutionConsumer::present_session_day(NativeDecisionContext& context
     }
     if (!here.in_session) return;
     context.in_session = true;
-    // In session on this bar's own session day.
+    const auto edges = native_calendar::clipped_day_edges(calendar_, script_tf_, label, calendar_memo_);
     const auto same_day = [&](int64_t other) {
         SessionPoint there;
         const CertifiedCycle* other_cycle = certified_cycle_of(other);
@@ -9223,7 +9223,7 @@ void NativeExecutionConsumer::present_session_day(NativeDecisionContext& context
             }
         }
     }
-    context.opens_session_day = run_start || !before || !same_day(*before);
+    context.opens_session_day = run_start || !before || !same_day(*before) || edges.opens;
 
     std::optional<int64_t> after;
     bool run_end = false;
@@ -9238,13 +9238,13 @@ void NativeExecutionConsumer::present_session_day(NativeDecisionContext& context
         pumped_last_label_ = label;
     }
     if (after) {
-        context.closes_session_day = !same_day(*after);
+        context.closes_session_day = !same_day(*after) || edges.closes;
         context.closes_session_day_open_ended = context.closes_session_day;
     } else {
         // Nothing held after the bar: the calendar's next eligible input
         // slot, which jumps across a declared break without ending the day.
         resolve_slot();
-        const bool scheduled = slot && !same_day(slot->next_input_open_ms);
+        const bool scheduled = (slot && !same_day(slot->next_input_open_ms)) || edges.closes;
         context.closes_session_day = run_end || scheduled;
         context.closes_session_day_open_ended = scheduled;
     }

@@ -400,8 +400,8 @@ def verify_pair(args: argparse.Namespace) -> dict:
     }
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+def parse_args(argv=None, *, parser_class=argparse.ArgumentParser):
+    parser = parser_class(description=__doc__)
     parser.add_argument("--compiler", required=True)
     parser.add_argument("--library", type=Path, required=True)
     parser.add_argument("--include", type=Path, required=True)
@@ -421,12 +421,23 @@ def main() -> int:
     receipt_mode = parser.add_mutually_exclusive_group()
     receipt_mode.add_argument("--skip-if-receipt-missing", action="store_true")
     receipt_mode.add_argument("--require-receipts", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.order_check:
         if args.order_check == "rebuild" and args.current_build is None:
             parser.error("--order-check rebuild requires --current-build")
         if not 1 <= args.jobs <= 64:
             parser.error("--jobs must be 1..64")
+    else:
+        for name in ("base_receipt", "prior_receipt", "v13_receipt", "v14_receipt",
+                     "v15_frozen_receipt", "v16_frozen_receipt", "v18_frozen_receipt"):
+            if getattr(args, name) is None:
+                parser.error("--" + name.replace("_", "-") + " is required for settlement ABI pairs")
+    return args
+
+
+def main() -> int:
+    args = parse_args()
+    if args.order_check:
         args.include = args.include.resolve()
         args.library = args.library.resolve()
         args.generated_include = args.generated_include.resolve()
@@ -443,10 +454,6 @@ def main() -> int:
         args.receipt.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
         print("native order C++ ABI: " + args.order_check + " verified; artifacts " + str(root))
         return 0
-    for name in ("base_receipt", "prior_receipt", "v13_receipt", "v14_receipt",
-                 "v15_frozen_receipt", "v16_frozen_receipt", "v18_frozen_receipt"):
-        if getattr(args, name) is None:
-            parser.error("--" + name.replace("_", "-") + " is required for settlement ABI pairs")
     try:
         absent = missing_private_fixtures()
         if absent:

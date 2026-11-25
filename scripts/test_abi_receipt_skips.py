@@ -27,11 +27,6 @@ from prepare_settlement_cpp_abi_base import PROVIDERS
 
 # The ctest the CTest row passes with --ctest (CMAKE_CTEST_COMMAND), else PATH's.
 CTEST = shutil.which('ctest')
-# A stand-in for a gated checker: exit 77 when a named input receipt is absent.
-CHECKER = ('import sys, os; a = sys.argv[1:]; '
-           'sys.exit(77 if any(f.endswith("-receipt") and f != "--receipt" '
-           'and not os.path.exists(v) for f, v in zip(a, a[1:])) else 0)')
-
 _SENTINEL = object()
 _PRIOR_OVERLAY_FLAG: object = _SENTINEL
 
@@ -61,6 +56,19 @@ def cmake_quote(value: str) -> str:
     return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
 
 
+def receipt_command(build, program, inputs, mode='--skip-if-receipt-missing'):
+    """A registration using the real CLI; its output receipt need not exist."""
+    command = [sys.executable, str(skips.ROOT / 'scripts' / program),
+               '--compiler', 'c++', '--generated-include', str(build)]
+    if program == 'check_runtime_budget.py':
+        command.extend(['--candidate', sys.executable, '--source', __file__, '--csv', __file__,
+                        '--compile-commands', str(build / 'compile_commands.json')])
+    else:
+        command.extend(['--library', sys.executable, '--include', str(build),
+                        '--receipt', str(build / 'own-output-receipt.json')])
+    return command + [*inputs, mode]
+
+
 class GatedRows(unittest.TestCase):
     def test_a_row_is_gated_by_its_receipt_mode_and_reads_only_its_input_receipts(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -69,17 +77,16 @@ class GatedRows(unittest.TestCase):
             present.parent.mkdir()
             present.write_text('{}')
             absent = build / 'settlement-abi-base' / 'receipt.json'
+            settlement_inputs = ['--base-receipt', str(absent)]
+            for stem in ('prior', 'v13', 'v14', 'v15-frozen', 'v16-frozen', 'v18-frozen'):
+                settlement_inputs.extend(['--' + stem + '-receipt', str(present)])
             tests = [
-                {'name': 'plain', 'command': ['python3', 'check.py', '--receipt', str(absent)]},
-                {'name': 'skipping', 'command': [
-                    'python3', 'check.py', '--v16-frozen-receipt', str(present),
-                    '--base-receipt', str(absent),
-                    '--receipt', str(build / 'own-output-receipt.json'),
-                    '--skip-if-receipt-missing']},
-                {'name': 'required', 'command': [
-                    'python3', 'budget.py', '--compile-commands',
-                    str(build / 'compile_commands.json'),
-                    '--v16-frozen-receipt', str(present), '--require-receipts']},
+                {'name': 'plain', 'command': [sys.executable, 'check.py', '--receipt', str(absent)]},
+                {'name': 'skipping', 'command': receipt_command(
+                    build, 'check_settlement_cpp_abi.py', settlement_inputs)},
+                {'name': 'required', 'command': receipt_command(
+                    build, 'check_runtime_budget.py', ['--v16-frozen-receipt', str(present)],
+                    '--require-receipts')},
             ]
             rows = skips.gated_rows(tests)
         self.assertEqual([row.name for row in rows], ['skipping', 'required'])
@@ -107,7 +114,7 @@ class AgainstRealCTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         if not CTEST:
-            raise unittest.SkipTest('ctest not found')
+            raise AssertionError('receipt readiness: NOT COMPARED: ctest not found')
 
     def build_tree(self, *, export_compile_commands: bool) -> Path:
         temporary = tempfile.TemporaryDirectory()
@@ -116,19 +123,23 @@ class AgainstRealCTest(unittest.TestCase):
         (build / 'CMakeCache.txt').write_text('CMAKE_HOME_DIRECTORY:INTERNAL=/nowhere\n')
         if export_compile_commands:
             (build / 'compile_commands.json').write_text('[]\n')
-        v16 = build / 'native-abi-v16-frozen' / 'receipt.json'
-        base = build / 'settlement-abi-base' / 'receipt.json'
+        # CTest runs the real budget program in candidate-only mode. Its sample
+        # parser still requires both clocks from an executable that exits zero.
+        sample = build / 'sample'
+        sample.write_text('#!/bin/sh\necho PF_RUNTIME_SECONDS=0.1\necho PF_RUNTIME_CPU_SECONDS=0.1\n')
+        sample.chmod(0o755)
+
+        def budget(directory):
+            command = receipt_command(build, 'check_runtime_budget.py', [
+                '--v16-frozen-receipt', str(build / directory / 'receipt.json')])
+            command[command.index('--candidate') + 1] = str(sample)
+            return [*command, '--candidate-only']
+
         rows = {
             'test_plain_python_row': [sys.executable, '-c', 'pass'],
-            'test_gated_pair': [sys.executable, '-c', CHECKER, '--v16-frozen-receipt', str(v16),
-                                '--receipt', str(build / 'pair-receipt.json'),
-                                '--skip-if-receipt-missing'],
-            'test_gated_settlement': [sys.executable, '-c', CHECKER, '--base-receipt', str(base),
-                                      '--v16-frozen-receipt', str(v16),
-                                      '--skip-if-receipt-missing'],
-            'test_gated_budget': [sys.executable, '-c', CHECKER,
-                                  '--compile-commands', str(build / 'compile_commands.json'),
-                                  '--v16-frozen-receipt', str(v16), '--skip-if-receipt-missing'],
+            self.GATED[0]: budget('first'),
+            self.GATED[1]: budget('second'),
+            self.GATED[2]: budget('native-abi-v16-frozen'),
         }
         lines = []
         for name, command in rows.items():
@@ -140,7 +151,7 @@ class AgainstRealCTest(unittest.TestCase):
 
     @staticmethod
     def receipts(build: Path) -> None:
-        for directory in ('native-abi-v16-frozen', 'settlement-abi-base'):
+        for directory in ('first', 'second', 'native-abi-v16-frozen'):
             (build / directory).mkdir(exist_ok=True)
             (build / directory / 'receipt.json').write_text('{}\n')
 
@@ -172,9 +183,9 @@ class AgainstRealCTest(unittest.TestCase):
         self.assertIn('registers 3 receipt-gated CTest rows', out)
         for name in ('test_gated_pair', 'test_gated_settlement', 'test_gated_budget'):
             self.assertRegex(out, rf'\n  inputs missing +{name} +receipts? missing: .*receipt mode: skip')
-        self.assertIn('settlement-abi-base/receipt.json, native-abi-v16-frozen/receipt.json', out)
+        for directory, name in zip(('first', 'second', 'native-abi-v16-frozen'), self.GATED):
+            self.assertRegex(out, rf'{name} +receipt missing: {directory}/receipt\.json')
         self.assertNotIn('test_plain_python_row', out)
-        self.assertNotIn('pair-receipt.json', out)
         self.assertIn('3 of 3 receipt-gated rows lack required input files', out)
         self.assertIn('--prepare', out)
 
@@ -189,10 +200,7 @@ class AgainstRealCTest(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stdout)
         self.assertEqual(ctest_rows(run.stdout.encode()).ran, 1 + len(self.GATED), run.stdout)
 
-    def test_a_tree_without_a_compile_database_fails_the_budget_row_once_it_runs(self):
-        # test_l4g_runtime_budget reads compile_commands.json after its receipt
-        # check: preparing the providers in a tree configured without
-        # CMAKE_EXPORT_COMPILE_COMMANDS=ON turns its skip into a failure.
+    def test_the_budget_registration_names_a_missing_compile_database(self):
         build = self.build_tree(export_compile_commands=False)
         self.receipts(build)
         code, out = self.check(build)
@@ -299,7 +307,7 @@ class PrivateFixtureManifests(unittest.TestCase):
     def placeholder(self, role):
         """The row dict the pinned SKIP placeholder registers for a provider."""
         manifest = self.manifest(role)
-        return ['cmake', '-E', 'echo', 'SKIP private fixtures not present: ' + manifest]
+        return [shutil.which('cmake'), '-E', 'echo', 'SKIP private fixtures not present: ' + manifest]
 
     def receipt_args(self, role, build):
         """The input flag and path for one provider in the real command."""
@@ -345,11 +353,13 @@ class PrivateFixtureManifests(unittest.TestCase):
                 receipt = build / PROVIDERS[role]['default_output'] / 'receipt.json'
                 receipt.parent.mkdir(parents=True, exist_ok=True)
                 receipt.write_text('{}\n')
-            tests = [{'name': row,
-                      'command': [sys.executable, 'check.py', '--require-receipts',
-                                  *(arg for role in self.ROW_PROVIDERS[row]
-                                    for arg in self.receipt_args(role, build))]}
-                     for row in self.ROWS]
+            (build / 'compile_commands.json').write_text('[]\n')
+            programs = ('check_script_cpp_abi.py', 'check_settlement_cpp_abi.py',
+                        'check_aggregate_cpp_versions.py', 'check_runtime_budget.py')
+            tests = [{'name': row, 'command': receipt_command(
+                        build, program, [arg for role in self.ROW_PROVIDERS[row]
+                                         for arg in self.receipt_args(role, build)],
+                        '--require-receipts')} for row, program in zip(self.ROWS, programs)]
             rows = skips.gated_rows(tests)
             self.assertEqual([row.name for row in rows], list(self.ROWS))
             self.assertEqual([row.verdict for row in rows], ['inputs present'] * 4)

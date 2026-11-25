@@ -478,6 +478,12 @@
 // declares a step of 1e-8 (quantities compared to 1e-4, the two other rules that a step switches on held off). 391bb8e9 changes
 // reversals seed 3665515, and only its digest. Every other row is retained byte for byte. This table is the engine's own
 // transcript, not a TradingView measurement.
+// Re-harvested with PINEFORGE_V19E_HARVEST on a cloud build of d4c61520, which measures the named tick brackets of a FIFO
+// pyramid from each entry's fill also with process_orders_on_close and with calc_on_order_fills: 2 rows change against the
+// table above. They are the only chains configurations with pyramiding 2, no magnifier and exactly one of the two settings:
+// seed 1152021 (process_orders_on_close, trades 72 -> 69) and seed 314189 (calc_on_order_fills, trades 78 -> 95). The tree
+// before that commit passes the table above. Every other row is retained byte for byte. This table is the engine's own
+// transcript, not a TradingView measurement.
 constexpr std::uint64_t kTranscriptDigests[] = {
     5688969932745949967ull,  // reversals seed 104729, 113 trades, 388 commands, 427 rows placed
     6673515823183289519ull,  // reversals seed 209458, 125 trades, 379 commands, 419 rows placed
@@ -553,7 +559,7 @@ constexpr std::uint64_t kTranscriptDigests[] = {
     4880364996188168172ull,  // brackets seed 3770245, 74 trades, 520 commands, 580 rows placed
     3254791467963586893ull,  // chains seed 104731, 67 trades, 318 commands, 348 rows placed
     9800751460692316674ull,  // chains seed 209460, 74 trades, 381 commands, 426 rows placed
-    1653695243317863533ull,  // chains seed 314189, 78 trades, 475 commands, 495 rows placed
+    18220617587370349330ull,  // chains seed 314189, 95 trades, 521 commands, 529 rows placed
     2033162760298087391ull,  // chains seed 418918, 44 trades, 293 commands, 349 rows placed
     12221320464222137166ull,  // chains seed 523647, 47 trades, 314 commands, 327 rows placed
     3066258265832884525ull,  // chains seed 628376, 74 trades, 342 commands, 351 rows placed
@@ -561,7 +567,7 @@ constexpr std::uint64_t kTranscriptDigests[] = {
     17976626526517250951ull,  // chains seed 837834, 60 trades, 368 commands, 418 rows placed
     16934523334156189547ull,  // chains seed 942563, 56 trades, 343 commands, 361 rows placed
     10686979679433049454ull,  // chains seed 1047292, 38 trades, 363 commands, 382 rows placed
-    16074989119573095012ull,  // chains seed 1152021, 72 trades, 351 commands, 401 rows placed
+    1288649637557226245ull,  // chains seed 1152021, 69 trades, 342 commands, 353 rows placed
     2862011423919039425ull,  // chains seed 1256750, 64 trades, 314 commands, 315 rows placed
     6616125162615994474ull,  // chains seed 1361479, 65 trades, 309 commands, 326 rows placed
     3831880097590379572ull,  // chains seed 1466208, 82 trades, 386 commands, 420 rows placed

@@ -514,98 +514,73 @@ void SeriesSma::ensure_capacity(std::size_t count) {
     history_ = std::move(next);
 }
 
-double SeriesSma::mean(std::uint64_t requested) const {
-    if (requested > count_) return na<double>();
-
-    const auto length = static_cast<std::size_t>(requested);
-    const auto capacity = history_.size();
-    double partials[::pineforge::detail::kWindowSumPartialCapacity];
-    std::size_t parts = 0;
-    const auto partial = [&partials](std::size_t i) -> double& { return partials[i]; };
-    const auto first = (head_ + capacity - length) % capacity;
-    const auto source = [this, first, capacity](std::size_t i) {
-        return history_.read((first + i) % capacity);
+double SeriesSma::update(double source, std::uint64_t length, bool replace) {
+    const bool push = !is_na(source);
+    const auto head = replace ? pre_update_head_ : head_;
+    const auto count = replace ? pre_update_count_ : count_;
+    const auto limit = history_limit(max_lookback_);
+    const bool full = limit && count == limit;
+    const double oldest = replace ? pre_update_evicted_
+                                  : (full ? history_.read(head) : na<double>());
+    // Offset one is the newest pre-bar source. At the cap, the oldest
+    // may already have been overwritten by the provisional bar.
+    const auto prior = [&](std::size_t back) {
+        if (full && back == count) return oldest;
+        return history_.read(back <= head ? head - back : history_.size() - (back - head));
     };
-    std::size_t i = 0;
-    for (; i != length; ++i) {
-        const double value = source(i);
-        if (is_na(value)) return na<double>();
-        if (!::pineforge::detail::expand_window_sum(value, parts, partial)) break;
-    }
-    if (i == length) {
-        const double sum = ::pineforge::detail::round_window_sum(parts, partial).sum;
-        // The fixed SMA starts its sum at positive zero.
-        return (sum + 0.0) / static_cast<double>(length);
+
+    Window next = replace ? pre_update_active_ : active_;
+    const auto keep = static_cast<std::size_t>(std::min<std::uint64_t>(count, length - push));
+    if (push || next.count != keep) {
+        bool finite = !next.exact_recovery;
+        const auto add = [&](double value) {
+            return ::pineforge::detail::add_window_value(next.sum, next.correction, value);
+        };
+        // Adjust the previous suffix oldest first in both directions.
+        for (auto back = next.count; finite && back > keep; --back)
+            finite = add(-prior(back));
+        for (auto back = keep; finite && back > next.count; --back)
+            finite = add(prior(back));
+        next.count = keep + push;
+        if (!finite || (push && !add(source))) {
+            const auto newest = [&](std::size_t i) {
+                if (!push) return prior(i + 1);
+                return i == 0 ? source : prior(i);
+            };
+            ::pineforge::detail::recover_window_sum(next.sum, next.correction,
+                                                    next.exact_recovery, next.count, newest);
+        }
     }
 
-    // Retry the window in integer units. Keep the previous fallback in the
-    // same scan for nonfinite sources or a sum that rounds to infinity.
-    ::pineforge::detail::ExactWindowSum exact;
-    bool all_finite = true;
-    double sum = 0.0;
-    double correction = 0.0;
-    for (std::size_t i = 0; i != length; ++i) {
-        const double value = source(i);
-        if (is_na(value)) return na<double>();
-        all_finite = all_finite && exact.add(value);
-        const double next = sum + value;
-        if (std::fabs(sum) >= std::fabs(value))
-            correction += (sum - next) + value;
-        else
-            correction += (value - next) + sum;
-        sum = next;
+    // Complete all reads, growth and the single required write before
+    // publishing either the logical window or the rewind record.
+    if (push) {
+        if (!full) ensure_capacity(count + 1);
+        history_.write(head, source);
+    } else if (replace && full && current_pushed_) {
+        history_.write(head, oldest);
     }
-    double rounded;
-    if (!all_finite || !exact.rounded(rounded)) rounded = sum + correction;
-    return rounded / static_cast<double>(length);
+    if (!replace) {
+        pre_update_head_ = head;
+        pre_update_count_ = count;
+        pre_update_evicted_ = oldest;
+        pre_update_active_ = active_;
+    }
+    const auto next_head = head + push;
+    head_ = next_head == limit ? 0 : next_head;
+    count_ = count + (push && !full);
+    current_pushed_ = push;
+    active_ = next;
+    return next.count == length ? (next.sum + next.correction) / static_cast<double>(length)
+                                : na<double>();
 }
 
 double SeriesSma::compute(double source, double current_length) {
-    const auto length = checked_length(current_length);
-    const auto previous_head = head_;
-    const auto previous_count = count_;
-    const auto limit = history_limit(max_lookback_);
-    // Save the oldest even on an NA call: a later replacement may evict it.
-    const bool full = limit && count_ == limit;
-    const double evicted = full ? history_.read(head_) : na<double>();
-    if (!is_na(source)) {
-        if (!full) ensure_capacity(count_ + 1);
-        history_.write(head_, source);
-        ++head_;
-        if (head_ == limit) head_ = 0;
-        if (!full) ++count_;
-    }
-    // Publish state only after the required reads/writes succeed.
-    pre_update_head_ = previous_head;
-    pre_update_count_ = previous_count;
-    pre_update_evicted_ = evicted;
-    current_pushed_ = !is_na(source);
-    return mean(length);
+    return update(source, checked_length(current_length), false);
 }
 
 double SeriesSma::recompute(double source, double current_length) {
-    const auto length = checked_length(current_length);
-    const auto limit = history_limit(max_lookback_);
-    const bool full = limit && pre_update_count_ == limit;
-    if (is_na(source)) {
-        // A full-ring push replaced the pre-update oldest slot. Restore its
-        // bytes before publishing the restored head/count, including on copies.
-        if (current_pushed_ && full)
-            history_.write(pre_update_head_, pre_update_evicted_);
-        head_ = pre_update_head_;
-        count_ = pre_update_count_;
-        current_pushed_ = false;
-    } else {
-        if (!full) ensure_capacity(pre_update_count_ + 1);
-        // The restored prefix plus this source has exactly this final slot.
-        // Write it directly: a failed second write cannot follow a rollback.
-        history_.write(pre_update_head_, source);
-        head_ = pre_update_head_ + 1;
-        if (head_ == limit) head_ = 0;
-        count_ = pre_update_count_ + !full;
-        current_pushed_ = true;
-    }
-    return mean(length);
+    return update(source, checked_length(current_length), true);
 }
 
 }  // namespace source

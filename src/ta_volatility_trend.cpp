@@ -11,11 +11,11 @@
 #include <pineforge/ta_compare_band.hpp>
 #include <pineforge/na.hpp>
 #include <pineforge/run_failure.hpp>
+#include "ta_observation_count.hpp"
 
 #include <algorithm>
 #include <charconv>
 #include <cmath>
-#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -80,7 +80,7 @@ double ATR::compute(double high, double low, double close) {
         return na<double>();
     }
 
-    bar_count++;
+    detail::advance_observation_count(bar_count);
 
     double tr;
     if (is_na(prev_close)) {
@@ -107,7 +107,7 @@ double ATR::compute(double high, double low, double close, double prev_chart_clo
         return na<double>();
     }
 
-    bar_count++;
+    detail::advance_observation_count(bar_count);
 
     double tr;
     if (is_na(prev_chart_close)) {
@@ -186,19 +186,19 @@ double StdDev::compute(double src) {
         // Pinned 2026-09-04 on OANDA:XAUUSD 15 (ta.stdev(z2, 20) with z2 na
         // on every 5th bar: 310/310 with hold + population, 248/310 without
         // the hold; ta.sma(z2, 20) 310/310 likewise).
-        if ((int)buffer.size() < length_) return na<double>();
+        if (buffer.size() < static_cast<std::size_t>(length_)) return na<double>();
         return held_stdev();
     }
 
     buffer.push_back(src);
     pushed_ = true;
-    while ((int)buffer.size() > length_) {
+    while (buffer.size() > static_cast<std::size_t>(length_)) {
         evicted_value_ = buffer.front();
         evicted_ = true;
         buffer.pop_front();
     }
 
-    if ((int)buffer.size() < length_) {
+    if (buffer.size() < static_cast<std::size_t>(length_)) {
         return na<double>();
     }
 
@@ -674,7 +674,7 @@ TR::TR(bool handle_na)
 double TR::compute(double high, double low, double close) {
     saved_prev_close_ = prev_close_;
     saved_bar_count_ = bar_count_;
-    bar_count_++;
+    detail::advance_observation_count(bar_count_);
     double tr;
     if (is_na(prev_close_)) {
         // First bar: TV v6 default returns na; legacy handle_na=true returns high - low.
@@ -691,7 +691,7 @@ double TR::compute(double high, double low, double close) {
 double TR::compute(double high, double low, double close, double prev_chart_close) {
     saved_prev_close_ = prev_close_;
     saved_bar_count_ = bar_count_;
-    bar_count_++;
+    detail::advance_observation_count(bar_count_);
     double tr;
     if (is_na(prev_chart_close)) {
         tr = handle_na_ ? (high - low) : na<double>();
@@ -737,7 +737,7 @@ double ATR::recompute(double high, double low, double close) {
         return na<double>();
     }
 
-    bar_count++;
+    detail::advance_observation_count(bar_count);
 
     double tr;
     if (is_na(prev_close)) {

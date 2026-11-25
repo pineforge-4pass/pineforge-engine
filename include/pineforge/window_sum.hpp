@@ -11,6 +11,8 @@ namespace pineforge {
 // Each addition updates S and adds its two-sum error to C in ordinary double
 // precision. Emit S + C; SMA divides that result by length. C is never folded
 // back into S. The rounding of C can retain information about earlier bars.
+// Series-length SMA uses the same arithmetic to adjust its suffix, oldest
+// first, before inserting the source, as recorded on TradingView in November 2026.
 //
 // November 2026 sums of stochastic, K, closes and squared closes, and SMAs
 // of K, support this order. The exact window sum missed three stochastic

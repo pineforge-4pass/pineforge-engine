@@ -5,7 +5,7 @@
  * UTC fast path calendar_day_open_local_ms has had since eab8676:
  * pure integer / gmtime_r arithmetic, no tz_util::ScopedTimezone, no tzset.
  * This test proves the fast path is BIT-EQUAL to the ScopedTimezone slow path
- * it bypasses. The slow-path bodies are replicated here verbatim (localtime_r
+ * it bypasses. The reference reads the containing second with libc (localtime_r
  * + mktime under an explicitly pinned process TZ — exactly what
  * ScopedTimezone pins, minus the mutex) because the *_tz slow-path functions
  * are file-local to session_time.cpp.
@@ -22,7 +22,7 @@
  *     comparison is not purely self-referential.
  *   - UTC-alias zones ("", "Etc/UTC", "GMT", "GMT+0") produce identical values.
  *   - non-UTC zones (fixed offset "UTC+2", IANA Asia/Kolkata) still take the
- *     untouched ScopedTimezone slow path with unchanged values.
+ *     ScopedTimezone path with the same reference values.
  *   - the session predicates (passes_session_filter / is(pre|post)market),
  *     whose decomposition now routes through decompose_ms_local instead of an
  *     unconditional ScopedTimezone, are swept every 61 s across three full
@@ -30,6 +30,7 @@
  *     a pinned-TZ replica of the old ScopedTimezone body — bit-equal booleans.
  */
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -71,11 +72,14 @@ static void pin_tz(const std::string& posix_tz) {
     tzset();
 }
 
-// --- verbatim replicas of the session_time.cpp *_tz slow-path bodies, with
-// --- the process TZ pinned by the caller instead of ScopedTimezone ----------
+// The caller pins the process timezone for these libc reference conversions.
+static time_t containing_second(int64_t ms) {
+    using namespace std::chrono;
+    return static_cast<time_t>(floor<seconds>(milliseconds{ms}).count());
+}
 
 static int64_t slow_week_open_pinned(int64_t bar_ms) {
-    time_t secs = static_cast<time_t>(bar_ms / 1000);
+    const time_t secs = containing_second(bar_ms);
     struct tm local_tm {};
     localtime_r(&secs, &local_tm);
     int wday = local_tm.tm_wday;  // 0=Sun
@@ -89,7 +93,7 @@ static int64_t slow_week_open_pinned(int64_t bar_ms) {
 }
 
 static int64_t slow_month_open_pinned(int64_t bar_ms) {
-    time_t secs = static_cast<time_t>(bar_ms / 1000);
+    const time_t secs = containing_second(bar_ms);
     struct tm local_tm {};
     localtime_r(&secs, &local_tm);
     local_tm.tm_mday = 1;
@@ -127,7 +131,7 @@ static void check_instant(int64_t bar_ms, int64_t* mism_w, int64_t* mism_m) {
 
 // ---------------------------------------------------------------------------
 // Dense sweep 1969-01-01 .. 2027-01-01, every 3601 s, ms offsets cycling
-// through {0, 1, 499, 999} so sub-second (and pre-1970 negative-truncation)
+// through {0, 1, 499, 999} so sub-second (including pre-1970)
 // bar_ms -> secs mapping is exercised on both paths.
 // ---------------------------------------------------------------------------
 static void test_utc_fast_vs_slow_dense_sweep() {
@@ -245,7 +249,7 @@ static void test_utc_alias_zones_identical() {
 // TZ is exactly what ScopedTimezone(tz)+localtime_r computed.
 static bool slow_ismarket_pinned(const std::string& windows,
                                  const int* days, int n_days, int64_t bar_ms) {
-    time_t secs = static_cast<time_t>(bar_ms / 1000);
+    const time_t secs = containing_second(bar_ms);
     struct tm local_tm {};
     localtime_r(&secs, &local_tm);
     int day_of_week_sun1 = local_tm.tm_wday + 1;  // 1=Sunday
@@ -300,7 +304,7 @@ static void test_session_predicates_utc_fast_vs_slow_sweep() {
         // post = [16:00, 20:00) — replica of the old bodies' arithmetic on the
         // same pinned-TZ decomposition.
         {
-            time_t secs = static_cast<time_t>(bar_ms / 1000);
+            const time_t secs = containing_second(bar_ms);
             struct tm lt {};
             localtime_r(&secs, &lt);
             int mod = lt.tm_hour * 60 + lt.tm_min;

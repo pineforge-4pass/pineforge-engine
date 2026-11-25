@@ -47,11 +47,9 @@ struct TapeBar {
     Flags tv;             // TradingView's flags on it
 };
 
-// The Entry rows of `<dir>/<slug>/tv_trades.csv`, in time order. `ok` turns
-// false when the file is missing, a row does not parse, or a Signal is not a
-// flag word, so a test reads a broken fixture as a failure, never as a pass.
-inline std::vector<TapeBar> read_tape(const std::string& dir, const std::string& slug, bool& ok) {
-    std::ifstream in(dir + "/" + slug + "/tv_trades.csv");
+// Decode Entry rows in time order. The replay can witness and parse the
+// same bytes without reopening a path between the two operations.
+inline std::vector<TapeBar> read_entries(std::istream& in, bool& ok) {
     std::vector<TapeBar> bars;
     if (!in) { ok = false; return bars; }
     std::string line;
@@ -62,7 +60,8 @@ inline std::vector<TapeBar> read_tape(const std::string& dir, const std::string&
         std::stringstream fields(line);
         std::string field;
         while (std::getline(fields, field, ',')) cell.push_back(field);
-        if (cell.size() < 4 || cell[1].rfind("Entry", 0) != 0) continue;
+        if (cell.size() < 2 || cell[1].rfind("Entry", 0) != 0) continue;
+        if (cell.size() < 4) { ok = false; continue; }
         int y = 0, mo = 0, d = 0, h = 0, mi = 0;
         if (std::sscanf(cell[2].c_str(), "%d-%d-%d %d:%d", &y, &mo, &d, &h, &mi) != 5) {
             ok = false;
@@ -93,8 +92,13 @@ inline std::vector<TapeBar> read_tape(const std::string& dir, const std::string&
     for (std::size_t i = 1; i < bars.size(); ++i)
         for (std::size_t j = i; j > 0 && bars[j - 1].ts > bars[j].ts; --j)
             std::swap(bars[j - 1], bars[j]);
-    if (bars.empty()) ok = false;
+    if (in.bad() || bars.empty()) ok = false;
     return bars;
+}
+
+inline std::vector<TapeBar> read_tape(const std::string& dir, const std::string& slug, bool& ok) {
+    std::ifstream in(dir + "/" + slug + "/tv_trades.csv");
+    return read_entries(in, ok);
 }
 
 inline pineforge::Bar flat_bar(std::int64_t ts) {

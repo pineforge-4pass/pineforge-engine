@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_timeframe_multiplier_range)
+pineforge_add_unit_test(test_timeframe_multiplier_range)
