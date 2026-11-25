@@ -1229,8 +1229,26 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     tv_cmp, eng_cmp = trim_to_common_match_window(tv, eng, matched + mark_pairs)
     matched = align_by_time(tv_cmp, eng_cmp)
 
+    # Optional interior trim: drop edge / warmup bars from the headline stats.
+    trim_bars = int(meta.get("trim_bars", 0) or 0)
+    warmup_bars = int(meta.get("warmup_bars", 0) or 0)
+    first_ms, last_ms, bar_ms = _ohlcv_span_ms(
+        strategy_dir, ohlcv_csv=str(meta["ohlcv_csv"]) if "ohlcv_csv" in meta else None)
+    # A declared positive bar interval wins over the first observed gap.
+    declared_bar_ms = meta.get("bar_ms")
+    if type(declared_bar_ms) is int and declared_bar_ms > 0:
+        bar_ms = declared_bar_ms
+    bounds = interior_time_bounds(trim_bars, warmup_bars, first_ms, last_ms, bar_ms)
+    if bounds is not None:
+        tv_gate = [t for t in tv_cmp if is_interior(t.entry_time * 1000, bounds)]
+        eng_gate = [e for e in eng_cmp if is_interior(e.entry_time * 1000, bounds)]
+    else:
+        tv_gate, eng_gate = tv_cmp, eng_cmp
+
     if not matched and not mark_pairs:
-        count_abs_delta = len(tv_cmp) + len(eng_cmp)
+        tv_gate_n, eng_gate_n = len(tv_gate), len(eng_gate)
+        count_abs_delta = tv_gate_n + eng_gate_n
+        closed_tv = sum(not t.open_mark for t in tv_gate)
         count_ok = count_abs_delta == 0
         label = _apply_declared_tier_override("minimal", meta)
         return VerificationResult(
@@ -1246,9 +1264,17 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
             eng_count=len(eng_cmp),
             tv_raw_count=len(tv),
             eng_raw_count=len(eng),
-            count_delta=count_abs_delta / max(len(tv_cmp), len(eng_cmp), 1),
+            tv_gate_count=tv_gate_n,
+            eng_gate_count=eng_gate_n,
+            trim_bars=trim_bars,
+            warmup_bars=warmup_bars,
+            bounds=bounds,
+            coverage_tv_count=closed_tv,
+            unmatched_total=closed_tv,
+            unmatched_in_window=max(tv_gate_n, eng_gate_n),
+            count_delta=count_abs_delta / max(tv_gate_n, eng_gate_n, 1),
             count_abs_delta=count_abs_delta,
-            net_count_abs_delta=abs(len(tv_cmp) - len(eng_cmp)),
+            net_count_abs_delta=abs(tv_gate_n - eng_gate_n),
             gross_unmatched_count=count_abs_delta,
             count_ok=count_ok,
         )
@@ -1270,17 +1296,6 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     }
     grade_percentile = grading_policy["percentile"]
 
-    # Optional interior trim: drop edge / warmup bars from the headline stats.
-    trim_bars = int(meta.get("trim_bars", 0) or 0)
-    warmup_bars = int(meta.get("warmup_bars", 0) or 0)
-    first_ms, last_ms, bar_ms = _ohlcv_span_ms(
-        strategy_dir, ohlcv_csv=str(meta["ohlcv_csv"]) if "ohlcv_csv" in meta else None)
-    # A declared positive bar interval wins over the first observed gap.
-    declared_bar_ms = meta.get("bar_ms")
-    if type(declared_bar_ms) is int and declared_bar_ms > 0:
-        bar_ms = declared_bar_ms
-    bounds = interior_time_bounds(trim_bars, warmup_bars, first_ms, last_ms, bar_ms)
-
     def _split_interior(pairs: list[tuple[TradePair, TradePair]]) -> list[tuple[TradePair, TradePair]]:
         if bounds is None:
             return pairs
@@ -1289,12 +1304,6 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     interior_matched = _split_interior(matched)
     # Use interior-only matched pairs for headline gating when bounds are set.
     gating_matched = interior_matched if (bounds is not None and interior_matched) else matched
-    # Interior-aware count totals: trim the tv/eng pools too when bounds given.
-    if bounds is not None:
-        tv_gate = [t for t in tv_cmp if is_interior(t.entry_time * 1000, bounds)]
-        eng_gate = [e for e in eng_cmp if is_interior(e.entry_time * 1000, bounds)]
-    else:
-        tv_gate, eng_gate = tv_cmp, eng_cmp
     # The mark pairs are matched trades on both sides of every count: the
     # gate pools, the gated matches, the coverage numerator and denominator.
     # Their rows left the lists above, so they are added back as a number —
