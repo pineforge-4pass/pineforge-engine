@@ -25476,9 +25476,17 @@ void PineExecutionAdapter::flush_pooc_marketable_limit_entry_fills(
 }
 
 void PineExecutionAdapter::fill_pooc_close_entries(
-        double raw_close, const NativeDecisionContext& context, bool after_close) {
+        double raw_close, const NativeDecisionContext& context, bool after_close,
+        const PlacementSnapshot* flatten) {
     const double book_before = detail::run_position(require_host()).signed_units;
     if (!finite_positive(raw_close)) return;
+    // Only the lone working entry has a measured place after this flatten.
+    // Other entries or raw orders can compete for the same tick.
+    if (flatten) {
+        const auto& counts = retired_row_scratch_.live_families;
+        if (book_before != 0.0 || counts[static_cast<std::size_t>(PineOrderFamily::Entry)] != 1
+            || counts[static_cast<std::size_t>(PineOrderFamily::Order)] != 0) return;
+    }
     // A same-bar close of the held side fills at this close after this pass:
     // the reversing stops it precedes wait for its fill.
     const bool close_follows = !after_close && std::any_of(
@@ -25527,8 +25535,15 @@ void PineExecutionAdapter::fill_pooc_close_entries(
                                                      : PositionSide::SHORT);
         const bool pyramid_add = placed_with && !after_close && book_before != 0.0
             && (book_before > 0.0) == row.is_long;
-        if (placed_flat ? (after_close || book_before != 0.0)
-                        : !(reversing_stop || reversing_limit || pyramid_add)) {
+        if (flatten) {
+            if (!placed_with || !pure_limit_entry(row) || !finite_positive(row.requested_qty)
+                || (row.qty_type >= 0 && row.qty_type != static_cast<int>(QtyType::FIXED))
+                || !row.oca_name.empty() || row.projection_over_pyramiding
+                || row.projection_position_side != flatten->projection_position_side
+                || row.placement_cycle != flatten->placement_cycle
+                || row.command_sequence >= flatten->command_sequence) continue;
+        } else if (placed_flat ? (after_close || book_before != 0.0)
+                               : !(reversing_stop || reversing_limit || pyramid_add)) {
             continue;
         }
         if (row.direction_gate || row.paired_flat_market_candidate) continue;
@@ -29411,17 +29426,26 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             }
         }
     }
-    // A same-bar strategy.close or close_all that fills at a
-    // process_orders_on_close close is followed there by the reversing stop
-    // entries the close pass left for it (the recalculation fill-order correction).
+    // A closing-tick fill can release a reversal. A close_all with a comment
+    // settles during the calculation; at its receipt the script has finished
+    // its cancellations and the add can be tested against the unslipped close.
     if (placement_snapshot && event.closed_units > 0.0
         && (placement_snapshot->family == PineOrderFamily::Close
             || placement_snapshot->family == PineOrderFamily::CloseAll)
         && placement_snapshot->projection_created_bar == projection_bar_index(context)
         && config_.process_orders_on_close && !config_.calc_on_order_fills
-        && modeled_input() && !coof_recalc_active_
-        && event.cursor.point.path_phase == NativePathPhase::Close) {
-        fill_pooc_close_entries(event.raw_price, context, /*after_close=*/true);
+        && modeled_input() && !coof_recalc_active_) {
+        if (event.cursor.point.path_phase == NativePathPhase::Close) {
+            fill_pooc_close_entries(event.raw_price, context, /*after_close=*/true);
+        } else if (context.coordinate.provenance == NativePriceProvenance::Calculation
+                   && placement_snapshot->family == PineOrderFamily::CloseAll
+                   && placement_snapshot->source_id == "__pine_close_all"
+                   && !placement_snapshot->immediately && !bar_magnifier_
+                   && !config_.close_entries_rule_any && config_.pyramiding > 1
+                   && margins_disabled() && !cap.active()
+                   && has_live_family(PineOrderFamily::Entry)) {
+            fill_pooc_close_entries(event.raw_price, context, /*after_close=*/true, &*placement_snapshot);
+        }
     }
     // Once the calculation's last order that fills at a process_orders_on_close
     // close has filled there, the pass decides the calculation's exits,
