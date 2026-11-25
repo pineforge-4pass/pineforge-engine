@@ -8,7 +8,7 @@ from pathlib import PurePosixPath
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from verify_corpus import (
-    analyze_strategy, detect_parity_profile, distinct_entry_fill_keys,
+    _ohlcv_span_ms, analyze_strategy, detect_parity_profile, distinct_entry_fill_keys,
     parse_dt, parse_trades, tv_tzinfo,
 )
 
@@ -56,6 +56,12 @@ def trade_tape(*trades):
         writer.writerow((n, "Entry long", entry, 100, qty, 0, signal, identity))
         writer.writerow((n, "Exit long", exit_time, 101, qty, qty, "close", ""))
     return tape.getvalue()
+
+
+def feed(*timestamps):
+    return "timestamp,open,high,low,close,volume\n" + "".join(
+        f"{timestamp},100,101,100,101,1\n" for timestamp in timestamps
+    )
 
 
 class ReadingRulesTests(unittest.TestCase):
@@ -142,6 +148,20 @@ class ReadingRulesTests(unittest.TestCase):
                                   result.count_abs_delta, result.distinct_entry_mismatches),
                                  counts)
                 self.assertEqual(distinct_entry_fill_keys(tv), keys)
+
+    def test_historical_epoch_milliseconds_are_not_scaled_as_seconds(self):
+        interval = 15 * 60
+        for year, units_per_second in (
+            (2025, 1), (2025, 1000), (2000, 1), (1960, 1),
+            (2000, 1000), (1960, 1000),
+        ):
+            with self.subTest(year=year, units_per_second=units_per_second):
+                start = int(datetime(year, 1, 1, tzinfo=timezone.utc).timestamp())
+                end = start + interval
+                root = probe({"ohlcv.csv": feed(start * units_per_second,
+                                               end * units_per_second)})
+                self.assertEqual(_ohlcv_span_ms(root),
+                                 (start * 1000, end * 1000, interval * 1000))
 
 
 if __name__ == "__main__":
