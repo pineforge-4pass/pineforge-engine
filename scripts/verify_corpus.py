@@ -956,7 +956,9 @@ def consolidate_fragments(
     return out
 
 
-def has_cross_entry_fifo_allocation(pairs: list[TradePair]) -> bool:
+def has_cross_entry_fifo_allocation(
+    pairs: list[TradePair], *, identity_field: str | None = None,
+) -> bool:
     """Return whether raw rows expose a genuinely ambiguous FIFO schedule.
 
     A repeated entry key alone is not enough.  Margin calls and other partial
@@ -972,14 +974,26 @@ def has_cross_entry_fifo_allocation(pairs: list[TradePair]) -> bool:
     eligibility predicate and the metric it enables cannot disagree about
     which broker event is shared.
     """
-    entry_exits: dict[
-        tuple[int, float, str], set[tuple[int, float, str]]
-    ] = {}
-    exit_owners: dict[
-        tuple[int, float, str], set[tuple[int, float, str]]
-    ] = {}
+    if identity_field is None:
+        identity_field = ("entry_identity" if any(t.entry_identity for t in pairs)
+                          else "entry_signal")
+    tags: dict[EntryFillKey, set[str]] = {}
     for trade in pairs:
-        entry_key = (trade.entry_time, trade.entry_price, trade.direction)
+        tag = getattr(trade, identity_field)
+        if tag:
+            key = (trade.entry_time, trade.entry_price, trade.direction)
+            tags.setdefault(key, set()).add(tag)
+
+    entry_exits: dict[tuple[EntryFillKey, str], set[EntryFillKey]] = {}
+    exit_owners: dict[EntryFillKey, set[tuple[EntryFillKey, str]]] = {}
+    for trade in pairs:
+        key = (trade.entry_time, trade.entry_price, trade.direction)
+        tag = ""
+        if len(tags.get(key, ())) > 1:
+            tag = getattr(trade, identity_field)
+            if not tag:
+                continue  # This fragment cannot prove either owner's schedule.
+        entry_key = (key, tag)
         exit_key = (trade.exit_time, round(trade.exit_price, 6), trade.direction)
         entry_exits.setdefault(entry_key, set()).add(exit_key)
         exit_owners.setdefault(exit_key, set()).add(entry_key)
@@ -1401,8 +1415,8 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         tv_raw_all, eng_raw_all, tv_gate, eng_gate, gating_matched
     )
     fragmented_fifo = (
-        has_cross_entry_fifo_allocation(tv_sched_rows)
-        or has_cross_entry_fifo_allocation(eng_sched_rows)
+        has_cross_entry_fifo_allocation(tv_sched_rows, identity_field="entry_signal")
+        or has_cross_entry_fifo_allocation(eng_sched_rows, identity_field="entry_identity")
     )
     if gating_matched and fragmented_fifo and entry_p90 < 1e-12 and count_delta < STRONG_COUNT_DELTA:
         sched_exit_deltas, sched_pnl_deltas = schedule_exit_metrics(tv_sched_rows, eng_sched_rows)
