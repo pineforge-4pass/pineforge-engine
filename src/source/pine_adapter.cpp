@@ -25944,6 +25944,7 @@ bool PineExecutionAdapter::per_entry_exit_call(
     record->loss_ticks = loss_ticks;
     if (!same_text) record->set_text(oca_name, comment);
     if (named) record->last_call = command_sequence;
+    const std::size_t existing_children = record->children.size();
     for (const auto& entry : per_entry_open_entries(long_side, from_entry)) {
         const bool known = std::any_of(record->children.begin(), record->children.end(),
             [&](const PerEntryExitChild& child) { return child.origin == entry.origin; });
@@ -25968,18 +25969,9 @@ bool PineExecutionAdapter::per_entry_exit_call(
             submit_per_entry_child(per_entry_exits_[index], child, command_sequence, changed);
             continue;
         }
-        if (!legs.empty() && same_definition) {
-            if (!shared_group) continue;
-            // A sibling may have reduced these orders since the last call.
-            // Reissue the outstanding entry entitlement, not its FIFO lot.
-            const std::size_t expected = finite_positive(profit_ticks) + finite_positive(loss_ticks);
-            if (legs.size() == expected && std::all_of(legs.begin(), legs.end(), [&](const auto& leg) {
-                    const auto working = require_host().native_working_request(leg);
-                    const auto* units = working
-                        ? std::get_if<native_order::RemainingProjectionUnits>(&working->remaining) : nullptr;
-                    return units && same(units->q, child.units);
-                })) continue;
-        }
+        // A shared group's existing children keep their native remainder,
+        // even when both legs are gone. Only new openings need orders.
+        if (same_definition && (shared_group ? position < existing_children : !legs.empty())) continue;
         cancel_working_legs(legs);
         submit_per_entry_child(per_entry_exits_[index], child, command_sequence);
     }
