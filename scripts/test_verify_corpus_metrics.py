@@ -1064,7 +1064,7 @@ class DeclaredTierOverrideTests(unittest.TestCase):
                 )
                 self.assertIn("abs=2; net=0", output.getvalue())
 
-    def test_both_empty_excellent_is_not_masked_by_stale_declarations(self) -> None:
+    def test_both_empty_honors_declaration_precedence(self) -> None:
         strategy = self.strategy(
             "both-empty",
             {
@@ -1078,7 +1078,8 @@ class DeclaredTierOverrideTests(unittest.TestCase):
         result = analyze_strategy(strategy)
 
         self.assertTrue(result.no_aligned_trades)
-        self.assertEqual(result.label, "excellent")
+        # expectation corrected: excellent -> engine_only, because explicit false overrides a declared anomaly without matches.
+        self.assertEqual(result.label, "engine_only")
         self.assertEqual(result.count_abs_delta, 0)
         self.assertEqual(result.count_delta, 0.0)
         self.assertTrue(result.count_ok)
@@ -1130,20 +1131,14 @@ class DeclaredTierOverrideTests(unittest.TestCase):
         with self.assertRaisesRegex(AttributeError, "has no attribute 'get'"):
             analyze_strategy(strategy)
 
-    def test_malformed_override_preserves_empty_branch_asymmetry(self) -> None:
-        both_empty = self.strategy(
-            "both-empty-malformed",
-            {"validation_overrides": "oops"},
-            tv_empty=True,
-            engine_empty=True,
-        )
-        self.assertEqual(analyze_strategy(both_empty).label, "excellent")
-
-        single_sided = (
+    def test_malformed_override_fails_on_empty_tapes(self) -> None:
+        # expectation corrected: excellent -> AttributeError, because all no-match grades apply the normal override rules.
+        empty_sides = (
+            ("both-empty-malformed", {"tv_empty": True, "engine_empty": True}),
             ("tv-empty-malformed", {"tv_empty": True}),
             ("engine-empty-malformed", {"engine_empty": True}),
         )
-        for name, empty_side in single_sided:
+        for name, empty_side in empty_sides:
             with self.subTest(name=name):
                 strategy = self.strategy(
                     name,

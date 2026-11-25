@@ -1232,12 +1232,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     if not matched and not mark_pairs:
         count_abs_delta = len(tv_cmp) + len(eng_cmp)
         count_ok = count_abs_delta == 0
-        label = "excellent" if count_ok else "minimal"
-        # The historical both-empty Excellent branch returned before reading
-        # override metadata. Keep that exact behavior while fixing declared
-        # divergence for the non-excellent zero-alignment branch.
-        if label != "excellent":
-            label = _apply_declared_tier_override(label, meta)
+        label = _apply_declared_tier_override("minimal", meta)
         return VerificationResult(
             strategy_dir=strategy_dir,
             rel=rel,

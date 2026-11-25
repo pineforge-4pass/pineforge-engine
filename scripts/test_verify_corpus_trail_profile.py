@@ -516,7 +516,8 @@ class GradingPolicyReportTests(unittest.TestCase):
 
     def test_empty_rows_do_not_claim_an_applied_policy(self):
         for name, tv_exits, engine_exits, tier in (
-            ("both-empty", [], [], "excellent"),
+            # expectation corrected: excellent -> minimal, because Minimal means no matches.
+            ("both-empty", [], [], "minimal"),
             ("tv-only", [100.0], [], "minimal"),
             ("engine-only", [], [100.0], "minimal"),
         ):
