@@ -2,9 +2,9 @@
 """Verify a strategy in the corpus against TradingView's exported trades.
 
 Reads `tv_trades.csv` and `engine_trades.csv` from a strategy folder under
-`corpus/`, aligns trades by entry time + direction with a 1-hour window
-(matches the parent project's parity sweep), and reports the largest
-deviations in entry price, exit price, and per-trade P&L.
+`corpus/`, pairs entries by exact time and direction within the entry-price
+gate, and reports the largest deviations in entry price, exit price, and
+per-trade P&L.
 
 This mirrors the canonical corpus summary used by the runtime docs:
 it applies common-window edge trimming, honours per-strategy metadata,
@@ -37,6 +37,9 @@ from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
+from decimal import Decimal
+from fractions import Fraction
+from math import isfinite
 from pathlib import Path
 
 from parity_paths import resolve_paths
@@ -71,9 +74,7 @@ STRONG_PNL_DELTA   = 1.0
 # Every other gated metric is computed inside a window derived from the
 # matches themselves, so without this gate a run that reproduces almost
 # nothing can grade top-tier on the sliver it happened to reproduce
-# (observed in production: 'excellent' at 0.9% real coverage). The
-# small-N alternative (<=1 unmatched TV trade) keeps single boundary-trade
-# cases fair for short exports.
+# (observed in production: 'excellent' at 0.9% real coverage).
 COVERAGE_EXCELLENT = 0.99
 COVERAGE_STRONG    = 0.95
 COVERAGE_MODERATE  = 0.75
@@ -85,11 +86,13 @@ COVERAGE_MODERATE  = 0.75
 # applies when the sizing drift itself is small.
 QTY_NORM_BAND = 0.02  # |tv_qty/eng_qty - 1| <= 2%
 
-# Pine-source comment-strippers + trail_* matcher for profile auto-detect.
-# Matches canonical pineforge-utils/validator/validate.py::detect_parity_profile.
-_LINE_COMMENT_PATTERN = re.compile(r"//.*?$", re.MULTILINE)
-_BLOCK_COMMENT_PATTERN = re.compile(r"/\*.*?\*/", re.DOTALL)
-_TRAIL_PATTERN = re.compile(r"\btrail_(points|offset|price)\s*=", re.IGNORECASE)
+# Scan strings and comments together so markers inside a string stay literal.
+_PINE_NON_CODE_PATTERN = re.compile(
+    r"//[^\r\n]*|/\*.*?\*/"
+    r"|(?P<quote>\"\"\"|'''|\"|')(?:\\.|(?!(?P=quote))[^\\])*(?P=quote)",
+    re.DOTALL,
+)
+_TRAIL_PATTERN = re.compile(r"\btrail_(?:points|offset|price)\s*:?=(?![=>])")
 
 # Per-strategy near-zero PnL filter: trades whose |tv_pnl| < $0.01 are
 # excluded from pnl p90 so scratch trades don't blow up the per-trade ratio.
@@ -110,12 +113,8 @@ TV_PNL_ROUNDING_EPSILON_USD = 0.005
 
 
 def detect_parity_profile(pine_source: str) -> str:
-    """Return 'production' if pine source uses any trail_* exit parameter, else 'strict'.
-
-    Backport of pineforge-utils/validator/validate.py::detect_parity_profile.
-    """
-    cleaned = _BLOCK_COMMENT_PATTERN.sub("", pine_source)
-    cleaned = _LINE_COMMENT_PATTERN.sub("", cleaned)
+    """Return 'production' for a trailing assignment in code, else 'strict'."""
+    cleaned = _PINE_NON_CODE_PATTERN.sub(" ", pine_source)
     return "production" if _TRAIL_PATTERN.search(cleaned) else "strict"
 
 
@@ -185,15 +184,21 @@ def is_interior(entry_ms: int, bounds: tuple[int, int] | None) -> bool:
     return lo <= entry_ms <= hi
 
 
-def _ohlcv_span_ms(strategy_dir: Path) -> tuple[int | None, int | None, int]:
+def _ohlcv_span_ms(
+    strategy_dir: Path, *, ohlcv_csv: str | None = None,
+) -> tuple[int | None, int | None, int]:
     """Best-effort: read first/last timestamps + bar interval from an OHLCV csv.
 
-    Looks for ``ohlcv.csv`` (or ``data.csv``) next to strategy.pine. Honors a
-    ``bar_ms`` override in inputs.json. Returns (first_ms, last_ms, bar_ms);
+    Uses the declared ``ohlcv_csv`` or looks for ``ohlcv.csv``, ``data.csv``
+    or ``candles.csv`` next to strategy.pine. Returns the inferred
+    (first_ms, last_ms, bar_ms);
     any of these may be None/0 if unavailable, in which case interior trimming
     is skipped.
     """
-    candidates = [strategy_dir / n for n in ("ohlcv.csv", "data.csv", "candles.csv")]
+    if ohlcv_csv is not None:
+        candidates = [(strategy_dir / ohlcv_csv).resolve()]
+    else:
+        candidates = [strategy_dir / n for n in ("ohlcv.csv", "data.csv", "candles.csv")]
     csv_path = next((p for p in candidates if p.is_file()), None)
     if csv_path is None:
         return None, None, 0
@@ -227,8 +232,9 @@ def _ohlcv_span_ms(strategy_dir: Path) -> tuple[int | None, int | None, int]:
                     second = v
                 last = v
             bar_ms = (second - first) if (first is not None and second is not None) else 0
-            # Normalize seconds to ms if it looks like seconds.
-            if first is not None and first < 10**12:
+            # Infer seconds only when both endpoints fit in ten digits.
+            # Magnitude alone cannot distinguish the units near the epoch.
+            if first is not None and last is not None and max(abs(first), abs(last)) < 10**10:
                 first *= 1000
                 if last is not None:
                     last *= 1000
@@ -238,9 +244,10 @@ def _ohlcv_span_ms(strategy_dir: Path) -> tuple[int | None, int | None, int]:
     except OSError:
         return None, None, 0
 
-# Match window for time-based alignment (matches parent project's gate).
+# Margin after the last matched entry in the common comparison window.
 MATCH_WINDOW_SECONDS = 3600    # 1 hour
-ENTRY_PRICE_GATE     = 3.00    # $3 — defends against same-bar duplicates
+ENTRY_PRICE_GATE_RATIO = 0.0015
+_DECIMAL_ENTRY_PRICE_GATE_RATIO = Fraction(str(ENTRY_PRICE_GATE_RATIO))
 
 # TradingView "Date and time" columns are bare wall-clock strings with no
 # timezone marker. They reflect the chart's display timezone at export.
@@ -326,8 +333,10 @@ class VerificationResult:
     gating_matched_count: int = 0
     tv_gate_count: int = 0
     eng_gate_count: int = 0
-    count_delta: float = 0.0
-    count_abs_delta: int = 0
+    count_delta: float = 0.0  # Gross unmatched count / larger gated pool size.
+    count_abs_delta: int = 0  # Unmatched TV trades plus unmatched engine trades.
+    net_count_abs_delta: int = 0  # Report-only absolute difference of pool sizes.
+    gross_unmatched_count: int = 0  # Alias of the canonical count_abs_delta.
     entry_p90: float = 0.0
     exit_p90: float = 0.0
     pnl_p90: float = 0.0
@@ -398,6 +407,8 @@ class VerificationResult:
             "matched": self.matched_count,
             "count_delta": self.count_delta,
             "count_abs_delta": self.count_abs_delta,
+            "net_count_abs_delta": self.net_count_abs_delta,
+            "gross_unmatched_count": self.gross_unmatched_count,
             "entry_p90": self.entry_p90,
             "exit_p90": self.exit_p90,
             "pnl_p90": self.pnl_p90,
@@ -431,13 +442,13 @@ def tv_tzinfo(meta: dict):
     low = name.lower()
     if low in TV_TZ_BY_NAME:
         return timezone(timedelta(hours=TV_TZ_BY_NAME[low]))
-    if "/" in name:  # looks like an IANA zone -> DST-aware
-        try:
-            from zoneinfo import ZoneInfo
-            return ZoneInfo(name)
-        except Exception:
-            pass
-    return timezone(timedelta(hours=TV_CSV_TZ_OFFSET_HOURS))  # default Asia/Taipei
+    if not name:
+        return timezone(timedelta(hours=TV_CSV_TZ_OFFSET_HOURS))  # Asia/Taipei
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(f"unresolved tv_trades_csv_tz: {name!r}") from exc
 
 
 def parse_dt(s: str, tz) -> int:
@@ -549,7 +560,7 @@ def parse_trades(csv_path: Path, *, tz) -> list[TradePair]:
             if kind.startswith("Entry"):
                 r["entry_time"] = parse_dt(time_field, tz)
                 r["entry_price"] = price
-                r["entry_signal"] = str(row.get("Signal") or "").strip()
+                r["entry_signal"] = row.get("Signal") or ""
                 raw_identity = str(
                     row.get("Engine entry incarnation")
                     or row.get("Engine entry ID")
@@ -604,8 +615,8 @@ def pair_range_end_marks(
     range-end close (open_at_end) — 6.3511 in that illustration — and marks the
     exit row in ENGINE_RANGE_END_COLUMN. The two rows are one lot marked
     twice, so they are paired here, lot for lot, by the alignment every
-    other trade gets (:func:`align_by_time`: same direction, entry within
-    the match window and the entry-price gate; closest entry first) — and
+    other trade gets (:func:`align_by_time`: same entry time and direction,
+    within the entry-price gate; nearest price first) — and
     only marks pair with marks: the tape's Open row is not a fill, and
     neither is the engine's row.
 
@@ -685,7 +696,7 @@ def _project_entry_fill_keys(
     """Project observed entry-price keys onto unambiguous TV oracle keys.
 
     Time and direction remain exact. Price alone may drift by less than the
-    strict entry-parity tolerance, using the same :func:`relative_max` metric as
+    strict entry-parity tolerance, using the same :func:`_price_delta` metric as
     the headline gate. Exact price equality wins. A non-exact observed key is
     projected only when exactly one TV key in its time/direction scope is in
     tolerance; overlapping tolerance neighborhoods are returned as ambiguous
@@ -727,7 +738,7 @@ def _project_entry_fill_keys(
             continue
         tolerant = {
             candidate for candidate in candidates
-            if relative_max(candidate[1], observed[1]) < STRICT_ENTRY_DELTA
+            if _price_delta(candidate[1], observed[1]) < STRICT_ENTRY_DELTA
         }
         if not tolerant & proven:
             continue
@@ -940,12 +951,15 @@ def consolidate_fragments(
             pnl_pct=pnl_pct,
             mfe=sum(m.mfe for m in members),
             mae=sum(m.mae for m in members),
+            open_mark=all(m.open_mark for m in members),
         ))
     out.sort(key=lambda t: t.entry_time)
     return out
 
 
-def has_cross_entry_fifo_allocation(pairs: list[TradePair]) -> bool:
+def has_cross_entry_fifo_allocation(
+    pairs: list[TradePair], *, identity_field: str | None = None,
+) -> bool:
     """Return whether raw rows expose a genuinely ambiguous FIFO schedule.
 
     A repeated entry key alone is not enough.  Margin calls and other partial
@@ -961,14 +975,26 @@ def has_cross_entry_fifo_allocation(pairs: list[TradePair]) -> bool:
     eligibility predicate and the metric it enables cannot disagree about
     which broker event is shared.
     """
-    entry_exits: dict[
-        tuple[int, float, str], set[tuple[int, float, str]]
-    ] = {}
-    exit_owners: dict[
-        tuple[int, float, str], set[tuple[int, float, str]]
-    ] = {}
+    if identity_field is None:
+        identity_field = ("entry_identity" if any(t.entry_identity for t in pairs)
+                          else "entry_signal")
+    tags: dict[EntryFillKey, set[str]] = {}
     for trade in pairs:
-        entry_key = (trade.entry_time, trade.entry_price, trade.direction)
+        tag = getattr(trade, identity_field)
+        if tag:
+            key = (trade.entry_time, trade.entry_price, trade.direction)
+            tags.setdefault(key, set()).add(tag)
+
+    entry_exits: dict[tuple[EntryFillKey, str], set[EntryFillKey]] = {}
+    exit_owners: dict[EntryFillKey, set[tuple[EntryFillKey, str]]] = {}
+    for trade in pairs:
+        key = (trade.entry_time, trade.entry_price, trade.direction)
+        tag = ""
+        if len(tags.get(key, ())) > 1:
+            tag = getattr(trade, identity_field)
+            if not tag:
+                continue  # This fragment cannot prove either owner's schedule.
+        entry_key = (key, tag)
         exit_key = (trade.exit_time, round(trade.exit_price, 6), trade.direction)
         entry_exits.setdefault(entry_key, set()).add(exit_key)
         exit_owners.setdefault(exit_key, set()).add(entry_key)
@@ -991,9 +1017,8 @@ def schedule_rows_for_gate(
 ) -> tuple[list[TradePair], list[TradePair]]:
     """Select the scored raw-entry groups for schedule comparison.
 
-    Canonical alignment permits a TV/engine entry pair to differ by up to the
-    match window.  Bounding both raw schedules only by independently gated
-    entry times can then drop one half of an already scored boundary pair.
+    When there are no interior matches, the metric fallback can score pairs
+    outside the interior even if there are still rows in the gated pools.
     Select each side's gate entries plus its half of every scored match.  Exact
     entry keys preserve every raw fragment without re-importing unrelated
     out-of-gate rows that happen to lie between two boundary timestamps.
@@ -1091,32 +1116,45 @@ def tv_timezone_offset(meta: dict) -> int:
     return TV_TZ_BY_NAME.get(tz_name, TV_CSV_TZ_OFFSET_HOURS)
 
 
+def _decimal_entry_price(price: float) -> Fraction | float:
+    # Use the round-trip decimal quote for finite prices.
+    return Fraction(str(price)) if isfinite(price) else price
+
+
+def entry_price_gate(tv_entry_price: Fraction | float) -> Fraction | float:
+    ratio = (_DECIMAL_ENTRY_PRICE_GATE_RATIO if isinstance(tv_entry_price, Fraction)
+             else ENTRY_PRICE_GATE_RATIO)
+    return ratio * abs(tv_entry_price)
+
+
 def align_by_time(tv: list[TradePair], eng: list[TradePair]) -> list[tuple[TradePair, TradePair]]:
-    """Greedy time-window alignment: pair TV[i] with the closest engine trade
-    that has the same direction and an entry within MATCH_WINDOW_SECONDS.
+    """Pair entries at the same time and in the same direction, in TV order.
+    Among unused rows inside the price gate, take the nearest price, then list order.
     """
     matched: list[tuple[TradePair, TradePair]] = []
     used_eng: set[int] = set()
     j_start = 0
     for tv_t in tv:
+        tv_quote = _decimal_entry_price(tv_t.entry_price)
+        price_limit = entry_price_gate(tv_quote)
         # Advance the engine cursor to the first plausibly-matching candidate.
-        while j_start < len(eng) and eng[j_start].entry_time < tv_t.entry_time - MATCH_WINDOW_SECONDS:
+        while j_start < len(eng) and eng[j_start].entry_time < tv_t.entry_time:
             j_start += 1
         best_j = -1
-        best_dt = MATCH_WINDOW_SECONDS + 1
+        best_price_gap = None
         for j in range(j_start, len(eng)):
             if j in used_eng:
                 continue
             e = eng[j]
-            if e.entry_time > tv_t.entry_time + MATCH_WINDOW_SECONDS:
+            if e.entry_time > tv_t.entry_time:
                 break
             if e.direction != tv_t.direction:
                 continue
-            if abs(e.entry_price - tv_t.entry_price) > ENTRY_PRICE_GATE:
+            price_gap = abs(_decimal_entry_price(e.entry_price) - tv_quote)
+            if price_gap > price_limit:
                 continue
-            dt = abs(e.entry_time - tv_t.entry_time)
-            if dt < best_dt:
-                best_dt = dt
+            if best_price_gap is None or price_gap < best_price_gap:
+                best_price_gap = price_gap
                 best_j = j
         if best_j >= 0:
             matched.append((tv_t, eng[best_j]))
@@ -1129,15 +1167,10 @@ def trim_to_common_match_window(
     eng: list[TradePair],
     matched: list[tuple[TradePair, TradePair]],
 ) -> tuple[list[TradePair], list[TradePair]]:
-    """Drop leading/trailing edge trades outside the mutually matched window.
-
-    The canonical parity sweep compares the common in-window trade region.
-    This avoids failing a strategy because one engine has an extra bootstrap or
-    terminal trade just outside the overlapping validation window.
-    """
+    """Keep entries from the first pair through one hour after the last, inclusive."""
     if not matched:
         return tv, eng
-    lo = min(min(t.entry_time, e.entry_time) for t, e in matched) - MATCH_WINDOW_SECONDS
+    lo = min(t.entry_time for t, _ in matched)
     hi = max(max(t.entry_time, e.entry_time) for t, e in matched) + MATCH_WINDOW_SECONDS
     tv_trim = [t for t in tv if lo <= t.entry_time <= hi]
     eng_trim = [e for e in eng if lo <= e.entry_time <= hi]
@@ -1149,12 +1182,22 @@ def relative_max(a: float, b: float) -> float:
     return abs(a - b) / denom
 
 
+def _price_delta(a: float, b: float) -> float:
+    """Relative difference of the prices as printed in decimal."""
+    if not (isfinite(a) and isfinite(b)):
+        return relative_max(a, b)
+    if a == b:
+        return 0.0
+    left, right = Decimal(str(a)), Decimal(str(b))
+    return float(abs(left - right) / max(abs(left), abs(right)))
+
+
 def percentile(xs: list[float], p: float) -> float:
     if not xs: return 0.0
     s = sorted(xs)
     k = (len(s) - 1) * p
     f, c = int(k), min(int(k) + 1, len(s) - 1)
-    if f == c: return s[f]
+    if f == c or s[f] == s[c]: return s[f]
     return s[f] * (c - k) + s[c] * (k - f)
 
 
@@ -1221,13 +1264,28 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     tv_cmp, eng_cmp = trim_to_common_match_window(tv, eng, matched + mark_pairs)
     matched = align_by_time(tv_cmp, eng_cmp)
 
+    # Optional interior trim: drop edge / warmup bars from the headline stats.
+    trim_bars = int(meta.get("trim_bars", 0) or 0)
+    warmup_bars = int(meta.get("warmup_bars", 0) or 0)
+    first_ms, last_ms, bar_ms = _ohlcv_span_ms(
+        strategy_dir, ohlcv_csv=str(meta["ohlcv_csv"]) if "ohlcv_csv" in meta else None)
+    # A declared positive bar interval wins over the first observed gap.
+    declared_bar_ms = meta.get("bar_ms")
+    if type(declared_bar_ms) is int and declared_bar_ms > 0:
+        bar_ms = declared_bar_ms
+    bounds = interior_time_bounds(trim_bars, warmup_bars, first_ms, last_ms, bar_ms)
+    if bounds is not None:
+        tv_gate = [t for t in tv_cmp if is_interior(t.entry_time * 1000, bounds)]
+        eng_gate = [e for e in eng_cmp if is_interior(e.entry_time * 1000, bounds)]
+    else:
+        tv_gate, eng_gate = tv_cmp, eng_cmp
+
     if not matched and not mark_pairs:
-        label = "excellent" if len(tv_cmp) == 0 and len(eng_cmp) == 0 else "minimal"
-        # The historical both-empty Excellent branch returned before reading
-        # override metadata. Keep that exact behavior while fixing declared
-        # divergence for the non-excellent zero-alignment branch.
-        if label != "excellent":
-            label = _apply_declared_tier_override(label, meta)
+        tv_gate_n, eng_gate_n = len(tv_gate), len(eng_gate)
+        count_abs_delta = tv_gate_n + eng_gate_n
+        closed_tv = sum(not t.open_mark for t in tv_gate)
+        count_ok = count_abs_delta == 0
+        label = _apply_declared_tier_override("minimal", meta)
         return VerificationResult(
             strategy_dir=strategy_dir,
             rel=rel,
@@ -1241,9 +1299,19 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
             eng_count=len(eng_cmp),
             tv_raw_count=len(tv),
             eng_raw_count=len(eng),
-            count_delta=relative_max(len(tv_cmp), len(eng_cmp)),
-            count_abs_delta=abs(len(tv_cmp) - len(eng_cmp)),
-            count_ok=len(tv_cmp) == len(eng_cmp),
+            tv_gate_count=tv_gate_n,
+            eng_gate_count=eng_gate_n,
+            trim_bars=trim_bars,
+            warmup_bars=warmup_bars,
+            bounds=bounds,
+            coverage_tv_count=closed_tv,
+            unmatched_total=closed_tv,
+            unmatched_in_window=max(tv_gate_n, eng_gate_n),
+            count_delta=count_abs_delta / max(tv_gate_n, eng_gate_n, 1),
+            count_abs_delta=count_abs_delta,
+            net_count_abs_delta=abs(tv_gate_n - eng_gate_n),
+            gross_unmatched_count=count_abs_delta,
+            count_ok=count_ok,
         )
 
     # Resolve parity profile (strict vs production) per probe.
@@ -1259,29 +1327,16 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         "scope": "per_probe",
         "comparison": "<",
         "count_rule": "exact",
+        "count_basis": "unmatched_both_sides",
     }
     grade_percentile = grading_policy["percentile"]
-
-    # Optional interior trim: drop edge / warmup bars from the headline stats.
-    trim_bars = int(meta.get("trim_bars", 0) or 0)
-    warmup_bars = int(meta.get("warmup_bars", 0) or 0)
-    first_ms, last_ms, bar_ms = _ohlcv_span_ms(strategy_dir)
-    bounds = interior_time_bounds(trim_bars, warmup_bars, first_ms, last_ms, bar_ms)
 
     def _split_interior(pairs: list[tuple[TradePair, TradePair]]) -> list[tuple[TradePair, TradePair]]:
         if bounds is None:
             return pairs
         return [(t, e) for (t, e) in pairs if is_interior(t.entry_time * 1000, bounds)]
 
-    interior_matched = _split_interior(matched)
-    # Use interior-only matched pairs for headline gating when bounds are set.
-    gating_matched = interior_matched if (bounds is not None and interior_matched) else matched
-    # Interior-aware count totals: trim the tv/eng pools too when bounds given.
-    if bounds is not None:
-        tv_gate = [t for t in tv_cmp if is_interior(t.entry_time * 1000, bounds)]
-        eng_gate = [e for e in eng_cmp if is_interior(e.entry_time * 1000, bounds)]
-    else:
-        tv_gate, eng_gate = tv_cmp, eng_cmp
+    gating_matched = _split_interior(matched)
     # The mark pairs are matched trades on both sides of every count: the
     # gate pools, the gated matches, the coverage numerator and denominator.
     # Their rows left the lists above, so they are added back as a number —
@@ -1290,10 +1345,19 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     n_gate_marks = len(gate_marks)
     tv_gate_n = len(tv_gate) + n_gate_marks
     eng_gate_n = len(eng_gate) + n_gate_marks
-    gating_matched_n = len(gating_matched) + n_gate_marks
 
-    count_abs_delta = abs(tv_gate_n - eng_gate_n)
-    count_delta = relative_max(tv_gate_n, eng_gate_n)
+    net_count_abs_delta = abs(tv_gate_n - eng_gate_n)
+    # Each unmatched gated trade counts, even when the two list sizes agree.
+    # Count only pairs with both rows in the gated pools.
+    tv_gate_ids = {id(t) for t in tv_gate}
+    eng_gate_ids = {id(e) for e in eng_gate}
+    count_matched_n = n_gate_marks + sum(
+        id(t) in tv_gate_ids and id(e) in eng_gate_ids for t, e in matched
+    )
+    unmatched_tv = tv_gate_n - count_matched_n
+    unmatched_engine = eng_gate_n - count_matched_n
+    count_abs_delta = unmatched_tv + unmatched_engine
+    count_delta = count_abs_delta / max(tv_gate_n, eng_gate_n, 1)
     # A mark pair's entry is a fill on both sides, so the identity gate
     # sees it with the others: the engine's range-end row must carry an
     # entry incarnation at a TV-proven multi-entry key exactly as any
@@ -1307,32 +1371,33 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     # The entry of a mark pair is a fill on both sides and is gated with the
     # others; appended after the matched pairs so the diagnostic display
     # (zip with ``matched``) keeps its alignment.
-    entry_deltas = ([relative_max(t.entry_price, e.entry_price) for t, e in gating_matched]
-                    + [relative_max(t.entry_price, e.entry_price) for t, e in gate_marks])
+    entry_deltas = ([_price_delta(t.entry_price, e.entry_price) for t, e in gating_matched]
+                    + [_price_delta(t.entry_price, e.entry_price) for t, e in gate_marks])
     # A TV Open row with no engine mark to pair with (the engine never
     # opened the lot, or closed it for real before the range's end) is an
     # ordinary row from here on: matched by entry, it carries its exit and
     # P&L deltas — TV held the position to the end and the engine did not,
     # which is a real divergence; unmatched, it leaves the coverage
     # denominator below, as it always has.
-    _open_keys = {(t.entry_time, t.entry_price, t.direction)
-                  for t in tv_raw_all if t.open_mark}
-    exit_deltas  = [relative_max(t.exit_price,  e.exit_price)  for t, e in gating_matched]
+    exit_deltas  = [_price_delta(t.exit_price, e.exit_price) for t, e in gating_matched]
     # PnL p90 uses *relative-to-tv_pnl*, with near-zero trades excluded so
     # scratch trades don't blow up the ratio. Mirrors canonical line ~1136.
     pnl_deltas: list[float] = []
     for t, e in gating_matched:
         if abs(t.pnl) < PNL_NEAR_ZERO_USD:
             continue
-        abs_diff = abs(t.pnl - e.pnl)
-        if (t.qty > 1e-9 and e.qty > 1e-9
-                and abs(t.qty / e.qty - 1.0) <= QTY_NORM_BAND):
+        comparisons = [(e.pnl - t.pnl, e.qty)]
+        if t.qty > 1e-9 and e.qty > 1e-9 and t.qty != e.qty:
+            tv_qty, eng_qty = Decimal(str(t.qty)), Decimal(str(e.qty))
             # Qty-normalized comparison isolates per-unit price/commission
             # parity from tiny equity-derived sizing drift between two
             # independently compounded simulations — but ONLY inside
             # QTY_NORM_BAND: a large sizing divergence is a bug the PnL gate
             # must surface, not rescale away.
-            abs_diff = min(abs_diff, abs(t.pnl - e.pnl * (t.qty / e.qty)))
+            if (eng_qty.is_finite()
+                    and abs(tv_qty - eng_qty) <= Decimal(str(QTY_NORM_BAND)) * eng_qty):
+                comparisons.append((e.pnl * (t.qty / e.qty) - t.pnl, t.qty))
+        abs_diff = min(abs(diff) for diff, _ in comparisons)
         if abs_diff < TV_PNL_ROUNDING_EPSILON_USD:
             pnl_deltas.append(0.0)
             continue
@@ -1343,30 +1408,41 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         # gate owns exit-price correctness; the PnL gate then fails only on
         # UNEXPLAINED money differences (commission, funding, sizing,
         # rounding) — each gate points at a distinct bug class.
-        exit_rel = relative_max(t.exit_price, e.exit_price)
-        explained_bound = (max(t.qty, e.qty) * abs(t.exit_price - e.exit_price)
-                           + TV_PNL_ROUNDING_EPSILON_USD)
-        if exit_rel < thresh["exit"] and abs_diff <= explained_bound:
+        exit_rel = _price_delta(t.exit_price, e.exit_price)
+        exit_change = (e.exit_price - t.exit_price) * (1 if t.direction == "long" else -1)
+        if exit_rel < thresh["exit"] and any(
+            abs(diff - qty * exit_change) <= TV_PNL_ROUNDING_EPSILON_USD
+            for diff, qty in comparisons
+        ):
             pnl_deltas.append(0.0)
             continue
-        pnl_deltas.append(abs_diff / abs(t.pnl))
+        if not (isfinite(t.pnl) and isfinite(e.pnl)):
+            pnl_deltas.append(abs_diff / abs(t.pnl))
+            continue
+        # Form the scored difference from the decimal amounts before division.
+        tv_amount, eng_amount = Decimal(str(t.pnl)), Decimal(str(e.pnl))
+        money_diff = abs(eng_amount - tv_amount)
+        if len(comparisons) == 2:
+            money_diff = min(money_diff, abs(eng_amount * tv_qty / eng_qty - tv_amount))
+        pnl_deltas.append(float(money_diff / abs(tv_amount)))
 
     entry_p90 = percentile(entry_deltas, grade_percentile)
     exit_p90  = percentile(exit_deltas,  grade_percentile)
     pnl_p90   = percentile(pnl_deltas,   grade_percentile) if pnl_deltas else 0.0
 
-    # Fragmented FIFO grids can have exact entry/count parity and exact
-    # position-level close events while entry-grouped consolidation smears exit
-    # prices across different FIFO lot boundaries. Under a strict guard, score
-    # exit/PnL on the raw exit schedule instead of the consolidated deal blend.
+    # Fragmented FIFO grids can have exact entry and position-level close
+    # events while entry-grouped consolidation smears exit prices across
+    # different FIFO lot boundaries. Below the same gross-count percentage
+    # limit as strong grading, score exit/PnL on the raw exit schedule instead
+    # of the consolidated deal blend.
     tv_sched_rows, eng_sched_rows = schedule_rows_for_gate(
         tv_raw_all, eng_raw_all, tv_gate, eng_gate, gating_matched
     )
     fragmented_fifo = (
-        has_cross_entry_fifo_allocation(tv_sched_rows)
-        or has_cross_entry_fifo_allocation(eng_sched_rows)
+        has_cross_entry_fifo_allocation(tv_sched_rows, identity_field="entry_signal")
+        or has_cross_entry_fifo_allocation(eng_sched_rows, identity_field="entry_identity")
     )
-    if fragmented_fifo and entry_p90 < 1e-12 and count_delta < STRONG_COUNT_DELTA:
+    if gating_matched and fragmented_fifo and entry_p90 < 1e-12 and count_delta < STRONG_COUNT_DELTA:
         sched_exit_deltas, sched_pnl_deltas = schedule_exit_metrics(tv_sched_rows, eng_sched_rows)
         if sched_exit_deltas:
             sched_exit_p90 = percentile(sched_exit_deltas, grade_percentile)
@@ -1407,14 +1483,15 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     pnlpct_p100 = max(pnlpct_deltas) if pnlpct_deltas else 0.0
     mfe_p90     = percentile(mfe_deltas, 0.90) if mfe_deltas else 0.0
     mae_p90     = percentile(mae_deltas, 0.90) if mae_deltas else 0.0
-    unmatched_in_window = max(tv_gate_n, eng_gate_n) - gating_matched_n
+    unmatched_in_window = max(tv_gate_n, eng_gate_n) - count_matched_n
 
     entry_ok = entry_p90  < thresh["entry"]
     # Count mismatch is a primary reproduction signal. Percent thresholds can
     # hide dozens of missing/extra trades in large strategies, so excellent
-    # requires exact gated TV/engine count parity. Any non-zero absolute count
-    # mismatch is an engine/codegen gap unless separately proven as a TV/export
-    # anomaly.
+    # requires zero unmatched gated trades on either side. An engine-only and
+    # a TV-only trade are two mismatches, even if their net count is zero.
+    # Any mismatch is an engine/codegen gap unless separately proven as a
+    # TV/export anomaly.
     count_ok = count_abs_delta == 0
     # HARD GATES ONLY. The former heuristic escape hatches (tiny_exit_pnl_noise,
     # strong_exit_pnl_coupling, pnl_validated_exit_noise, and the mae_* waivers)
@@ -1442,16 +1519,13 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     # open row (engine opened AND closed the position for real past window) is
     # a legitimate matched trade and is kept. This never touches the matcher,
     # the count gate, or entry/exit/pnl -- only the coverage denominator.
-    # (_open_keys — the UNPAIRED Open rows — is resolved above, with the
-    # exit/pnl deltas; a paired mark is a matched trade on both sides.)
     _matched_tv_ids = {id(t) for t, _ in matched}
     def _is_dropped_open(t):
-        return ((t.entry_time, t.entry_price, t.direction) in _open_keys
-                and id(t) not in _matched_tv_ids)
+        return t.open_mark and id(t) not in _matched_tv_ids
     if bounds is not None:
         tv_cov_denom = [t for t in tv
                         if is_interior(t.entry_time * 1000, bounds) and not _is_dropped_open(t)]
-        cov_matched = gating_matched_n
+        cov_matched = count_matched_n
         cov_denom_n = len(tv_cov_denom) + n_gate_marks
     else:
         tv_cov_denom = [t for t in tv if not _is_dropped_open(t)]
@@ -1459,8 +1533,8 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         cov_denom_n = len(tv_cov_denom) + len(mark_pairs)
     unmatched_total = max(cov_denom_n - cov_matched, 0)
     coverage = (cov_matched / cov_denom_n) if cov_denom_n else 1.0
-    cov_excellent = coverage >= COVERAGE_EXCELLENT or unmatched_total <= 1
-    cov_strong    = coverage >= COVERAGE_STRONG or unmatched_total <= 1
+    cov_excellent = coverage >= COVERAGE_EXCELLENT
+    cov_strong    = coverage >= COVERAGE_STRONG
     cov_moderate  = coverage >= COVERAGE_MODERATE
 
     all_ok = (
@@ -1481,9 +1555,9 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         and pnl_p90 < STRONG_PNL_DELTA
     ):
         label = "strong"
-    elif cov_moderate and gating_matched_n / max(tv_gate_n, 1) >= 0.90:
+    elif cov_moderate and count_matched_n / max(tv_gate_n, 1) >= 0.90:
         label = "moderate"
-    elif gating_matched_n:
+    elif matched or mark_pairs:
         label = "weak"
     else:
         label = "minimal"
@@ -1527,11 +1601,13 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         tv_raw_count=len(tv) + len(mark_pairs),
         eng_raw_count=len(eng) + len(mark_pairs),
         matched_count=len(matched) + len(mark_pairs),
-        gating_matched_count=gating_matched_n,
+        gating_matched_count=count_matched_n,
         tv_gate_count=tv_gate_n,
         eng_gate_count=eng_gate_n,
         count_delta=count_delta,
         count_abs_delta=count_abs_delta,
+        net_count_abs_delta=net_count_abs_delta,
+        gross_unmatched_count=count_abs_delta,
         entry_p90=entry_p90,
         exit_p90=exit_p90,
         pnl_p90=pnl_p90,
@@ -1577,14 +1653,19 @@ def _print_verification(result: VerificationResult, *, show_diffs: int = 0) -> N
             f"  MISSING (tv: {result.tv_exists}, engine: {result.eng_exists})"
         )
         return
+    check = lambda b: "OK" if b else "X"
+    count_line = (
+        f"  Count delta:           {result.count_delta * 100:8.4f}%  "
+        f"({check(result.count_ok)}; abs={result.count_abs_delta}; "
+        f"net={result.net_count_abs_delta})\n"
+    )
     if result.no_aligned_trades:
         print(
             f"{result.rel}: TV={result.tv_raw_count} engine={result.eng_raw_count} "
-            f"matched=0  (no aligned trades)\n  -> {result.label}"
+            f"matched=0  (no aligned trades)\n{count_line}  -> {result.label}"
         )
         return
 
-    check = lambda b: "OK" if b else "X"
     match_pct = 100.0 * result.matched_count / max(result.tv_raw_count, 1)
     interior_line = ""
     if result.bounds is not None:
@@ -1600,7 +1681,7 @@ def _print_verification(result: VerificationResult, *, show_diffs: int = 0) -> N
         f"  Engine trades: {result.eng_count}  (raw {result.eng_raw_count})\n"
         f"  Matched:       {result.matched_count} ({match_pct:.1f}% of TV)\n"
         f"{interior_line}"
-        f"  Count delta:           {result.count_delta * 100:8.4f}%  ({check(result.count_ok)}; abs={result.count_abs_delta})\n"
+        f"{count_line}"
         f"  Entry-price p90 delta: {result.entry_p90  * 100:8.4f}%  ({check(result.entry_ok)})\n"
         f"  Exit-price  p90 delta: {result.exit_p90   * 100:8.4f}%  ({check(result.exit_ok)})\n"
         f"  PnL         p90 delta: {result.pnl_p90    * 100:8.4f}%  ({check(result.pnl_ok)})\n"

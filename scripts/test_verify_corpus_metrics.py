@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
+import argparse
+import csv
 import json
-import math
 import sys
 import tempfile
 import unittest
@@ -15,6 +16,8 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+from test_verify_corpus_count_rule import _analyze_tapes, _checked_path
+from test_verify_corpus_trail_profile import TRADE_COLUMNS
 from verify_corpus import (
     STRICT_ENTRY_DELTA,
     TradePair,
@@ -58,6 +61,27 @@ def trade(
         entry_signal=entry_signal,
         entry_identity=entry_identity,
     )
+
+
+def _write_trade_pairs(path: Path, rows: list[TradePair], *, tv_timezone: bool) -> None:
+    """Keep raw partial-close quantities and their actual broker events."""
+    offset = timedelta(hours=8 if tv_timezone else 0)
+    with _checked_path(path).open("x", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow([*TRADE_COLUMNS, "Engine entry ID"])
+        for row in rows:
+            entry = datetime.fromtimestamp(row.entry_time, timezone.utc) + offset
+            exit_time = datetime.fromtimestamp(row.exit_time, timezone.utc) + offset
+            writer.writerow([
+                row.trade_num, "Entry " + row.direction,
+                entry.strftime("%Y-%m-%d %H:%M"), row.entry_signal,
+                row.entry_price, row.qty, 0.0, 0.0, row.entry_identity,
+            ])
+            writer.writerow([
+                row.trade_num, "Exit " + row.direction,
+                exit_time.strftime("%Y-%m-%d %H:%M"), "",
+                row.exit_price, row.qty, row.pnl, 0.0, "",
+            ])
 
 
 class FragmentConsolidationIdentityTests(unittest.TestCase):
@@ -177,28 +201,25 @@ class FragmentConsolidationIdentityTests(unittest.TestCase):
                 tv_rows, engine_rows, preserve), 1)
 
     def test_tolerant_projection_uses_strict_boundary(self) -> None:
-        tv_rows = [
-            trade(1, 100, 100.0, 200, 102.0, entry_signal="A"),
-            trade(2, 100, 100.0, 200, 102.0, entry_signal="B"),
-        ]
-        last_inside = 100.0 / (1.0 - STRICT_ENTRY_DELTA)
-        first_outside = math.nextafter(last_inside, math.inf)
-        self.assertLess(
-            relative_max(100.0, last_inside), STRICT_ENTRY_DELTA)
-        self.assertGreaterEqual(
-            relative_max(100.0, first_outside), STRICT_ENTRY_DELTA)
-        preserve = distinct_entry_fill_keys(tv_rows)
-
-        def mismatches_at(price: float) -> int:
+        def mismatches_at(tv_price: float, price: float) -> int:
+            tv_rows = [
+                trade(1, 100, tv_price, 200, 102.0, entry_signal="A"),
+                trade(2, 100, tv_price, 200, 102.0, entry_signal="B"),
+            ]
             engine_rows = [
                 trade(1, 100, price, 200, 102.0, entry_identity="41"),
                 trade(2, 100, price, 200, 102.0, entry_identity="42"),
             ]
             return distinct_entry_fill_mismatches(
-                tv_rows, engine_rows, preserve)
+                tv_rows, engine_rows, {(100, tv_price, "long")})
 
-        self.assertEqual(mismatches_at(last_inside), 0)
-        self.assertEqual(mismatches_at(first_outside), 1)
+        for price, expected in ((9.999, 1), (9.999001, 0), (9.998999, 1)):
+            with self.subTest(price=price):
+                self.assertEqual(mismatches_at(10, price), expected)
+        # Above 100 the larger denominator is the engine price: the upper
+        # boundary is 1000000/9999, between these adjacent printed prices.
+        self.assertEqual(mismatches_at(100, 100.0100010001), 0)
+        self.assertEqual(mismatches_at(100, 100.01000100010002), 1)
 
     def test_tolerant_projection_fails_closed_on_non_transitive_overlap(
         self,
@@ -632,6 +653,9 @@ class FragmentConsolidationIdentityTests(unittest.TestCase):
         self.assertIsNotNone(result.bounds)
         self.assertEqual(result.tv_gate_count, 0)
         self.assertEqual(result.eng_gate_count, 0)
+        self.assertEqual(result.count_abs_delta, 0)
+        self.assertEqual(result.net_count_abs_delta, 0)
+        self.assertTrue(result.count_ok)
         self.assertTrue(result.distinct_entry_identity_ok)
         self.assertEqual(result.distinct_entry_mismatches, 0)
         self.assertEqual(result.label, "excellent")
@@ -668,12 +692,21 @@ class FragmentConsolidationIdentityTests(unittest.TestCase):
 
         self.assertEqual(result.tv_count, 2)
         self.assertEqual(result.eng_count, 2)
-        self.assertEqual(result.count_abs_delta, 0)
+        # expectation corrected: 0 -> 2, because the unmatched long and short
+        # are separate mismatches despite equal gated list sizes.
+        self.assertEqual(result.count_abs_delta, 2)
+        self.assertEqual(result.net_count_abs_delta, 0)
+        self.assertFalse(result.count_ok)
         self.assertEqual(result.unmatched_in_window, 1)
-        self.assertTrue(result.coverage_ok)
+        # expectation corrected: True -> False, because one of two TV trades is below the 99% coverage floor.
+        self.assertFalse(result.coverage_ok)
         self.assertFalse(result.distinct_entry_identity_ok)
         self.assertEqual(result.distinct_entry_mismatches, 1)
-        self.assertEqual(result.label, "strong")
+        # expectation corrected: 0 -> 1 and strong -> weak, because both
+        # unmatched trades count against the two-trade compared population.
+        self.assertEqual(result.count_delta, 1.0)
+        self.assertEqual(result.report_row()["count_delta"], 1.0)
+        self.assertEqual(result.label, "weak")
 
 
 PRIVATE_FIXTURE_SKIP_LITERAL = "SKIP private fixtures not present: "
@@ -743,6 +776,88 @@ class CoofCascadeIdentityTapeTests(unittest.TestCase):
 
 
 class FragmentedFifoEligibilityTests(unittest.TestCase):
+    retain_artifacts: Path | None = None
+
+    def test_gross_count_limit_blocks_fifo_metric_replacement(self) -> None:
+        if self.retain_artifacts is None:
+            temporary = tempfile.TemporaryDirectory(prefix="verify-corpus-fifo-")
+            self.addCleanup(temporary.cleanup)
+            run_root = _checked_path(Path(temporary.name))
+        else:
+            run_root = _checked_path(Path(tempfile.mkdtemp(
+                prefix="verify-corpus-fifo-", dir=_checked_path(self.retain_artifacts)
+            )))
+        start = int(datetime(2025, 1, 1, tzinfo=timezone.utc).timestamp())
+        results = []
+        for substitutions in (2, 3):
+            tv_rows = []
+            engine_rows = []
+            moved = set((10, 20, 30)[:substitutions])
+            for group in range(50):
+                base = start + group * 2 * 86400
+                for entry_index in range(2):
+                    entry_time = base + entry_index * 12 * 3600
+                    engine_entry_time = entry_time + (
+                        6 * 3600 if group in moved and entry_index == 0 else 0
+                    )
+                    # Same exit schedule, different allocation across the two
+                    # entry fills: TV consolidates to 115/125, engine to 125/115.
+                    for exit_index, exit_price in enumerate((110.0, 130.0)):
+                        tv_qty = 0.75 if entry_index == exit_index else 0.25
+                        engine_qty = 1.0 - tv_qty
+                        exit_time = base + (24 + exit_index * 12) * 3600
+                        number = len(tv_rows) + 1
+                        tv_rows.append(trade(
+                            number, entry_time, 100.0, exit_time, exit_price,
+                            qty=tv_qty, pnl=(exit_price - 100.0) * tv_qty,
+                            entry_signal=f"entry-{group}-{entry_index}",
+                        ))
+                        engine_rows.append(trade(
+                            number, engine_entry_time, 100.0, exit_time, exit_price,
+                            qty=engine_qty, pnl=(exit_price - 100.0) * engine_qty,
+                            entry_identity=f"engine-{group}-{entry_index}",
+                        ))
+            self.assertTrue(has_cross_entry_fifo_allocation(tv_rows))
+            self.assertTrue(has_cross_entry_fifo_allocation(engine_rows))
+            schedule_exit, schedule_pnl = schedule_exit_metrics(tv_rows, engine_rows)
+            self.assertEqual(schedule_exit, [0.0] * 100)
+            self.assertEqual(schedule_pnl, [0.0])
+
+            result, row, cli = _analyze_tapes(
+                run_root, f"fifo-{substitutions}", tv_rows, engine_rows,
+                write_trades=_write_trade_pairs,
+            )
+            self.assertEqual((result.tv_gate_count, result.eng_gate_count), (100, 100))
+            self.assertEqual(result.gating_matched_count, 100 - substitutions)
+            self.assertEqual(result.count_abs_delta, 2 * substitutions)
+            self.assertEqual(result.net_count_abs_delta, 0)
+            self.assertEqual(result.entry_p90, 0.0)
+            self.assertEqual(result.coverage, (100 - substitutions) / 100)
+            self.assertGreaterEqual(result.coverage, 0.95)
+            self.assertFalse(result.coverage_ok)  # Excellent still requires 99%.
+            self.assertTrue(result.distinct_entry_identity_ok)
+            if substitutions == 2:
+                self.assertEqual((result.exit_p90, result.pnl_p90), (0.0, 0.0))
+                self.assertEqual(row["metric_observations"]["exit"], 100)
+                self.assertEqual(result.label, "strong")
+                self.assertEqual(cli["exit"], 0)
+            else:
+                # On the previous grader this is the first failing assertion:
+                # net zero wrongly enables the perfect schedule at 6% gross.
+                self.assertAlmostEqual(
+                    result.exit_p90, 0.08,
+                    msg="gross count at the 6% limit must block FIFO replacement",
+                )
+                self.assertAlmostEqual(result.pnl_p90, 2 / 3)
+                self.assertEqual(row["metric_observations"]["exit"], 97)
+                self.assertEqual(row["metric_observations"]["pnl"], 97)
+                self.assertEqual(result.label, "moderate")
+                self.assertEqual(cli["exit"], 1)
+            results.append((result, substitutions))
+
+        for result, substitutions in results:
+            self.assertEqual(result.count_delta, 2 * substitutions / 100)
+
     def test_true_fifo_requires_split_entry_and_cross_entry_exit(self) -> None:
         rows = [
             trade(1, 100, 10.0, 200, 12.0, qty=0.5),
@@ -926,13 +1041,27 @@ class DeclaredTierOverrideTests(unittest.TestCase):
                 result = analyze_strategy(self.strategy(name, meta))
                 self.assertTrue(result.no_aligned_trades)
                 self.assertEqual(result.label, expected)
+                self.assertEqual((result.tv_count, result.eng_count), (1, 1))
+                self.assertEqual(result.count_abs_delta, 2)
+                self.assertEqual(result.net_count_abs_delta, 0)
+                self.assertFalse(result.count_ok)
+                self.assertEqual(result.report_row()["count_abs_delta"], 2)
+                # expectation corrected: 0 -> 2, because two unmatched trades
+                # are normalized by the larger one-trade pool, even unaligned.
+                self.assertEqual(result.count_delta, 2.0)
+                self.assertEqual(result.report_row()["count_delta"], 2.0)
 
                 output = StringIO()
                 with redirect_stdout(output):
                     _print_verification(result)
                 self.assertIn(f"-> {expected}", output.getvalue())
+                self.assertRegex(
+                    output.getvalue(),
+                    r"Count delta:\s+200\.0000%\s+\(X; abs=2; net=0\)",
+                )
+                self.assertIn("abs=2; net=0", output.getvalue())
 
-    def test_both_empty_excellent_is_not_masked_by_stale_declarations(self) -> None:
+    def test_both_empty_honors_declaration_precedence(self) -> None:
         strategy = self.strategy(
             "both-empty",
             {
@@ -946,7 +1075,11 @@ class DeclaredTierOverrideTests(unittest.TestCase):
         result = analyze_strategy(strategy)
 
         self.assertTrue(result.no_aligned_trades)
-        self.assertEqual(result.label, "excellent")
+        # expectation corrected: excellent -> engine_only, because explicit false overrides a declared anomaly without matches.
+        self.assertEqual(result.label, "engine_only")
+        self.assertEqual(result.count_abs_delta, 0)
+        self.assertEqual(result.count_delta, 0.0)
+        self.assertTrue(result.count_ok)
 
     def test_single_sided_empty_results_honor_valid_declarations(self) -> None:
         anomaly = analyze_strategy(self.strategy(
@@ -966,6 +1099,24 @@ class DeclaredTierOverrideTests(unittest.TestCase):
             (engine_only.tv_raw_count, engine_only.eng_raw_count), (1, 0)
         )
         self.assertEqual(engine_only.label, "engine_only")
+        for result in (anomaly, engine_only):
+            self.assertEqual(result.count_abs_delta, 1)
+            self.assertEqual(result.net_count_abs_delta, 1)
+            self.assertEqual(result.count_delta, 1.0)
+            self.assertFalse(result.count_ok)
+
+    def test_single_sided_empty_without_declaration_is_minimal(self) -> None:
+        for name, kwargs in (
+            ("tv-empty-plain", {"tv_empty": True}),
+            ("engine-empty-plain", {"engine_empty": True}),
+        ):
+            with self.subTest(name=name):
+                result = analyze_strategy(self.strategy(name, {}, **kwargs))
+                self.assertTrue(result.no_aligned_trades)
+                self.assertEqual(result.label, "minimal")
+                self.assertEqual(result.count_abs_delta, 1)
+                self.assertEqual(result.net_count_abs_delta, 1)
+                self.assertFalse(result.count_ok)
 
     def test_matched_excellent_preserves_malformed_override_failure(self) -> None:
         strategy = self.strategy(
@@ -977,20 +1128,14 @@ class DeclaredTierOverrideTests(unittest.TestCase):
         with self.assertRaisesRegex(AttributeError, "has no attribute 'get'"):
             analyze_strategy(strategy)
 
-    def test_malformed_override_preserves_empty_branch_asymmetry(self) -> None:
-        both_empty = self.strategy(
-            "both-empty-malformed",
-            {"validation_overrides": "oops"},
-            tv_empty=True,
-            engine_empty=True,
-        )
-        self.assertEqual(analyze_strategy(both_empty).label, "excellent")
-
-        single_sided = (
+    def test_malformed_override_fails_on_empty_tapes(self) -> None:
+        # expectation corrected: excellent -> AttributeError, because all no-match grades apply the normal override rules.
+        empty_sides = (
+            ("both-empty-malformed", {"tv_empty": True, "engine_empty": True}),
             ("tv-empty-malformed", {"tv_empty": True}),
             ("engine-empty-malformed", {"engine_empty": True}),
         )
-        for name, empty_side in single_sided:
+        for name, empty_side in empty_sides:
             with self.subTest(name=name):
                 strategy = self.strategy(
                     name,
@@ -1039,6 +1184,7 @@ class DeclaredTierOverrideTests(unittest.TestCase):
 
             self.assertEqual(rc, expected_rc)
             self.assertIn(f"-> {expected_label}", output.getvalue())
+            self.assertIn("abs=2; net=0", output.getvalue())
 
 
 # TradingView's current trade-list header, verbatim. Only the header is real:
@@ -1250,7 +1396,11 @@ class TradingViewReturnPercentTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    parser.add_argument("--retain-artifacts", type=Path, metavar="DIR")
+    options, unittest_args = parser.parse_known_args()
+    FragmentedFifoEligibilityTests.retain_artifacts = options.retain_artifacts
     if not _coof_cascade_tape.exists():
         print(PRIVATE_FIXTURE_SKIP_LITERAL
               + "tests/fixtures/coof_cascade_identity/w7-coof-cascade-identity")
-    unittest.main()
+    unittest.main(argv=[sys.argv[0], *unittest_args])
