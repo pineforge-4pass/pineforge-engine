@@ -23873,18 +23873,10 @@ void PineExecutionAdapter::apply_open_market_admission(
         }
     }
 
-    // A same-side-at-placement request is executable only if an earlier
-    // opposite command in this broker batch can move the account before its
-    // turn.  This retires the live-LONG pair's first no-op while preserving
-    // the ordinary priced/raw/carried-book controls where the later request
-    // becomes a reversal after its earlier sibling fills. In a batch of this
-    // bar's market entries and closes alone -- no priced, raw or carried order
-    // beside them, the controls that keep their ordinary fills -- a default
-    // percent_of_equity (<= 100) add whose margin on top of the held side's
-    // exceeded the equity when it was placed is not one of them: TradingView
-    // dropped it there (entry(): the same rule inside the cap), so it never
-    // reverses the book back once its sibling has reversed it (the
-    // reversal-candle probe's tapes).
+    // A same-side order at capacity needs an earlier opposite order.
+    // For a percent-of-equity add among this bar's market entries and closes,
+    // keep the signal-time margin check against the held side. A sibling
+    // reversal cannot make an add affordable after it was refused.
     const double held = detail::run_position(require_host()).signed_units;
     const auto dropped_at_placement = [&](const PlacementSnapshot& row) {
         return !foreign_live_order
@@ -23905,15 +23897,23 @@ void PineExecutionAdapter::apply_open_market_admission(
                             });
     };
     for (std::size_t index = 0; index < market.size(); ++index) {
-        if (!market[index].snapshot->projection_over_pyramiding) continue;
-        bool earlier_opposite = false;
-        for (std::size_t prior = 0; prior < index; ++prior) {
-            if (market[prior].snapshot->is_long != market[index].snapshot->is_long) {
-                earlier_opposite = true;
-                break;
-            }
-        }
-        if (!earlier_opposite || dropped_at_placement(*market[index].snapshot))
+        const auto& row = *market[index].snapshot;
+        if (!row.projection_over_pyramiding) continue;
+        // place_entry sized these transactions against earlier calls. Buys
+        // fill first, so the sell a buy reversed can be later in fill order.
+        const auto here = market.begin() + index;
+        const auto opposite = [&](const Candidate& peer) {
+            return peer.snapshot->is_long != row.is_long;
+        };
+        const bool earlier_opposite = std::any_of(market.begin(), here, opposite)
+            || (!foreign_live_order && row.frozen_market_instruction
+                && fixed_unmargined_market_batch_scope()
+                && std::any_of(here + 1, market.end(), [&](const Candidate& peer) {
+                    return opposite(peer)
+                        && peer.snapshot->frozen_market_instruction
+                        && peer.snapshot->command_sequence < row.command_sequence;
+                }));
+        if (!earlier_opposite || dropped_at_placement(row))
             cancel_later(market[index].handle);
     }
     std::vector<native_order::RequestHandle> review_handles;
