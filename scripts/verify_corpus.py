@@ -1312,7 +1312,6 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     n_gate_marks = len(gate_marks)
     tv_gate_n = len(tv_gate) + n_gate_marks
     eng_gate_n = len(eng_gate) + n_gate_marks
-    gating_matched_n = len(gating_matched) + n_gate_marks
 
     net_count_abs_delta = abs(tv_gate_n - eng_gate_n)
     # Each unmatched gated trade counts, even when the two list sizes agree.
@@ -1439,7 +1438,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     pnlpct_p100 = max(pnlpct_deltas) if pnlpct_deltas else 0.0
     mfe_p90     = percentile(mfe_deltas, 0.90) if mfe_deltas else 0.0
     mae_p90     = percentile(mae_deltas, 0.90) if mae_deltas else 0.0
-    unmatched_in_window = max(tv_gate_n, eng_gate_n) - gating_matched_n
+    unmatched_in_window = max(tv_gate_n, eng_gate_n) - count_matched_n
 
     entry_ok = entry_p90  < thresh["entry"]
     # Count mismatch is a primary reproduction signal. Percent thresholds can
@@ -1481,7 +1480,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     if bounds is not None:
         tv_cov_denom = [t for t in tv
                         if is_interior(t.entry_time * 1000, bounds) and not _is_dropped_open(t)]
-        cov_matched = gating_matched_n
+        cov_matched = count_matched_n
         cov_denom_n = len(tv_cov_denom) + n_gate_marks
     else:
         tv_cov_denom = [t for t in tv if not _is_dropped_open(t)]
@@ -1511,9 +1510,9 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         and pnl_p90 < STRONG_PNL_DELTA
     ):
         label = "strong"
-    elif cov_moderate and gating_matched_n / max(tv_gate_n, 1) >= 0.90:
+    elif cov_moderate and count_matched_n / max(tv_gate_n, 1) >= 0.90:
         label = "moderate"
-    elif gating_matched_n:
+    elif matched or mark_pairs:
         label = "weak"
     else:
         label = "minimal"
@@ -1557,7 +1556,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         tv_raw_count=len(tv) + len(mark_pairs),
         eng_raw_count=len(eng) + len(mark_pairs),
         matched_count=len(matched) + len(mark_pairs),
-        gating_matched_count=gating_matched_n,
+        gating_matched_count=count_matched_n,
         tv_gate_count=tv_gate_n,
         eng_gate_count=eng_gate_n,
         count_delta=count_delta,
