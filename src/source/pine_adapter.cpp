@@ -18775,24 +18775,38 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
     if (snapshot != placement_.end()) {
         const auto& source = snapshot->second;
         const auto physical = detail::run_position(require_host());
-        // ab9714be pine_fills.cpp:7449-7459: a deferred strategy.close belongs
-        // to the position cycle it was issued in.  When the live position
-        // opened on a bar later than the close's creation bar — the next open's
-        // opposite entry applied first and flipped the book — the legacy book
-        // Removes the stale close instead of flattening the freshly opened lot
-        // at its own entry price.  The two legacy exclusions are the short-seed
-        // MATERIALIZE_LONG close and the same-bar market transaction's targeted
-        // close artifact.
+        // Both indices count chart bars. On a tick stream an opening can
+        // carry the print's timestamp; on a magnified chart the pending
+        // projection counts input bars. Neither measures the close's age.
         const bool stale_close_for_new_position =
             (source.family == PineOrderFamily::Close
              || source.family == PineOrderFamily::CloseAll)
             && static_cast<PositionSide>(source.projection_position_side)
                    != PositionSide::FLAT
             && physical.signed_units != 0.0
-            && position_open_script_bar_ > source.placement_script_open_ms
+            && (source.birth.bar() >= 0
+                ? position_open_bar_index_ > source.birth.bar()
+                : position_open_script_bar_ > source.placement_script_open_ms)
             && !source.frozen_market_targeted_close
             && !(short_seed_.active && view.target == short_seed_.materialize_long);
-        if (stale_close_for_new_position) return NativePrecommitVerdict::Refuse;
+        if (stale_close_for_new_position) {
+            if (source.family != PineOrderFamily::Close || !source.from_entry.empty()
+                || physical.lot_count != 1 || source.immediately
+                || !magnified_fifo_closes(require_host(), config_, bar_magnifier_))
+                return NativePrecommitVerdict::Refuse;
+            // close(id), entry(id), close(id): only the last close names
+            // the new opening. Use the source call order, since the first
+            // close's fill can submit the entry after the last close.
+            const auto entry = placement_.find(entry_incarnation_of(source.source_id));
+            if (entry == placement_.end() || !source_market_entry(entry->second)
+                || !entry->second.close_first_entry
+                || entry->second.birth.bar() != source.birth.bar()
+                || entry->second.placement_cycle != source.placement_cycle
+                || entry->second.command_ordinal >= source.command_ordinal
+                || source.birth.bar() != view.cursor.point.interval_index - 1
+                || entry->second.is_long != (physical.signed_units > 0.0))
+                return NativePrecommitVerdict::Refuse;
+        }
         // ab9714be pine_fills.cpp:7483-7537: priced (stop/limit) entries are
         // throttled to one opening from flat per bar after an earlier entry
         // fill. A same-direction pyramid while still in position is the
