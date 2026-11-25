@@ -2572,7 +2572,7 @@ void PineExecutionAdapter::purge_brackets_after_applied_reversal(
                     && leg.command_sequence < reversal.command_sequence
                     && leg.from_entry == reversal.source_id && lot.entry_id == leg.from_entry
                     && !price_present(reversal.exit_levels.limit) && !price_present(reversal.exit_levels.stop)
-                    && finite_positive(levels.limit) && finite_positive(levels.stop) && std::isnan(levels.trail_offset)
+                    && finite_non_negative(levels.limit) && finite_non_negative(levels.stop) && std::isnan(levels.trail_offset)
                     && whole_level_exit(levels.limit, levels.stop, levels.trail_points, levels.trail_price,
                                         levels.profit_ticks, levels.loss_ticks, leg.requested_qty, leg.qty_percent)
                     && consumer.same_request_chain(*parent, {fill.handle().run, lot.entry_incarnation}))
