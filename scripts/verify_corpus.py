@@ -433,13 +433,13 @@ def tv_tzinfo(meta: dict):
     low = name.lower()
     if low in TV_TZ_BY_NAME:
         return timezone(timedelta(hours=TV_TZ_BY_NAME[low]))
-    if "/" in name:  # looks like an IANA zone -> DST-aware
-        try:
-            from zoneinfo import ZoneInfo
-            return ZoneInfo(name)
-        except Exception:
-            pass
-    return timezone(timedelta(hours=TV_CSV_TZ_OFFSET_HOURS))  # default Asia/Taipei
+    if not name:
+        return timezone(timedelta(hours=TV_CSV_TZ_OFFSET_HOURS))  # Asia/Taipei
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(f"unresolved tv_trades_csv_tz: {name!r}") from exc
 
 
 def parse_dt(s: str, tz) -> int:
