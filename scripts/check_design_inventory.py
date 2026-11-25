@@ -39,11 +39,12 @@ decision rather than guessing at it. Two halves:
 2. **Reach.** ``pineforge_test_reaches_source_layer`` walks a TU's transitive
    *quoted* include closure and answers TRUE as soon as a line matches
    ``pineforge/(source|compat/pine)/``. With
-   ``PINEFORGE_BUILD_SOURCE_LAYER=OFF`` those TUs are removed from
-   ``TEST_SOURCES``; the rest are the kernel profile's rows. The walk below is
-   that function, line for line: quoted includes are resolved against the
-   including file's own directory, angled includes are only tested for the
-   forbidden prefix, and a file that does not exist is skipped.
+   ``PINEFORGE_BUILD_SOURCE_LAYER=OFF`` CMake removes those members from
+   ``TEST_SOURCES`` once, before the unit registration loop. Later explicit
+   targets do not go through that filter. Their registrations are compared
+   even when their includes cannot supply a source-free document witness.
+   A script that takes a selected module's target file has a registry row,
+   but its fixture sources do not become document witnesses either.
 
 Both halves are readable from the tree alone, so the guard needs no configured
 build. Where one exists, ``--ctest-list FILE`` takes the output of
@@ -205,8 +206,10 @@ def _condition(body, root, lists, targets, unit=None):
         elif m := re.fullmatch(r'([\w.-]+) IN_LIST _pf_kernel_absent_rows', term):
             value = (m[1] in (list_value(lists, '_pf_source_bound_private_rows') or ()) or
                      reaches_source_layer(root / 'tests' / (m[1] + '.cpp')))
-        elif m := re.fullmatch(r'TARGET (test_[\w.-]+)', term):
-            value = m[1] in targets
+        elif term == '_pf_source_bound_tests':
+            value = bool(list_value(lists, term))
+        elif m := re.fullmatch(r'TARGET ([\w.+-]+)', term):
+            value = targets.get(m[1], False if m[1].startswith('test_') else None)
         else:
             value = None
         if value is not None and value == negate:
@@ -248,14 +251,19 @@ def command_targets(words, source, line):
     return result
 
 
-def registrations(root: Path):
-    """Source-list members, executable sources, selected rows and declared commands."""
+def registrations(root: Path, *, modules=None):
+    """Unit members, executable sources, selected rows and declared commands.
+
+    For a registry comparison, also collect module providers, separately from
+    executable witnesses. None as a provider value means no selected definition.
+    """
     cmake = root / TESTS_CMAKE
     if not cmake.is_file():
         raise ShapeError('no such file: ' + TESTS_CMAKE)
     lists: dict[str, list[str] | ShapeError] = {}
     direct: set[str] = set()
-    built: set[str] = set()
+    filtered: set[str] = set()
+    built: dict[str, bool] = {}
     targets: dict[str, list[str]] = {}
     commands: dict[str, set[str]] = {}
     declared: dict[str, set[str]] = {}
@@ -263,6 +271,7 @@ def registrations(root: Path):
     unit_rules = []
     function = None
     loops = []
+    unit_loop_seen = False
 
     def register_unit(target):
         if not re.fullmatch(r'[\w.+-]+', target):
@@ -270,9 +279,8 @@ def registrations(root: Path):
         if target in direct:
             return
         direct.add(target)
-        entry = root / 'tests' / (target + '.cpp')
-        if entry.is_file() and not reaches_source_layer(entry):
-            built.add(target)
+        built[target] = True
+        targets[target] = [target + '.cpp']
         rows = commands.setdefault(target, set())
         if unit_parameter is None:  # Standalone fragments use the usual primary.
             rows.add(target)
@@ -298,7 +306,18 @@ def registrations(root: Path):
         raise ShapeError(f'{source}:{line}: unsupported compiled row name {name!r}')
 
     try:
-        for source, cmd, guards in guarded(registration_statements(cmake)):
+        statements = guarded(registration_statements(cmake))
+        if modules is not None:
+            # add_test may refer to a module defined later in the directory.
+            # Its kind is known in advance; TARGET becomes true at its definition.
+            statements = list(statements)
+            for _, cmd, _ in statements:
+                if cmd.name.lower() == 'add_library':
+                    words = _words(cmd.body)
+                    if words[1:2] == ['MODULE'] and re.fullmatch(r'[\w.+-]+', words[0]):
+                        modules[words[0]] = None
+                        built[words[0]] = False
+        for source, cmd, guards in statements:
             name = cmd.name.lower()
             words = _words(cmd.body)
             if name in ('function', 'macro'):
@@ -334,10 +353,20 @@ def registrations(root: Path):
                 else:
                     operation = name.upper()
                     key, *values = words
-                if (operation == 'REMOVE_ITEM' and key == 'TEST_SOURCES'
-                        and values == ['${_pf_source_bound_tests}']):
-                    continue  # kernel_units applies the include walk.
                 try:
+                    if (operation == 'APPEND' and key == '_pf_source_bound_tests'
+                            and loops and loops[-1] == ['test_name', 'IN', 'LISTS', 'TEST_SOURCES']
+                            and values == ['${test_name}'] and guards
+                            and guards[-1][1].body.strip() == '_pf_reaches' and guards[-1][2]):
+                        # Replay the reach loop over its input *now*. Declarations
+                        # after the corresponding REMOVE_ITEM do not go through it.
+                        if selected(guards[:-1], root, lists, built):
+                            private = list_value(lists, '_pf_source_bound_private_rows') or ()
+                            units = list_value(lists, 'TEST_SOURCES') or []
+                            lists[key] = (list_value(lists, key) or []) + [
+                                t for t in units if t in private or
+                                reaches_source_layer(root / 'tests' / (t + '.cpp'))]
+                        continue
                     if not selected(guards, root, lists, built):
                         lists.setdefault(key, [])  # A disabled write supplies no value.
                         continue
@@ -366,21 +395,41 @@ def registrations(root: Path):
                         lists[key] = (list_value(lists, key) or []) + items
                     else:
                         lists[key] = [v for v in (list_value(lists, key) or []) if v not in items]
+                        if key == 'TEST_SOURCES':
+                            if values == ['${_pf_source_bound_tests}']:
+                                filtered.update(items)
+                            else:
+                                filtered.difference_update(items)
                 except ShapeError as error:
                     # Only consumers need a decidable value. A later set() can replace it.
                     lists[key] = ShapeError(f'{source}:{cmd.line}: cannot determine {key}: {error}')
             elif name == 'pineforge_add_unit_test' and selected(guards, root, lists, built):
                 if words == ['${test_name}']:  # The TEST_SOURCES registration loop.
+                    if not loops or loops[-1] not in (['test_name', '${TEST_SOURCES}'],
+                                                      ['test_name', 'IN', 'LISTS', 'TEST_SOURCES']):
+                        raise ShapeError(f'{source}:{cmd.line}: unsupported unit loop')
+                    unit_loop_seen = True
                     for target in list_value(lists, 'TEST_SOURCES') or []:
                         register_unit(target)
                 elif len(words) == 1 and re.fullmatch(r'[\w.+-]+', words[0]):
                     register_unit(words[0])
                 else:
                     raise ShapeError(f'{source}:{cmd.line}: unsupported unit target {cmd.body!r}')
+            elif (name == 'add_library' and words[1:2] == ['MODULE']
+                  and modules is not None and words[0] in modules
+                  and selected(guards, root, lists, built)):
+                sources = words[2:]
+                if loops or 'IMPORTED' in sources:
+                    raise ShapeError(f'{source}:{cmd.line}: unsupported module definition for {words[0]}')
+                if not sources or not all(re.fullmatch(r'[\w./+-]+\.(?:cpp|c)', s)
+                                          and (root / 'tests' / s).is_file() for s in sources):
+                    raise ShapeError(f'{source}:{cmd.line}: cannot resolve module sources for {words[0]}')
+                modules[words[0]] = sources
+                built[words[0]] = True
             elif (name == 'add_executable' and words
                   and (words[0].startswith('test_') or any(w.startswith('test_') for w in words[1:]))):
                 if selected(guards, root, lists, built):
-                    built.add(words[0])
+                    built[words[0]] = True
                     sources = []
                     for word in words[1:]:
                         var = re.fullmatch(r'\$\{(\w+)\}', word)
@@ -398,7 +447,7 @@ def registrations(root: Path):
                 if name == 'pineforge_add_twin_test':
                     row, target = words[:2]
                     owners = {target}
-                    available = target in built
+                    available = built.get(target, False)
                 else:
                     if len(words) < 4 or words[:3:2] != ['NAME', 'COMMAND']:
                         raise ShapeError(f'{source}:{cmd.line}: unsupported add_test({cmd.body})')
@@ -415,7 +464,8 @@ def registrations(root: Path):
                     owners = command_targets(args, source, cmd.line)
                     available = True
                 # An optional script-only registration cannot supply a TU witness.
-                script_only = not any(t in targets or t in direct or t.startswith(('test_', 'tool_'))
+                script_only = not any(t in targets or t in direct or (modules is not None and t in modules)
+                                      or t.startswith(('test_', 'tool_'))
                                       for t in owners)
                 enabled = available and selected(guards, root, lists, built, script_only=script_only)
                 if '$' in row and (not enabled or script_only):
@@ -429,21 +479,28 @@ def registrations(root: Path):
         raise ShapeError(str(error)) from error
     if loops or function:
         raise ShapeError(f'{cmake}: unterminated registration loop or function')
-    sources = list_value(lists, 'TEST_SOURCES')
-    if sources is None:
+    if 'TEST_SOURCES' not in lists:
         raise ShapeError('TEST_SOURCES is not set in ' + TESTS_CMAKE)
-    return direct.union(sources), targets, commands, declared
+    members = direct | filtered
+    if not unit_loop_seen and unit_parameter is None:
+        # A standalone source-list fragment omits the helper and its loop.
+        # A complete list file must use the values present at its calls.
+        sources = list_value(lists, 'TEST_SOURCES')
+        members.update(sources)
+        for name in sources:
+            if name in targets:
+                continue
+            for suffix in ('.cpp', '.c'):
+                entry = root / 'tests' / (name + suffix)
+                if entry.is_file():
+                    if not reaches_source_layer(entry):
+                        targets[name] = [entry.name]
+                    break
+    return members, targets, commands, declared
 
 
-def kernel_units(root: Path, members: set[str], targets: dict[str, list[str]]) -> set[str]:
+def kernel_units(root: Path, targets: dict[str, list[str]]) -> set[str]:
     out: set[str] = set()
-    for name in members:
-        for suffix in ('.cpp', '.c'):
-            entry = root / 'tests' / (name + suffix)
-            if entry.is_file():
-                if not reaches_source_layer(entry):
-                    out.add(name + suffix)
-                break
     for sources in targets.values():
         present = [name for name in sources if (root / 'tests' / name).is_file()]
         if present and not any(reaches_source_layer(root / 'tests' / name)
@@ -455,8 +512,8 @@ def kernel_units(root: Path, members: set[str], targets: dict[str, list[str]]) -
 
 
 def kernel_profile_tests(root: Path) -> set[str]:
-    members, targets, _, _ = registrations(root)
-    return kernel_units(root, members, targets)
+    _, targets, _, _ = registrations(root)
+    return kernel_units(root, targets)
 
 
 def ctest_rows(listing: str) -> set[str]:
@@ -513,29 +570,32 @@ def check(root: Path, listing: str | None = None) -> tuple[list[str], dict]:
     if not design.is_file():
         raise ShapeError('no such file: ' + DESIGN)
     rows = inventory_rows(design.read_text())
-    members, targets, commands, declared = registrations(root)
-    kernel = kernel_units(root, members, targets)
+    modules = {}
+    members, targets, commands, declared = registrations(
+        root, modules=modules if listing is not None else None)
+    kernel = kernel_units(root, targets)
     findings: list[str] = []
 
     if listing is not None:
         registered = ctest_rows(listing)
         if not registered:
             raise ShapeError('--ctest-list parsed no rows; expected "Test #N: name" lines')
-        # An explicit add_executable in a selected arm exists even when its TU
-        # has a conditional adapter include. Only TEST_SOURCES goes through the
-        # include filter. Keep TU witnesses conservative, but compare its rows.
+        # Compare the selected targets' rows independently of whether their
+        # sources can witness a closure in the design document.
         owners = dict(targets)
-        for source in kernel:
-            target = source.rsplit('.', 1)[0]
-            if target in members:
-                owners.setdefault(target, [source])
+        for module, sources in modules.items():
+            if module in commands:
+                if sources is None:
+                    raise ShapeError(f'{TESTS_CMAKE}: no selected module {module} for '
+                                     + ', '.join(sorted(commands[module])))
+                owners[module] = sources
         expected = set()
         missing = []
         for target, sources in sorted(owners.items()):
             names = commands.get(target, {target})
-            expected.update(names)
-            for row in sorted(names - registered):
+            for row in sorted(names - registered - expected):
                 missing.append(sources[0] if row == target else f'{sources[0]}: {row}')
+            expected.update(names)
         if missing:
             findings.append(
                 f'{TESTS_CMAKE}: {len(missing)} kernel-profile test row(s) '
@@ -545,7 +605,7 @@ def check(root: Path, listing: str | None = None) -> tuple[list[str], dict]:
         # A listed row can name a compiled TU directly or run it under an alias.
         # A known script command is not a TU, even if a same-named file exists.
         def compiled_target(name):
-            return (name in targets or name in members or
+            return (name in targets or name in members or name in modules or
                     (re.fullmatch(r'[\w.-]+', name) and
                      any((root / 'tests' / (name + ext)).is_file() for ext in ('.cpp', '.c'))))
 
