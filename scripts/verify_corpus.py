@@ -1376,7 +1376,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     for t, e in gating_matched:
         if abs(t.pnl) < PNL_NEAR_ZERO_USD:
             continue
-        abs_diff = abs(t.pnl - e.pnl)
+        comparisons = [(e.pnl - t.pnl, e.qty)]
         if t.qty > 1e-9 and e.qty > 1e-9 and t.qty != e.qty:
             tv_qty, eng_qty = Decimal(str(t.qty)), Decimal(str(e.qty))
             # Qty-normalized comparison isolates per-unit price/commission
@@ -1386,7 +1386,8 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
             # must surface, not rescale away.
             if (eng_qty.is_finite()
                     and abs(tv_qty - eng_qty) <= Decimal(str(QTY_NORM_BAND)) * eng_qty):
-                abs_diff = min(abs_diff, abs(t.pnl - e.pnl * (t.qty / e.qty)))
+                comparisons.append((e.pnl * (t.qty / e.qty) - t.pnl, t.qty))
+        abs_diff = min(abs(diff) for diff, _ in comparisons)
         if abs_diff < TV_PNL_ROUNDING_EPSILON_USD:
             pnl_deltas.append(0.0)
             continue
@@ -1398,9 +1399,11 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         # UNEXPLAINED money differences (commission, funding, sizing,
         # rounding) — each gate points at a distinct bug class.
         exit_rel = relative_max(t.exit_price, e.exit_price)
-        explained_bound = (max(t.qty, e.qty) * abs(t.exit_price - e.exit_price)
-                           + TV_PNL_ROUNDING_EPSILON_USD)
-        if exit_rel < thresh["exit"] and abs_diff <= explained_bound:
+        exit_change = (e.exit_price - t.exit_price) * (1 if t.direction == "long" else -1)
+        if exit_rel < thresh["exit"] and any(
+            abs(diff - qty * exit_change) <= TV_PNL_ROUNDING_EPSILON_USD
+            for diff, qty in comparisons
+        ):
             pnl_deltas.append(0.0)
             continue
         pnl_deltas.append(abs_diff / abs(t.pnl))
