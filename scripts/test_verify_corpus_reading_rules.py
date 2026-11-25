@@ -83,6 +83,11 @@ class ReadingRulesTests(unittest.TestCase):
             ('strategy("""a " quote: trail_points=1 " inside""")', "strict"),
             ('strategy.exit("https://x", trail_points=1)', "production"),
             ('strategy.exit("/*", trail_offset=1) // */', "production"),
+            ('switch exit_mode\n    trail_points => strategy.close("L")', "strict"),
+            ("f(trail_offset) => trail_offset", "strict"),
+            ('strategy.exit("trail", trail_points = 10)', "production"),
+            ("trail_price := x", "production"),
+            ("trail_points >= 2", "strict"),
         )
         for source, expected in cases:
             with self.subTest(source=source):
