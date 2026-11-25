@@ -1182,6 +1182,16 @@ def relative_max(a: float, b: float) -> float:
     return abs(a - b) / denom
 
 
+def _price_delta(a: float, b: float) -> float:
+    """Relative difference of the prices as printed in decimal."""
+    if not (isfinite(a) and isfinite(b)):
+        return relative_max(a, b)
+    if a == b:
+        return 0.0
+    left, right = Decimal(str(a)), Decimal(str(b))
+    return float(abs(left - right) / max(abs(left), abs(right), Decimal("1e-9")))
+
+
 def percentile(xs: list[float], p: float) -> float:
     if not xs: return 0.0
     s = sorted(xs)
@@ -1361,15 +1371,15 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     # The entry of a mark pair is a fill on both sides and is gated with the
     # others; appended after the matched pairs so the diagnostic display
     # (zip with ``matched``) keeps its alignment.
-    entry_deltas = ([relative_max(t.entry_price, e.entry_price) for t, e in gating_matched]
-                    + [relative_max(t.entry_price, e.entry_price) for t, e in gate_marks])
+    entry_deltas = ([_price_delta(t.entry_price, e.entry_price) for t, e in gating_matched]
+                    + [_price_delta(t.entry_price, e.entry_price) for t, e in gate_marks])
     # A TV Open row with no engine mark to pair with (the engine never
     # opened the lot, or closed it for real before the range's end) is an
     # ordinary row from here on: matched by entry, it carries its exit and
     # P&L deltas — TV held the position to the end and the engine did not,
     # which is a real divergence; unmatched, it leaves the coverage
     # denominator below, as it always has.
-    exit_deltas  = [relative_max(t.exit_price,  e.exit_price)  for t, e in gating_matched]
+    exit_deltas  = [_price_delta(t.exit_price, e.exit_price) for t, e in gating_matched]
     # PnL p90 uses *relative-to-tv_pnl*, with near-zero trades excluded so
     # scratch trades don't blow up the ratio. Mirrors canonical line ~1136.
     pnl_deltas: list[float] = []
@@ -1398,7 +1408,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         # gate owns exit-price correctness; the PnL gate then fails only on
         # UNEXPLAINED money differences (commission, funding, sizing,
         # rounding) — each gate points at a distinct bug class.
-        exit_rel = relative_max(t.exit_price, e.exit_price)
+        exit_rel = _price_delta(t.exit_price, e.exit_price)
         exit_change = (e.exit_price - t.exit_price) * (1 if t.direction == "long" else -1)
         if exit_rel < thresh["exit"] and any(
             abs(diff - qty * exit_change) <= TV_PNL_ROUNDING_EPSILON_USD
