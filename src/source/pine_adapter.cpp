@@ -7811,14 +7811,11 @@ void PineExecutionAdapter::end_coof_recalc() noexcept {
 
 bool PineExecutionAdapter::suppress_grouped_stop_recalc(
         const native_order::ExecutionAppliedEvent& event,
-        const NativeDecisionContext& context) const noexcept {
-    // Every exit of one entry that the fill's point also triggers fills there
-    // before the point recalculates: the recalculation after the first cannot
-    // cancel or outrun the others (lab tv tapes
-    // tests/fixtures/coof_same_point_exits td-m1e, -f and -g: two exits of one
-    // entry share a stop, and the recalculation of a stop fill calls
-    // cancel_all() and close_all(); TradingView books both at the stop; lane
-    // TAIL-D). The recalculation of the point's last such fill runs.
+        const NativeDecisionContext& context) const {
+    // Named brackets over separate openings settle on the approaching leg.
+    // Different exits sharing a stop already settle at the same point before
+    // its last fill recalculates: cancel_all() and close_all() in the body
+    // see both exits booked (tests/fixtures/coof_same_point_exits).
     if (host_ && config_.calc_on_order_fills && event.closed_units > 0.0) {
         const double held = detail::run_position(*host_).signed_units;
         const auto filled = placement_.find(event.handle().incarnation);
@@ -7827,6 +7824,9 @@ bool PineExecutionAdapter::suppress_grouped_stop_recalc(
                 || filled->second.family == PineOrderFamily::ExitLimit)) {
             const double price = event.raw_price;
             const bool closing_long = held > 0.0;
+            if (named_tick_child(filled->second)
+                && another_child_fills_on_leg(filled->second, event, context, closing_long))
+                return true;
             for (const auto& handle : live_handles_) {
                 if (handle == event.handle()) continue;
                 const auto sibling = placement_.find(handle.incarnation);
@@ -33509,6 +33509,69 @@ double PendingIntentView::position_before_order(const PlacementSnapshot& target,
     });
     if (remaining <= internal::kQtyEpsilon) return 0.0;
     return std::copysign(remaining, signed_position);
+}
+
+bool PineExecutionAdapter::another_child_fills_on_leg(
+        const PlacementSnapshot& filled, const native_order::ExecutionAppliedEvent& event,
+        const NativeDecisionContext& context, bool closing_long) const {
+    const auto& point = context.coordinate;
+    if (point.provenance != NativePriceProvenance::Confirmed || event.cursor.t == 0.0
+        || stream_mode_ || bar_magnifier_ || config_.process_orders_on_close
+        || config_.close_entries_rule_any || !policy_script_bar_valid_
+        || policy_script_bar_.timestamp != context.script_bar_open_ms
+        || !filled.oca_name.empty() || finite_positive(filled.forced_execution_price)
+        || !native_order::point_eligible(event.birth(), point.ordinal, point.effective_time_ms)
+        || cap.active() || risk_.max_drawdown != 0 || risk_.max_intraday_loss != 0
+        || risk_.max_cons_loss_days != 0 || risk_.halted)
+        return false;
+
+    double end;
+    switch (point.path_phase) {
+    case NativePathPhase::High: end = policy_script_bar_.high; break;
+    case NativePathPhase::Low: end = policy_script_bar_.low; break;
+    case NativePathPhase::Close: end = policy_script_bar_.close; break;
+    default: return false;
+    }
+    // The implicit cancel group is per opening. Its other leg may already
+    // have ended in the broker while its source handle awaits retirement.
+    // Do not predict fills through another entry, a margin call, a shared
+    // group or a different exit family: their callbacks have their own rules.
+    bool reached = false;
+    for (const auto& live : detail::run_consumer(*host_).request_core().live()) {
+        const auto it = placement_.find(live.handle().incarnation);
+        if (it == placement_.end()) return false;
+        const auto& row = it->second;
+        if (!named_tick_child(row) || row.source_id != filled.source_id
+            || row.from_entry != filled.from_entry || !row.oca_name.empty()
+            || finite_positive(row.forced_execution_price)
+            || row.placement_cycle != filled.placement_cycle
+            || !std::holds_alternative<native_order::Independent>(live.request().owner)
+            || !native_order::point_eligible(live, point.ordinal, point.effective_time_ms))
+            return false;
+        if (row.per_entry_origin == filled.per_entry_origin || !(row.per_entry_units > 0)
+            || withdrawn(row.legs))
+            continue;
+        // Use the installed trigger: a raw extreme half a tick short of the
+        // order's printed price can reach it. At a shared level the remaining
+        // suffix includes the current print. Never look past this endpoint.
+        const auto& trigger = live.request().trigger;
+        if (row.family == PineOrderFamily::ExitLimit) {
+            const auto* limit = std::get_if<native_order::Limit>(&trigger);
+            if (!limit) return false;
+            if (row.leg_activation.limit_ready(current_position_cycle_, point.interval_index))
+                reached |= closing_long ? std::max(event.raw_price, end) >= limit->price
+                                        : std::min(event.raw_price, end) <= limit->price;
+        } else if (row.family == PineOrderFamily::ExitStop) {
+            const auto* stop = std::get_if<native_order::Stop>(&trigger);
+            if (!stop) return false;
+            if (row.leg_activation.stop_ready(current_position_cycle_, point.interval_index))
+                reached |= closing_long ? std::min(event.raw_price, end) <= stop->price
+                                        : std::max(event.raw_price, end) >= stop->price;
+        } else {
+            return false;
+        }
+    }
+    return reached;
 }
 
 } // namespace pineforge::source
