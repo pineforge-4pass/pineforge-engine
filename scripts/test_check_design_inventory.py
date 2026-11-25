@@ -6,8 +6,8 @@ a handful of test TUs, the TUs themselves (one of which reaches a source-layer
 header), and a design document with a §1 table — and drives the real
 ``check_design_inventory.main`` over it with ``--root``.
 
-The must-fail half is one case per rule: a ``no`` row whose kernel-profile test
-is passing, a ``partial`` row likewise, a gap row whose closure marker names
+The must-fail half is one case per rule: a ``no`` row that cites a registered
+kernel-profile test, a ``partial`` row likewise, a gap row whose closure marker names
 only a source-bound test, a row citing a test that is not in the tree, and a
 ``--ctest-list`` that disagrees with the reach walk in either direction.
 
@@ -270,7 +270,10 @@ class MustFail(unittest.TestCase):
         with tree(design(row), cmake=CMAKE + INCLUDES, extra=extra) as made:
             code, out = made.run()
             self.assertEqual(code, 1, out)
-            self.assertIn('row AB reads **no** while tests/test_clock.cpp runs', out)
+            self.assertIn('row AB reads **no** while tests/test_clock.cpp', out)
+            with self.subTest(listing='not supplied'):
+                self.assertNotIn('runs in the kernel profile', out)
+                self.assertNotIn('passing source-free test', out)
             (made.root / 'tests/lanes.d/clock.cmake').write_text(
                 'pineforge_add_unit_test(test_clock)\n'
                 'if(PINEFORGE_BUILD_SOURCE_LAYER)\n'
@@ -287,6 +290,29 @@ class MustFail(unittest.TestCase):
             listing.write_text(ctest_listing(*names, 'test_clock'))
             code, out = made.run('--ctest-list', str(listing))
             self.assertEqual(code, 0, out)
+            self.assertIn('0 findings ... OK', out)
+
+            listing.write_text(ctest_listing(*names, 'test_clock (Disabled)'))
+            with self.subTest(witness='disabled'):
+                code, out = made.run('--ctest-list', str(listing))
+                self.assertEqual(code, 1, out)
+                self.assertIn('1 findings', out)
+                self.assertIn('row AB carries a closure marker', out)
+                self.assertIn('disabled CTest rows: test_clock', out)
+
+            for marker, expected in ((' **Closed:**', 0), ('', 1)):
+                with self.subTest(witnesses='one enabled and one disabled', marker=marker):
+                    (made.root / guard.DESIGN).write_text(design(
+                        f'| AB | clock | **no**{marker} '
+                        '(`tests/test_clock.cpp`, `tests/test_kernel_one.cpp`) |'))
+                    code, out = made.run('--ctest-list', str(listing))
+                    self.assertEqual(code, expected, out)
+                    if marker:
+                        self.assertIn('0 findings ... OK', out)
+                    else:
+                        self.assertIn('row AB reads **no**', out)
+                        self.assertIn('tests/test_kernel_one.cpp', out)
+                        self.assertNotIn('tests/test_clock.cpp', out)
 
     def test_ctest_lists_a_compiled_row_missing_from_the_inventory(self):
         row = '| AB | a feature | **yes** |'
@@ -310,17 +336,24 @@ class MustFail(unittest.TestCase):
                 'add_test(NAME test_clock_first COMMAND test_clock --slice 1/2)\n'
                 'add_test(NAME test_clock_second COMMAND test_clock --slice 2/2)\n'),
         }
-        with tree(design('| AB | a feature | **yes** |'), cmake=CMAKE + INCLUDES,
-                  extra=extra) as made:
+        row = '| AB | clock | **no** **Closed:** (`tests/test_clock.cpp`) |'
+        with tree(design(row), cmake=CMAKE + INCLUDES, extra=extra) as made:
             listing = made.root / 'listing.txt'
-            names = ('test_kernel_one', 'test_kernel_three', 'test_pure_c', 'test_clock_first')
-            listing.write_text(ctest_listing(*names))
+            names = ('test_kernel_one', 'test_kernel_three', 'test_pure_c')
+            listing.write_text(ctest_listing(*names, 'test_clock_first'))
             code, out = made.run('--ctest-list', str(listing))
             self.assertEqual(code, 1, out)
             self.assertIn('test_clock_second', out)
-            listing.write_text(ctest_listing(*names, 'test_clock_second'))
-            code, out = made.run('--ctest-list', str(listing))
-            self.assertEqual(code, 0, out)
+            for first, second, expected, message in (
+                    ('test_clock_first', 'test_clock_second', 0, '0 findings ... OK'),
+                    ('test_clock_first (Disabled)', 'test_clock_second', 0, '0 findings ... OK'),
+                    ('test_clock_first (Disabled)', 'test_clock_second (Disabled)', 1,
+                     'disabled CTest rows: test_clock_first, test_clock_second')):
+                with self.subTest(first=first, second=second):
+                    listing.write_text(ctest_listing(*names, first, second))
+                    code, out = made.run('--ctest-list', str(listing))
+                    self.assertEqual(code, expected, out)
+                    self.assertIn(message, out)
 
 
 class MustNotFire(unittest.TestCase):
@@ -529,12 +562,14 @@ endif()
         cmake = (UNIT_HELPER + 'set(TEST_SOURCES test_kernel_one)\n' + UNIT_LOOP
                  + 'add_executable(test_clock test_clock.cpp)\n')
         with tree(design(row), cmake=cmake, extra={
-                'tests/test_clock.cpp': KERNEL_TU,
-                'listing.txt': ctest_listing('test_kernel_one')}) as made:
+                'tests/test_clock.cpp': KERNEL_TU}) as made:
             listing = made.root / 'listing.txt'
-            code, out = made.run('--ctest-list', str(listing))
-            self.assertEqual(code, 0, out)
-            self.assertIn('0 findings ... OK', out)
+            for uncited in ('test_kernel_one', 'test_kernel_one (Disabled)'):
+                with self.subTest(uncited=uncited):
+                    listing.write_text(ctest_listing(uncited))
+                    code, out = made.run('--ctest-list', str(listing))
+                    self.assertEqual(code, 0, out)
+                    self.assertIn('0 findings ... OK', out)
 
             listing.write_text(ctest_listing('test_kernel_one', 'test_clock'))
             code, out = made.run('--ctest-list', str(listing))
@@ -555,12 +590,16 @@ class Shape(unittest.TestCase):
         self.assertIn(diagnostic, err.getvalue())
 
     def test_ctest_listing_rejects_duplicate_names(self):
-        self.assert_bad_listing(ctest_listing('test_kernel_one', 'test_kernel_one'),
-                                'duplicate test name: test_kernel_one')
+        for duplicate in ('test_kernel_one', 'test_kernel_one (Disabled)'):
+            with self.subTest(duplicate=duplicate):
+                self.assert_bad_listing(ctest_listing('test_kernel_one', duplicate),
+                                        'duplicate test name: test_kernel_one')
 
     def test_ctest_listing_rejects_a_gap_in_row_numbers(self):
         self.assert_bad_listing(ctest_listing('test_kernel_one').replace('Test #1:', 'Test  #2:'),
                                 'expected test #1, got #2')
+        listing = ctest_listing('test_kernel_one', 'test_two (Disabled)')
+        self.assert_bad_listing(listing.replace('Test #2:', 'Test #3:'), 'expected test #2, got #3')
 
     def test_ctest_listing_rejects_the_wrong_total(self):
         self.assert_bad_listing(ctest_listing('test_kernel_one').replace('Total Tests: 1',
