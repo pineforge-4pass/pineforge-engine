@@ -196,6 +196,33 @@ class ReadingRulesTests(unittest.TestCase):
                 self.assertEqual(result.bounds, bounds)
                 self.assertEqual((result.tv_gate_count, result.eng_gate_count), gated)
 
+    def test_declared_bar_interval_takes_precedence(self):
+        day = int(datetime(2025, 1, 1, tzinfo=timezone.utc).timestamp()) * 1000
+        minute = 60 * 1000
+        files = {
+            "tv_trades.csv": trade_tape(
+                ("2025-01-01 00:15", "2025-01-01 00:30", 1, "early", ""),
+                ("2025-01-01 01:00", "2025-01-01 01:15", 1, "middle", "")),
+            "engine_trades.csv": trade_tape(
+                ("2025-01-01 00:15", "2025-01-01 00:30", 1, "", "41"),
+                ("2025-01-01 01:00", "2025-01-01 01:15", 1, "", "42")),
+            "ohlcv.csv": feed(*(day + n * minute for n in (0, 30, 60, 120, 180))),
+        }
+        for metadata, pad, gated in (
+            ({}, 30, 1),
+            ({"bar_ms": 15 * minute}, 15, 2),
+        ):
+            with self.subTest(metadata=metadata):
+                files["inputs.json"] = json.dumps(
+                    {"tv_trades_csv_tz": "utc", "trim_bars": 1, **metadata})
+                result = analyze_strategy(probe(files))
+                self.assertEqual((result.tv_raw_count, result.eng_raw_count,
+                                  result.matched_count), (2, 2, 2))
+                self.assertEqual(result.bounds, (day + pad * minute,
+                                                 day + (180 - pad) * minute))
+                self.assertEqual((result.tv_gate_count, result.eng_gate_count,
+                                  result.gating_matched_count), (gated, gated, gated))
+
 
 if __name__ == "__main__":
     unittest.main()
