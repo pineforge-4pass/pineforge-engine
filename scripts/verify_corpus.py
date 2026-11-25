@@ -1137,9 +1137,9 @@ def align_by_time(tv: list[TradePair], eng: list[TradePair]) -> list[tuple[Trade
                 break
             if e.direction != tv_t.direction:
                 continue
-            if abs(_decimal_entry_price(e.entry_price) - tv_quote) > price_limit:
+            price_gap = abs(_decimal_entry_price(e.entry_price) - tv_quote)
+            if price_gap > price_limit:
                 continue
-            price_gap = abs(e.entry_price - tv_t.entry_price)
             if best_price_gap is None or price_gap < best_price_gap:
                 best_price_gap = price_gap
                 best_j = j
