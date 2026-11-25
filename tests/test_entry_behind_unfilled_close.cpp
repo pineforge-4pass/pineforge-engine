@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -133,7 +134,7 @@ bool publication(bool suppress, const char* name) {
 
 // A host lets the test set a loss limit at precommit. The normal Pine risk
 // latches gate openings; a reducing close does not ask them for admission.
-class Host final : public NativeStrategyHost {
+class Host : public NativeStrategyHost {
 public:
     explicit Host(End end) : end(end), adapter(*this) {}
     End end;
@@ -213,6 +214,103 @@ public:
     }
 };
 
+enum class Change { Script, BeforeFlush, AfterFlush, CancelSuccessor, KeepHandle };
+class ReplacedClose final : public Host {
+public:
+    explicit ReplacedClose(Change change) : Host(End::Fill), change(change) {}
+    void on_native_bar(const Bar&, const NativeDecisionContext& c) override {
+        const int i = c.coordinate.interval_index;
+        clock_ok &= i == callbacks++ && c.script_bar_open_ms == start + i * hour;
+        adapter.observe_terminal_receipts();
+        adapter.begin_source_evaluation();
+        if (i == 0) adapter.entry("seed", false);
+        if (i == 2) {
+            if (physical_position().signed_units != -1) throw std::runtime_error("missing seed short");
+            const double na = std::numeric_limits<double>::quiet_NaN();
+            // The explicit quantity lets a script reissue its close at the
+            // same call site without the repeated default-close suppression.
+            const double qty = change == Change::Script ? 1.0 : na;
+            adapter.close("seed", "", qty, na, false, 17);
+            adapter.entry("next", true);
+            parent = waiting_parent(adapter, "next");
+            if (change == Change::AfterFlush || change == Change::CancelSuccessor)
+                adapter.flush_pending_entries();
+            if (change == Change::Script) {
+                adapter.close("seed", "resized", qty, na, false, 17);
+                for (const auto& w : native_working_requests())
+                    if (w.definition->request.comment == "resized") successor = w.definition->handle;
+            } else {
+                const auto w = native_working_request(parent);
+                if (!w) throw std::runtime_error("original close is not working");
+                auto request = w->definition->request;
+                request.comment = "resized";
+                no::ReplaceOptions options;
+                options.keep_handle = change == Change::KeepHandle;
+                const auto result = replace(parent, request, options);
+                if (!result.successor || result.status != no::ReplaceStatus::Replaced)
+                    throw std::runtime_error("native close replacement was not accepted");
+                successor = *result.successor;
+                if (change == Change::CancelSuccessor && cancel(successor).status != no::CancelStatus::Cancelled)
+                    throw std::runtime_error("successor cancellation was not accepted");
+            }
+            if (!successor.incarnation || (successor == parent) != (change == Change::KeepHandle))
+                throw std::runtime_error("unexpected replacement identity");
+            if (change == Change::AfterFlush || change == Change::CancelSuccessor) return;
+        }
+        if (i == 3) {
+            read_after = pending(adapter.pending_intent_view(), "next");
+            close_after = pending(adapter.pending_intent_view(), "__close__seed");
+        }
+        adapter.flush_pending_entries();
+        if (i == 2) read_at_flush = pending(adapter.pending_intent_view(), "next");
+    }
+    const Change change;
+    no::RequestHandle successor{};
+    int read_at_flush = -1, read_after = -1, close_after = -1;
+};
+
+bool replacement(Change change, const char* name) {
+    const auto feed = prices();
+    ReplacedClose host(change);
+    host.run(feed.data(), static_cast<int>(feed.size()), "10", "60", true);
+    int replacements = 0, successor_fills = 0, successor_cancels = 0, children = 0, opened = 0;
+    for (const auto& row : host.native_events(0)) {
+        if (!row.command) continue;
+        if (const auto* e = std::get_if<no::ReplacedEvent>(&*row.command))
+            replacements += e->predecessor() == host.parent && e->successor() == host.successor
+                && e->kept_handle() == (change == Change::KeepHandle);
+        if (const auto* e = std::get_if<no::CancelledEvent>(&*row.command))
+            successor_cancels += e->handle() == host.successor && e->reason == no::CancelReason::User;
+        if (const auto* e = std::get_if<no::ExecutionAppliedEvent>(&*row.command)) {
+            successor_fills += e->handle() == host.successor && e->closed_units == 1
+                && e->interval_index() == 3 && e->resolved_price == 103;
+            if (e->request().label == "next") {
+                ++children;
+                opened += e->opened_units == 1 && e->interval_index() == 3 && e->resolved_price == 103;
+            }
+        }
+    }
+    const bool kept = change == Change::KeepHandle, cancelled = change == Change::CancelSuccessor;
+    if (!host.last_error().empty() || host.native_state().kind != NativeLifecycleKind::Completed
+        || !host.clock_ok || host.callbacks != hours || host.sub_bars != hours * per_hour
+        || replacements != 1 || successor_fills != int(!cancelled) || successor_cancels != int(cancelled)) {
+        std::cerr << "NOT COMPARED " << name << ": replacements=" << replacements << " successor fills="
+                  << successor_fills << " cancellations=" << successor_cancels << " error=" << host.last_error() << '\n';
+        return false;
+    }
+    const bool read_at_flush = change != Change::AfterFlush && !cancelled;
+    if ((read_at_flush && host.read_at_flush != int(kept)) || host.read_after != 0 || host.close_after != 0
+        || pending(host.adapter.pending_intent_view(), "next") != 0 || children != int(kept)
+        || opened != int(kept) || host.physical_position().signed_units != (cancelled ? -1 : int(kept))) {
+        std::cerr << "FAIL " << name << ": pending after flush=" << host.read_at_flush
+                  << " at next read=" << host.read_after << " old closes=" << host.close_after
+                  << " child fills=" << children << '\n';
+        return false;
+    }
+    std::cout << "PASS " << name << '\n';
+    return true;
+}
+
 bool check(End end, const char* name) {
     const auto feed = prices();
     Host host(end);
@@ -273,6 +371,17 @@ bool check(End end, const char* name) {
 
 int main() {
     bool ok = true;
+    for (const auto& [change, name] : {std::pair{Change::Script, "script replacement"},
+                                      std::pair{Change::BeforeFlush, "native replacement before flush"},
+                                      std::pair{Change::AfterFlush, "native replacement after flush"},
+                                      std::pair{Change::CancelSuccessor, "cancelled successor"},
+                                      std::pair{Change::KeepHandle, "retained close handle"}}) {
+        try { ok &= replacement(change, name); }
+        catch (const std::exception& e) {
+            std::cerr << "NOT COMPARED " << name << ": " << e.what() << '\n';
+            ok = false;
+        }
+    }
     for (bool suppress : {false, true}) {
         const char* name = suppress ? "suppressed final bar" : "next script read";
         try { ok &= publication(suppress, name); }
