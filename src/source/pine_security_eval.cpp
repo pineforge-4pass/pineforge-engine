@@ -576,12 +576,12 @@ void source::PineStrategyHost::publish_security_eval_state_at_calling_boundary(
         ~ReplayScope() { active = previous; }
     } replay_scope(security_history_publication_replay_);
 
-    // The boundary-triggering input belongs to the next calling bar. Publish
-    // the final requested value that was already evaluated for the completed
-    // caller, before the chart body runs and before that retained input is fed.
-    // security_series_slot_is_new() returns false in this scope, so generated
-    // TA sites recompute the current slot instead of advancing their cadence —
-    // under the same requested-context bar index as the evaluation replayed.
+    // Publish the completed caller's last value before feeding the next input.
+    // This reuses the requested slot; a conditional TA can first be called here.
+    // Its EMA must latch the requested seed even on that first recomputation.
+    internal::AmbientEmaSeedingScope warmup(
+        NativeExecutionConsumer::bound(*this).pump_ambient(),
+        security_range_start_na_warmup_);
     dispatch_pine_request(
         state, state.current_bar, true,
         state.ta_bar_index >= 0 ? state.ta_bar_index : state.eval_complete_count,
