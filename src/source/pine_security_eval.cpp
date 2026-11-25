@@ -1697,6 +1697,8 @@ void source::PineStrategyHost::run_foreign_site_bar(
             std::swap(host.syminfo_, site.syminfo);
         }
     } scope(*this, site);
+    internal::AmbientEmaSeedingScope warmup(
+        NativeExecutionConsumer::bound(*this).pump_ambient(), security_range_start_na_warmup_);
     PineRequestCallerScope caller_scope(
         *this, request_foreign_caller(sec_id, index), 0);
     dispatch_pine_request(site.eval, bar, true, index, true);
