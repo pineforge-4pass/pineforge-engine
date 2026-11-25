@@ -392,6 +392,77 @@ bool two_closes() {
     return true;
 }
 
+class CloseClock final : public Host {
+public:
+    CloseClock() : Host(End::Fill) {}
+    void on_native_bar(const Bar&, const NativeDecisionContext& c) override {
+        const int i = c.coordinate.interval_index;
+        clock_ok &= i == callbacks++ && c.script_bar_open_ms == start + i * hour;
+        adapter.observe_terminal_receipts();
+        adapter.begin_source_evaluation();
+        if (i == 0) adapter.entry("seed", false);
+        if (i == 2) {
+            if (physical_position().signed_units != -1) throw std::runtime_error("missing seed short");
+            // A raw buy of two crosses zero. It is not an entry for which
+            // the following FIFO close would wait; both orders are markets.
+            adapter.order("flip", true, 2);
+            adapter.close("seed");
+            for (const auto& row : adapter.fixture_pending_snapshots()) {
+                if (row.staged || row.snapshot.family != source::PineOrderFamily::Close) continue;
+                const auto& close = row.snapshot;
+                if (close.source_id != "seed" || close.projection_created_bar != 2 * per_hour
+                    || close.placement_script_open_ms != start + 2 * hour
+                    || close.projection_position_side != static_cast<int>(PositionSide::SHORT)
+                    || close.frozen_market_targeted_close || close.paired_reversal_parent.incarnation)
+                    throw std::runtime_error("close did not belong to the original short at input slot 12");
+                for (const auto& w : native_working_requests())
+                    if (w.definition->handle.incarnation == row.incarnation) parent = w.definition->handle;
+            }
+            if (!parent.incarnation) throw std::runtime_error("no independently working close");
+        }
+        adapter.flush_pending_entries();
+    }
+    NativePrecommitVerdict validate_execution_precommit(const NativePrecommitView& v) const override {
+        if (v.target == parent && parent.incarnation) {
+            const auto lots = native_open_lots(v.resolved_price);
+            if (lots.size() == 1 && lots[0].entry_label == "flip" && lots[0].signed_units == 1
+                && lots[0].entry_bar_index == 3 && v.cursor.point.interval_index == 3
+                && v.inspected_closed_units == 1 && v.resolved_price == 103) ++fresh_lot_candidates;
+        }
+        return adapter.validate_precommit(v);
+    }
+    mutable int fresh_lot_candidates = 0;
+};
+
+bool close_clock() {
+    const auto feed = prices();
+    CloseClock host;
+    host.run(feed.data(), static_cast<int>(feed.size()), "10", "60", true);
+    int flips = 0, rejected = 0, fills = 0;
+    for (const auto& row : host.native_events(0)) {
+        if (!row.command) continue;
+        if (const auto* e = std::get_if<no::ExecutionAppliedEvent>(&*row.command)) {
+            flips += e->request().label == "flip" && e->interval_index() == 3 && e->resolved_price == 103
+                && e->closed_units == 1 && e->opened_units == 1;
+            fills += e->handle() == host.parent;
+        }
+        if (const auto* e = std::get_if<no::MatchRejectedEvent>(&*row.command))
+            rejected += e->handle() == host.parent && e->reason == no::MatchRejectReason::HostPrecommit;
+    }
+    if (!host.last_error().empty() || host.native_state().kind != NativeLifecycleKind::Completed
+        || !host.clock_ok || host.callbacks != hours || host.sub_bars != hours * per_hour
+        || flips != 1 || host.fresh_lot_candidates != 1)
+        throw std::runtime_error("missing reversal or stale-close candidate against the fresh lot");
+    const double position = host.physical_position().signed_units;
+    if (fills || rejected != 1 || position != 1) {
+        std::cerr << "FAIL stale magnified close: expected fills=0 refusals=1 position=1, got fills="
+                  << fills << " refusals=" << rejected << " position=" << position << '\n';
+        return false;
+    }
+    std::cout << "PASS stale magnified close\n";
+    return true;
+}
+
 bool check(End end, const char* name) {
     const auto feed = prices();
     Host host(end);
@@ -460,6 +531,11 @@ bool check(End end, const char* name) {
 
 int main() {
     bool ok = true;
+    try { ok &= close_clock(); }
+    catch (const std::exception& e) {
+        std::cerr << "NOT COMPARED stale magnified close: " << e.what() << '\n';
+        ok = false;
+    }
     try { ok &= two_closes(); }
     catch (const std::exception& e) {
         std::cerr << "NOT COMPARED two waiting entries: " << e.what() << '\n';
