@@ -167,7 +167,9 @@ struct RefRCI {
         }
         // expectation corrected: raw -> tie-adjusted rank distance. Replacing
         // m distinct ranks by their mean removes m*(m*m-1)/12 of their spread.
-        const double time_ss = n * (n * n - 1) / 12.0;
+        const double count = static_cast<double>(n);
+        const double rank_denominator = count * (count * count - 1.0);
+        const double time_ss = rank_denominator / 12.0;
         const double price_ss = time_ss - tie_loss;
         // expectation corrected: 50 -> na, because TradingView's ta.rci is na on a flat window (recorded 2026-11-25)
         if (price_ss == 0.0) return na<double>();
@@ -175,7 +177,7 @@ struct RefRCI {
             const double cross = (time_ss + price_ss - sum_d2) / 2.0;
             return 100.0 * cross / std::sqrt(time_ss * price_ss);
         }
-        const double rho = 1.0 - 6.0 * sum_d2 / (n * (n * n - 1));
+        const double rho = 1.0 - 6.0 * sum_d2 / rank_denominator;
         return rho * 100.0;
     }
 
