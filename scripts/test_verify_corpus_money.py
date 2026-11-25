@@ -153,6 +153,33 @@ class MoneyTests(unittest.TestCase):
         self.assertEqual(len(r.pnl_deltas), 6)
         self.assertAlmostEqual(r.pnl_p90, (1 + 2) / (2 * 10))
 
+    def test_scored_price_p90_is_strict_at_the_decimal_limit(self):
+        prices = ((9.999, 1000, False), (9.999001, 999, True), (9.998999, 1001, False))
+        for field, mark in (("exit_price", False), ("entry_price", False), ("entry_price", True)):
+            entry, close = (9, 10) if field == "exit_price" else (10, 11)
+            tv = [lot(i * 900, entry_price=entry, exit_price=close, open_mark=mark)
+                  for i in range(6)]
+            for price, millionths, allowed in prices:
+                with self.subTest(field=field, mark=mark, price=price):
+                    r = grade(tv, [replace(t, **{field: price}) for t in tv])
+                    self.assert_pairs(r, 6)
+                    self.assertEqual((r.open_mark_pairs, len(r.entry_deltas), len(r.exit_deltas)),
+                                     (6 if mark else 0, 6, 0 if mark else 6))
+                    ok, p90 = ((r.exit_ok, r.exit_p90) if field == "exit_price"
+                               else (r.entry_ok, r.entry_p90))
+                    self.assertEqual(ok, allowed)
+                    self.assertAlmostEqual(p90, millionths / 10000000)
+                    self.assertEqual(r.label, "excellent" if allowed else "strong")
+
+        # On 100 units this exit explains ten cents, but only a price
+        # strictly inside the profile limit can forgive that money change.
+        tv = [lot(i * 900, entry_price=9.99, exit_price=10, qty=100, pnl=1) for i in range(6)]
+        for price, _, allowed in prices:
+            with self.subTest(exit_price=price):
+                r = grade(tv, [replace(t, exit_price=price, pnl=.9) for t in tv])
+                self.assert_pairs(r, 6)
+                self.assertEqual(r.pnl_deltas, [0. if allowed else 1 / 10] * 6)
+
 
 if __name__ == "__main__":
     unittest.main()
