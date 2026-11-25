@@ -7505,6 +7505,27 @@ void PineExecutionAdapter::set_exit_phase(std::size_t trade_index, std::uint8_t 
     if (trade_exit_phase_[offset] != phase) { invalidate_exit_group(trade_index); } trade_exit_phase_.set(offset, phase);
 }
 
+static bool magnified_fifo_closes(const NativeStrategyHost& host, const PineStrategyConfig& config,
+                                  bool magnifier) {
+    if (!magnifier || config.close_entries_rule_any || config.process_orders_on_close
+        || config.calc_on_order_fills) return false;
+    const auto* spec = detail::run_spec(host);
+    const auto* lower = spec ? spec->intrabar.lower() : nullptr;
+    if (!lower) return false;
+    const auto* borrowed = detail::run_consumer(host).bar_views().lower_path;
+    return borrowed ? borrowed->count() != 0 : !lower->bars.empty();
+}
+
+template<class Event>
+static const native_order::RequestHandle* ended_without_fill(const Event& e) noexcept {
+    if constexpr (std::is_same_v<Event, native_order::CancelledEvent>
+                  || std::is_same_v<Event, native_order::MatchRejectedEvent>
+                  || std::is_same_v<Event, native_order::NoEffectEvent>) {
+        return &e.handle();
+    }
+    return nullptr;
+}
+
 void PineExecutionAdapter::observe_terminal_receipts() {
     auto& host = require_host();
     // A PineStrategyHost's command history is read in place, through its
@@ -7550,6 +7571,20 @@ void PineExecutionAdapter::observe_terminal_receipts() {
             using Event = std::decay_t<decltype(event)>;
             if constexpr (!std::is_same_v<Event, native_order::AcceptedEvent>)
                 retired_row_scratch_.roster_pass_due = true;
+            // A waiting entry leaves at its close's receipt, before a script
+            // can read the book, even when the last bar has no script body.
+            const auto* ended_parent = ended_without_fill(event);
+            if (ended_parent && !pending_entries_.empty()
+                && magnified_fifo_closes(host, config_, bar_magnifier_)) {
+                const auto waits = [&](const PendingEntry& entry) {
+                    return entry.snapshot.paired_reversal_parent == *ended_parent;
+                };
+                const auto first = std::find_if(pending_entries_.begin(), pending_entries_.end(), waits);
+                if (first != pending_entries_.end()) {
+                    auto& entries = pending_write(pending_entries_);
+                    entries.erase(std::remove_if(first, entries.end(), waits), entries.end());
+                }
+            }
             if constexpr (std::is_same_v<Event, native_order::MatchRejectedEvent>
                           || std::is_same_v<Event, native_order::CancelledEvent>
                           || std::is_same_v<Event, native_order::NoEffectEvent>) {
@@ -10738,17 +10773,6 @@ void PineExecutionAdapter::record_close_first(bool whole_position) {
     if (held == 0.0) return;
     close_first_script_bar_ = point->decision.script_bar_open_ms;
     close_first_side_ = held > 0.0 ? 1 : -1;
-}
-
-static bool magnified_fifo_closes(const NativeStrategyHost& host, const PineStrategyConfig& config,
-                                  bool magnifier) {
-    if (!magnifier || config.close_entries_rule_any || config.process_orders_on_close
-        || config.calc_on_order_fills) return false;
-    const auto* spec = detail::run_spec(host);
-    const auto* lower = spec ? spec->intrabar.lower() : nullptr;
-    if (!lower) return false;
-    const auto* borrowed = detail::run_consumer(host).bar_views().lower_path;
-    return borrowed ? borrowed->count() != 0 : !lower->bars.empty();
 }
 
 void PineExecutionAdapter::close(const SourceId& id, const std::string& comment, double qty,
@@ -15543,10 +15567,8 @@ void PineExecutionAdapter::flush_pending_entries() {
                 if (std::find(live_handles_.begin(), live_handles_.end(), parent) == live_handles_.end())
                     return true;
                 if (consumer.visit_commands_after(receipt_cursor_, [&](const native_order::CommandEvent& command) {
-                    if (const auto* e = std::get_if<native_order::CancelledEvent>(&command)) return e->handle() == parent;
-                    if (const auto* e = std::get_if<native_order::MatchRejectedEvent>(&command)) return e->handle() == parent;
-                    if (const auto* e = std::get_if<native_order::NoEffectEvent>(&command)) return e->handle() == parent;
-                    return false;
+                    const auto* ended = std::visit([](const auto& e) { return ended_without_fill(e); }, command);
+                    return ended && *ended == parent;
                 })) return true;
             }
         }
