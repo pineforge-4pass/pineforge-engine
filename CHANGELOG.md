@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- With `close_entries_rule = "ANY"`, a market reversal that reuses an entry ID retires the stop and limit of the unfilled order that the closed entry replaced, including a stop or limit at zero. An old leg could close the new position on its entry bar.
 - When a protective stop closes a position before a default percent-of-equity reversal stop fills, the reversal now trades the old position’s size even if its own opening leg was unaffordable.
 - `ta.rci` now returns `na` when a full window of two or more values is flat, matching TradingView.
 - A requested EMA first evaluated when a sparse chart bar is published now uses the same seed as during the original requested evaluation. (#994)
@@ -23,7 +24,6 @@ version number follows semantic versioning over the surfaces the
 - With `calc_on_order_fills`, a stop entry placed at the tick of an intrabar fill now waits for the price to reach it again when the next extreme is outside the stop. A rounding difference could open the position a bar early.
 - With `calc_on_order_fills`, a named tick bracket that closes several openings on one leg of a historical bar now runs the script once after those fills. The script can no longer place an extra entry between the exits. (#694)
 - On chart bars with `process_orders_on_close`, FIFO and no margin requirement, a lone limit add with an explicit quantity now fills at the closing tick if it is marketable and was placed under the pyramiding cap before `strategy.close_all(comment=...)`. The close still covers only the carried position.
-- With `close_entries_rule = "ANY"`, a market reversal that reuses an entry ID now retires the whole stop and limit (both levels above zero) placed with the unfilled order that the closed entry replaced. Those orders could close the new position on its entry bar. Runs with the bar magnifier, with orders processed on the close or on a live stream are not changed.
 - With the bar magnifier using finer bars, FIFO closes and default order timing, an entry waiting for a close that ends without a fill is withdrawn when the pending entries are next processed, instead of staying in the pending orders list. A script that reads the list on that same bar can still see it.
 - When a session's opening fixed chart cell is cut short at the session open, the next bar also opens the session day, and the opening bar also closes it when that next cell reaches the day's close. `session.isfirstbar`, `session.islastbar`, their `_regular` forms and the native session-day facts of HKEX:700 on 60 and 240 minutes now equal TradingView's recorded flags.
 - `strategy_pending_order_fill_qty` now accounts for a market close queued by a fill recalculation before a limit order that fills later, and treats a remainder within the fill's quantity tolerance as flat.
