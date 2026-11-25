@@ -2,9 +2,9 @@
 """Verify a strategy in the corpus against TradingView's exported trades.
 
 Reads `tv_trades.csv` and `engine_trades.csv` from a strategy folder under
-`corpus/`, aligns trades by entry time + direction with a 1-hour window
-(matches the parent project's parity sweep), and reports the largest
-deviations in entry price, exit price, and per-trade P&L.
+`corpus/`, pairs entries by exact time and direction within the entry-price
+gate, and reports the largest deviations in entry price, exit price, and
+per-trade P&L.
 
 This mirrors the canonical corpus summary used by the runtime docs:
 it applies common-window edge trimming, honours per-strategy metadata,
@@ -238,7 +238,7 @@ def _ohlcv_span_ms(strategy_dir: Path) -> tuple[int | None, int | None, int]:
     except OSError:
         return None, None, 0
 
-# Match window for time-based alignment (matches parent project's gate).
+# Margin after the last matched entry in the common comparison window.
 MATCH_WINDOW_SECONDS = 3600    # 1 hour
 ENTRY_PRICE_GATE_RATIO = 0.0015
 
@@ -608,8 +608,8 @@ def pair_range_end_marks(
     range-end close (open_at_end) — 6.3511 in that illustration — and marks the
     exit row in ENGINE_RANGE_END_COLUMN. The two rows are one lot marked
     twice, so they are paired here, lot for lot, by the alignment every
-    other trade gets (:func:`align_by_time`: same direction, entry within
-    the match window and the entry-price gate; closest entry first) — and
+    other trade gets (:func:`align_by_time`: same entry time and direction,
+    within the entry-price gate; nearest price first) — and
     only marks pair with marks: the tape's Open row is not a fill, and
     neither is the engine's row.
 
@@ -995,9 +995,8 @@ def schedule_rows_for_gate(
 ) -> tuple[list[TradePair], list[TradePair]]:
     """Select the scored raw-entry groups for schedule comparison.
 
-    Canonical alignment permits a TV/engine entry pair to differ by up to the
-    match window.  Bounding both raw schedules only by independently gated
-    entry times can then drop one half of an already scored boundary pair.
+    When there are no interior matches, the metric fallback can score pairs
+    outside the interior even if there are still rows in the gated pools.
     Select each side's gate entries plus its half of every scored match.  Exact
     entry keys preserve every raw fragment without re-importing unrelated
     out-of-gate rows that happen to lie between two boundary timestamps.
@@ -1100,31 +1099,31 @@ def entry_price_gate(tv_entry_price: float) -> float:
 
 
 def align_by_time(tv: list[TradePair], eng: list[TradePair]) -> list[tuple[TradePair, TradePair]]:
-    """Greedy time-window alignment: pair TV[i] with the closest engine trade
-    with the same direction and an entry within the time and price limits.
+    """Pair entries at the same time and in the same direction, in TV order.
+    Among unused rows inside the price gate, take the nearest price, then list order.
     """
     matched: list[tuple[TradePair, TradePair]] = []
     used_eng: set[int] = set()
     j_start = 0
     for tv_t in tv:
         # Advance the engine cursor to the first plausibly-matching candidate.
-        while j_start < len(eng) and eng[j_start].entry_time < tv_t.entry_time - MATCH_WINDOW_SECONDS:
+        while j_start < len(eng) and eng[j_start].entry_time < tv_t.entry_time:
             j_start += 1
         best_j = -1
-        best_dt = MATCH_WINDOW_SECONDS + 1
+        best_price_gap = None
         for j in range(j_start, len(eng)):
             if j in used_eng:
                 continue
             e = eng[j]
-            if e.entry_time > tv_t.entry_time + MATCH_WINDOW_SECONDS:
+            if e.entry_time > tv_t.entry_time:
                 break
             if e.direction != tv_t.direction:
                 continue
             if abs(e.entry_price - tv_t.entry_price) > entry_price_gate(tv_t.entry_price):
                 continue
-            dt = abs(e.entry_time - tv_t.entry_time)
-            if dt < best_dt:
-                best_dt = dt
+            price_gap = abs(e.entry_price - tv_t.entry_price)
+            if best_price_gap is None or price_gap < best_price_gap:
+                best_price_gap = price_gap
                 best_j = j
         if best_j >= 0:
             matched.append((tv_t, eng[best_j]))
@@ -1137,15 +1136,10 @@ def trim_to_common_match_window(
     eng: list[TradePair],
     matched: list[tuple[TradePair, TradePair]],
 ) -> tuple[list[TradePair], list[TradePair]]:
-    """Drop leading/trailing edge trades outside the mutually matched window.
-
-    The canonical parity sweep compares the common in-window trade region.
-    This avoids failing a strategy because one engine has an extra bootstrap or
-    terminal trade just outside the overlapping validation window.
-    """
+    """Keep entries from the first pair through one hour after the last, inclusive."""
     if not matched:
         return tv, eng
-    lo = min(min(t.entry_time, e.entry_time) for t, e in matched) - MATCH_WINDOW_SECONDS
+    lo = min(t.entry_time for t, _ in matched)
     hi = max(max(t.entry_time, e.entry_time) for t, e in matched) + MATCH_WINDOW_SECONDS
     tv_trim = [t for t in tv if lo <= t.entry_time <= hi]
     eng_trim = [e for e in eng if lo <= e.entry_time <= hi]
