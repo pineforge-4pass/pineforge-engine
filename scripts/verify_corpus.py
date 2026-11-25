@@ -73,9 +73,7 @@ STRONG_PNL_DELTA   = 1.0
 # Every other gated metric is computed inside a window derived from the
 # matches themselves, so without this gate a run that reproduces almost
 # nothing can grade top-tier on the sliver it happened to reproduce
-# (observed in production: 'excellent' at 0.9% real coverage). The
-# small-N alternative (<=1 unmatched TV trade) keeps single boundary-trade
-# cases fair for short exports.
+# (observed in production: 'excellent' at 0.9% real coverage).
 COVERAGE_EXCELLENT = 0.99
 COVERAGE_STRONG    = 0.95
 COVERAGE_MODERATE  = 0.75
@@ -1497,8 +1495,8 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         cov_denom_n = len(tv_cov_denom) + len(mark_pairs)
     unmatched_total = max(cov_denom_n - cov_matched, 0)
     coverage = (cov_matched / cov_denom_n) if cov_denom_n else 1.0
-    cov_excellent = coverage >= COVERAGE_EXCELLENT or unmatched_total <= 1
-    cov_strong    = coverage >= COVERAGE_STRONG or unmatched_total <= 1
+    cov_excellent = coverage >= COVERAGE_EXCELLENT
+    cov_strong    = coverage >= COVERAGE_STRONG
     cov_moderate  = coverage >= COVERAGE_MODERATE
 
     all_ok = (

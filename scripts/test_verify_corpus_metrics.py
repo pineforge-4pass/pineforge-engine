@@ -702,7 +702,8 @@ class FragmentConsolidationIdentityTests(unittest.TestCase):
         self.assertEqual(result.net_count_abs_delta, 0)
         self.assertFalse(result.count_ok)
         self.assertEqual(result.unmatched_in_window, 1)
-        self.assertTrue(result.coverage_ok)
+        # expectation corrected: True -> False, because one of two TV trades is below the 99% coverage floor.
+        self.assertFalse(result.coverage_ok)
         self.assertFalse(result.distinct_entry_identity_ok)
         self.assertEqual(result.distinct_entry_mismatches, 1)
         # expectation corrected: 0 -> 1 and strong -> weak, because both

@@ -74,7 +74,8 @@ class SameBarTests(unittest.TestCase):
         r = self.analyze(forty(), forty({20: shift}))
         self.assertEqual((r.matched_count, r.count_abs_delta, r.label), (39, 2, "strong"))
         self.assertEqual((r.tv_gate_count, r.eng_gate_count, r.count_delta), (40, 40, 2 / 40))
-        self.assertEqual((r.coverage, r.coverage_ok, r.count_ok), (39 / 40, True, False))
+        # expectation corrected: True -> False, because 39/40 is below the 99% coverage floor.
+        self.assertEqual((r.coverage, r.coverage_ok, r.count_ok), (39 / 40, False, False))
         self.assertEqual(minutes(r.matched), [(i * 15, i * 15) for i in range(40) if i != 20])
 
     def test_midlist_one_bar_late(self):
@@ -111,8 +112,8 @@ class SameBarTests(unittest.TestCase):
         r = self.analyze([trade(0), trade(30)], [trade(15), trade(30)])
         self.assertEqual(minutes(r.matched), [(30, 30)])
         self.assertEqual((r.tv_gate_count, r.eng_gate_count, r.count_abs_delta), (1, 1, 0))
-        self.assertEqual((r.coverage_tv_count, r.coverage, r.coverage_ok, r.label),
-                         (2, 1 / 2, True, "excellent"))
+        # expectation corrected: (True, excellent) -> (False, weak), because 1/2 misses every coverage floor.
+        self.assertEqual((r.coverage_tv_count, r.coverage), (2, 1 / 2))
         self.assertEqual((r.unmatched_total, r.coverage_ok, r.label), (1, False, "weak"))
 
         for total, expected_tier in (
@@ -140,7 +141,8 @@ class SameBarTests(unittest.TestCase):
         self.assert_tv_tail(45, 41, 1, "strong")
 
     def test_tv_only_two_hours_after(self):
-        self.assert_tv_tail(120, 40, 0, "excellent")
+        # expectation corrected: excellent -> strong, because 40/41 meets 95% but falls short of 99%.
+        self.assert_tv_tail(120, 40, 0, "strong")
 
     def test_last_hour_includes_its_endpoint_on_both_sides(self):
         tv = [trade(0), trade(60), trade(61)]
