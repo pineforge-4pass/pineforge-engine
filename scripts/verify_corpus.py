@@ -696,7 +696,7 @@ def _project_entry_fill_keys(
     """Project observed entry-price keys onto unambiguous TV oracle keys.
 
     Time and direction remain exact. Price alone may drift by less than the
-    strict entry-parity tolerance, using the same :func:`relative_max` metric as
+    strict entry-parity tolerance, using the same :func:`_price_delta` metric as
     the headline gate. Exact price equality wins. A non-exact observed key is
     projected only when exactly one TV key in its time/direction scope is in
     tolerance; overlapping tolerance neighborhoods are returned as ambiguous
@@ -738,7 +738,7 @@ def _project_entry_fill_keys(
             continue
         tolerant = {
             candidate for candidate in candidates
-            if relative_max(candidate[1], observed[1]) < STRICT_ENTRY_DELTA
+            if _price_delta(candidate[1], observed[1]) < STRICT_ENTRY_DELTA
         }
         if not tolerant & proven:
             continue
