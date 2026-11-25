@@ -9,6 +9,15 @@
 - Pairing ([`docs/pages/public-contract.md`](docs/pages/public-contract.md), "Pairing with codegen"): engine and codegen share one version number, the only supported pair is the same `X.Y.Z` (prerelease included), and the C++ is regenerated and relinked on every pair change.
 - The kernel must not know what TradingView is: TradingView rules go in the adapter (`src/source/`, `src/compat/pine/`) or in codegen ([ADR 0001](docs/adr/0001-kernel-adapter-boundary.md)).
 
+## Core value: a native C++ engine; Pine Script is one front end
+
+PineForge is a native C++ backtest and forward-execution engine. Pine Script reaches it through the code generator plus an adapter layer inside the engine; that path is a market funnel, not the product's boundary, and more front ends are expected (for example MQL5 and the MultiCharts language). Classify every fix before writing it:
+
+- **generic**: wrong for any strategy language (fills, money, order state, accounting, sessions). Fix it in the engine kernel.
+- **adapter**: only needed to match Pine Script / TradingView semantics. Fix it in the code generator or the engine's Pine adapter layer, never in the kernel.
+
+Every PR lists its changes by class, and review checks placement. The kernel takes no Pine-specific name, rule or special case.
+
 ## Build
 
 ```bash
