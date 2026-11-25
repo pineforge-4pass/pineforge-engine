@@ -384,12 +384,14 @@ double RCI::calculate() {
         return buffer_[a] < buffer_[b];
     });
 
+    bool has_ties = false;
     int i = 0;
     while (i < n) {
         int j = i;
         while (j + 1 < n && buffer_[order_[j + 1]] == buffer_[order_[i]]) {
             j++;
         }
+        has_ties = has_ties || j > i;
         const double avg_rank = (static_cast<double>(i) + j) / 2.0;
         for (int k = i; k <= j; k++) {
             price_rank_[order_[k]] = avg_rank;
@@ -397,6 +399,24 @@ double RCI::calculate() {
         i = j + 1;
     }
 
+    // Averaging a tie reduces the spread of the price ranks. The squared
+    // rank-distance shortcut below assumes both sets of ranks have equal spread.
+    const double nd = static_cast<double>(n);
+    if (has_ties && buffer_[order_[0]] != buffer_[order_[n - 1]]) {
+        const double mean = (nd - 1.0) / 2.0;
+        const double time_ss = nd * (nd * nd - 1.0) / 12.0;
+        double cross = 0.0;
+        double price_ss = 0.0;
+        for (int t = 0; t < n; ++t) {
+            const double rank = price_rank_[t] - mean;
+            cross += (t - mean) * rank;
+            price_ss += rank * rank;
+        }
+        return 100.0 * cross / std::sqrt(time_ss * price_ss);
+    }
+
+    // Preserve the previous rounding for distinct ranks and the existing
+    // flat-window result (correlation has no denominator on a flat window).
     double sum_d2 = 0.0;
     for (int t = 0; t < n; t++) {
         double d = (double)t - price_rank_[t];
@@ -405,7 +425,6 @@ double RCI::calculate() {
     // n * (n * n - 1) leaves the int range from n = 1291. In double every
     // factor and product is exact while the product fit in an int, so those
     // windows keep their value.
-    const double nd = static_cast<double>(n);
     double rho = 1.0 - 6.0 * sum_d2 / (nd * (nd * nd - 1.0));
     return rho * 100.0;
 }

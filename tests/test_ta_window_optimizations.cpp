@@ -148,10 +148,13 @@ struct RefRCI {
         });
 
         std::vector<double> price_rank(n);
+        double tie_loss = 0.0;
         int i = 0;
         while (i < n) {
             int j = i;
             while (j + 1 < n && prices[order[j + 1]] == prices[order[i]]) ++j;
+            const double m = j - i + 1;
+            tie_loss += m * (m * m - 1.0) / 12.0;
             const double average_rank = (i + j) / 2.0;
             for (int k = i; k <= j; ++k) price_rank[order[k]] = average_rank;
             i = j + 1;
@@ -161,6 +164,14 @@ struct RefRCI {
         for (int t = 0; t < n; ++t) {
             const double d = static_cast<double>(t) - price_rank[t];
             sum_d2 += d * d;
+        }
+        // expectation corrected: raw -> tie-adjusted rank distance. Replacing
+        // m distinct ranks by their mean removes m*(m*m-1)/12 of their spread.
+        const double time_ss = n * (n * n - 1) / 12.0;
+        const double price_ss = time_ss - tie_loss;
+        if (tie_loss > 0.0 && price_ss > 0.0) {
+            const double cross = (time_ss + price_ss - sum_d2) / 2.0;
+            return 100.0 * cross / std::sqrt(time_ss * price_ss);
         }
         const double rho = 1.0 - 6.0 * sum_d2 / (n * (n * n - 1));
         return rho * 100.0;
