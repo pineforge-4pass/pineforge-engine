@@ -47,7 +47,8 @@ void need(bool value, const char* reason) {
     if (!value) throw std::runtime_error(reason);
 }
 
-enum class Route { Attached, Held, Distinct, Fifo, Reissue, Replaced, ReplacedTwice, ReplacedDistinct };
+enum class Route { Attached, Held, Distinct, Fifo, Reissue, Replaced, ReplacedTwice, ReplacedDistinct,
+                   ReplacedZero };
 struct Book {
     int projected = 0, limits = 0, stops = 0, working = 0;
     std::string from;
@@ -83,7 +84,7 @@ public:
         books.at(i) = book();
         if (i == 0 && replaces_entry()) {
             strategy_entry("Entry", side < 0, 100 + side * 6, na, 5);
-            strategy_exit("Guard", "Entry", 100 - side * 10, 100 + side * 10);
+            strategy_exit("Guard", "Entry", old_limit(), old_stop());
         }
         if (i == 1) {
             if (replaces_entry()) {
@@ -112,7 +113,7 @@ public:
         need(positions[flip - 1] == -side * 5 && before.limits == 1 && before.stops == 1
              && before.working == 2 && before.projected == 1
              && before.from == "Entry"
-             && before.limit == 100 - side * 10 && before.stop == 100 + side * 10,
+             && before.limit == old_limit() && before.stop == old_stop(),
              "the original five units and their two resting bracket legs are required");
         need(fills.size() >= 2 && fills[0].id == "Entry" && fills[1].id == next_id
              && fills[1].closed > 0 && fills[1].opened * side > 0 && saw_reversal,
@@ -175,8 +176,13 @@ public:
     }
 
 private:
+    // On positive prints a sell stop at zero protects the long without
+    // triggering; a buy limit at zero likewise rests on the short.
+    double old_stop() const { return route == Route::ReplacedZero && side < 0 ? 0 : 100 + side * 10; }
+    double old_limit() const { return route == Route::ReplacedZero && side > 0 ? 0 : 100 - side * 10; }
     bool replaces_entry() const {
-        return route == Route::Replaced || route == Route::ReplacedTwice || route == Route::ReplacedDistinct;
+        return route == Route::Replaced || route == Route::ReplacedTwice || route == Route::ReplacedDistinct
+            || route == Route::ReplacedZero;
     }
     Book book() const {
         Book result;
@@ -232,6 +238,7 @@ int main() {
     int status = 0;
     struct Case { const char* name; Route route; int cap; };
     for (const auto c : {Case{"ANY replaced opener", Route::Replaced, 1},
+                         Case{"ANY replaced opener zero level", Route::ReplacedZero, 1},
                          Case{"ANY replaced opener pyramid 2", Route::Replaced, 2},
                          Case{"ANY twice replaced opener", Route::ReplacedTwice, 1},
                          Case{"ANY replaced opener distinct entry", Route::ReplacedDistinct, 1},
