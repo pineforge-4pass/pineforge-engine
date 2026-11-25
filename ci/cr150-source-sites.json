@@ -41985,6 +41985,19 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "id",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: on_applied ( const native_order :: ExecutionAppliedEvent & event , const NativeDecisionContext & context ) #1",
+    "if ( placement_snapshot && placement_snapshot -> family = = PineOrderFamily :: ExitStop && ( std :: isfinite ( placement_snapshot -> exit_levels . stop ) || finite_positive ( placement_snapshot -> exit_levels . loss_ticks ) ) && event . closed_units > 0 . 0 && event . cycle_before > 0 && event . cycle_after = = 0 && has_live_family ( PineOrderFamily :: Entry ) ) #1",
+    "for ( const auto & order : detail :: run_consumer ( require_host ( ) ) . request_core ( ) . live ( ) ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "id = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "pending",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
