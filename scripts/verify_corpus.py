@@ -1189,7 +1189,7 @@ def _price_delta(a: float, b: float) -> float:
     if a == b:
         return 0.0
     left, right = Decimal(str(a)), Decimal(str(b))
-    return float(abs(left - right) / max(abs(left), abs(right), Decimal("1e-9")))
+    return float(abs(left - right) / max(abs(left), abs(right)))
 
 
 def percentile(xs: list[float], p: float) -> float:
