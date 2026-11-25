@@ -159,6 +159,11 @@ class SameBarTests(unittest.TestCase):
                trade(0, 1024 + 1 / 64), trade(0, 1024 - 1 / 64)]
         self.assertEqual(align_by_time(tv, eng), [(tv[0], eng[2]), (tv[1], eng[3])])
 
+        # Both prices are 0.01 from the TV entry, so the first row wins.
+        tv = [trade(0, 100.01)]
+        eng = [trade(0, 100.00), trade(0, 100.02)]
+        self.assertEqual(align_by_time(tv, eng), [(tv[0], eng[0])])
+
     def test_open_marks_on_the_same_entry_bar(self):
         r = self.analyze([trade(0), trade(30, mark=True)], [trade(0), trade(30, mark=True)])
         self.assertEqual((r.open_mark_pairs, r.matched_count, r.count_abs_delta, r.label),
