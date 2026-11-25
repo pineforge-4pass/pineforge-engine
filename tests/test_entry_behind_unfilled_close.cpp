@@ -311,12 +311,93 @@ bool replacement(Change change, const char* name) {
     return true;
 }
 
+class TwoCloses final : public Host {
+public:
+    TwoCloses() : Host(End::Fill) {}
+    void on_native_bar(const Bar&, const NativeDecisionContext& c) override {
+        const int i = c.coordinate.interval_index;
+        clock_ok &= i == callbacks++ && c.script_bar_open_ms == start + i * hour;
+        adapter.observe_terminal_receipts();
+        adapter.begin_source_evaluation();
+        if (i == 0) adapter.entry("seed", false);
+        if (i == 2) {
+            if (physical_position().signed_units != -1) throw std::runtime_error("missing seed short");
+            // Independent statements, both claiming the one short. The first
+            // is cancelled before either can match.
+            adapter.close("seed", "first", 1);
+            adapter.entry("withdraw", true);
+            parent = waiting_parent(adapter, "withdraw");
+            adapter.close("seed", "second", 1);
+            adapter.entry("keep", true);
+            second = waiting_parent(adapter, "keep");
+            if (parent == second || waiting_parent(adapter, "withdraw") != parent
+                || cancel(parent).status != no::CancelStatus::Cancelled)
+                throw std::runtime_error("expected two distinct working closes");
+            adapter.observe_terminal_receipts();
+            for (const auto& p : adapter.fixture_pending_snapshots()) {
+                if (p.staged && p.snapshot.source_id == "keep") {
+                    ++still_waiting;
+                    kept_parent = p.snapshot.paired_reversal_parent;
+                }
+            }
+            visible_kept = pending(adapter.pending_intent_view(), "keep");
+            left = pending(adapter.pending_intent_view(), "withdraw");
+        }
+        adapter.flush_pending_entries();
+    }
+    no::RequestHandle second{}, kept_parent{};
+    int left = -1, still_waiting = 0, visible_kept = -1;
+};
+
+bool two_closes() {
+    const auto feed = prices();
+    TwoCloses host;
+    host.run(feed.data(), static_cast<int>(feed.size()), "10", "60", true);
+    std::uint64_t cancelled = 0, filled = 0, opened = 0;
+    int first_fills = 0, second_fills = 0, withdrawn = 0, kept = 0;
+    for (const auto& row : host.native_events(0)) {
+        if (!row.command) continue;
+        if (const auto* e = std::get_if<no::CancelledEvent>(&*row.command)) {
+            if (e->handle() == host.parent && e->request().comment == "first"
+                && e->reason == no::CancelReason::User) cancelled = e->ordinal;
+        }
+        if (const auto* e = std::get_if<no::ExecutionAppliedEvent>(&*row.command)) {
+            first_fills += e->handle() == host.parent;
+            if (e->handle() == host.second) {
+                ++second_fills;
+                if (e->request().comment == "second" && e->closed_units == 1
+                    && e->interval_index() == 3 && e->resolved_price == 103) filled = e->ordinal;
+            }
+            withdrawn += e->request().label == "withdraw";
+            if (e->request().label == "keep") {
+                ++kept;
+                if (e->opened_units == 1 && e->closed_units == 0 && e->interval_index() == 3
+                    && e->resolved_price == 103) opened = e->ordinal;
+            }
+        }
+    }
+    if (!host.last_error().empty() || host.native_state().kind != NativeLifecycleKind::Completed
+        || !host.clock_ok || host.callbacks != hours || host.sub_bars != hours * per_hour
+        || !cancelled || first_fills || second_fills != 1 || filled <= cancelled)
+        throw std::runtime_error("did not observe the two closes, one cancelled and the other filled");
+    if (host.left != 0 || host.still_waiting != 1 || host.visible_kept != 1 || host.kept_parent != host.second
+        || withdrawn || kept != 1 || opened <= filled
+        || host.physical_position().signed_units != 1 || pending(host.adapter.pending_intent_view(), "keep")
+        || pending(host.adapter.pending_intent_view(), "withdraw")) {
+        std::cerr << "FAIL two waiting entries: withdrawn pending=" << host.left << " fills=" << withdrawn
+                  << " other fills=" << kept << '\n';
+        return false;
+    }
+    std::cout << "PASS two waiting entries\n";
+    return true;
+}
+
 bool check(End end, const char* name) {
     const auto feed = prices();
     Host host(end);
     host.run(feed.data(), static_cast<int>(feed.size()), "10", "60", true);
     bool accepted = false, terminal = false, flattened = false;
-    int parent_fills = 0, entries = 0;
+    int parent_fills = 0, entries = 0, entry_fills = 0;
     for (const auto& row : host.native_events(0)) {
         if (!row.command) continue;
         const auto& e = *row.command;
@@ -324,7 +405,10 @@ bool check(End end, const char* name) {
             accepted |= a->handle() == host.parent && a->request().label == "__close__seed";
         if (const auto* a = std::get_if<no::ExecutionAppliedEvent>(&e)) {
             if (a->handle() == host.parent) ++parent_fills;
-            if (a->request().label == "next" && a->opened_units == 1) ++entries;
+            if (a->request().label == "next") {
+                ++entry_fills;
+                if (a->opened_units == 1) ++entries;
+            }
             if (a->request().label == "flatten" && a->closed_units == 1) flattened = true;
         }
         if (const auto* a = std::get_if<no::CancelledEvent>(&e))
@@ -349,6 +433,11 @@ bool check(End end, const char* name) {
         return false;
     }
     const auto& view = host.adapter.pending_intent_view();
+    if (entry_fills != int(fills)) {
+        std::cerr << "FAIL " << name << ": expected " << int(fills)
+                  << " waiting-entry fills, got " << entry_fills << '\n';
+        return false;
+    }
     for (int i = 0; i < view.size(); ++i) {
         pf_pending_order_v1_t p{};
         if (view.copy_v1(i, &p) != 0) {
@@ -371,6 +460,11 @@ bool check(End end, const char* name) {
 
 int main() {
     bool ok = true;
+    try { ok &= two_closes(); }
+    catch (const std::exception& e) {
+        std::cerr << "NOT COMPARED two waiting entries: " << e.what() << '\n';
+        ok = false;
+    }
     for (const auto& [change, name] : {std::pair{Change::Script, "script replacement"},
                                       std::pair{Change::BeforeFlush, "native replacement before flush"},
                                       std::pair{Change::AfterFlush, "native replacement after flush"},
