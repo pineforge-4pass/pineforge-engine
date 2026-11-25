@@ -189,8 +189,8 @@ def _ohlcv_span_ms(
     """Best-effort: read first/last timestamps + bar interval from an OHLCV csv.
 
     Uses the declared ``ohlcv_csv`` or looks for ``ohlcv.csv``, ``data.csv``
-    or ``candles.csv`` next to strategy.pine. Honors a ``bar_ms`` override
-    in inputs.json. Returns (first_ms, last_ms, bar_ms);
+    or ``candles.csv`` next to strategy.pine. Returns the inferred
+    (first_ms, last_ms, bar_ms);
     any of these may be None/0 if unavailable, in which case interior trimming
     is skipped.
     """
@@ -1279,6 +1279,10 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     warmup_bars = int(meta.get("warmup_bars", 0) or 0)
     first_ms, last_ms, bar_ms = _ohlcv_span_ms(
         strategy_dir, ohlcv_csv=str(meta["ohlcv_csv"]) if "ohlcv_csv" in meta else None)
+    # A declared positive bar interval wins over the first observed gap.
+    declared_bar_ms = meta.get("bar_ms")
+    if type(declared_bar_ms) is int and declared_bar_ms > 0:
+        bar_ms = declared_bar_ms
     bounds = interior_time_bounds(trim_bars, warmup_bars, first_ms, last_ms, bar_ms)
 
     def _split_interior(pairs: list[tuple[TradePair, TradePair]]) -> list[tuple[TradePair, TradePair]]:
