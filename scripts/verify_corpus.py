@@ -1187,7 +1187,7 @@ def percentile(xs: list[float], p: float) -> float:
     s = sorted(xs)
     k = (len(s) - 1) * p
     f, c = int(k), min(int(k) + 1, len(s) - 1)
-    if f == c: return s[f]
+    if f == c or s[f] == s[c]: return s[f]
     return s[f] * (c - k) + s[c] * (k - f)
 
 
@@ -1406,7 +1406,15 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         ):
             pnl_deltas.append(0.0)
             continue
-        pnl_deltas.append(abs_diff / abs(t.pnl))
+        if not (isfinite(t.pnl) and isfinite(e.pnl)):
+            pnl_deltas.append(abs_diff / abs(t.pnl))
+            continue
+        # Form the scored difference from the decimal amounts before division.
+        tv_amount, eng_amount = Decimal(str(t.pnl)), Decimal(str(e.pnl))
+        money_diff = abs(eng_amount - tv_amount)
+        if len(comparisons) == 2:
+            money_diff = min(money_diff, abs(eng_amount * tv_qty / eng_qty - tv_amount))
+        pnl_deltas.append(float(money_diff / abs(tv_amount)))
 
     entry_p90 = percentile(entry_deltas, grade_percentile)
     exit_p90  = percentile(exit_deltas,  grade_percentile)
