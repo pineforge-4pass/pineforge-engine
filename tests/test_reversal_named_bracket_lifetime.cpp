@@ -50,7 +50,7 @@ void need(bool value, const char* reason) {
 }
 
 enum class Route { Attached, Held, Distinct, Fifo, Reissue, Replaced, ReplacedTwice, ReplacedDistinct,
-                   ReplacedZero, ReplacedReissue, TwoLots, EndedStop };
+                   ReplacedZero, ReplacedReissue, TwoLots, EndedStop, ReplacedFifo };
 struct Book {
     int projected = 0, limits = 0, stops = 0, working = 0;
     std::string from;
@@ -69,7 +69,7 @@ public:
         : route(route), side(side),
           next_id(route == Route::Distinct || route == Route::ReplacedDistinct ? "Other" : "Entry") {
         source::PineStrategyConfig config;
-        config.close_entries_rule_any = route != Route::Fifo;
+        config.close_entries_rule_any = route != Route::Fifo && route != Route::ReplacedFifo;
         config.pyramiding = cap;
         config.margin_long = config.margin_short = 0;
         configure_pine_strategy(config);
@@ -215,7 +215,7 @@ private:
     bool replaces_entry() const {
         return route == Route::Replaced || route == Route::ReplacedTwice || route == Route::ReplacedDistinct
             || route == Route::ReplacedZero || route == Route::ReplacedReissue || route == Route::TwoLots
-            || route == Route::EndedStop;
+            || route == Route::EndedStop || route == Route::ReplacedFifo;
     }
     bool reissues() const { return route == Route::Reissue || route == Route::ReplacedReissue; }
     void identify_legs() {
@@ -425,6 +425,7 @@ int main() {
                          Case{"ANY replaced opener fresh exit", Route::ReplacedReissue, 1},
                          Case{"ANY replaced opener second lot", Route::TwoLots, 2},
                          Case{"ANY replaced opener dependent stop", Route::EndedStop, 1},
+                         Case{"FIFO replaced opener", Route::ReplacedFifo, 1},
                          Case{"ANY replaced opener pyramid 2", Route::Replaced, 2},
                          Case{"ANY twice replaced opener", Route::ReplacedTwice, 1},
                          Case{"ANY replaced opener distinct entry", Route::ReplacedDistinct, 1},
