@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The design doc's §1 inventory must not contradict a passing kernel test.
+"""Check the design doc's §1 closure markers against kernel test registrations.
 
 Why this exists
 ---------------
@@ -14,12 +14,11 @@ conventions and a reader could not tell which ``partial`` was current.
 
 The repair is the doc's own convention, not a verdict rewrite: a row keeps the
 finding it recorded (that is the audit's record) and **appends a closure
-marker** naming what landed and the test that proves it. This guard holds that
+marker** naming what landed and citing a source-free test. This guard holds that
 convention:
 
-* a row whose verdict is ``no`` or ``partial`` and which names a test that runs
-  in the **kernel profile** must carry a closure marker — the capability is
-  demonstrably there, so the bare verdict is a contradiction;
+* a row whose verdict is ``no`` or ``partial`` and which names a kernel-profile
+  witness must carry a closure marker;
 * a **gap** row — one whose verdict is ``no`` or ``partial`` — that carries a
   closure marker must name at least one kernel-profile test: a marker with no
   source-free witness is a claim, not evidence. A row with no such verdict is
@@ -27,8 +26,8 @@ convention:
   is what the *adapter* cannot adopt, is the case that matters;
 * every ``tests/…`` file any §1 row names must exist.
 
-"Runs in the kernel profile" is not a heuristic
------------------------------------------------
+How the guard identifies a kernel-profile witness
+-------------------------------------------------
 ``tests/CMakeLists.txt`` decides it, and this guard transliterates that
 decision rather than guessing at it. Two halves:
 
@@ -51,7 +50,9 @@ build. Where one exists, ``--ctest-list FILE`` takes the output of
 ``ctest -N`` from a kernel build directory and cross-checks the reimplemented
 set against the rows CTest actually registered; a disagreement is reported as
 an infrastructure finding, because it means this file has drifted from
-``tests/CMakeLists.txt``.
+``tests/CMakeLists.txt``. Disabled rows still count as registrations. A source
+whose listed rows are all disabled cannot witness a closure. Neither CMake
+registration nor a CTest listing shows whether a test ran or passed.
 
 Exit status
 -----------
@@ -84,7 +85,7 @@ SECTION_HEADING = '## 1. Inventory'
 #: native capability to close. A cell whose verdict is neither (the waiver row
 #: reads ``**measured-infeasible for the Pine adapter**``) is not policed: the
 #: guard's subject is a *contradiction* between a no/partial verdict and a
-#: passing kernel test, not the table's grammar.
+#: cited kernel-profile witness, not the table's grammar.
 VERDICT_RE = re.compile(r'\*\*\s*(yes|partial|no)\b[^*]*\*\*|^n/a\b')
 
 #: The closure-marker convention the table already uses: a bold lead-in whose
@@ -535,15 +536,17 @@ def registrations(root: Path, *, modules=None):
     return members, targets, commands, declared, list(missing_units.values())
 
 
-def kernel_units(root: Path, targets: dict[str, list[str]], commands) -> set[str]:
-    out: set[str] = set()
+def kernel_unit_rows(root: Path, targets: dict[str, list[str]], commands) -> dict[str, set[str]]:
+    """Map each source-free test unit to the registered names of its targets."""
+    out: dict[str, set[str]] = {}
     for target, sources in targets.items():
-        if not commands.get(target):
+        if not (names := commands.get(target)):
             continue
         present = [name for name in sources if (root / 'tests' / name).is_file()]
         if present and not any(reaches_source_layer(root / 'tests' / name)
                                for name in present):
-            out.update(present)
+            for source in present:
+                out.setdefault(source, set()).update(names)
     return out
 
 
@@ -551,15 +554,15 @@ def kernel_profile_tests(root: Path) -> set[str]:
     _, targets, commands, _, missing = registrations(root)
     if missing:
         raise ShapeError('; '.join(missing))
-    kernel = kernel_units(root, targets, commands)
+    kernel = set(kernel_unit_rows(root, targets, commands))
     if not kernel:
         raise ShapeError('no kernel-profile test TU found; the reach walk is broken')
     return kernel
 
 
-def ctest_rows(listing: str) -> set[str]:
-    """Check the row numbering, names and final count from ``ctest -N``."""
-    names = set()
+def ctest_rows(listing: str) -> dict[str, bool]:
+    """Validate ``ctest -N`` output and map each registered name to its enabled status."""
+    enabled: dict[str, bool] = {}
     totals = []
     lines = listing.rstrip().splitlines()
     for index, line in enumerate(lines):
@@ -568,24 +571,24 @@ def ctest_rows(listing: str) -> set[str]:
             row = re.fullmatch(r'Test\s+#([0-9]+):\s+(\S.*)', line)
             if not row:
                 raise ShapeError(f'--ctest-list has a malformed test row: {line!r}')
-            number, name = row.groups()
-            expected = len(names) + 1
+            number, label = row.groups()
+            expected = len(enabled) + 1
             if number != str(expected):
                 raise ShapeError(f'--ctest-list expected test #{expected}, got #{number}')
-            name = name.removesuffix(' (Disabled)')
-            if name in names:
+            name = label.removesuffix(' (Disabled)')
+            if name in enabled:
                 raise ShapeError(f'--ctest-list has a duplicate test name: {name}')
-            names.add(name)
+            enabled[name] = name == label
         elif line.startswith('Total Tests'):
             totals.append(index)
-    if not names:
+    if not enabled:
         raise ShapeError('--ctest-list parsed no rows; expected "Test #N: name" lines')
     if totals != [len(lines) - 1] or not (total := re.fullmatch(
             r'Total Tests: ([0-9]+)', lines[-1].strip())):
         raise ShapeError('--ctest-list expected one final "Total Tests: N" line')
-    if total[1] != str(len(names)):
-        raise ShapeError(f'--ctest-list Total Tests: {total[1]} does not match {len(names)} test row(s)')
-    return names
+    if total[1] != str(len(enabled)):
+        raise ShapeError(f'--ctest-list Total Tests: {total[1]} does not match {len(enabled)} test row(s)')
+    return enabled
 
 
 # --------------------------------------------------------------------------
@@ -642,7 +645,7 @@ def check(root: Path, listing: str | None = None) -> tuple[list[str], dict]:
     members, targets, commands, declared, findings = registrations(
         root, modules=modules if listing is not None else None)
     missing_unit_sources = bool(findings)
-    kernel = kernel_units(root, targets, commands)
+    kernel = kernel_unit_rows(root, targets, commands)
     if not kernel and not missing_unit_sources:
         raise ShapeError('no kernel-profile test TU found; the reach walk is broken')
 
@@ -664,7 +667,7 @@ def check(root: Path, listing: str | None = None) -> tuple[list[str], dict]:
         for target, sources in sorted(owners.items()):
             if not (names := commands.get(target)):
                 continue
-            for row in sorted(names - registered - expected):
+            for row in sorted(names - registered.keys() - expected):
                 missing.append(sources[0] if row == target else f'{sources[0]}: {row}')
             expected.update(names)
         if missing:
@@ -689,7 +692,7 @@ def check(root: Path, listing: str | None = None) -> tuple[list[str], dict]:
         active_compiled = {row for target, names in commands.items() if compiled_target(target)
                            for row in names}
         native_rows -= active_names - active_compiled
-        compiled = {name for name in registered - expected
+        compiled = {name for name in registered.keys() - expected
                     if name in native_rows or (name not in named and compiled_target(name))}
         wrong = sorted((compiled & members) - targets.keys())
         if wrong:
@@ -703,6 +706,13 @@ def check(root: Path, listing: str | None = None) -> tuple[list[str], dict]:
             findings.append(f'{TESTS_CMAKE}: compiled CTest rows missing from the '
                             f'kernel inventory: {", ".join(extra)}')
 
+    disabled_sources: dict[str, set[str]] = {}
+    if registered is not None:
+        for source, names in kernel.items():
+            listed = names & registered.keys()
+            if listed and not any(registered[name] for name in listed):
+                disabled_sources[source] = listed
+
     for row in rows:
         for name in row.tests:
             if not (root / 'tests' / name).is_file():
@@ -710,22 +720,24 @@ def check(root: Path, listing: str | None = None) -> tuple[list[str], dict]:
                                 f'tests/{name}, which is not in the tree')
         if not kernel:
             continue
-        witnesses = sorted(name for name in row.tests if name in kernel)
+        witnesses = sorted(name for name in row.tests
+                           if name in kernel and name not in disabled_sources)
         if row.verdict in ('no', 'partial') and witnesses and not row.marked:
             findings.append(
                 f'{DESIGN}:{row.line}: row {row.id} reads **{row.verdict}** while '
-                f'{", ".join("tests/" + name for name in witnesses)} runs in the '
-                'kernel profile. Append the closure marker the table already uses '
-                '("**Closed:** <what landed> (`tests/…`)") instead of leaving the '
-                'verdict to contradict a passing source-free test.')
+                f'{", ".join("tests/" + name for name in witnesses)} runs are registered '
+                'for the kernel profile. Execution is not checked. Append the closure '
+                'marker the table already uses ("**Closed:** <what landed> (`tests/…`)").')
         if row.marked and row.verdict in ('no', 'partial') and not witnesses:
             named = (', '.join('tests/' + name for name in row.tests)
                      if row.tests else 'no test at all')
+            disabled = sorted({name for source in row.tests
+                               for name in disabled_sources.get(source, ())})
+            reason = (f'no enabled kernel-profile witness (disabled CTest rows: {", ".join(disabled)})'
+                      if disabled else 'no kernel-profile test')
             findings.append(
                 f'{DESIGN}:{row.line}: row {row.id} carries a closure marker but '
-                f'names {named} — no kernel-profile test. A closure marker must '
-                'name a source-free witness; a capability only the adapter '
-                'exercises is not closed for a bare host.')
+                f'names {named} — {reason}. A closure marker must name a source-free witness.')
     summary = {
         'rows': len(rows),
         'marked': sum(1 for row in rows if row.marked),
@@ -742,7 +754,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--root', type=Path, default=ROOT)
     parser.add_argument('--ctest-list', type=Path, default=None,
                         help='output of `ctest -N` from a kernel build dir, to '
-                             'cross-check the reimplemented kernel-profile set')
+                             'check registrations and exclude disabled rows as witnesses')
     parser.add_argument('--list-kernel-tests', action='store_true',
                         help='print the kernel-profile TU set and exit 0')
     args = parser.parse_args(argv)
