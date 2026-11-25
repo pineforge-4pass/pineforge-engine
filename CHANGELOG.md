@@ -22,6 +22,7 @@ version number follows semantic versioning over the surfaces the
 - With `close_entries_rule = "ANY"`, a market reversal that reuses an entry ID retires the stop and limit of the unfilled order that the closed entry replaced, including a stop or limit at zero. An old leg could close the new position on its entry bar.
 - With FIFO, a bracket placed before its entry fills also ends when a market reversal closes that entry’s replacement under the same ID.
 - With finer bars supplied to the bar magnifier, FIFO closes and default order timing, an entry waiting for a close that ends without a fill leaves the pending list before the next script read. The final pending list is correct even when the last bar skips the script.
+- With finer bars, FIFO closes and default order timing, replacing a close through the native interface withdraws the entry that waited for its old handle. Repricing the close while keeping its handle lets its fill release the entry.
 - When a protective stop closes a position before a default percent-of-equity reversal stop fills, the reversal now trades the old position’s size even if its own opening leg was unaffordable.
 - `ta.rci` now returns `na` when a full window of two or more values is flat, matching TradingView.
 - A requested EMA first evaluated when a sparse chart bar is published now uses the same seed as during the original requested evaluation. (#994)
