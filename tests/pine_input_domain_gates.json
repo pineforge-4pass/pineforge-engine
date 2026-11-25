@@ -448,7 +448,7 @@
     "predicate": "Applied close belongs to modeled current POOC command pass",
     "old": "        && !stream_mode_ && !coof_recalc_active_",
     "new": "        && modeled_input() && !coof_recalc_active_",
-    "window": "            || placement_snapshot->family == PineOrderFamily::CloseAll)\n        && placement_snapshot->projection_created_bar == projection_bar_index(context)\n        && config_.process_orders_on_close && !config_.calc_on_order_fills\n        && modeled_input() && !coof_recalc_active_\n        && event.cursor.point.path_phase == NativePathPhase::Close) {\n        fill_pooc_close_entries(event.raw_price, context, /*after_close=*/true);\n    }"
+    "window": "            || placement_snapshot->family == PineOrderFamily::CloseAll)\n        && placement_snapshot->projection_created_bar == projection_bar_index(context)\n        && config_.process_orders_on_close && !config_.calc_on_order_fills\n        && modeled_input() && !coof_recalc_active_) {\n        if (event.cursor.point.path_phase == NativePathPhase::Close) {\n            fill_pooc_close_entries(event.raw_price, context, /*after_close=*/true);\n        }"
   },
   {
     "file": "src/source/pine_adapter.cpp",
