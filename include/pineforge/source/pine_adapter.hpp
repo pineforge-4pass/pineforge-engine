@@ -2808,10 +2808,10 @@ private:
     void retune_carried_trails_for_tick_reach(const Bar&, const NativeDecisionContext&);
     void restore_carried_trail_retunes();
     void flush_pooc_marketable_limit_entry_fills(const Bar&, const NativeDecisionContext&);
-    // The close pass's fills at a close tick: its own pass, or (after_close)
-    // the reversing stops a same-bar close's fill releases.
+    // At the closing tick, or from a close's receipt. A calculation-time flatten
+    // releases only the limit add placed before that close.
     void fill_pooc_close_entries(double raw_close, const NativeDecisionContext&,
-                                 bool after_close);
+                                 bool after_close, const PlacementSnapshot* flatten = nullptr);
     void flush_pooc_marketable_exit_fills(const Bar&, const NativeDecisionContext&);
     // The close pass's exit fills at a close tick, and whether the calculation
     // still has an order the close fills at any price.
