@@ -18789,7 +18789,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             && static_cast<PositionSide>(source.projection_position_side)
                    != PositionSide::FLAT
             && physical.signed_units != 0.0
-            && position_open_bar_index_ > source.projection_created_bar
+            && position_open_script_bar_ > source.placement_script_open_ms
             && !source.frozen_market_targeted_close
             && !(short_seed_.active && view.target == short_seed_.materialize_long);
         if (stale_close_for_new_position) return NativePrecommitVerdict::Refuse;
