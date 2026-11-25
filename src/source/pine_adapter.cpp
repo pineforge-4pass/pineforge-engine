@@ -9215,16 +9215,16 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
             && (waypoint_index == 1 || waypoint_index == 2) && finite_positive(waypoint)
             && finite_positive(birth)
             && (!coof_fill_on_path_point() || forced_first_extreme)
-            && executable_at(birth) && !executable_at(waypoint)) {
-            // An entry executable at its birth but not at the extreme rests at
-            // its own level from the extreme on (w8d-coof2-d/e/f, and after a
-            // forced first-extreme fill tailc-w2r-a/b: every refill filled
-            // after the extreme or later, none on the leg before it; the
-            // placement and recalculation correction). A limit arms at the extreme: StopLimit{extreme, level}.
-            // A stop becomes a trail armed at the extreme, riding its level's
-            // distance behind the running best: no print beyond the extreme
-            // follows on this bar, so it is the stop at its own level, booked
-            // there; on_bar_open hands the next bar the plain stop back.
+            && !executable_at(waypoint)
+            && (executable_at(birth)
+                || (pure_stop && !coof_fill_on_path_point()
+                    && coof_native_state.spec && coof_native_state.spec->intrabar.is_none()
+                    && source_same_point(birth, stop_price, staged_.syminfo.mintick)))) {
+            // At a mid-leg fill the booked tick can be one ULP past the same
+            // decimal stop. It still rests from the extreme. Arm a limit
+            // there or pin a trail there at the stop's distance: no better
+            // print follows on this bar. on_bar_open restores the plain stop.
+            // Both stop-entry directions are recorded in the refill tests.
             if (pure_limit) {
                 request.trigger = native_order::StopLimit{waypoint, limit_price};
             } else {
