@@ -148,10 +148,13 @@ struct RefRCI {
         });
 
         std::vector<double> price_rank(n);
+        double tie_loss = 0.0;
         int i = 0;
         while (i < n) {
             int j = i;
             while (j + 1 < n && prices[order[j + 1]] == prices[order[i]]) ++j;
+            const double m = j - i + 1;
+            tie_loss += m * (m * m - 1.0) / 12.0;
             const double average_rank = (i + j) / 2.0;
             for (int k = i; k <= j; ++k) price_rank[order[k]] = average_rank;
             i = j + 1;
@@ -162,7 +165,20 @@ struct RefRCI {
             const double d = static_cast<double>(t) - price_rank[t];
             sum_d2 += d * d;
         }
-        const double rho = 1.0 - 6.0 * sum_d2 / (n * (n * n - 1));
+        // expectation corrected: raw -> tie-adjusted rank distance. In Spearman's correlation,
+        // averaging m tied ranks removes m*(m*m-1)/12 from the sum of squared rank deviations.
+        const double count = static_cast<double>(n);
+        const double rank_denominator = count * (count * count - 1.0);
+        const double time_ss = rank_denominator / 12.0;
+        const double price_ss = time_ss - tie_loss;
+        // expectation corrected: 50 -> na, because a flat window has zero price-rank variance.
+        // Agreement with TradingView's RCI values is unverified.
+        if (price_ss == 0.0) return na<double>();
+        if (tie_loss > 0.0 && price_ss > 0.0) {
+            const double cross = (time_ss + price_ss - sum_d2) / 2.0;
+            return 100.0 * cross / std::sqrt(time_ss * price_ss);
+        }
+        const double rho = 1.0 - 6.0 * sum_d2 / rank_denominator;
         return rho * 100.0;
     }
 

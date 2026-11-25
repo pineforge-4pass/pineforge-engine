@@ -56,7 +56,7 @@ class SourceLists(unittest.TestCase):
                 self.assertEqual(code, 0, out)
 
     def test_private_row_removal_in_the_repository_registry(self):
-        members, _, commands, _ = inventory.registrations(inventory.ROOT)
+        members, _, commands, _, _ = inventory.registrations(inventory.ROOT)
         primary = 'test_native_report_truth'
         # Removed from the registration loop by the appended private-row list;
         # its own registration is also disabled in the kernel profile.

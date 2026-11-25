@@ -6,7 +6,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from test_check_design_inventory import CMAKE, INCLUDES, KERNEL_TU, design, tree
+from test_check_design_inventory import CMAKE, INCLUDES, KERNEL_TU, ctest_listing, design, tree
 
 
 class InventoryRegistry(unittest.TestCase):
@@ -26,7 +26,8 @@ class InventoryRegistry(unittest.TestCase):
                     code, out = made.run()
                 self.assertEqual(code, 1, out)
                 self.assertIn('no kernel-profile test' if marker else
-                              'row AB reads **no** while tests/test_clock.cpp runs', out)
+                              'row AB reads **no** while tests/test_clock.cpp can be matched to '
+                              'test names registered for the kernel profile.', out)
 
     def test_an_unknown_witness_condition_names_the_comparison_it_prevents(self):
         with tree(design('| AB | clock | **yes** |'), cmake=CMAKE + INCLUDES, extra={
@@ -57,13 +58,13 @@ class InventoryRegistry(unittest.TestCase):
                                              'add_test(NAME clock_slice COMMAND test_clock 1)\n'
         }) as made:
             listing = made.root / 'listing.txt'
-            listing.write_text('Test #1: test_kernel_one\nTest #2: test_kernel_three\n'
-                               'Test #3: test_pure_c\nTest #4: clock_slice\n')
+            listing.write_text(ctest_listing('test_kernel_one', 'test_kernel_three',
+                                             'test_pure_c', 'clock_slice'))
             code, out = made.run('--ctest-list', str(listing))
             self.assertEqual(code, 1, out)
             self.assertIn('kernel build did not register (test_clock.cpp)', out)
-            with listing.open('a') as output:
-                output.write('Test #5: test_clock\n')
+            listing.write_text(ctest_listing('test_kernel_one', 'test_kernel_three',
+                                             'test_pure_c', 'clock_slice', 'test_clock'))
             self.assertEqual(made.run('--ctest-list', str(listing))[0], 0)
 
     def test_a_python_launcher_is_a_compiled_alias_in_both_directions(self):
@@ -74,8 +75,8 @@ class InventoryRegistry(unittest.TestCase):
                 'tests/test_clock.cpp': KERNEL_TU, 'tests/lanes.d/clock.cmake': fragment
         }) as made:
             listing = made.root / 'listing.txt'
-            listing.write_text('Test #1: test_kernel_one\nTest #2: test_kernel_three\n'
-                               'Test #3: test_pure_c\nTest #4: clock_alias\n')
+            listing.write_text(ctest_listing('test_kernel_one', 'test_kernel_three',
+                                             'test_pure_c', 'clock_alias'))
             code, out = made.run('--ctest-list', str(listing))
             self.assertEqual(code, 1, out)
             self.assertIn('compiled CTest rows missing from the kernel inventory: clock_alias', out)
@@ -106,8 +107,8 @@ class InventoryRegistry(unittest.TestCase):
     def test_a_compiled_case_registered_by_a_literal_loop_is_required(self):
         extra = {
             'tests/test_clock.cpp': KERNEL_TU,
-            'listing.txt': 'Test #1: test_kernel_one\nTest #2: test_kernel_three\n'
-                           'Test #3: test_pure_c\nTest #4: test_clock\nTest #5: clock_read\n'}
+            'listing.txt': ctest_listing('test_kernel_one', 'test_kernel_three',
+                                         'test_pure_c', 'test_clock', 'clock_read')}
         cmake = (CMAKE + 'list(APPEND TEST_SOURCES test_clock)\n'
                  'pineforge_add_unit_test(test_clock)\nforeach(mode IN ITEMS read write)\n'
                  '    add_test(NAME clock_${mode} COMMAND test_clock ${mode})\nendforeach()\n')
@@ -116,8 +117,9 @@ class InventoryRegistry(unittest.TestCase):
             code, out = made.run('--ctest-list', str(listing))
             self.assertEqual(code, 1, out)
             self.assertIn('test_clock.cpp: clock_write', out)
-            with listing.open('a') as output:
-                output.write('Test #6: clock_write\n')
+            listing.write_text(ctest_listing('test_kernel_one', 'test_kernel_three',
+                                             'test_pure_c', 'test_clock', 'clock_read',
+                                             'clock_write'))
             self.assertEqual(made.run('--ctest-list', str(listing))[0], 0)
 
 

@@ -2045,7 +2045,7 @@ public:
     void end_coof_recalc() noexcept;
     bool suppress_grouped_stop_recalc(
         const native_order::ExecutionAppliedEvent&,
-        const NativeDecisionContext&) const noexcept;
+        const NativeDecisionContext&) const;
     // The event fills a strategy.close / close_all sent with immediately =
     // true, executed by the bar's own calculation.
     bool immediate_calculation_close(
@@ -2808,10 +2808,10 @@ private:
     void retune_carried_trails_for_tick_reach(const Bar&, const NativeDecisionContext&);
     void restore_carried_trail_retunes();
     void flush_pooc_marketable_limit_entry_fills(const Bar&, const NativeDecisionContext&);
-    // The close pass's fills at a close tick: its own pass, or (after_close)
-    // the reversing stops a same-bar close's fill releases.
+    // At the closing tick, or from a close's receipt. A calculation-time flatten
+    // releases only the limit add placed before that close.
     void fill_pooc_close_entries(double raw_close, const NativeDecisionContext&,
-                                 bool after_close);
+                                 bool after_close, const PlacementSnapshot* flatten = nullptr);
     void flush_pooc_marketable_exit_fills(const Bar&, const NativeDecisionContext&);
     // The close pass's exit fills at a close tick, and whether the calculation
     // still has an order the close fills at any price.
@@ -3538,6 +3538,8 @@ private:
     void observe_retirement_expiry(const PlacementSnapshot&, std::int64_t interval) noexcept;
     void sweep_retired_rows(const NativeDecisionContext&, RetirementWork&);
     void finish_retirement_phases();
+    bool another_child_fills_on_leg(const PlacementSnapshot&, const native_order::ExecutionAppliedEvent&,
+                                    const NativeDecisionContext&, bool closing_long) const;
 #ifndef NDEBUG
     std::array<std::uint64_t, 3> retirement_validation_state() const;
 #endif

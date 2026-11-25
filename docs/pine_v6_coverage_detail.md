@@ -814,7 +814,7 @@ All **✅ Runtime** — backed by `PineMatrix` (`matrix.hpp` / `matrix.cpp`) for
 | `ta.pivothigh()` | fn | ✅ Runtime | `ta::PivotHigh` class | |
 | `ta.pivotlow()` | fn | ✅ Runtime | `ta::PivotLow` class | |
 | `ta.range()` | fn | ✅ Runtime | `ta::Range` class | |
-| `ta.rci()` | fn | ✅ Runtime | `ta::RCI` class | |
+| `ta.rci()` | fn | ✅ Runtime | `ta::RCI` class | Returns `na` when all values in a full window of length 2 or more are equal. |
 | `ta.rising()` | fn | ✅ Runtime | `ta::Rising` class | |
 | `ta.rma()` | fn | ✅ Runtime | `ta::RMA` class | |
 | `ta.roc()` | fn | ✅ Runtime | `ta::ROC` class | |

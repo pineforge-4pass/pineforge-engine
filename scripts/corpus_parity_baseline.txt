@@ -258,7 +258,7 @@ bd2382bce7f244cef70cb35a8d11726391313acc492c14e64606b86063afb958  validation/ta-
 22f3c986c75a538bbad265a3e75841c85b7ee444ba55d79dd5305d8a02ca3de4  validation/ta-pvt-ema-cross-01/engine_trades.csv
 81e2359a5b2c3233223a1f2040fd4d4f8440d9be74f3aab1b09c1f0840c745d3  validation/ta-quarry-alma-correlation-01/engine_trades.csv
 a1bb3cbc2228566038c24426429735bfc8839a079c5dbb3877959813459576a7  validation/ta-range-filter-var-band-01/engine_trades.csv
-1b6da884f99c982c937308bd5ada5eb6ba275bb3e8cbe8a87f2ca62732330e73  validation/ta-rci-14-zero-cross-01/engine_trades.csv
+e54ac6ed1849cb9e03507f593996dc8ac5a67d7bcfabc24dc6a93b0c94823f9a  validation/ta-rci-14-zero-cross-01/engine_trades.csv
 e4675f858e213a9942abcb2b30d5188548733579bf90a349b752d45fdf68e368  validation/ta-rsi-bb-self-bands-01/engine_trades.csv
 90bead406b0cd9da90ca1d08f689a4a923255bccb641a629fffe99eee717f21e  validation/ta-rsi-ema-signal-cross-01/engine_trades.csv
 5c61195b5a9e5a9a45482bc4fc7852da3fd65817d43959aed761547d272f6a43  validation/ta-rsi-macd-and-continuous-state-01/engine_trades.csv

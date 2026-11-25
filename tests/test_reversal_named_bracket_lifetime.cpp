@@ -1,5 +1,7 @@
 #include <pineforge/source/pine_strategy_host.hpp>
 
+#include "waiting_exit_fixture.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -47,7 +49,8 @@ void need(bool value, const char* reason) {
     if (!value) throw std::runtime_error(reason);
 }
 
-enum class Route { Attached, Held, Distinct, Fifo, Reissue, Replaced, ReplacedTwice, ReplacedDistinct };
+enum class Route { Attached, Held, Distinct, Fifo, Reissue, Replaced, ReplacedTwice, ReplacedDistinct,
+                   ReplacedZero, ReplacedReissue, TwoLots, EndedStop, ReplacedFifo };
 struct Book {
     int projected = 0, limits = 0, stops = 0, working = 0;
     std::string from;
@@ -66,7 +69,7 @@ public:
         : route(route), side(side),
           next_id(route == Route::Distinct || route == Route::ReplacedDistinct ? "Other" : "Entry") {
         source::PineStrategyConfig config;
-        config.close_entries_rule_any = route != Route::Fifo;
+        config.close_entries_rule_any = route != Route::Fifo && route != Route::ReplacedFifo;
         config.pyramiding = cap;
         config.margin_long = config.margin_short = 0;
         configure_pine_strategy(config);
@@ -74,6 +77,7 @@ public:
         set_syminfo_session("24x7");
         set_syminfo_mintick(0.25);
         set_syminfo_metadata("qty_step", 1);
+        fixture_retain_all_events();
     }
 
     void on_source_bar(const Bar&) override {
@@ -83,7 +87,8 @@ public:
         books.at(i) = book();
         if (i == 0 && replaces_entry()) {
             strategy_entry("Entry", side < 0, 100 + side * 6, na, 5);
-            strategy_exit("Guard", "Entry", 100 - side * 10, 100 + side * 10);
+            strategy_exit("Guard", "Entry", old_limit(), old_stop());
+            if (route == Route::TwoLots) strategy_entry("First", side < 0, na, na, 2);
         }
         if (i == 1) {
             if (replaces_entry()) {
@@ -100,8 +105,28 @@ public:
         }
         if (!replaces_entry() && i == (route == Route::Held ? 3 : 1))
             strategy_exit("Guard", "Entry", 100 - side * 10, 100 + side * 10);
-        if (i == flip - 1) strategy_entry(next_id, side > 0, na, na, 3);
-        if (i == flip && route == Route::Reissue)
+        if (i == flip - 1) {
+            if (replaces_entry()) identify_legs();
+            if (route == Route::TwoLots) {
+                const auto lots = native_open_lots(100);
+                need(lots.size() == 2 && lots[0].entry_label == "First" && lots[0].signed_units == -side * 2
+                     && lots[1].entry_incarnation == filled_opener.incarnation
+                     && lots[1].signed_units == -side * 5, "missing both lots before reversal");
+            }
+            if (route == Route::EndedStop) {
+                // Cancelling the limit will end the stop inside the purge.
+                auto request = native_working_request(old_stop_handle)->definition->request;
+                request.owner = no::WaitForApplied{old_limit_handle, no::NativeArmVisibility::Working,
+                    no::NativeArmFirstMatch::AtArmPrint, no::NativeArmScope::Book};
+                no::ReplaceOptions keep;
+                keep.keep_handle = true;
+                const auto result = replace(old_stop_handle, request, keep);
+                need(result.status == no::ReplaceStatus::Replaced && result.successor == old_stop_handle,
+                     "could not make the original stop wait for its limit");
+            }
+            strategy_entry(next_id, side > 0, na, na, 3);
+        }
+        if (i == flip && reissues())
             strategy_exit("Guard", next_id, 100 + side * 14, 100 - side * 20);
         if (i == close_bar - 1) strategy_close(next_id);
     }
@@ -109,16 +134,19 @@ public:
     void compare(Checks& c) const {
         need(last_run_status() == 0 && last_error().empty() && seen == bars, "incomplete run");
         const auto& before = books[flip - 1];
-        need(positions[flip - 1] == -side * 5 && before.limits == 1 && before.stops == 1
+        const bool two = route == Route::TwoLots;
+        const int opener = two ? 1 : 0;
+        const int held = two ? 7 : 5;
+        need(positions[flip - 1] == -side * held && before.limits == 1 && before.stops == 1
              && before.working == 2 && before.projected == 1
              && before.from == "Entry"
-             && before.limit == 100 - side * 10 && before.stop == 100 + side * 10,
-             "the original five units and their two resting bracket legs are required");
-        need(fills.size() >= 2 && fills[0].id == "Entry" && fills[1].id == next_id
-             && fills[1].closed > 0 && fills[1].opened * side > 0 && saw_reversal,
+             && before.limit == old_limit() && before.stop == old_stop(),
+             "the original lots and their two resting bracket legs are required");
+        need(fills.size() >= std::size_t(opener + 2) && fills[opener].id == "Entry" && fills[opener + 1].id == next_id
+             && fills[opener + 1].closed > 0 && fills[opener + 1].opened * side > 0 && saw_reversal,
              "no opening followed by an applied reversal of the original lot");
         need(!replaces_entry() || replacement_filled, "the market fill did not replace the resting entry");
-        const bool reissue = route == Route::Reissue;
+        const bool reissue = reissues();
         const int end = reissue ? 8 : close_bar;
         const double end_price = reissue ? 100 + side * 14 : 87;
         const std::string end_id = reissue ? "Guard" : "__close__" + next_id;
@@ -133,15 +161,19 @@ public:
             c.equal(key + "signed opened units", f.opened, opened);
             c.equal(key + "at open", f.at_open, at_open);
         };
-        fill(0, "Entry", 2, 99, 0, -side * 5, true);
-        fill(1, next_id, flip, 103, 5, side * 3, true);
+        if (two) fill(0, "First", 1, 100, 0, -side * 2, true);
+        fill(opener, "Entry", 2, 99, 0, -side * 5, true);
+        fill(opener + 1, next_id, flip, 103, held, side * 3, true);
         c.equal("working Guard legs at reversal", at_reversal.working, 0);
         c.equal("projected Guard orders at reversal", at_reversal.projected, 0);
-        c.equal("applied fills", fills.size(), 3U);
-        if (fills.size() >= 3) fill(2, end_id, end, end_price, 3, 0, !reissue);
+        c.equal("applied fills", fills.size(), std::size_t(opener + 3));
+        if (fills.size() >= std::size_t(opener + 3))
+            fill(opener + 2, end_id, end, end_price, 3, 0, !reissue);
+        if (replaces_entry() && route != Route::ReplacedDistinct) check_cancels(c);
         for (int i = 0; i < bars; ++i) {
             const std::string key = "bar " + std::to_string(i) + " ";
-            const double units = i < 2 || i >= end ? 0 : i < flip ? -side * 5 : side * 3;
+            const double units = i < 2 ? (two && i == 1 ? -side * 2 : 0)
+                : i >= end ? 0 : i < flip ? -side * held : side * 3;
             c.equal(key + "signed position", positions[i], units);
             if (i < flip) continue;
             const bool fresh = reissue && i == flip + 1;
@@ -153,7 +185,7 @@ public:
                 c.equal(key + "new stop", books[i].stop, 100 - side * 20);
             }
         }
-        c.equal("closed trades", closed_trade_count(), 2U);
+        c.equal("closed trades", closed_trade_count(), two ? 3U : 2U);
         const auto trade = [&](int index, const std::string& entry, const std::string& exit,
                                bool is_long, double qty, int from, int to, double entry_price,
                                double exit_price, bool bracket) {
@@ -170,13 +202,66 @@ public:
             c.equal(key + "exit price", t.exit_price, exit_price);
             c.equal(key + "bracket exit", t.exit_from_bracket, bracket);
         };
-        trade(0, "Entry", next_id, side < 0, 5, 2, flip, 99, 103, false);
-        trade(1, next_id, end_id, side > 0, 3, flip, end, 103, end_price, reissue);
+        if (two) trade(0, "First", next_id, side < 0, 2, 1, flip, 100, 103, false);
+        trade(opener, "Entry", next_id, side < 0, 5, 2, flip, 99, 103, false);
+        trade(opener + 1, next_id, end_id, side > 0, 3, flip, end, 103, end_price, reissue);
     }
 
 private:
+    // On positive prints a sell stop at zero protects the long without
+    // triggering; a buy limit at zero likewise rests on the short.
+    double old_stop() const { return route == Route::ReplacedZero && side < 0 ? 0 : 100 + side * 10; }
+    double old_limit() const { return route == Route::ReplacedZero && side > 0 ? 0 : 100 - side * 10; }
     bool replaces_entry() const {
-        return route == Route::Replaced || route == Route::ReplacedTwice || route == Route::ReplacedDistinct;
+        return route == Route::Replaced || route == Route::ReplacedTwice || route == Route::ReplacedDistinct
+            || route == Route::ReplacedZero || route == Route::ReplacedReissue || route == Route::TwoLots
+            || route == Route::EndedStop || route == Route::ReplacedFifo;
+    }
+    bool reissues() const { return route == Route::Reissue || route == Route::ReplacedReissue; }
+    void identify_legs() {
+        for (const auto& w : native_working_requests()) {
+            const auto& r = w.definition->request;
+            if (r.label != "Guard") continue;
+            if (std::holds_alternative<no::Stop>(r.trigger)) old_stop_handle = w.definition->handle;
+            if (std::holds_alternative<no::Limit>(r.trigger)) old_limit_handle = w.definition->handle;
+        }
+        need(old_stop_handle.incarnation && old_limit_handle.incarnation && old_stop_handle != old_limit_handle,
+             "missing original stop or limit handle");
+        int bound = 0;
+        for (const auto& row : adapter_.fixture_pending_snapshots()) {
+            if (row.incarnation == old_limit_handle.incarnation || row.incarnation == old_stop_handle.incarnation)
+                bound += !row.staged && row.snapshot.bracket_origin == resting_entry
+                    && !row.snapshot.pending_bound_exit && !row.snapshot.void_issue;
+        }
+        need(bound == 2, "both legs must still name the replaced entry order");
+    }
+    void check_cancels(Checks& c) const {
+        int limit = 0, stop = 0, misses = 0;
+        std::uint64_t limit_end = 0;
+        for (const auto& row : native_events(0)) {
+            if (!row.command) continue;
+            if (const auto* e = std::get_if<no::CancelledEvent>(&*row.command)) {
+                if (e->handle() == old_limit_handle) {
+                    ++limit;
+                    c.equal("limit cancelled at reversal", e->ordinal > reversal_ordinal
+                            && e->reason == no::CancelReason::User, true);
+                    limit_end = e->ordinal;
+                }
+                if (e->handle() == old_stop_handle) {
+                    ++stop;
+                    const auto* wait = std::get_if<no::Wait>(&e->prior_authority);
+                    c.equal("stop ended at reversal", e->ordinal > reversal_ordinal && (route == Route::EndedStop
+                            ? wait && wait->parent == old_limit_handle && e->reason == no::CancelReason::OwnerGone
+                                && limit_end && e->cause && e->cause->ordinal == limit_end
+                            : e->reason == no::CancelReason::User), true);
+                }
+            } else if (const auto* e = std::get_if<no::NotWorkingEvent>(&*row.command)) {
+                misses += e->target == old_stop_handle || e->target == old_limit_handle;
+            }
+        }
+        c.equal("old limit cancellation count", limit, 1);
+        c.equal("old stop cancellation count", stop, 1);
+        c.equal("cancels of ended legs", misses, 0);
     }
     Book book() const {
         Book result;
@@ -203,13 +288,15 @@ private:
                                  const NativeDecisionContext&) override {
         fills.push_back({e.request().label, e.interval_index(), e.resolved_price,
                          e.closed_units, e.opened_units, e.cursor.point.path_phase == NativePathPhase::Open});
-        if (fills.size() == 1 && replaces_entry()) {
+        if (replaces_entry() && e.request().label == "Entry" && e.closed_units == 0) {
+            filled_opener = e.handle();
             replacement_filled = e.definition->root == resting_entry && e.definition->predecessor
                 && (*e.definition->predecessor != resting_entry) == (route == Route::ReplacedTwice)
                 && e.handle() != resting_entry && std::holds_alternative<no::Market>(e.request().trigger);
         }
         if (e.request().label == next_id && e.closed_units > 0 && e.opened_units * side > 0) {
             at_reversal = book();
+            reversal_ordinal = e.ordinal;
             saw_reversal = true;
         }
     }
@@ -219,19 +306,126 @@ private:
     int seen = 0;
     bool saw_reversal = false;
     bool replacement_filled = false;
-    no::RequestHandle resting_entry{};
+    no::RequestHandle resting_entry{}, filled_opener{}, old_stop_handle{}, old_limit_handle{};
+    std::uint64_t reversal_ordinal = 0;
     Book at_reversal;
     std::array<double, bars> positions{};
     std::array<Book, bars> books{};
     std::vector<Fill> fills;
+};
+
+// A host keeps a priced successor working outside the source replacement
+// book. Its two legs wait for it while another chain of the same ID fills.
+class OtherChain final : public waiting_exit::Host {
+public:
+    explicit OtherChain(int side) : waiting_exit::Host(true), side(side) {}
+    void on_source_bar(const Bar&) override {
+        const int i = pine_bar_index();
+        need(i == callbacks++, "missing chart bar");
+        if (i == 0) {
+            strategy_entry("Entry", side > 0, 100 - side * 35, na, 3);
+            guard_root = working("Entry");
+            strategy_exit("Guard", "Entry", 100 + side * 25, 100 - side * 25);
+            limit = working("Guard");
+            stop = working<no::Stop>("Guard");
+        }
+        if (i == 1) {
+            const auto original = native_working_request(guard_root);
+            need(original.has_value(), "missing original priced entry");
+            const auto result = replace(guard_root, original->definition->request);
+            need(result.status == no::ReplaceStatus::Replaced && result.successor
+                 && *result.successor != guard_root, "missing independent priced successor");
+            guarded = *result.successor;
+            wait_for(limit, guarded, true);
+            wait_for(stop, guarded, true);
+            strategy_entry("Entry", side < 0, 100 + side * 30, na, 5);
+            for (const auto& w : native_working_requests())
+                if (w.definition->request.label == "Entry" && w.definition->handle != guarded
+                    && !w.definition->predecessor) other_root = w.definition->handle;
+            need(other_root.incarnation && other_root != guard_root, "missing separate same-ID root");
+        }
+        if (i == 2) {
+            strategy_entry("Entry", side < 0, na, na, 5);
+            other_fill = working<no::Market>("Entry");
+        }
+        if (i == flip - 1) {
+            const auto lots = native_open_lots(100);
+            need(lots.size() == 1 && lots[0].entry_incarnation == other_fill.incarnation
+                 && lots[0].entry_label == "Entry" && lots[0].signed_units == -side * 5
+                 && guard_root.incarnation < other_fill.incarnation && working("Entry") == guarded,
+                 "expected the other chain's lot beside Guard's resting parent");
+            int bound = 0;
+            for (const auto& row : adapter_.fixture_pending_snapshots()) {
+                const auto& s = row.snapshot;
+                if (row.incarnation != limit.incarnation && row.incarnation != stop.incarnation) continue;
+                bound += !row.staged && !s.void_issue && !s.pending_bound_exit && s.bracket_origin == guard_root
+                    && s.from_entry == "Entry" && s.exit_levels.limit == 100 + side * 25
+                    && s.exit_levels.stop == 100 - side * 25;
+            }
+            need(bound == 2, "expected both resting legs bound to the earlier incarnation");
+            strategy_entry("Entry", side > 0, na, na, 3);
+        }
+    }
+    void compare(Checks& c) const {
+        need(last_run_status() == 0 && last_error().empty() && callbacks == flip + 2
+             && seeded && reversed, "missing identified fills from the two independent chains");
+        c.equal("original working legs at reversal", kept, 2);
+        c.equal("projected Guard orders at reversal", projected_at_flip, 1);
+        c.equal("original working legs on following bar",
+                int(bool(native_working_request(limit))) + int(bool(native_working_request(stop))), 2);
+        c.equal("following position", physical_position().signed_units, side * 3);
+        c.equal("closed trades", closed_trade_count(), 1U);
+    }
+private:
+    void on_native_applied_event(const no::ExecutionAppliedEvent& e, const NativeDecisionContext&) override {
+        if (e.handle() == other_fill) {
+            seeded = e.definition->root == other_root && e.request().label == "Entry" && e.interval_index() == 3
+                && e.resolved_price == 100 && e.opened_units == -side * 5 && e.closed_units == 0;
+        }
+        if (e.opened_units != side * 3 || e.closed_units != 5 || e.closed_trade_count != 1) return;
+        const auto lot = get_trade(static_cast<int>(e.first_trade_index));
+        reversed = e.interval_index() == flip && e.resolved_price == 103 && e.request().label == "Entry"
+            && std::holds_alternative<no::Market>(e.request().trigger) && !e.definition->predecessor
+            && native_working_request(guarded) && native_working_request(guarded)->definition->root == guard_root
+            && other_root != guard_root && lot.entry_id == "Entry" && lot.entry_incarnation == other_fill.incarnation;
+        kept = 0;
+        for (const auto& h : {limit, stop}) {
+            const auto w = native_working_request(h);
+            const auto* wait = w ? std::get_if<no::WaitForApplied>(&w->definition->request.owner) : nullptr;
+            kept += wait && wait->parent == guarded;
+        }
+        projected_at_flip = projected("Guard");
+    }
+    int side, callbacks = 0, kept = -1, projected_at_flip = -1;
+    bool seeded = false, reversed = false;
+    no::RequestHandle guard_root{}, guarded{}, other_root{}, other_fill{}, limit{}, stop{};
 };
 } // namespace
 
 int main() {
     const auto tape = prices();
     int status = 0;
+    for (int side : {-1, 1}) {
+        Checks c{std::string("ANY other replacement chain") + (side < 0 ? " into short" : " into long")};
+        try {
+            OtherChain host(side);
+            host.run(tape.data(), flip + 2, "15", "15", false);
+            if (!host.last_error().empty()) throw std::runtime_error(host.last_error());
+            host.compare(c);
+            if (c.ok) std::cout << "PASS " << c.name << '\n';
+            else status = std::max(status, 1);
+        } catch (const std::exception& e) {
+            std::cerr << "NOT COMPARED " << c.name << ": " << e.what() << '\n';
+            status = 2;
+        }
+    }
     struct Case { const char* name; Route route; int cap; };
     for (const auto c : {Case{"ANY replaced opener", Route::Replaced, 1},
+                         Case{"ANY replaced opener zero level", Route::ReplacedZero, 1},
+                         Case{"ANY replaced opener fresh exit", Route::ReplacedReissue, 1},
+                         Case{"ANY replaced opener second lot", Route::TwoLots, 2},
+                         Case{"ANY replaced opener dependent stop", Route::EndedStop, 1},
+                         Case{"FIFO replaced opener", Route::ReplacedFifo, 1},
                          Case{"ANY replaced opener pyramid 2", Route::Replaced, 2},
                          Case{"ANY twice replaced opener", Route::ReplacedTwice, 1},
                          Case{"ANY replaced opener distinct entry", Route::ReplacedDistinct, 1},

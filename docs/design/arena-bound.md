@@ -341,14 +341,14 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 | Equity writer / selected hold-back / SpillCurve | 24*E | `pf_equity_point_t` size assertion `include/pineforge/metrics_stream.hpp:16`; `src/report_scratch.cpp:238` |
 | Position tail | (30+L)*T | `src/source/pine_position_tail.hpp:20`; footer packing at `src/source/pine_position_tail.cpp:94` |
 | Cohort AVL and five-word summary | (96+L)*D + 1[D>0] | `Links` at `include/pineforge/detail/disk_id_table.hpp:28-32`, `end_` at `:540`; `CohortFacts::Record` at `include/pineforge/source/pine_adapter.hpp:2128-2131` |
-| Entry-rank AVL | (60+L)*J + 1[J>0] | `exit_rank_keys_` at `src/source/pine_adapter.cpp:7427-7428`; `Links` at `include/pineforge/detail/disk_id_table.hpp:28-32`, `end_` at `:540` |
+| Entry-rank AVL | (60+L)*J + 1[J>0] | `exit_rank_keys_` at `src/source/pine_adapter.cpp:7392-7393`; `Links` at `include/pineforge/detail/disk_id_table.hpp:28-32`, `end_` at `:540` |
 | Erased minima data | (40+L)*D + (40+2*L)*Q | `erased_minima_` at `include/pineforge/source/pine_adapter.hpp:965`; 40-byte header at `include/pineforge/detail/id_pair_store.hpp:69` |
 | Erased minima index | indexPeak(D+Q) | 16-byte slot at `include/pineforge/detail/id_pair_store.hpp:69`; replacement at `:642` |
-| Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2966`; joined key at `src/source/pine_adapter.cpp:27682` |
+| Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2966`; joined key at `src/source/pine_adapter.cpp:27788` |
 | Consumed partial-cycle index | indexPeak(Q) | `include/pineforge/detail/id_pair_store.hpp:642` |
 | Ordered consumed-cycle fold | 136*leaves + 2088*branches + 2096*savedPath | `include/pineforge/detail/id_pair_ordered_fold.hpp:161`, `:165`, `:172`, size assertion for `Leaf`, `Branch` and `Snapshot` at `:183` |
 | Successor-root rows | 16*R | `SuccessorRootIndex` at `src/native_order.cpp:8546`, size assertion for `Row` at `:8547`, 64-row tail bound `kTailRows` at `:8552` |
-| Frozen external openings | **0 in this certified profile** | Stock source builds owned `BindOpenings` vectors at `src/source/pine_adapter.cpp:7672`, `:7679`, `:10398-10411`; generic external owners are excluded below |
+| Frozen external openings | **0 in this certified profile** | Stock source builds owned `BindOpenings` vectors at `src/source/pine_adapter.cpp:7723`, `:7730`, `:10449-10462`; generic external owners are excluded below |
 
 The AVL node is seven uint64 words = 56 bytes, then its value and exact key
 bytes. CohortFacts::Record is handle, cycle, origin_count, origin_digest and
@@ -381,7 +381,7 @@ root only when a newly issued definition has one. The 64-row RAM tail makes
 charging every issued row conservative. Partial closes create one trade
 row per affected lot: `src/engine_execution.cpp:1241`. Bracket definitions
 have limit, stop and trailing families; per-entry expansion is visible at
-`src/source/pine_adapter.cpp:25932`. A closed-trade count cannot bound
+`src/source/pine_adapter.cpp:26002`. A closed-trade count cannot bound
 unfilled placement history or the replacement-root history.
 
 The ordered fold retains distinct-ever keys, including erased keys.

@@ -2563,16 +2563,16 @@ void PineExecutionAdapter::purge_brackets_after_applied_reversal(
                 const auto lot = host.closed_trade(fill.first_trade_index + i);
                 if (parent->incarnation ? lot.entry_incarnation == parent->incarnation : lot.entry_id == leg.from_entry)
                     return lot.is_long == prior_long;
-                // A whole ANY bracket can still name the unfilled order
+                // A whole named bracket can still name the unfilled order
                 // that its entry replaced. The trade names the successor.
                 const auto& levels = leg.exit_levels;
                 if (parent->incarnation && parent->incarnation < lot.entry_incarnation
-                    && config_.close_entries_rule_any && !config_.process_orders_on_close
+                    && !config_.process_orders_on_close
                     && !bar_magnifier_ && !stream_mode_ && lot.is_long == prior_long
                     && leg.command_sequence < reversal.command_sequence
                     && leg.from_entry == reversal.source_id && lot.entry_id == leg.from_entry
                     && !price_present(reversal.exit_levels.limit) && !price_present(reversal.exit_levels.stop)
-                    && finite_positive(levels.limit) && finite_positive(levels.stop) && std::isnan(levels.trail_offset)
+                    && finite_non_negative(levels.limit) && finite_non_negative(levels.stop) && std::isnan(levels.trail_offset)
                     && whole_level_exit(levels.limit, levels.stop, levels.trail_points, levels.trail_price,
                                         levels.profit_ticks, levels.loss_ticks, leg.requested_qty, leg.qty_percent)
                     && consumer.same_request_chain(*parent, {fill.handle().run, lot.entry_incarnation}))
@@ -3978,6 +3978,9 @@ native_order::Group PineExecutionAdapter::group_for(const std::string& name, int
 void PineExecutionAdapter::remember(const native_order::RequestHandle& handle,
                                     PlacementSnapshot&& snapshot) {
     snapshot.filled_exit = false;
+    // A re-armed default entry cannot inherit its predecessor's closing fill.
+    if (snapshot.family == PineOrderFamily::Entry && !std::isfinite(snapshot.requested_qty))
+        snapshot.frozen_reversal_transaction = kNaN;
     // Most rows arrive above the high water. An anchored leg can be adopted
     // later: K3 must compare that new peer against old (even resolved)
     // candidates too. A wholesale rewrite invalidates the immutable-field
@@ -7505,6 +7508,29 @@ void PineExecutionAdapter::set_exit_phase(std::size_t trade_index, std::uint8_t 
     if (trade_exit_phase_[offset] != phase) { invalidate_exit_group(trade_index); } trade_exit_phase_.set(offset, phase);
 }
 
+static bool magnified_fifo_closes(const NativeStrategyHost& host, const PineStrategyConfig& config,
+                                  bool magnifier) {
+    if (!magnifier || config.close_entries_rule_any || config.process_orders_on_close
+        || config.calc_on_order_fills) return false;
+    const auto* spec = detail::run_spec(host);
+    const auto* lower = spec ? spec->intrabar.lower() : nullptr;
+    if (!lower) return false;
+    const auto* borrowed = detail::run_consumer(host).bar_views().lower_path;
+    return borrowed ? borrowed->count() != 0 : !lower->bars.empty();
+}
+
+template<class Event>
+static const native_order::RequestHandle* ended_without_fill(const Event& e) noexcept {
+    if constexpr (std::is_same_v<Event, native_order::CancelledEvent>
+                  || std::is_same_v<Event, native_order::MatchRejectedEvent>
+                  || std::is_same_v<Event, native_order::NoEffectEvent>) {
+        return &e.handle();
+    }
+    if constexpr (std::is_same_v<Event, native_order::ReplacedEvent>)
+        return e.kept_handle() ? nullptr : &e.predecessor();
+    return nullptr;
+}
+
 void PineExecutionAdapter::observe_terminal_receipts() {
     auto& host = require_host();
     // A PineStrategyHost's command history is read in place, through its
@@ -7550,6 +7576,20 @@ void PineExecutionAdapter::observe_terminal_receipts() {
             using Event = std::decay_t<decltype(event)>;
             if constexpr (!std::is_same_v<Event, native_order::AcceptedEvent>)
                 retired_row_scratch_.roster_pass_due = true;
+            // A waiting entry leaves at its close's receipt, before a script
+            // can read the book, even when the last bar has no script body.
+            const auto* ended_parent = ended_without_fill(event);
+            if (ended_parent && !pending_entries_.empty()
+                && magnified_fifo_closes(host, config_, bar_magnifier_)) {
+                const auto waits = [&](const PendingEntry& entry) {
+                    return entry.snapshot.paired_reversal_parent == *ended_parent;
+                };
+                const auto first = std::find_if(pending_entries_.begin(), pending_entries_.end(), waits);
+                if (first != pending_entries_.end()) {
+                    auto& entries = pending_write(pending_entries_);
+                    entries.erase(std::remove_if(first, entries.end(), waits), entries.end());
+                }
+            }
             if constexpr (std::is_same_v<Event, native_order::MatchRejectedEvent>
                           || std::is_same_v<Event, native_order::CancelledEvent>
                           || std::is_same_v<Event, native_order::NoEffectEvent>) {
@@ -7581,6 +7621,17 @@ void PineExecutionAdapter::observe_terminal_receipts() {
                         placement->second.requested_qty, kNaN};
                     retire(handle);
                     if (opening) cancel_bracket_origin(handle);
+                }
+            } else if constexpr (std::is_same_v<Event, native_order::ReplacedEvent>) {
+                // Script replacement retired its predecessor at placement.
+                // A host can replace the close directly, outside that path.
+                if (ended_parent && magnified_fifo_closes(host, config_, bar_magnifier_)) {
+                    const auto found = placement_.find(ended_parent->incarnation);
+                    if (found != placement_.end()
+                        && (found->second.family == PineOrderFamily::Close || found->second.family == PineOrderFamily::CloseAll)
+                        && std::find(live_handles_.begin(), live_handles_.end(), *ended_parent) != live_handles_.end()) {
+                        retire(*ended_parent);
+                    }
                 }
             } else if constexpr (std::is_same_v<Event, native_order::ActivatedEvent>) {
                 if (std::holds_alternative<native_order::StopLimitLive>(event.after)) {
@@ -7811,14 +7862,11 @@ void PineExecutionAdapter::end_coof_recalc() noexcept {
 
 bool PineExecutionAdapter::suppress_grouped_stop_recalc(
         const native_order::ExecutionAppliedEvent& event,
-        const NativeDecisionContext& context) const noexcept {
-    // Every exit of one entry that the fill's point also triggers fills there
-    // before the point recalculates: the recalculation after the first cannot
-    // cancel or outrun the others (lab tv tapes
-    // tests/fixtures/coof_same_point_exits td-m1e, -f and -g: two exits of one
-    // entry share a stop, and the recalculation of a stop fill calls
-    // cancel_all() and close_all(); TradingView books both at the stop; lane
-    // TAIL-D). The recalculation of the point's last such fill runs.
+        const NativeDecisionContext& context) const {
+    // Named brackets over separate openings settle on the approaching leg.
+    // Different exits sharing a stop already settle at the same point before
+    // its last fill recalculates: cancel_all() and close_all() in the body
+    // see both exits booked (tests/fixtures/coof_same_point_exits).
     if (host_ && config_.calc_on_order_fills && event.closed_units > 0.0) {
         const double held = detail::run_position(*host_).signed_units;
         const auto filled = placement_.find(event.handle().incarnation);
@@ -7827,6 +7875,9 @@ bool PineExecutionAdapter::suppress_grouped_stop_recalc(
                 || filled->second.family == PineOrderFamily::ExitLimit)) {
             const double price = event.raw_price;
             const bool closing_long = held > 0.0;
+            if (named_tick_child(filled->second)
+                && another_child_fills_on_leg(filled->second, event, context, closing_long))
+                return true;
             for (const auto& handle : live_handles_) {
                 if (handle == event.handle()) continue;
                 const auto sibling = placement_.find(handle.incarnation);
@@ -9215,16 +9266,16 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
             && (waypoint_index == 1 || waypoint_index == 2) && finite_positive(waypoint)
             && finite_positive(birth)
             && (!coof_fill_on_path_point() || forced_first_extreme)
-            && executable_at(birth) && !executable_at(waypoint)) {
-            // An entry executable at its birth but not at the extreme rests at
-            // its own level from the extreme on (w8d-coof2-d/e/f, and after a
-            // forced first-extreme fill tailc-w2r-a/b: every refill filled
-            // after the extreme or later, none on the leg before it; the
-            // placement and recalculation correction). A limit arms at the extreme: StopLimit{extreme, level}.
-            // A stop becomes a trail armed at the extreme, riding its level's
-            // distance behind the running best: no print beyond the extreme
-            // follows on this bar, so it is the stop at its own level, booked
-            // there; on_bar_open hands the next bar the plain stop back.
+            && !executable_at(waypoint)
+            && (executable_at(birth)
+                || (pure_stop && !coof_fill_on_path_point()
+                    && coof_native_state.spec && coof_native_state.spec->intrabar.is_none()
+                    && source_same_point(birth, stop_price, staged_.syminfo.mintick)))) {
+            // At a mid-leg fill the booked tick can be one ULP past the same
+            // decimal stop. It still rests from the extreme. Arm a limit
+            // there or pin a trail there at the stop's distance: no better
+            // print follows on this bar. on_bar_open restores the plain stop.
+            // The refill test covers only the sell stop entry.
             if (pure_limit) {
                 request.trigger = native_order::StopLimit{waypoint, limit_price};
             } else {
@@ -10738,17 +10789,6 @@ void PineExecutionAdapter::record_close_first(bool whole_position) {
     if (held == 0.0) return;
     close_first_script_bar_ = point->decision.script_bar_open_ms;
     close_first_side_ = held > 0.0 ? 1 : -1;
-}
-
-static bool magnified_fifo_closes(const NativeStrategyHost& host, const PineStrategyConfig& config,
-                                  bool magnifier) {
-    if (!magnifier || config.close_entries_rule_any || config.process_orders_on_close
-        || config.calc_on_order_fills) return false;
-    const auto* spec = detail::run_spec(host);
-    const auto* lower = spec ? spec->intrabar.lower() : nullptr;
-    if (!lower) return false;
-    const auto* borrowed = detail::run_consumer(host).bar_views().lower_path;
-    return borrowed ? borrowed->count() != 0 : !lower->bars.empty();
 }
 
 void PineExecutionAdapter::close(const SourceId& id, const std::string& comment, double qty,
@@ -15543,10 +15583,8 @@ void PineExecutionAdapter::flush_pending_entries() {
                 if (std::find(live_handles_.begin(), live_handles_.end(), parent) == live_handles_.end())
                     return true;
                 if (consumer.visit_commands_after(receipt_cursor_, [&](const native_order::CommandEvent& command) {
-                    if (const auto* e = std::get_if<native_order::CancelledEvent>(&command)) return e->handle() == parent;
-                    if (const auto* e = std::get_if<native_order::MatchRejectedEvent>(&command)) return e->handle() == parent;
-                    if (const auto* e = std::get_if<native_order::NoEffectEvent>(&command)) return e->handle() == parent;
-                    return false;
+                    const auto* ended = std::visit([](const auto& e) { return ended_without_fill(e); }, command);
+                    return ended && *ended == parent;
                 })) return true;
             }
         }
@@ -17154,6 +17192,27 @@ void PineExecutionAdapter::apply_frozen_reversal_close(
     result.shape = native_order::OpeningShape::Transact;
 }
 
+namespace {
+bool declined_default_stop_reversal(const PlacementSnapshot& row,
+                                    const native_order::Trigger& trigger) noexcept {
+    // A default percent stop up to 100% has its own placement check.
+    // Explicit quantities, fixed, cash and larger percentages use the general policy.
+    return row.family == PineOrderFamily::Entry && !std::isfinite(row.requested_qty)
+        && row.affordability_close_only && !row.affordability_policy_active
+        && std::isnan(row.exit_levels.limit) && finite_positive(row.exit_levels.stop)
+        && std::holds_alternative<native_order::Stop>(trigger)
+        && row.projection_position_side == static_cast<std::int32_t>(
+            row.is_long ? PositionSide::SHORT : PositionSide::LONG)
+        && finite_positive(row.projection_tv_carry_qty);
+}
+
+bool declined_stop_from_flat(const PlacementSnapshot& row, double book,
+                            const native_order::Trigger& trigger) noexcept {
+    return book == 0.0 && finite_positive(row.frozen_reversal_transaction)
+        && declined_default_stop_reversal(row, trigger);
+}
+} // namespace
+
 native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         const NativeExecutionTermsFacts& facts) const {
     native_order::ExecutionTerms result{facts.default_resolved_price, std::nullopt,
@@ -18523,7 +18582,10 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         }
         if (affordability_close_only) {
             if (!opposite) {
-                result.units = 0.0;
+                // Only a protective stop that closed the placement position
+                // leaves its closing quantity executable from flat.
+                result.units = declined_stop_from_flat(source, facts.position.signed_units, trigger)
+                    ? source.frozen_reversal_transaction : 0.0;
                 return result;
             }
             result.units = keep_mc_close_surplus ? 1.0
@@ -18723,24 +18785,38 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
     if (snapshot != placement_.end()) {
         const auto& source = snapshot->second;
         const auto physical = detail::run_position(require_host());
-        // ab9714be pine_fills.cpp:7449-7459: a deferred strategy.close belongs
-        // to the position cycle it was issued in.  When the live position
-        // opened on a bar later than the close's creation bar — the next open's
-        // opposite entry applied first and flipped the book — the legacy book
-        // Removes the stale close instead of flattening the freshly opened lot
-        // at its own entry price.  The two legacy exclusions are the short-seed
-        // MATERIALIZE_LONG close and the same-bar market transaction's targeted
-        // close artifact.
+        // Both indices count chart bars. On a tick stream an opening can
+        // carry the print's timestamp; on a magnified chart the pending
+        // projection counts input bars. Neither measures the close's age.
         const bool stale_close_for_new_position =
             (source.family == PineOrderFamily::Close
              || source.family == PineOrderFamily::CloseAll)
             && static_cast<PositionSide>(source.projection_position_side)
                    != PositionSide::FLAT
             && physical.signed_units != 0.0
-            && position_open_bar_index_ > source.projection_created_bar
+            && (source.birth.bar() >= 0
+                ? position_open_bar_index_ > source.birth.bar()
+                : position_open_script_bar_ > source.placement_script_open_ms)
             && !source.frozen_market_targeted_close
             && !(short_seed_.active && view.target == short_seed_.materialize_long);
-        if (stale_close_for_new_position) return NativePrecommitVerdict::Refuse;
+        if (stale_close_for_new_position) {
+            if (source.family != PineOrderFamily::Close || !source.from_entry.empty()
+                || physical.lot_count != 1 || source.immediately
+                || !magnified_fifo_closes(require_host(), config_, bar_magnifier_))
+                return NativePrecommitVerdict::Refuse;
+            // close(id), entry(id), close(id): only the last close names
+            // the new opening. Use the source call order, since the first
+            // close's fill can submit the entry after the last close.
+            const auto entry = placement_.find(entry_incarnation_of(source.source_id));
+            if (entry == placement_.end() || !source_market_entry(entry->second)
+                || !entry->second.close_first_entry
+                || entry->second.birth.bar() != source.birth.bar()
+                || entry->second.placement_cycle != source.placement_cycle
+                || entry->second.command_ordinal >= source.command_ordinal
+                || source.birth.bar() != view.cursor.point.interval_index - 1
+                || entry->second.is_long != (physical.signed_units > 0.0))
+                return NativePrecommitVerdict::Refuse;
+        }
         // ab9714be pine_fills.cpp:7483-7537: priced (stop/limit) entries are
         // throttled to one opening from flat per bar after an earlier entry
         // fill. A same-direction pyramid while still in position is the
@@ -19364,7 +19440,10 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         // +1-gap reversal that the source broker declines.
         const double margin = source.is_long ? config_.margin_long : config_.margin_short;
         const double fx = active_staged_fx(view.cursor.point.effective_time_ms);
-        const double required = source.sizing.frozen_units * view.resolved_price
+        const double units = declined_stop_from_flat(source, physical_now.signed_units,
+                                                     view.definition->request.trigger)
+            ? std::abs(view.inspected_opened_units) : source.sizing.frozen_units;
+        const double required = units * view.resolved_price
             * staged_.syminfo.pointvalue * fx * margin / 100.0;
         const double equity = source.sizing.equity;
         const double guard = std::max(1e-9, std::abs(equity) * 1e-12);
@@ -23873,18 +23952,10 @@ void PineExecutionAdapter::apply_open_market_admission(
         }
     }
 
-    // A same-side-at-placement request is executable only if an earlier
-    // opposite command in this broker batch can move the account before its
-    // turn.  This retires the live-LONG pair's first no-op while preserving
-    // the ordinary priced/raw/carried-book controls where the later request
-    // becomes a reversal after its earlier sibling fills. In a batch of this
-    // bar's market entries and closes alone -- no priced, raw or carried order
-    // beside them, the controls that keep their ordinary fills -- a default
-    // percent_of_equity (<= 100) add whose margin on top of the held side's
-    // exceeded the equity when it was placed is not one of them: TradingView
-    // dropped it there (entry(): the same rule inside the cap), so it never
-    // reverses the book back once its sibling has reversed it (the
-    // reversal-candle probe's tapes).
+    // A same-side order at capacity needs an earlier opposite order.
+    // For a percent-of-equity add among this bar's market entries and closes,
+    // keep the signal-time margin check against the held side. A sibling
+    // reversal cannot make an add affordable after it was refused.
     const double held = detail::run_position(require_host()).signed_units;
     const auto dropped_at_placement = [&](const PlacementSnapshot& row) {
         return !foreign_live_order
@@ -23905,15 +23976,23 @@ void PineExecutionAdapter::apply_open_market_admission(
                             });
     };
     for (std::size_t index = 0; index < market.size(); ++index) {
-        if (!market[index].snapshot->projection_over_pyramiding) continue;
-        bool earlier_opposite = false;
-        for (std::size_t prior = 0; prior < index; ++prior) {
-            if (market[prior].snapshot->is_long != market[index].snapshot->is_long) {
-                earlier_opposite = true;
-                break;
-            }
-        }
-        if (!earlier_opposite || dropped_at_placement(*market[index].snapshot))
+        const auto& row = *market[index].snapshot;
+        if (!row.projection_over_pyramiding) continue;
+        // place_entry sized these transactions against earlier calls. Buys
+        // fill first, so the sell a buy reversed can be later in fill order.
+        const auto here = market.begin() + index;
+        const auto opposite = [&](const Candidate& peer) {
+            return peer.snapshot->is_long != row.is_long;
+        };
+        const bool earlier_opposite = std::any_of(market.begin(), here, opposite)
+            || (!foreign_live_order && row.frozen_market_instruction
+                && fixed_unmargined_market_batch_scope()
+                && std::any_of(here + 1, market.end(), [&](const Candidate& peer) {
+                    return opposite(peer)
+                        && peer.snapshot->frozen_market_instruction
+                        && peer.snapshot->command_sequence < row.command_sequence;
+                }));
+        if (!earlier_opposite || dropped_at_placement(row))
             cancel_later(market[index].handle);
     }
     std::vector<native_order::RequestHandle> review_handles;
@@ -25476,9 +25555,17 @@ void PineExecutionAdapter::flush_pooc_marketable_limit_entry_fills(
 }
 
 void PineExecutionAdapter::fill_pooc_close_entries(
-        double raw_close, const NativeDecisionContext& context, bool after_close) {
+        double raw_close, const NativeDecisionContext& context, bool after_close,
+        const PlacementSnapshot* flatten) {
     const double book_before = detail::run_position(require_host()).signed_units;
     if (!finite_positive(raw_close)) return;
+    // Only the lone working entry has a measured place after this flatten.
+    // Other entries or raw orders can compete for the same tick.
+    if (flatten) {
+        const auto& counts = retired_row_scratch_.live_families;
+        if (book_before != 0.0 || counts[static_cast<std::size_t>(PineOrderFamily::Entry)] != 1
+            || counts[static_cast<std::size_t>(PineOrderFamily::Order)] != 0) return;
+    }
     // A same-bar close of the held side fills at this close after this pass:
     // the reversing stops it precedes wait for its fill.
     const bool close_follows = !after_close && std::any_of(
@@ -25527,8 +25614,15 @@ void PineExecutionAdapter::fill_pooc_close_entries(
                                                      : PositionSide::SHORT);
         const bool pyramid_add = placed_with && !after_close && book_before != 0.0
             && (book_before > 0.0) == row.is_long;
-        if (placed_flat ? (after_close || book_before != 0.0)
-                        : !(reversing_stop || reversing_limit || pyramid_add)) {
+        if (flatten) {
+            if (!placed_with || !pure_limit_entry(row) || !finite_positive(row.requested_qty)
+                || (row.qty_type >= 0 && row.qty_type != static_cast<int>(QtyType::FIXED))
+                || !row.oca_name.empty() || row.projection_over_pyramiding
+                || row.projection_position_side != flatten->projection_position_side
+                || row.placement_cycle != flatten->placement_cycle
+                || row.command_sequence >= flatten->command_sequence) continue;
+        } else if (placed_flat ? (after_close || book_before != 0.0)
+                               : !(reversing_stop || reversing_limit || pyramid_add)) {
             continue;
         }
         if (row.direction_gate || row.paired_flat_market_candidate) continue;
@@ -25944,6 +26038,7 @@ bool PineExecutionAdapter::per_entry_exit_call(
     record->loss_ticks = loss_ticks;
     if (!same_text) record->set_text(oca_name, comment);
     if (named) record->last_call = command_sequence;
+    const std::size_t existing_children = record->children.size();
     for (const auto& entry : per_entry_open_entries(long_side, from_entry)) {
         const bool known = std::any_of(record->children.begin(), record->children.end(),
             [&](const PerEntryExitChild& child) { return child.origin == entry.origin; });
@@ -25968,18 +26063,9 @@ bool PineExecutionAdapter::per_entry_exit_call(
             submit_per_entry_child(per_entry_exits_[index], child, command_sequence, changed);
             continue;
         }
-        if (!legs.empty() && same_definition) {
-            if (!shared_group) continue;
-            // A sibling may have reduced these orders since the last call.
-            // Reissue the outstanding entry entitlement, not its FIFO lot.
-            const std::size_t expected = finite_positive(profit_ticks) + finite_positive(loss_ticks);
-            if (legs.size() == expected && std::all_of(legs.begin(), legs.end(), [&](const auto& leg) {
-                    const auto working = require_host().native_working_request(leg);
-                    const auto* units = working
-                        ? std::get_if<native_order::RemainingProjectionUnits>(&working->remaining) : nullptr;
-                    return units && same(units->q, child.units);
-                })) continue;
-        }
+        // A shared group's existing children keep their native remainder,
+        // even when both legs are gone. Only new openings need orders.
+        if (same_definition && (shared_group ? position < existing_children : !legs.empty())) continue;
         cancel_working_legs(legs);
         submit_per_entry_child(per_entry_exits_[index], child, command_sequence);
     }
@@ -27182,6 +27268,26 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         adopted.sizing = sizing_snapshot();
         placement_.try_emplace(event.handle().incarnation, adopted); invalidate_retirement();
         placement_snapshot = adopted;
+    }
+    if (placement_snapshot && placement_snapshot->family == PineOrderFamily::ExitStop
+        && (std::isfinite(placement_snapshot->exit_levels.stop)
+            || finite_positive(placement_snapshot->exit_levels.loss_ticks))
+        && event.closed_units > 0.0 && event.cycle_before > 0 && event.cycle_after == 0
+        && has_live_family(PineOrderFamily::Entry)) {
+        // Freeze the quantity carried when each reversal was placed on the cycle
+        // this stop ended. A partial fill or a stop on a later position cannot
+        // give an older reversal a transaction. A trail with no stop or loss
+        // can use a native stop too, but is not the protective stop leg.
+        const auto& placements = std::as_const(placement_);
+        for (const auto& order : detail::run_consumer(require_host()).request_core().live()) {
+            const auto id = order.handle().incarnation;
+            const auto found = placements.find(id);
+            if (found == placements.end()) continue;
+            const auto& row = found->second;
+            if (row.placement_cycle == event.cycle_before
+                && declined_default_stop_reversal(row, order.request().trigger))
+                placement_.at(id).frozen_reversal_transaction = row.projection_tv_carry_qty;
+        }
     }
     if (placement_snapshot && event.opened_units != 0.0
         && (placement_snapshot->family == PineOrderFamily::Entry
@@ -29419,17 +29525,26 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             }
         }
     }
-    // A same-bar strategy.close or close_all that fills at a
-    // process_orders_on_close close is followed there by the reversing stop
-    // entries the close pass left for it (the recalculation fill-order correction).
+    // A closing-tick fill can release a reversal. A close_all with a comment
+    // settles during the calculation; at its receipt the script has finished
+    // its cancellations and the add can be tested against the unslipped close.
     if (placement_snapshot && event.closed_units > 0.0
         && (placement_snapshot->family == PineOrderFamily::Close
             || placement_snapshot->family == PineOrderFamily::CloseAll)
         && placement_snapshot->projection_created_bar == projection_bar_index(context)
         && config_.process_orders_on_close && !config_.calc_on_order_fills
-        && modeled_input() && !coof_recalc_active_
-        && event.cursor.point.path_phase == NativePathPhase::Close) {
-        fill_pooc_close_entries(event.raw_price, context, /*after_close=*/true);
+        && modeled_input() && !coof_recalc_active_) {
+        if (event.cursor.point.path_phase == NativePathPhase::Close) {
+            fill_pooc_close_entries(event.raw_price, context, /*after_close=*/true);
+        } else if (context.coordinate.provenance == NativePriceProvenance::Calculation
+                   && placement_snapshot->family == PineOrderFamily::CloseAll
+                   && placement_snapshot->source_id == "__pine_close_all"
+                   && !placement_snapshot->immediately && !bar_magnifier_
+                   && !config_.close_entries_rule_any && config_.pyramiding > 1
+                   && margins_disabled() && !cap.active()
+                   && has_live_family(PineOrderFamily::Entry)) {
+            fill_pooc_close_entries(event.raw_price, context, /*after_close=*/true, &*placement_snapshot);
+        }
     }
     // Once the calculation's last order that fills at a process_orders_on_close
     // close has filled there, the pass decides the calculation's exits,
@@ -33517,6 +33632,69 @@ double PendingIntentView::position_before_order(const PlacementSnapshot& target,
     });
     if (remaining <= internal::kQtyEpsilon) return 0.0;
     return std::copysign(remaining, signed_position);
+}
+
+bool PineExecutionAdapter::another_child_fills_on_leg(
+        const PlacementSnapshot& filled, const native_order::ExecutionAppliedEvent& event,
+        const NativeDecisionContext& context, bool closing_long) const {
+    const auto& point = context.coordinate;
+    if (point.provenance != NativePriceProvenance::Confirmed || event.cursor.t == 0.0
+        || stream_mode_ || bar_magnifier_ || config_.process_orders_on_close
+        || config_.close_entries_rule_any || !policy_script_bar_valid_
+        || policy_script_bar_.timestamp != context.script_bar_open_ms
+        || !filled.oca_name.empty() || finite_positive(filled.forced_execution_price)
+        || !native_order::point_eligible(event.birth(), point.ordinal, point.effective_time_ms)
+        || cap.active() || risk_.max_drawdown != 0 || risk_.max_intraday_loss != 0
+        || risk_.max_cons_loss_days != 0 || risk_.halted)
+        return false;
+
+    double end;
+    switch (point.path_phase) {
+    case NativePathPhase::High: end = policy_script_bar_.high; break;
+    case NativePathPhase::Low: end = policy_script_bar_.low; break;
+    case NativePathPhase::Close: end = policy_script_bar_.close; break;
+    default: return false;
+    }
+    // The implicit cancel group is per opening. Its other leg may already
+    // have ended in the broker while its source handle awaits retirement.
+    // Do not predict fills through another entry, a margin call, a shared
+    // group or a different exit family: their callbacks have their own rules.
+    bool reached = false;
+    for (const auto& live : detail::run_consumer(*host_).request_core().live()) {
+        const auto it = placement_.find(live.handle().incarnation);
+        if (it == placement_.end()) return false;
+        const auto& row = it->second;
+        if (!named_tick_child(row) || row.source_id != filled.source_id
+            || row.from_entry != filled.from_entry || !row.oca_name.empty()
+            || finite_positive(row.forced_execution_price)
+            || row.placement_cycle != filled.placement_cycle
+            || !std::holds_alternative<native_order::Independent>(live.request().owner)
+            || !native_order::point_eligible(live, point.ordinal, point.effective_time_ms))
+            return false;
+        if (row.per_entry_origin == filled.per_entry_origin || !(row.per_entry_units > 0)
+            || withdrawn(row.legs))
+            continue;
+        // Use the installed trigger: a raw extreme half a tick short of the
+        // order's printed price can reach it. At a shared level the remaining
+        // suffix includes the current print. Never look past this endpoint.
+        const auto& trigger = live.request().trigger;
+        if (row.family == PineOrderFamily::ExitLimit) {
+            const auto* limit = std::get_if<native_order::Limit>(&trigger);
+            if (!limit) return false;
+            if (row.leg_activation.limit_ready(current_position_cycle_, point.interval_index))
+                reached |= closing_long ? std::max(event.raw_price, end) >= limit->price
+                                        : std::min(event.raw_price, end) <= limit->price;
+        } else if (row.family == PineOrderFamily::ExitStop) {
+            const auto* stop = std::get_if<native_order::Stop>(&trigger);
+            if (!stop) return false;
+            if (row.leg_activation.stop_ready(current_position_cycle_, point.interval_index))
+                reached |= closing_long ? std::min(event.raw_price, end) <= stop->price
+                                        : std::max(event.raw_price, end) >= stop->price;
+        } else {
+            return false;
+        }
+    }
+    return reached;
 }
 
 } // namespace pineforge::source
