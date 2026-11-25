@@ -15535,6 +15535,21 @@ void PineExecutionAdapter::flush_pending_entries() {
                 && found->second.family != PineOrderFamily::CloseAll)) {
             return false;
         }
+        // A fill also takes the close off the book. Keep its entry until
+        // on_applied runs; discard it only if the close retired without filling.
+        if (magnified_fifo_closes(require_host(), config_, bar_magnifier_)) {
+            const auto& consumer = detail::run_consumer(require_host());
+            if (!consumer.request_core().find_live(parent)) {
+                if (std::find(live_handles_.begin(), live_handles_.end(), parent) == live_handles_.end())
+                    return true;
+                if (consumer.visit_commands_after(receipt_cursor_, [&](const native_order::CommandEvent& command) {
+                    if (const auto* e = std::get_if<native_order::CancelledEvent>(&command)) return e->handle() == parent;
+                    if (const auto* e = std::get_if<native_order::MatchRejectedEvent>(&command)) return e->handle() == parent;
+                    if (const auto* e = std::get_if<native_order::NoEffectEvent>(&command)) return e->handle() == parent;
+                    return false;
+                })) return true;
+            }
+        }
         pending_write(pending_entries_).push_back(std::move(entry));
         return true;
     });
