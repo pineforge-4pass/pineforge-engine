@@ -90,6 +90,22 @@ class TradePoolTests(unittest.TestCase):
                 self.assertEqual((r.trim_bars, r.warmup_bars), (1, 0))
                 self.assertEqual(r.bounds, ((START + 15 * 60) * 1000, (START + 60 * 60) * 1000))
 
+    def test_exterior_pairs_do_not_count_toward_interior_coverage(self):
+        bars = range(0, 90, 15)
+        tv = [trade(m) for m in bars]
+        for interior_side, pairs, tier in (("long", 2, "excellent"), ("short", 0, "weak")):
+            with self.subTest(interior_side=interior_side):
+                engine = [trade(m, direction=interior_side if m in (30, 45) else "long")
+                          for m in bars]
+                r = analyze(tv, engine, trim=2, bars=bars)
+                self.assertEqual((r.tv_gate_count, r.eng_gate_count, r.coverage_tv_count), (2, 2, 2))
+                self.assertEqual(r.matched_count, 4 + pairs)
+                self.assertEqual(r.count_abs_delta, 2 * (2 - pairs))
+                self.assertEqual(r.gating_matched_count, pairs)
+                self.assertEqual((r.coverage, r.unmatched_total, r.unmatched_in_window),
+                                 (pairs / 2, 2 - pairs, 2 - pairs))
+                self.assertEqual(r.label, tier)
+
 
 if __name__ == "__main__":
     unittest.main()
