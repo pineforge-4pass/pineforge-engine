@@ -1,10 +1,12 @@
 """Tests for the corpus grader's source and export readers."""
 
 import csv
+import json
 import unittest
 from datetime import datetime, timezone
 from io import StringIO
 from pathlib import PurePosixPath
+from posixpath import normpath
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from verify_corpus import (
@@ -22,6 +24,9 @@ class MemoryPath:
 
     def __truediv__(self, name):
         return MemoryPath(self.path / name, self.files)
+
+    def resolve(self):
+        return MemoryPath(PurePosixPath(normpath(self.path)), self.files)
 
     @property
     def name(self):
@@ -162,6 +167,34 @@ class ReadingRulesTests(unittest.TestCase):
                                                end * units_per_second)})
                 self.assertEqual(_ohlcv_span_ms(root),
                                  (start * 1000, end * 1000, interval * 1000))
+
+    def test_trim_uses_the_declared_chart_feed(self):
+        day = int(datetime(2025, 1, 1, tzinfo=timezone.utc).timestamp()) * 1000
+        hour = 60 * 60 * 1000
+        next_day = day + 24 * hour
+        files = {
+            "tv_trades.csv": trade_tape(
+                ("2025-01-01 01:00", "2025-01-01 02:00", 1, "L", "")),
+            "engine_trades.csv": trade_tape(
+                ("2025-01-01 01:00", "2025-01-01 02:00", 1, "", "41")),
+            "ohlcv.csv": feed(*(next_day + n * hour for n in range(4))),
+            "feeds/prices.csv": feed(*(day + n * hour for n in range(4))),
+            "/feeds/prices.csv": feed(*(day + n * hour for n in range(5))),
+        }
+        cases = (
+            ({}, (next_day + hour, next_day + 2 * hour), (0, 0)),
+            ({"ohlcv_csv": "feeds/prices.csv"}, (day + hour, day + 2 * hour), (1, 1)),
+            ({"ohlcv_csv": "/feeds/prices.csv"}, (day + hour, day + 3 * hour), (1, 1)),
+        )
+        for metadata, bounds, gated in cases:
+            with self.subTest(metadata=metadata):
+                files["inputs.json"] = json.dumps(
+                    {"tv_trades_csv_tz": "utc", "trim_bars": 1, **metadata})
+                result = analyze_strategy(probe(files))
+                self.assertEqual((result.tv_raw_count, result.eng_raw_count,
+                                  result.matched_count), (1, 1, 1))
+                self.assertEqual(result.bounds, bounds)
+                self.assertEqual((result.tv_gate_count, result.eng_gate_count), gated)
 
 
 if __name__ == "__main__":
