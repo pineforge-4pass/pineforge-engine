@@ -551,7 +551,7 @@ def parse_trades(csv_path: Path, *, tz) -> list[TradePair]:
             if kind.startswith("Entry"):
                 r["entry_time"] = parse_dt(time_field, tz)
                 r["entry_price"] = price
-                r["entry_signal"] = str(row.get("Signal") or "").strip()
+                r["entry_signal"] = row.get("Signal") or ""
                 raw_identity = str(
                     row.get("Engine entry incarnation")
                     or row.get("Engine entry ID")
