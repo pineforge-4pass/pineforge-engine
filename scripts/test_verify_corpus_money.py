@@ -78,6 +78,22 @@ class MoneyTests(unittest.TestCase):
                             for entry, close, tag, qty in shape]
                     self.assertEqual(has_cross_entry_fifo_allocation(tape), observations == 1)
 
+    def test_quantity_normalization_includes_both_two_percent_edges(self):
+        for tv_qty, eng_qty, tv_pnl, eng_pnl, residual in (
+            (98, 100, 98, 100, 0), (102, 100, 102, 100, 0),
+            (.98, 1, 98, 100, 0), (1.02, 1, 102, 100, 0),
+            (103, 100, 103, 100, 3), (97, 100, 97, 100, 3),
+            (101, 100, 100, 100, 0), (0, 100, 98, 100, 2),
+        ):
+            with self.subTest(tv_qty=tv_qty, eng_qty=eng_qty):
+                tv = [lot(i * 900, qty=tv_qty, pnl=tv_pnl) for i in range(6)]
+                eng = [replace(t, qty=eng_qty, pnl=eng_pnl) for t in tv]
+                r = grade(tv, eng)
+                self.assert_pairs(r, 6)
+                self.assertEqual(len(r.pnl_deltas), 6)
+                self.assertAlmostEqual(r.pnl_p90, residual / tv_pnl)
+                self.assertEqual(r.label, "strong" if residual else "excellent")
+
 
 if __name__ == "__main__":
     unittest.main()
