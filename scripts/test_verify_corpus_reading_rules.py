@@ -7,7 +7,10 @@ from io import StringIO
 from pathlib import PurePosixPath
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from verify_corpus import analyze_strategy, detect_parity_profile, parse_dt, tv_tzinfo
+from verify_corpus import (
+    analyze_strategy, detect_parity_profile, distinct_entry_fill_keys,
+    parse_dt, parse_trades, tv_tzinfo,
+)
 
 
 class MemoryPath:
@@ -113,6 +116,32 @@ class ReadingRulesTests(unittest.TestCase):
         with self.subTest(case="unknown name"):
             with self.assertRaisesRegex(ValueError, "tv_trades_csv_tz.*Asia/Taipeii"):
                 tv_tzinfo({"tv_trades_csv_tz": "Asia/Taipeii"})
+
+    def test_distinct_signals_preserve_trailing_space(self):
+        entry, exit_time = "2025-01-01 00:00", "2025-01-01 00:15"
+        entry_key = (int(datetime(2025, 1, 1, tzinfo=timezone.utc).timestamp()),
+                     100, "long")
+        engine = trade_tape((entry, exit_time, 1, "", "41"))
+        for signal, keys, counts in (
+            ("L", set(), (1, 1, 0, 0)),
+            ("L ", {entry_key}, (2, 1, 1, 1)),
+        ):
+            with self.subTest(second_signal=signal):
+                root = probe({
+                    "inputs.json": '{"tv_trades_csv_tz":"utc"}',
+                    "tv_trades.csv": trade_tape(
+                        (entry, exit_time, 0.5, "L", ""),
+                        (entry, exit_time, 0.5, signal, "")),
+                    "engine_trades.csv": engine,
+                })
+                tv = parse_trades(root / "tv_trades.csv", tz=timezone.utc)
+                self.assertEqual(len(tv), 2)
+                result = analyze_strategy(root)
+                self.assertEqual(result.matched_count, 1)
+                self.assertEqual((result.tv_gate_count, result.eng_gate_count,
+                                  result.count_abs_delta, result.distinct_entry_mismatches),
+                                 counts)
+                self.assertEqual(distinct_entry_fill_keys(tv), keys)
 
 
 if __name__ == "__main__":
