@@ -183,15 +183,21 @@ def is_interior(entry_ms: int, bounds: tuple[int, int] | None) -> bool:
     return lo <= entry_ms <= hi
 
 
-def _ohlcv_span_ms(strategy_dir: Path) -> tuple[int | None, int | None, int]:
+def _ohlcv_span_ms(
+    strategy_dir: Path, *, ohlcv_csv: str | None = None,
+) -> tuple[int | None, int | None, int]:
     """Best-effort: read first/last timestamps + bar interval from an OHLCV csv.
 
-    Looks for ``ohlcv.csv`` (or ``data.csv``) next to strategy.pine. Honors a
-    ``bar_ms`` override in inputs.json. Returns (first_ms, last_ms, bar_ms);
+    Uses the declared ``ohlcv_csv`` or looks for ``ohlcv.csv``, ``data.csv``
+    or ``candles.csv`` next to strategy.pine. Honors a ``bar_ms`` override
+    in inputs.json. Returns (first_ms, last_ms, bar_ms);
     any of these may be None/0 if unavailable, in which case interior trimming
     is skipped.
     """
-    candidates = [strategy_dir / n for n in ("ohlcv.csv", "data.csv", "candles.csv")]
+    if ohlcv_csv is not None:
+        candidates = [(strategy_dir / ohlcv_csv).resolve()]
+    else:
+        candidates = [strategy_dir / n for n in ("ohlcv.csv", "data.csv", "candles.csv")]
     csv_path = next((p for p in candidates if p.is_file()), None)
     if csv_path is None:
         return None, None, 0
@@ -1271,7 +1277,8 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     # Optional interior trim: drop edge / warmup bars from the headline stats.
     trim_bars = int(meta.get("trim_bars", 0) or 0)
     warmup_bars = int(meta.get("warmup_bars", 0) or 0)
-    first_ms, last_ms, bar_ms = _ohlcv_span_ms(strategy_dir)
+    first_ms, last_ms, bar_ms = _ohlcv_span_ms(
+        strategy_dir, ohlcv_csv=str(meta["ohlcv_csv"]) if "ohlcv_csv" in meta else None)
     bounds = interior_time_bounds(trim_bars, warmup_bars, first_ms, last_ms, bar_ms)
 
     def _split_interior(pairs: list[tuple[TradePair, TradePair]]) -> list[tuple[TradePair, TradePair]]:
