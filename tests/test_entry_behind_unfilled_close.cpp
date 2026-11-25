@@ -1,5 +1,6 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/source/pine_adapter.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 #include <cstdint>
 #include <exception>
@@ -16,6 +17,119 @@ namespace no = native_order;
 enum class End { Cancel, Risk, Flat, Fill, CurrentFill };
 constexpr std::int64_t start = 1'736'683'200'000LL, hour = 3'600'000;
 constexpr int hours = 5, per_hour = 6;
+
+std::vector<Bar> prices() {
+    std::vector<Bar> feed;
+    for (int i = 0; i < hours * per_hour; ++i) {
+        const double p = 100 + i / per_hour;
+        feed.push_back({p, p, p, p, 1, start + i * (hour / per_hour)});
+    }
+    return feed;
+}
+
+int pending(const source::PendingIntentView& view, const char* id) {
+    int count = 0;
+    for (int i = 0; i < view.size(); ++i) {
+        pf_pending_order_v1_t row{};
+        if (view.copy_v1(i, &row) != 0) throw std::runtime_error("unreadable pending order");
+        count += std::string(row.id) == id;
+    }
+    return count;
+}
+
+no::RequestHandle waiting_parent(const source::PineExecutionAdapter& adapter, const char* id) {
+    no::RequestHandle parent{};
+    for (const auto& row : adapter.fixture_pending_snapshots()) {
+        if (!row.staged || row.snapshot.source_id != id) continue;
+        if (parent.incarnation || !row.snapshot.paired_reversal_parent.incarnation)
+            throw std::runtime_error("expected one entry waiting for an identified close");
+        parent = row.snapshot.paired_reversal_parent;
+    }
+    if (!parent.incarnation || pending(adapter.pending_intent_view(), id) != 1)
+        throw std::runtime_error("waiting entry missing from the public book");
+    return parent;
+}
+
+// The native flatten is first in the next open's queue. The Pine close
+// loses its position there, after the placing bar has finished its flush.
+class PublishedBook final : public source::PineStrategyHost {
+public:
+    explicit PublishedBook(bool suppress) {
+        set_syminfo_timezone("UTC");
+        set_syminfo_session("24x7");
+        set_syminfo_mintick(1);
+        set_syminfo_metadata("qty_step", 0.25);
+        set_probe_suppress_tail_logic(suppress);
+        fixture_retain_all_events();
+    }
+    void on_source_bar(const Bar& b) override {
+        const int i = pine_bar_index();
+        if (i != bodies++ || b.timestamp != start + i * hour)
+            throw std::runtime_error("unexpected script bar");
+        if (i == 0) strategy_entry("seed", false);
+        if (i == hours - 2) {
+            const auto lots = native_open_lots(103);
+            if (lots.size() != 1 || lots[0].entry_label != "seed" || lots[0].signed_units != -1
+                || lots[0].entry_price != 101 || lots[0].entry_bar_index != 1)
+                throw std::runtime_error("missing one-unit short");
+            const auto placed = submit({no::Flatten{}, "flatten", ""});
+            if (!placed.handle) throw std::runtime_error("flatten was not accepted");
+            flatten = *placed.handle;
+            strategy_close("seed");
+            strategy_entry("next", true);
+            parent = waiting_parent(adapter_, "next");
+        }
+        if (i == hours - 1) body_read = pending(pending_intent_view(), "next");
+    }
+    int bodies = 0, body_read = -1;
+    no::RequestHandle parent{}, flatten{};
+};
+
+bool publication(bool suppress, const char* name) {
+    const auto feed = prices();
+    PublishedBook host(suppress);
+    host.run(feed.data(), static_cast<int>(feed.size()), "10", "60", true);
+    int close_ends = 0, close_fills = 0, flatten_fills = 0, child_fills = 0;
+    std::uint64_t flatten_ordinal = 0, end_ordinal = 0;
+    bool accepted = false;
+    for (const auto& row : host.native_events(0)) {
+        if (!row.command) continue;
+        if (const auto* e = std::get_if<no::AcceptedEvent>(&*row.command))
+            accepted |= e->handle() == host.parent && e->request().label == "__close__seed";
+        if (const auto* e = std::get_if<no::ExecutionAppliedEvent>(&*row.command)) {
+            close_fills += e->handle() == host.parent;
+            child_fills += e->request().label == "next";
+            if (e->handle() == host.flatten && e->closed_units == 1
+                && e->interval_index() == hours - 1 && e->resolved_price == 104) {
+                ++flatten_fills;
+                flatten_ordinal = e->ordinal;
+            }
+        }
+        if (const auto* e = std::get_if<no::NoEffectEvent>(&*row.command); e && e->handle() == host.parent) {
+            ++close_ends;
+            end_ordinal = e->ordinal;
+        }
+        if (const auto* e = std::get_if<no::CancelledEvent>(&*row.command); e && e->handle() == host.parent) {
+            ++close_ends;
+            end_ordinal = e->ordinal;
+        }
+    }
+    if (host.last_run_status() != 0 || !host.last_error().empty() || !accepted || close_ends != 1
+        || close_fills || flatten_fills != 1 || end_ordinal <= flatten_ordinal || host.bodies != hours - int(suppress)) {
+        std::cerr << "NOT COMPARED " << name << ": bodies=" << host.bodies << " close ends=" << close_ends
+                  << " close fills=" << close_fills << " flatten fills=" << flatten_fills
+                  << " error=" << host.last_error() << '\n';
+        return false;
+    }
+    const int read = suppress ? pending(host.pending_intent_view(), "next") : host.body_read;
+    if (read != 0 || child_fills != 0) {
+        std::cerr << "FAIL " << name << ": expected pending=0 fills=0, got pending=" << read
+                  << " fills=" << child_fills << '\n';
+        return false;
+    }
+    std::cout << "PASS " << name << '\n';
+    return true;
+}
 
 // A host lets the test set a loss limit at precommit. The normal Pine risk
 // latches gate openings; a reducing close does not ask them for admission.
@@ -100,11 +214,7 @@ public:
 };
 
 bool check(End end, const char* name) {
-    std::vector<Bar> feed;
-    for (int i = 0; i < hours * per_hour; ++i) {
-        const double p = 100 + i / per_hour;
-        feed.push_back({p, p, p, p, 1, start + i * (hour / per_hour)});
-    }
+    const auto feed = prices();
     Host host(end);
     host.run(feed.data(), static_cast<int>(feed.size()), "10", "60", true);
     bool accepted = false, terminal = false, flattened = false;
@@ -163,6 +273,14 @@ bool check(End end, const char* name) {
 
 int main() {
     bool ok = true;
+    for (bool suppress : {false, true}) {
+        const char* name = suppress ? "suppressed final bar" : "next script read";
+        try { ok &= publication(suppress, name); }
+        catch (const std::exception& e) {
+            std::cerr << "NOT COMPARED " << name << ": " << e.what() << '\n';
+            ok = false;
+        }
+    }
     for (const auto& [end, name] : {std::pair{End::Cancel, "script-cancel"},
                                    std::pair{End::Risk, "host-loss-limit"},
                                    std::pair{End::Flat, "flat-book"},
