@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- A requested EMA first evaluated when a sparse chart bar is published now uses the same seed as during the original requested evaluation. (#994)
 - A runtime-selected `request.security` timeframe now omits the bucket that opened before the declared origin and uses the requested context's EMA seed. (#994)
 - An EMA evaluated on another symbol's installed bars now uses the requested context's seed when a series origin is declared. (#994)
 - With `close_entries_rule = "ANY"`, a market reversal that reuses an entry ID now retires the whole stop and limit (both levels above zero) placed with the unfilled order that the closed entry replaced. Those orders could close the new position on its entry bar. Runs with the bar magnifier, with orders processed on the close or on a live stream are not changed.
