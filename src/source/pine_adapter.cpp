@@ -17154,6 +17154,20 @@ void PineExecutionAdapter::apply_frozen_reversal_close(
     result.shape = native_order::OpeningShape::Transact;
 }
 
+namespace {
+bool declined_stop_from_flat(const PlacementSnapshot& row, double book,
+                            const native_order::Trigger& trigger) noexcept {
+    // A default percent stop up to 100% has its own placement check.
+    // Explicit quantities, fixed, cash and larger percentages use the general policy.
+    return book == 0.0 && row.affordability_close_only && !row.affordability_policy_active
+        && std::isnan(row.exit_levels.limit) && finite_positive(row.exit_levels.stop)
+        && std::holds_alternative<native_order::Stop>(trigger)
+        && row.projection_position_side == static_cast<std::int32_t>(
+            row.is_long ? PositionSide::SHORT : PositionSide::LONG)
+        && finite_positive(row.projection_tv_carry_qty);
+}
+} // namespace
+
 native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         const NativeExecutionTermsFacts& facts) const {
     native_order::ExecutionTerms result{facts.default_resolved_price, std::nullopt,
@@ -18523,7 +18537,10 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         }
         if (affordability_close_only) {
             if (!opposite) {
-                result.units = 0.0;
+                // The declined leg contributes no units. The stop can still
+                // transact the quantity it was placed to close.
+                result.units = declined_stop_from_flat(source, facts.position.signed_units, trigger)
+                    ? source.projection_tv_carry_qty : 0.0;
                 return result;
             }
             result.units = keep_mc_close_surplus ? 1.0
@@ -19364,7 +19381,10 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         // +1-gap reversal that the source broker declines.
         const double margin = source.is_long ? config_.margin_long : config_.margin_short;
         const double fx = active_staged_fx(view.cursor.point.effective_time_ms);
-        const double required = source.sizing.frozen_units * view.resolved_price
+        const double units = declined_stop_from_flat(source, physical_now.signed_units,
+                                                     view.definition->request.trigger)
+            ? std::abs(view.inspected_opened_units) : source.sizing.frozen_units;
+        const double required = units * view.resolved_price
             * staged_.syminfo.pointvalue * fx * margin / 100.0;
         const double equity = source.sizing.equity;
         const double guard = std::max(1e-9, std::abs(equity) * 1e-12);
