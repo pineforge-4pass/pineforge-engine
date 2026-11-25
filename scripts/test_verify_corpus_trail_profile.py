@@ -528,15 +528,22 @@ class GradingPolicyReportTests(unittest.TestCase):
                     tv_pnls=[10.0] * len(tv_exits),
                     engine_pnls=[10.0] * len(engine_exits),
                 )
+                self.assertTrue(result.tv_exists and result.eng_exists)
+                self.assertEqual((result.tv_raw_count, result.eng_raw_count, result.matched_count),
+                                 (len(tv_exits), len(engine_exits), 0))
                 self.assertTrue(result.no_aligned_trades)
                 self.assertEqual(result.profile, "production")
                 self.assertEqual(result.tier, tier)
                 row = self.assert_metric_report(result)
+                gross = len(tv_exits) + len(engine_exits)
+                self.assertEqual((row["count_abs_delta"], row["count_delta"]),
+                                 (gross, gross / max(len(tv_exits), len(engine_exits), 1)))
                 self.assertIn("grading_policy", row)
                 self.assertIsNone(row["grading_policy"])
                 self.assertEqual(
                     row["metric_observations"], {"entry": 0, "exit": 0, "pnl": 0}
                 )
+                self.assertEqual(row["tier"], "minimal")
 
     def test_missing_tapes_do_not_invent_an_applied_policy(self):
         for omit_tv, omit_engine in ((True, False), (False, True), (True, True)):
