@@ -1301,9 +1301,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
             return pairs
         return [(t, e) for (t, e) in pairs if is_interior(t.entry_time * 1000, bounds)]
 
-    interior_matched = _split_interior(matched)
-    # Use interior-only matched pairs for headline gating when bounds are set.
-    gating_matched = interior_matched if (bounds is not None and interior_matched) else matched
+    gating_matched = _split_interior(matched)
     # The mark pairs are matched trades on both sides of every count: the
     # gate pools, the gated matches, the coverage numerator and denominator.
     # Their rows left the lists above, so they are added back as a number —
@@ -1315,8 +1313,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
 
     net_count_abs_delta = abs(tv_gate_n - eng_gate_n)
     # Each unmatched gated trade counts, even when the two list sizes agree.
-    # Count only pairs with both rows in the gated pools: metric fallback can
-    # include matches outside the interior when no interior pair exists.
+    # Count only pairs with both rows in the gated pools.
     tv_gate_ids = {id(t) for t in tv_gate}
     eng_gate_ids = {id(e) for e in eng_gate}
     count_matched_n = n_gate_marks + sum(
@@ -1397,7 +1394,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         has_cross_entry_fifo_allocation(tv_sched_rows)
         or has_cross_entry_fifo_allocation(eng_sched_rows)
     )
-    if fragmented_fifo and entry_p90 < 1e-12 and count_delta < STRONG_COUNT_DELTA:
+    if gating_matched and fragmented_fifo and entry_p90 < 1e-12 and count_delta < STRONG_COUNT_DELTA:
         sched_exit_deltas, sched_pnl_deltas = schedule_exit_metrics(tv_sched_rows, eng_sched_rows)
         if sched_exit_deltas:
             sched_exit_p90 = percentile(sched_exit_deltas, grade_percentile)
