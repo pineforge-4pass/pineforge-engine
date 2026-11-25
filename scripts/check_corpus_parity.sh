@@ -93,7 +93,7 @@ PY="${PYTHON:-python3}"
 # trades (#836); measured 2026-11-19 on corpus 93d956a2, and all 312 pinned
 # strategy trade outputs still match the baseline hashes.
 # scripts/verify_corpus.py prints this line verbatim.
-EXPECTED_VERIFY="${EXPECTED_VERIFY:-Verified 312 strategies — excellent=303, strong=8, moderate=0, weak=0, minimal=0, anomaly=1, engine_only=0, missing=0}"
+EXPECTED_VERIFY="${EXPECTED_VERIFY:-Verified 312 strategies — excellent=304, strong=7, moderate=0, weak=0, minimal=0, anomaly=1, engine_only=0, missing=0}"
 
 log()  { printf '\033[1;34m[corpus-parity]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[corpus-parity]\033[0m %s\n' "$*" >&2; }
