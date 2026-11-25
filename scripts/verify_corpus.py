@@ -85,11 +85,13 @@ COVERAGE_MODERATE  = 0.75
 # applies when the sizing drift itself is small.
 QTY_NORM_BAND = 0.02  # |tv_qty/eng_qty - 1| <= 2%
 
-# Pine-source comment-strippers + trail_* matcher for profile auto-detect.
-# Matches canonical pineforge-utils/validator/validate.py::detect_parity_profile.
-_LINE_COMMENT_PATTERN = re.compile(r"//.*?$", re.MULTILINE)
-_BLOCK_COMMENT_PATTERN = re.compile(r"/\*.*?\*/", re.DOTALL)
-_TRAIL_PATTERN = re.compile(r"\btrail_(points|offset|price)\s*=", re.IGNORECASE)
+# Scan strings and comments together so markers inside a string stay literal.
+_PINE_NON_CODE_PATTERN = re.compile(
+    r"//[^\r\n]*|/\*.*?\*/"
+    r"|(?P<quote>\"\"\"|'''|\"|')(?:\\.|(?!(?P=quote))[^\\])*(?P=quote)",
+    re.DOTALL,
+)
+_TRAIL_PATTERN = re.compile(r"\btrail_(?:points|offset|price)\s*=(?!=)")
 
 # Per-strategy near-zero PnL filter: trades whose |tv_pnl| < $0.01 are
 # excluded from pnl p90 so scratch trades don't blow up the per-trade ratio.
@@ -110,12 +112,8 @@ TV_PNL_ROUNDING_EPSILON_USD = 0.005
 
 
 def detect_parity_profile(pine_source: str) -> str:
-    """Return 'production' if pine source uses any trail_* exit parameter, else 'strict'.
-
-    Backport of pineforge-utils/validator/validate.py::detect_parity_profile.
-    """
-    cleaned = _BLOCK_COMMENT_PATTERN.sub("", pine_source)
-    cleaned = _LINE_COMMENT_PATTERN.sub("", cleaned)
+    """Return 'production' for a trailing assignment in code, else 'strict'."""
+    cleaned = _PINE_NON_CODE_PATTERN.sub(" ", pine_source)
     return "production" if _TRAIL_PATTERN.search(cleaned) else "strict"
 
 
