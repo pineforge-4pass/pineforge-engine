@@ -2045,7 +2045,7 @@ public:
     void end_coof_recalc() noexcept;
     bool suppress_grouped_stop_recalc(
         const native_order::ExecutionAppliedEvent&,
-        const NativeDecisionContext&) const noexcept;
+        const NativeDecisionContext&) const;
     // The event fills a strategy.close / close_all sent with immediately =
     // true, executed by the bar's own calculation.
     bool immediate_calculation_close(
@@ -3538,6 +3538,8 @@ private:
     void observe_retirement_expiry(const PlacementSnapshot&, std::int64_t interval) noexcept;
     void sweep_retired_rows(const NativeDecisionContext&, RetirementWork&);
     void finish_retirement_phases();
+    bool another_child_fills_on_leg(const PlacementSnapshot&, const native_order::ExecutionAppliedEvent&,
+                                    const NativeDecisionContext&, bool closing_long) const;
 #ifndef NDEBUG
     std::array<std::uint64_t, 3> retirement_validation_state() const;
 #endif
