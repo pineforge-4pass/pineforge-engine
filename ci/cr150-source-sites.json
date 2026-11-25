@@ -34516,6 +34516,21 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "entries",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: observe_terminal_receipts ( ) #1",
+    "const auto observe = [ & ] ( const native_order :: CommandEvent & command ) #1",
+    "std :: visit ( [ & ] ( const auto & event ) #1",
+    "if ( ended_parent && ! pending_entries_ . empty ( ) && magnified_fifo_closes ( host , config_ , bar_magnifier_ ) ) #1",
+    "if ( first ! = pending_entries_ . end ( ) ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "entries = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "remaining",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -39214,7 +39229,7 @@
    "symbol": "key",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "namespace #11",
+    "namespace #12",
     "[ [ gnu :: noinline ] ] std :: int64_t civil_chart_day_key ( AdapterLookupIndex * index , std :: int64_t secs ) noexcept #1"
    ],
    "cls": "assign",
@@ -41205,7 +41220,7 @@
    "symbol": "marketable",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: fill_pooc_close_entries ( double raw_close , const NativeDecisionContext & context , bool after_close ) #1"
+    "void PineExecutionAdapter :: fill_pooc_close_entries ( double raw_close , const NativeDecisionContext & context , bool after_close , const PlacementSnapshot * flatten ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: vector < std :: pair < native_order :: RequestHandle , PlacementSnapshot > >",
@@ -41216,7 +41231,7 @@
    "symbol": "marketable",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: fill_pooc_close_entries ( double raw_close , const NativeDecisionContext & context , bool after_close ) #1",
+    "void PineExecutionAdapter :: fill_pooc_close_entries ( double raw_close , const NativeDecisionContext & context , bool after_close , const PlacementSnapshot * flatten ) #1",
     "for ( const auto & handle : live_handles_ ) #1"
    ],
    "cls": "grow",
@@ -41228,7 +41243,7 @@
    "symbol": "comment",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: fill_pooc_close_entries ( double raw_close , const NativeDecisionContext & context , bool after_close ) #1",
+    "void PineExecutionAdapter :: fill_pooc_close_entries ( double raw_close , const NativeDecisionContext & context , bool after_close , const PlacementSnapshot * flatten ) #1",
     "for ( auto & candidate : marketable ) #1"
    ],
    "cls": "assign",
