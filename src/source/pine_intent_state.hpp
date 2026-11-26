@@ -170,6 +170,13 @@ struct PineIntentState : NativeHostState {
     NativeCurrentPointView terminal_point{};
     std::vector<PineIntentRow> rows;
     const NativeCurrentPointView* replay_point = nullptr;
+    // Not part of the capture. The consumer has one host-state slot and a
+    // selected run's capture holds it, so the other state the Pine layer parks
+    // for a run is kept here: timeframe.change's N-day partitions
+    // (TimeframeChangeState, pine_host_reads.hpp). Null until a call asks for
+    // one. Like the slot's own occupant it is dropped with this state at the
+    // next run's begin, and it is neither hashed nor replayed.
+    std::unique_ptr<NativeHostState> timeframe_change;
 };
 
 // A selected pre-roll call the capture cannot take is the engine's fault, never

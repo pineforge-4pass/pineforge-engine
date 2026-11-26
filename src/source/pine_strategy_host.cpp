@@ -4748,16 +4748,17 @@ double source::PineStrategyHost::request_currency_rate(
 // timeframe, a W or M multiple, another symbol's requested context and a
 // partition the rule does not yield stay the namespace-level answer.
 //
-// The run's partitions are kept in the run cache the consumer holds for this
-// host (PineRunCache::timeframe_change_periods, pine_host_reads.hpp), never in
-// this object, whose layout is the generated script's ABI. Each is built on
-// the first call naming its timeframe and read until the consumer drops the
-// cache as the next run begins, before that run's prepare: it reads the bars
-// of the run that built it. A partition is derived from the run's bars and
-// the symbol's facts alone, so where the consumer holds no cache for this
-// host and run (its switch is off, or the cache could not be allocated), or
-// the cache's slots are all taken by other timeframes, the same partition is
-// built for the call and not kept.
+// The run's partitions are parked in the consumer's host-state slot for this
+// host and run (detail::TimeframeChangeState, pine_host_reads.hpp), never in
+// this object, whose layout is the generated script's ABI. Each is planned on
+// the first call naming its timeframe -- a timeframe the rule yields no
+// partition for is kept as that answer -- and read until the consumer drops
+// the state as the next run begins, before that run's prepare: it reads the
+// bars of the run that planned it. Planning walks the run's feeds, so no call
+// repeats it: the slot has no switch, unlike the consumer's host cache, and
+// keeps a row for every N-day timeframe the script names. Outside a running
+// run there is no run to keep a partition for, none is planned, and the
+// answer is the namespace-level one.
 bool source::PineStrategyHost::tf_change(std::int64_t prev_ms, std::int64_t curr_ms,
                                          const std::string& tf, const std::string& tz,
                                          const std::string& session) const {
@@ -4785,29 +4786,10 @@ bool source::PineStrategyHost::tf_change(std::int64_t prev_ms, std::int64_t curr
         feeds.exchange_calendar = session_template_knows_early_close();
         return make_multi_day_period_source(feeds);
     };
-    std::shared_ptr<TimeframeAggregator::PeriodSource> unkept;
-    TimeframeAggregator::PeriodSource* periods = nullptr;
-    bool kept = false;
-    if (detail::PineRunCache* const run_facts = detail::run_cache(
-            detail::run_consumer(*this), &adapter_, adapter_.run_counter_)) {
-        for (auto& slot : run_facts->timeframe_change_periods) {
-            if (slot.days == 0) {
-                // The first free slot: this timeframe has none yet. A build
-                // that throws leaves the slot free.
-                slot.periods = build_partition();
-                slot.days = days;
-            }
-            if (slot.days == days) {
-                periods = slot.periods.get();
-                kept = true;
-                break;
-            }
-        }
-    }
-    if (!kept) {
-        unkept = build_partition();
-        periods = unkept.get();
-    }
+    detail::TimeframeChangeState* const change_state = detail::timeframe_change_state(*this);
+    TimeframeAggregator::PeriodSource* const periods = change_state == nullptr
+        ? nullptr
+        : detail::timeframe_change_periods(*change_state, days, build_partition);
     std::int64_t prev_open = 0;
     std::int64_t curr_open = 0;
     bool last = false;

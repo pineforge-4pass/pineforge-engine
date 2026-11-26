@@ -1688,7 +1688,7 @@ protected:
     // run cannot build keep the namespace-level answer (pine_strategy_host.cpp).
     // The run's partitions are no member of this class, whose layout is the
     // generated script's ABI: they are parked with the consumer that serves
-    // the run (PineRunCache, src/source/pine_host_reads.hpp).
+    // the run (TimeframeChangeState, src/source/pine_host_reads.hpp).
     bool tf_change(std::int64_t prev_ms, std::int64_t curr_ms, const std::string& tf,
                    const std::string& tz, const std::string& session) const;
     // A class-scope name hides every namespace-level overload: the UTC form
