@@ -738,6 +738,46 @@ public:
     }
 };
 
+// ta.vwma(source, length) as the Pine reference manual defines it:
+//     ta.sma(source * volume, length) / ta.sma(volume, length)
+// with two ta::SMA windows that take their inputs separately. ta::VWMA keeps
+// complete pairs instead: a bar whose source or volume is na enters neither
+// of its windows and answers na. Here a bar whose source is na and whose
+// volume is not still enters the volume window, and the product window holds
+// its last mean, as ta::SMA does for an na input. So the answer on such a bar
+// is the held product mean over the new volume mean, and the two windows
+// cover different bars until `length` further complete pairs have arrived.
+// An na volume is missing in both windows. On bars without na the values are
+// those of the two ta::SMA calls, not ta::VWMA's running sums, and can differ
+// from ta::VWMA in the last place. A zero volume mean answers na, as a zero
+// total weight does in ta::VWMA. The definition is the manual's; no
+// TradingView recording of a bar with an na source backs it yet.
+// Members: the length constructor, compute, recompute (each window replays
+// its own bar) and observe_owned_storage, the ones ta::VWMA has.
+class PineVwma {
+    ta::SMA product_;
+    ta::SMA volume_;
+
+    static double quotient(double product_mean, double volume_mean) {
+        if (volume_mean == 0.0) return na<double>();
+        return product_mean / volume_mean;
+    }
+
+public:
+    explicit PineVwma(int length) : product_(length), volume_(length) {}
+    double compute(double source, double volume) {
+        const double product_mean = product_.compute(source * volume);
+        return quotient(product_mean, volume_.compute(volume));
+    }
+    double recompute(double source, double volume) {
+        const double product_mean = product_.recompute(source * volume);
+        return quotient(product_mean, volume_.recompute(volume));
+    }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        ::pineforge::observe_owned_members(out, product_, volume_);
+    }
+};
+
 }  // namespace source
 }  // namespace pineforge
 
