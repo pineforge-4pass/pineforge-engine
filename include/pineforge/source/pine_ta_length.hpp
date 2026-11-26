@@ -690,6 +690,54 @@ public:
     }
 };
 
+// The check ta.supertrend's two arguments get on the first execution of a
+// call site, whatever their qualifier: PineSupertrend::compute makes it for a
+// factor that is not a constant, PineFixedSupertrend below for a constant or
+// input one. atrPeriod first, through simple_ta_length ("supertrend",
+// "atrPeriod": na, zero or a negative period stops the run), then the factor:
+// zero or a negative factor stops the run with "Invalid value of the 'factor'
+// argument (<value>) in the 'supertrend' function. It must be > 0."; an na
+// factor is accepted. Returns the checked atrPeriod.
+int supertrend_first_execution_period(double factor, double atr_period);
+
+// ta.supertrend(factor, atrPeriod) with a constant or input factor and
+// atrPeriod: the checked form of ta::Supertrend, as PineEma is of ta::EMA.
+// The constructor stores the two arguments and never throws, so an invalid
+// one cannot stop a run before its first bar. The first compute() or
+// recompute() makes the check above, the one a factor that is not a constant
+// gets, and then builds ta::Supertrend from the checked arguments. A failed
+// check builds nothing, so the next call checks again. After a passed check
+// every call delegates to that class, so the line and direction for a valid
+// pair are the class's own. The factor is taken as an int, int64 or double
+// (ta_number keeps an integer na as na) and atrPeriod as a length
+// (ta_length_number). Covered: the two-argument constructor, compute,
+// recompute and observe_owned_storage.
+class PineFixedSupertrend {
+    double factor_;
+    double atr_period_;
+    std::optional<ta::Supertrend> object_;
+
+    ta::Supertrend& bound() {
+        if (!object_)
+            object_.emplace(factor_, supertrend_first_execution_period(factor_, atr_period_));
+        return *object_;
+    }
+
+public:
+    template <class Factor, class Period>
+    PineFixedSupertrend(Factor factor, Period atr_period)
+        : factor_(ta_number(factor)), atr_period_(ta_length_number(atr_period)) {}
+    ta::SupertrendResult compute(double high, double low, double close) {
+        return bound().compute(high, low, close);
+    }
+    ta::SupertrendResult recompute(double high, double low, double close) {
+        return bound().recompute(high, low, close);
+    }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        ::pineforge::observe_owned_storage(out, object_);
+    }
+};
+
 }  // namespace source
 }  // namespace pineforge
 
@@ -697,3 +745,5 @@ public:
 #define PINEFORGE_HAS_TA_SERIES_LENGTH 1
 // Feature macro: PineMom and PineRoc exist.
 #define PINEFORGE_HAS_PINE_POSITIONAL_LAG 1
+// Feature macro: PineFixedSupertrend exists.
+#define PINEFORGE_HAS_PINE_FIXED_SUPERTREND 1

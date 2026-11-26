@@ -476,12 +476,12 @@ ta::SupertrendResult PineSupertrend::step(double high, double low, double close,
 ta::SupertrendResult PineSupertrend::compute(double factor, double atr_period, double high,
                                              double low, double close) {
     if (!latched_) {
-        atr_.emplace(simple_ta_length(atr_period, "supertrend", "atrPeriod"));
         // Only the latched factor is checked: an na one is accepted (and read
         // as na), zero or a negative one stops the run on the first execution
         // (tv/edge st-factor-zero / -neg: RE10001 on bar 0); a later 0 or -2
-        // is never read (st-factor-zero-later, 60/60 equal to factor 3).
-        if (!is_na(factor) && factor <= 0.0) factor_not_positive(factor);
+        // is never read (st-factor-zero-later, 60/60 equal to factor 3). The
+        // check itself is supertrend_first_execution_period, at the end.
+        atr_.emplace(supertrend_first_execution_period(factor, atr_period));
         factor_ = factor;
         latched_ = true;
     }
@@ -581,6 +581,16 @@ double SeriesSma::compute(double source, double current_length) {
 
 double SeriesSma::recompute(double source, double current_length) {
     return update(source, checked_length(current_length), true);
+}
+
+// --- ta.supertrend's first-execution check ---
+
+// atrPeriod first, then the factor: the order PineSupertrend::compute always
+// checked them in, so a call with both invalid reports atrPeriod.
+int supertrend_first_execution_period(double factor, double atr_period) {
+    const int period = simple_ta_length(atr_period, "supertrend", "atrPeriod");
+    if (!is_na(factor) && factor <= 0.0) factor_not_positive(factor);
+    return period;
 }
 
 }  // namespace source

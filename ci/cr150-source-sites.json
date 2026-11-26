@@ -12550,6 +12550,19 @@
    "ordinal": 1
   },
   {
+   "file": "include/pineforge/source/pine_ta_length.hpp",
+   "symbol": "object_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "class PineFixedSupertrend #1",
+    "ta :: Supertrend & bound ( ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "object_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
    "file": "include/pineforge/str_utils.hpp",
    "symbol": "text",
    "scope": [
