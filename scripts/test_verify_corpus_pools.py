@@ -29,7 +29,7 @@ def write_trades(path, rows, *, tv):
                              row.qty, row.pnl, mark))
 
 
-def analyze(tv, engine, *, trim=0, bars=()):
+def analyze(tv, engine, *, trim=0, bars=(), served_range_ms=None):
     with tempfile.TemporaryDirectory(dir=_checked_path(Path.cwd())) as tmp:
         files = {name: _checked_path(Path(tmp) / name) for name in (
             "inputs.json", "strategy.pine", "tv_trades.csv", "engine_trades.csv",
@@ -37,6 +37,8 @@ def analyze(tv, engine, *, trim=0, bars=()):
         )}
         print("Grader fixture paths:", *files.values(), sep="\n", flush=True)
         meta = {"tv_trades_csv_tz": "utc", "trim_bars": trim}
+        if served_range_ms is not None:
+            meta["tv_served_range_ms"] = served_range_ms
         files["inputs.json"].write_text(json.dumps(meta), encoding="utf-8")
         if bars:
             with files["ohlcv.csv"].open("x", encoding="utf-8") as stream:
@@ -134,6 +136,88 @@ class TradePoolTests(unittest.TestCase):
                 self.assertEqual((row["exit_p100"], row["pnl_p100"]),
                                  (None, None) if mark else (0.0, 0.0))
                 self.assertEqual(r.label, "excellent")
+
+
+def served_range_ms(first_minute, last_minute):
+    return {"from": (START + first_minute * 60) * 1000, "to": (START + last_minute * 60) * 1000}
+
+
+class ServedRangePoolTests(unittest.TestCase):
+    last_match = 12 * 24 * 60  # Minutes from the first matched entry.
+
+    def setUp(self):
+        self.tv = [trade(0), trade(self.last_match)]
+
+    def assert_extra_counts(self, extra_minute, *, first_served):
+        span = served_range_ms(first_served, self.last_match + 60)
+        before = analyze(self.tv, self.tv, served_range_ms=span)
+        after = analyze(self.tv, [*self.tv, trade(extra_minute)], served_range_ms=span)
+        for r, engine_size in ((before, 2), (after, 3)):
+            self.assertEqual((r.tv_raw_count, r.eng_raw_count, r.gating_matched_count),
+                             (2, engine_size, 2), "NOT COMPARED: expected both tapes and two pairs")
+        self.assertEqual((before.count_abs_delta, after.count_abs_delta), (0, 1))
+        self.assertEqual((before.eng_gate_count - before.gating_matched_count,
+                          after.eng_gate_count - after.gating_matched_count), (0, 1))
+        self.assertEqual((before.count_ok, after.count_ok), (True, False))
+
+    def test_before_first_tv_trade(self):
+        # The extra opens five days into the served range, six days before the first pair.
+        self.assert_extra_counts(-6 * 24 * 60, first_served=-11 * 24 * 60)
+
+    def test_just_inside_W(self):
+        # The first served bar itself is eligible, half an hour before the first pair.
+        self.assert_extra_counts(-30, first_served=-30)
+
+    def test_served_tail_stops_at_recorded_end(self):
+        last = self.last_match
+        span = served_range_ms(-30, last + 90)
+        # The one-hour endpoint already counts. Only the entry at W's end adds another;
+        # the entries one minute outside either end of W stay clipped.
+        engine = [*self.tv, trade(last + 60), trade(-31), trade(last + 91)]
+        for rows, extras in ((engine, 1), ([*engine, trade(last + 90)], 2)):
+            with self.subTest(extras=extras):
+                r = analyze(self.tv, rows, served_range_ms=span)
+                self.assertEqual((r.eng_count, r.eng_gate_count, r.count_abs_delta),
+                                 (2 + extras, 2 + extras, extras))
+
+    def test_served_range_preserves_entry_exit_pairs(self):
+        # The two leading entries are fifteen minutes apart: no match, even with W.
+        tv = [trade(-45), *self.tv]
+        partners = [replace(self.tv[0], exit_time=self.tv[0].exit_time + 60), self.tv[1]]
+        engine = [trade(-30), *partners]
+        expected = [(t.entry_time, t.exit_time, e.entry_time, e.exit_time)
+                    for t, e in zip(self.tv, partners)]
+        for span in (None, served_range_ms(-45, self.last_match + 60)):
+            with self.subTest(span=span):
+                r = analyze(tv, engine, served_range_ms=span)
+                self.assertEqual([(t.entry_time, t.exit_time, e.entry_time, e.exit_time)
+                                  for t, e in r.matched], expected)
+                self.assertEqual(r.tv_gate_count, 2)
+
+    def test_no_served_range_keeps_clipped_counts(self):
+        r = analyze(self.tv, [*self.tv, trade(-30)])
+        self.assertEqual((r.eng_raw_count, r.eng_count, r.eng_gate_count,
+                          r.tv_gate_count, r.gating_matched_count), (3, 2, 2, 2, 2))
+        self.assertEqual((r.count_abs_delta, r.count_delta, r.unmatched_in_window,
+                          r.count_ok, r.label), (0, 0.0, 0, True, "excellent"))
+
+    def test_no_served_range_names_trimmed_engine_count(self):
+        r = analyze(self.tv, [*self.tv, trade(-30)])
+        self.assertEqual(r.report_row().get("eng_common_window_trimmed_count"), 1)
+        self.assertEqual(r.eng_common_window_trimmed_count, 1)
+
+    def test_served_extra_still_obeys_interior_trim(self):
+        tv = [trade(45), trade(60)]
+        r = analyze(tv, [trade(0), trade(15), *tv], trim=1, bars=range(0, 91, 15),
+                    served_range_ms=served_range_ms(0, 90))
+        # Both entries are served, but the declared bar trim keeps only minutes 15..75.
+        self.assertEqual((r.eng_count, r.eng_gate_count, r.count_abs_delta), (4, 3, 1))
+        self.assertEqual(r.eng_common_window_trimmed_count, 0)
+
+    def test_invalid_served_range_is_not_graded(self):
+        for span in ({"from": 2, "to": 1}, {"from": True, "to": 1}, {"from": 1}):
+            with self.subTest(span=span), self.assertRaisesRegex(ValueError, "NOT COMPARED"):
+                analyze(self.tv, self.tv, served_range_ms=span)
 
 
 if __name__ == "__main__":

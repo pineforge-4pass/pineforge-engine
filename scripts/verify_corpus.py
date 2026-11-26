@@ -384,6 +384,13 @@ class VerificationResult:
     def tier(self) -> str:
         return self.label
 
+    @property
+    def eng_common_window_trimmed_count(self) -> int | None:
+        """Logical engine entries excluded by the common clip, before the bar trim."""
+        if not self.tv_exists or not self.eng_exists:
+            return None
+        return self.eng_raw_count - self.eng_count
+
     def report_row(self) -> dict:
         """Return the canonical report-facing fields without re-analysis.
 
@@ -427,6 +434,7 @@ class VerificationResult:
             "eng_exists": self.eng_exists,
             "no_aligned_trades": self.no_aligned_trades,
             "notes": self.notes,
+            "eng_common_window_trimmed_count": self.eng_common_window_trimmed_count,
         }
 
 
@@ -1091,6 +1099,19 @@ def load_strategy_metadata(strategy_dir: Path) -> dict:
         return json.load(f)
 
 
+def _tv_served_range_ms(meta: dict) -> tuple[int, int] | None:
+    """Recorded TV interval for this tape, inclusive UTC epoch milliseconds."""
+    if "tv_served_range_ms" not in meta:
+        return None
+    span = meta["tv_served_range_ms"]
+    if isinstance(span, dict):
+        lo, hi = span.get("from"), span.get("to")
+        if type(lo) is int and type(hi) is int and lo <= hi:
+            return lo, hi
+    raise ValueError("NOT COMPARED: tv_served_range_ms requires integer from <= to "
+                     f"in UTC milliseconds; got {span!r}")
+
+
 def _apply_declared_tier_override(label: str, meta: dict) -> str:
     """Apply documented-divergence metadata without masking a real TV match.
 
@@ -1264,6 +1285,16 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     tv_cmp, eng_cmp = trim_to_common_match_window(tv, eng, matched + mark_pairs)
     matched = align_by_time(tv_cmp, eng_cmp)
 
+    # Restore clipped entries only to the engine count. Keep the common-window
+    # lists for pairing, identity checks and the FIFO exit schedule.
+    served_extras = []
+    served_range = _tv_served_range_ms(meta)
+    if served_range is not None and len(eng_cmp) < len(eng):
+        kept_ids = {id(e) for e in eng_cmp}
+        lo_ms, hi_ms = served_range
+        served_extras = [e for e in eng if id(e) not in kept_ids
+                         and lo_ms <= e.entry_time * 1000 <= hi_ms]
+
     # Optional interior trim: drop edge / warmup bars from the headline stats.
     trim_bars = int(meta.get("trim_bars", 0) or 0)
     warmup_bars = int(meta.get("warmup_bars", 0) or 0)
@@ -1344,7 +1375,8 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     gate_marks = _split_interior(mark_pairs)
     n_gate_marks = len(gate_marks)
     tv_gate_n = len(tv_gate) + n_gate_marks
-    eng_gate_n = len(eng_gate) + n_gate_marks
+    eng_gate_n = (len(eng_gate) + n_gate_marks
+                  + sum(is_interior(e.entry_time * 1000, bounds) for e in served_extras))
 
     net_count_abs_delta = abs(tv_gate_n - eng_gate_n)
     # Each unmatched gated trade counts, even when the two list sizes agree.
@@ -1597,7 +1629,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         tv_path=tv_path,
         eng_path=eng_path,
         tv_count=len(tv_cmp) + len(mark_pairs),
-        eng_count=len(eng_cmp) + len(mark_pairs),
+        eng_count=len(eng_cmp) + len(mark_pairs) + len(served_extras),
         tv_raw_count=len(tv) + len(mark_pairs),
         eng_raw_count=len(eng) + len(mark_pairs),
         matched_count=len(matched) + len(mark_pairs),
