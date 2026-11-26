@@ -590,27 +590,27 @@ class PositionalLag {
     // Newest first from head_, as ta::Change keeps its history. The ring
     // grows as calls arrive, so a large length costs nothing before that
     // many calls have been made.
-    std::vector<double> slots_;
+    std::vector<double> lag_slots_;
     std::size_t head_ = 0;
     std::size_t size_ = 0;
     int length_;
 
     std::size_t index(std::size_t offset) const noexcept {
         const std::size_t position = head_ + offset;
-        return position < slots_.size() ? position : position - slots_.size();
+        return position < lag_slots_.size() ? position : position - lag_slots_.size();
     }
     // Room for one more slot while fewer than `keep` are held. Nothing
     // changes if the allocation fails.
     void ensure_room(std::size_t keep) {
-        if (size_ < slots_.size() || size_ >= keep) return;
-        const std::size_t capacity = slots_.size();
+        if (size_ < lag_slots_.size() || size_ >= keep) return;
+        const std::size_t capacity = lag_slots_.size();
         const std::size_t initial = keep < 8 ? keep : std::size_t{8};
         const std::size_t missing = keep - capacity;
         const std::size_t next =
             capacity == 0 ? initial : capacity + (capacity < missing ? capacity : missing);
         std::vector<double> grown(next);
-        for (std::size_t i = 0; i < size_; ++i) grown[i] = slots_[index(i)];
-        slots_.swap(grown);
+        for (std::size_t i = 0; i < size_; ++i) grown[i] = lag_slots_[index(i)];
+        lag_slots_.swap(grown);
         head_ = 0;
     }
 
@@ -627,18 +627,18 @@ public:
         const std::size_t keep = static_cast<std::size_t>(length_) + 1;
         if (advance || size_ == 0) {
             ensure_room(keep);
-            head_ = head_ ? head_ - 1 : slots_.size() - 1;
-            slots_[head_] = src;
+            head_ = head_ ? head_ - 1 : lag_slots_.size() - 1;
+            lag_slots_[head_] = src;
             if (size_ < keep) ++size_;
         } else {
-            slots_[head_] = src;
+            lag_slots_[head_] = src;
         }
         if (size_ < keep) return false;
-        previous = slots_[index(keep - 1)];
+        previous = lag_slots_[index(keep - 1)];
         return true;
     }
     void observe_owned_storage(OwnedStorage& out) const noexcept {
-        ::pineforge::observe_owned_members(out, slots_);
+        ::pineforge::observe_owned_members(out, lag_slots_);
     }
 };
 

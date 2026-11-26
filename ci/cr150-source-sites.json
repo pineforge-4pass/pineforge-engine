@@ -12551,6 +12551,31 @@
   },
   {
    "file": "include/pineforge/source/pine_ta_length.hpp",
+   "symbol": "lag_slots_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "class PositionalLag #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < double >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_length.hpp",
+   "symbol": "grown",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "class PositionalLag #1",
+    "void ensure_room ( std :: size_t keep ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < double >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_length.hpp",
    "symbol": "object_",
    "scope": [
     "namespace pineforge #1",
@@ -47856,6 +47881,30 @@
    ],
    "cls": "assign",
    "spelling": "history_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_ta_length.cpp",
+   "symbol": "state_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "ta :: DMIResult PineDmiReference :: recompute ( double high , double low , double close ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "state_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_ta_length.cpp",
+   "symbol": "state_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "double PineSar :: recompute ( double high , double low , double close ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "state_ = . . .",
    "ordinal": 1
   },
   {

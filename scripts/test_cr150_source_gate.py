@@ -1306,7 +1306,14 @@ class RealTree(unittest.TestCase):
         # shadowed-opening set (U0268, U0811); a named tick exit stores its texts in
         # one string (U1957, U1958); three lists of one call (U1960, U1961, U1963)
         # and one list of a state fold (U1964) are new. All remain OPEN.
-        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3 + 1 + 1 + 1 + 2 + 3 + 2 + 1 + 6
+        # expectation corrected: 1653 -> 1655, because U1965 and U1966 add two
+        # unreviewed groups in include/pineforge/source/pine_ta_length.hpp: the
+        # ring of the positional history of the Pine ta.mom / ta.roc objects
+        # (PositionalLag's lag_slots_) and the larger vector one growth step
+        # builds (grown). Two site identities also enter the existing OPEN group
+        # U1108 without adding a group: the whole-state restores of
+        # PineDmiReference::recompute and PineSar::recompute. All remain OPEN.
+        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3 + 1 + 1 + 1 + 2 + 3 + 2 + 1 + 6 + 2
         self.assertEqual(c['OPEN'], expected_open)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
