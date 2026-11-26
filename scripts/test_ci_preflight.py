@@ -3403,7 +3403,9 @@ class PostFleetRunnerPolicy(unittest.TestCase):
         # expectation corrected: 2170 -> 2177, because the shard/join contract
         # paragraph adds seven lines to docs/ci.md.
         # expectation corrected: 2177 -> 2188, because the baseline promotion guard extends the CI guide.
-        self.assertEqual(len(docs.splitlines()), 2188)
+        # expectation corrected: 2188 -> 2204, because the stamp guard section
+        # for the C ABI and the engine layout adds sixteen lines to docs/ci.md.
+        self.assertEqual(len(docs.splitlines()), 2204)
         # The test-owned job catalog defines the protected label inventory.
         tables = re.findall(
             r"^\| Workflow \| Events/callers \| Inline jobs' `runs-on` \|\n"
@@ -5183,7 +5185,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
             'source-guard-adapter-spec-shadowing', 'source-guard-dangling-comment-names',
             'source-guard-run-failure-codes', 'source-guard-run-failure-diff',
             'source-guard-selected-window-ownership', 'source-guard-market-admission',
-            'source-guard-cancellation', 'source-guard-cr150-source-bounds',
+            'source-guard-cancellation', 'abi-pin-guard', 'source-guard-cr150-source-bounds',
             'cr150-source-gate-tests', 'rng-draw-order-tests', 'rng-draw-order', 'verifier-tests',
             'preflight-tests', 'unittest-shards-tests', 'verifier-paths-tests',
             'native-c-surface-tests', 'native-x86-release-tests', 'kernel-residuals-tests',
@@ -5212,8 +5214,10 @@ class RunnerGroupAllowlist(unittest.TestCase):
             # main() prepends actionlint-version to all/fast/github-only.
             # expectation corrected: 71 -> 73, 66 -> 68, 7 -> 9 and 64 -> 66,
             # because both added-text stages run in the full and reduced tiers.
-            self.assertEqual(len(expected) + 1, 73)
-            self.assertEqual(len(check_commands(ROOT, tier='fast')), 68)
+            # expectation corrected: 73 -> 74, 68 -> 69 and 66 -> 67, because
+            # the abi-pin-guard stage runs in the full and fast tiers.
+            self.assertEqual(len(expected) + 1, 74)
+            self.assertEqual(len(check_commands(ROOT, tier='fast')), 69)
             self.assertEqual(len(check_commands(ROOT, tier='slow')), 4)
             self.assertEqual(len(check_commands(ROOT, tier='github-only')), 9)
         for platform in ('darwin', 'win32'):
@@ -5222,7 +5226,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
                                      if name not in ('prebuilt-bookworm-tests', 'prebuilt-glibc-tests')]
                 self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})],
                                  expected_platform)
-                self.assertEqual(len(check_commands(ROOT, tier='fast')), 66)
+                self.assertEqual(len(check_commands(ROOT, tier='fast')), 67)
 
 
 class PrebuiltGlibcRegistration(unittest.TestCase):
@@ -5907,7 +5911,9 @@ class PreflightFailures(unittest.TestCase):
         # expectation corrected: 2170 -> 2177, because the shard/join contract
         # paragraph adds seven lines to docs/ci.md.
         # expectation corrected: 2177 -> 2188, because the baseline promotion guard extends the CI guide.
-        self.assertEqual(len(text.splitlines()), 2188)
+        # expectation corrected: 2188 -> 2204, because the stamp guard section
+        # for the C ABI and the engine layout adds sixteen lines to docs/ci.md.
+        self.assertEqual(len(text.splitlines()), 2204)
         slices = tuple(name for name in EXPECTED_PR_SLOW_ROWS
                        if name.startswith('test_ci_verify_slice_'))
         self.assertTrue(slices, 'verifier slice inventory must not be empty')
