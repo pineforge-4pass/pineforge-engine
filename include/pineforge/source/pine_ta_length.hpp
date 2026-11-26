@@ -557,8 +557,143 @@ private:
     std::int64_t max_lookback_ = ::pineforge::detail::ta_lookback_limit();
 };
 
+// ta.mom(source, length) and ta.roc(source, length) on a source that has
+// missing (na) bars.
+//
+// TradingView's reference defines ta.mom as `source - source[length]` and
+// ta.roc as `100 * ta.change(source, length) / source[length]`. A history
+// subscript counts bars, so a bar whose source is na still holds a position:
+// the call reads the bar `length` positions back whatever lies between, and
+// answers na when that bar or the current one is na. This is the rule of the
+// reference text; no TradingView tape pins it yet for a source with an na
+// bar. ta.change already follows it: ta::Change keeps one slot per call, na
+// included. ta::Mom and ta::ROC keep a window of non-missing samples
+// instead, so after an na bar they read the length-th previous PRESENT
+// sample, which is older than `source[length]`, until the na bar is more
+// than `length` bars back. That window is those two classes' own contract
+// and stays as it is; PineMom and PineRoc are the Pine call's objects.
+//
+// PositionalLag is the history the two share: one slot per compute(), na
+// included, the last `length + 1` of them. recompute() rewrites the newest
+// slot, so a recalculation of the same bar adds no position; a recompute()
+// before the first compute() is that first compute().
+//
+// For a source with no na after its first value (leading na bars included)
+// PineMom and PineRoc answer what ta::Mom and ta::ROC answer, bit for bit,
+// for every length: na until `length` earlier values exist, then the same
+// subtraction and the same `(source - previous) / previous * 100` with na
+// for a previous value of zero. A length of 0 reads the current value
+// (ta.mom 0, ta.roc 0 or na for a zero source) and a negative length answers
+// na on every call, as the two classes do. The length is taken as the int
+// the classes take; no length stops the run here.
+class PositionalLag {
+    // Newest first from head_, as ta::Change keeps its history. The ring
+    // grows as calls arrive, so a large length costs nothing before that
+    // many calls have been made.
+    std::vector<double> slots_;
+    std::size_t head_ = 0;
+    std::size_t size_ = 0;
+    int length_;
+
+    std::size_t index(std::size_t offset) const noexcept {
+        const std::size_t position = head_ + offset;
+        return position < slots_.size() ? position : position - slots_.size();
+    }
+    // Room for one more slot while fewer than `keep` are held. Nothing
+    // changes if the allocation fails.
+    void ensure_room(std::size_t keep) {
+        if (size_ < slots_.size() || size_ >= keep) return;
+        const std::size_t capacity = slots_.size();
+        const std::size_t initial = keep < 8 ? keep : std::size_t{8};
+        const std::size_t missing = keep - capacity;
+        const std::size_t next =
+            capacity == 0 ? initial : capacity + (capacity < missing ? capacity : missing);
+        std::vector<double> grown(next);
+        for (std::size_t i = 0; i < size_; ++i) grown[i] = slots_[index(i)];
+        slots_.swap(grown);
+        head_ = 0;
+    }
+
+public:
+    explicit PositionalLag(int length) : length_(length) {}
+
+    // One call of the site. `advance` records `src` at a new position;
+    // otherwise `src` replaces the newest position. Returns false while
+    // fewer than `length` earlier positions exist, and for a negative
+    // length; otherwise `previous` is the value `length` positions back,
+    // na if that position holds na.
+    bool step(double src, bool advance, double& previous) {
+        if (length_ < 0) return false;
+        const std::size_t keep = static_cast<std::size_t>(length_) + 1;
+        if (advance || size_ == 0) {
+            ensure_room(keep);
+            head_ = head_ ? head_ - 1 : slots_.size() - 1;
+            slots_[head_] = src;
+            if (size_ < keep) ++size_;
+        } else {
+            slots_[head_] = src;
+        }
+        if (size_ < keep) return false;
+        previous = slots_[index(keep - 1)];
+        return true;
+    }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        ::pineforge::observe_owned_members(out, slots_);
+    }
+};
+
+// ta.mom(source, length): `source - source[length]`, positions counted as
+// PositionalLag counts them. A drop-in for ta::Mom in generated code: the
+// same constructor argument, compute, recompute and observe_owned_storage.
+class PineMom {
+    PositionalLag lag_;
+
+    double answer(double src, bool advance) {
+        double previous = na<double>();
+        if (!lag_.step(src, advance, previous) || is_na(src) || is_na(previous)) {
+            return na<double>();
+        }
+        return src - previous;
+    }
+
+public:
+    explicit PineMom(int length) : lag_(length) {}
+    double compute(double src) { return answer(src, true); }
+    double recompute(double src) { return answer(src, false); }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        lag_.observe_owned_storage(out);
+    }
+};
+
+// ta.roc(source, length): `100 * (source - source[length]) / source[length]`
+// in ta::ROC's operation order, na for a zero `source[length]`, positions
+// counted as PositionalLag counts them. A drop-in for ta::ROC in generated
+// code, as PineMom is for ta::Mom.
+class PineRoc {
+    PositionalLag lag_;
+
+    double answer(double src, bool advance) {
+        double previous = na<double>();
+        if (!lag_.step(src, advance, previous) || is_na(src) || is_na(previous) ||
+            previous == 0.0) {
+            return na<double>();
+        }
+        return (src - previous) / previous * 100.0;
+    }
+
+public:
+    explicit PineRoc(int length) : lag_(length) {}
+    double compute(double src) { return answer(src, true); }
+    double recompute(double src) { return answer(src, false); }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        lag_.observe_owned_storage(out);
+    }
+};
+
 }  // namespace source
 }  // namespace pineforge
 
 // Feature macro: the classes above exist.
 #define PINEFORGE_HAS_TA_SERIES_LENGTH 1
+// Feature macro: PineMom and PineRoc exist.
+#define PINEFORGE_HAS_PINE_POSITIONAL_LAG 1
