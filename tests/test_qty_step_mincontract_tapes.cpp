@@ -9,8 +9,18 @@
  * expected exits are the paired EXIT times. Join on entry fill UTC + id.
  * Tape labels are UTC+8, so UTC = label minus eight hours.
  *
- * The Pine control uses only limit entries:
- *   strategy('repro', process_orders_on_close = true)
+ * Re-capture on the 60-minute BTCUSDT chart, with the same first and last
+ * hourly opens as btc60/feed/bars.csv. Save the chart bars and the Strategy
+ * Tester list of trades from that same run (trade labels in UTC+8). The
+ * reporter uses the chart's minimum contract; the four metadata permutations
+ * below are engine controls over the one export, not four TV captures.
+ * With the original limit verification and chart settings, run:
+ *   //@version=6
+ *   strategy('repro', initial_capital=100000, pyramiding=1,
+ *       default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+ *       commission_type=strategy.commission.percent, commission_value=0,
+ *       slippage=0, margin_long=100, margin_short=100,
+ *       calc_on_order_fills=false, process_orders_on_close=true)
  *   if bar_index % 50 == 0 and strategy.position_size == 0
  *       strategy.entry('Long', strategy.long, limit = close)
  *   if strategy.position_size > 0 and bar_index % 50 == 10
