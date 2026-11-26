@@ -34,8 +34,8 @@ namespace pineforge::detail { struct NativeHistoryRegistryStats; }
 namespace pineforge {
 inline namespace engine_script_run_v20 {
 class LiveReportAccumulator;
-// Lookup state a host derives from its own bookkeeping, kept out of its own
-// object by choice (no ABI freezes that object's layout) and parked
+// Lookup state a host derives from its own bookkeeping and cannot keep in its
+// own object -- a generated script's ABI fixes that object's layout -- parked
 // with the consumer that serves the host (the host bookkeeping index cache). The consumer owns
 // it for the host, drops it at every run begin, so it never outlives the run
 // it was built over, and never reads it: nothing in it is hashed, recorded or
