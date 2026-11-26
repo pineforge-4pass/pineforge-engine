@@ -778,6 +778,64 @@ public:
     }
 };
 
+// ta.dmi(diLength, adxSmoothing) by the Pine reference definition:
+//
+//   plus  = fixnan(100 * ta.rma(plusDM, diLength) / ta.rma(ta.tr, diLength))
+//   minus = fixnan(100 * ta.rma(minusDM, diLength) / ta.rma(ta.tr, diLength))
+//   sum   = plus + minus
+//   adx   = 100 * ta.rma(math.abs(plus - minus) / (sum == 0 ? 1 : sum), adxSmoothing)
+//
+// The directional movements, the true range and the four averages are
+// ta::DMI's, and so is every value on a bar the two rules below do not
+// decide, bit for bit:
+//
+// * fixnan: a quotient that is na keeps the last value it had. The quotient
+//   is na while the averages are, and on a zero averaged true range (0 / 0:
+//   the averaged range is zero only while every directional movement is
+//   zero too). On such a bar both indices read their last values and ADX
+//   takes one more step from them, where ta::DMI answers three na and leaves
+//   ADX where it was. Nothing is held before the first valid quotient, so
+//   flat bars at the start of the series stay na and give ADX no input. With
+//   diLength 1 the averaged range is the bar's own, so every bar whose high
+//   and low equal the previous close is such a bar; with a longer diLength
+//   the averaged range stays positive, short of underflow, once one bar has
+//   had a range.
+// The directional movements compare with the tolerant relational of
+// <pineforge/ta_compare_band.hpp>, exactly as ta::DMI does, and the index sum
+// is tested against zero exactly, as ta::DMI tests it.
+//
+// A TradingView capture of a synthetic script found the built-in's indices
+// finite on bars whose own true range is zero. The scaling keeps ta::DMI's order
+// (100 * |plus - minus| / divisor, then the average), which is what keeps
+// the other bars' bits. An na high, low or close answers three na and
+// changes nothing, as in ta::DMI. The lengths are the two ints ta::DMI
+// takes and are not checked here, as they are not checked there.
+// recompute() replaces the bar computed last: the held indices, the
+// previous bar and the four averages return to what that bar found.
+class PineDmiReference {
+public:
+    PineDmiReference(int di_length, int adx_smoothing);
+    ta::DMIResult compute(double high, double low, double close);
+    ta::DMIResult recompute(double high, double low, double close);
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        ::pineforge::observe_owned_members(out, rma_plus_, rma_minus_, rma_tr_, rma_adx_);
+    }
+
+private:
+    struct State {
+        double prev_high = na<double>();
+        double prev_low = na<double>();
+        double prev_close = na<double>();
+        bool first_bar = true;
+        double held_plus = na<double>();    // fixnan: the last non-na +DI
+        double held_minus = na<double>();   // fixnan: the last non-na -DI
+    };
+
+    ta::RMA rma_plus_, rma_minus_, rma_tr_, rma_adx_;
+    State state_;
+    State saved_state_;
+};
+
 }  // namespace source
 }  // namespace pineforge
 
@@ -787,3 +845,5 @@ public:
 #define PINEFORGE_HAS_PINE_POSITIONAL_LAG 1
 // Feature macro: PineFixedSupertrend exists.
 #define PINEFORGE_HAS_PINE_FIXED_SUPERTREND 1
+// Feature macro: PineDmiReference exists.
+#define PINEFORGE_HAS_PINE_DMI_REFERENCE 1

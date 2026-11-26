@@ -8,6 +8,7 @@
 #include <pineforge/source/pine_ta_length.hpp>
 #include <pineforge/na.hpp>
 #include <pineforge/run_failure.hpp>
+#include <pineforge/ta_compare_band.hpp>
 
 #include "window_sum_expansion.hpp"
 
@@ -591,6 +592,80 @@ int supertrend_first_execution_period(double factor, double atr_period) {
     const int period = simple_ta_length(atr_period, "supertrend", "atrPeriod");
     if (!is_na(factor) && factor <= 0.0) factor_not_positive(factor);
     return period;
+}
+
+// --- PineDmiReference ---
+
+PineDmiReference::PineDmiReference(int di_length, int adx_smoothing)
+    : rma_plus_(di_length), rma_minus_(di_length), rma_tr_(di_length),
+      rma_adx_(adx_smoothing) {}
+
+ta::DMIResult PineDmiReference::compute(double high, double low, double close) {
+    saved_state_ = state_;
+    rma_plus_.save();
+    rma_minus_.save();
+    rma_tr_.save();
+    rma_adx_.save();
+
+    ta::DMIResult result{na<double>(), na<double>(), na<double>()};
+    if (is_na(high) || is_na(low) || is_na(close)) return result;
+    if (state_.first_bar) {
+        state_.prev_high = high;
+        state_.prev_low = low;
+        state_.prev_close = close;
+        state_.first_bar = false;
+        return result;
+    }
+
+    // The directional movements, the true range and their averages, written
+    // as ta::DMI::compute writes them so both give the same bits.
+    const double up_move = high - state_.prev_high;
+    const double down_move = state_.prev_low - low;
+    const double plus_dm = (float_band_gt(up_move, down_move)
+                            && float_band_gt(up_move, 0.0)) ? up_move : 0.0;
+    const double minus_dm = (float_band_gt(down_move, up_move)
+                             && float_band_gt(down_move, 0.0)) ? down_move : 0.0;
+    const double tr = std::max({high - low,
+                                std::abs(high - state_.prev_close),
+                                std::abs(low - state_.prev_close)});
+    const double smoothed_plus = rma_plus_.compute(plus_dm);
+    const double smoothed_minus = rma_minus_.compute(minus_dm);
+    const double smoothed_tr = rma_tr_.compute(tr);
+    state_.prev_high = high;
+    state_.prev_low = low;
+    state_.prev_close = close;
+
+    // fixnan(100 * rma(DM) / rma(TR)): the quotient is na while an average
+    // is na and on a zero averaged range, and an na quotient keeps the last
+    // value it had.
+    const auto quotient = [smoothed_tr](double smoothed_dm) {
+        if (is_na(smoothed_dm) || is_na(smoothed_tr) || smoothed_tr == 0.0) return na<double>();
+        return 100.0 * smoothed_dm / smoothed_tr;
+    };
+    const double plus = quotient(smoothed_plus);
+    const double minus = quotient(smoothed_minus);
+    if (!is_na(plus)) state_.held_plus = plus;
+    if (!is_na(minus)) state_.held_minus = minus;
+    // Nothing to hold yet: three na, and ADX gets no input.
+    if (is_na(state_.held_plus) || is_na(state_.held_minus)) return result;
+
+    result.diplus = state_.held_plus;
+    result.diminus = state_.held_minus;
+    // sum == 0 ? 1 : sum, compared exactly as ta::DMI compares its sum (a
+    // banded test of the sum is held until a TradingView capture decides it).
+    const double di_sum = result.diplus + result.diminus;
+    const double divisor = di_sum == 0.0 ? 1.0 : di_sum;
+    result.adx = rma_adx_.compute(100.0 * std::abs(result.diplus - result.diminus) / divisor);
+    return result;
+}
+
+ta::DMIResult PineDmiReference::recompute(double high, double low, double close) {
+    state_ = saved_state_;
+    rma_plus_.restore();
+    rma_minus_.restore();
+    rma_tr_.restore();
+    rma_adx_.restore();
+    return compute(high, low, close);
 }
 
 }  // namespace source
