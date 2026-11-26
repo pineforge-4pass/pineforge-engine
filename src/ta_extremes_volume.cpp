@@ -293,7 +293,7 @@ double PivotHigh::compute(double src) {
     // LEFT side: only a left VALUE above the candidate rejects it. Equal highs
     // are allowed (non-strict): TV reports the right-most bar of a flat-top, one
     // bar after the run. A left bar with no value (na: the source's own warm-up)
-    // does not compete -- tests/test_ta_pivot_na_left_window.cpp, a hypothesis.
+    // does not compete, as on TradingView -- tests/test_ta_pivot_na_left_window.cpp.
     //
     // RIGHT side: equal-high right bars invalidate the candidate (strict).
     // While the flat-top continues to the right, no pivot has yet been
