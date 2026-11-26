@@ -630,10 +630,10 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
         throw coded<std::logic_error>(
             RunFailureCode::run_mode_unsupported, {{"feature", "fx_series_calc_on_order_fills"}},
             "timestamped account-currency FX does not support calc_on_order_fills");
-    if (!staged.account_fx_effective_from_ms.empty() && args.bar_magnifier)
-        throw coded<std::logic_error>(
-            RunFailureCode::run_mode_unsupported, {{"feature", "fx_series_bar_magnifier"}},
-            "timestamped account-currency FX is not supported with bar magnifier");
+    // Settlement already converts at the fill cursor. Revalue the carried
+    // book before the first match of each subsequent lower bar as well.
+    NativeExecutionConsumer::bound(*this).set_sub_bar_open_hook(
+        args.bar_magnifier && !staged.account_fx_effective_from_ms.empty() ? on_fx_sub_bar_open : nullptr);
 
     adapter_.reset_for_run();
     adapter_.set_cache_policy_for_run(cache_policy_for_run());
@@ -4683,6 +4683,12 @@ double source::PineStrategyHost::request_currency_rate(
     if (conversion.identity) return 1.0;
     return conversion.to_account ? conversion.account_per_symbol
                                  : 1.0 / conversion.account_per_symbol;
+}
+
+void source::PineStrategyHost::on_fx_sub_bar_open(
+        NativeStrategyHost& host, const Bar& sub, const NativeDecisionContext& context) {
+    auto& pine = static_cast<PineStrategyHost&>(host);
+    if (!pine.source_prepare_failed_) pine.adapter_.apply_fx_open_margin_slice(sub, context);
 }
 
 }  // namespace pineforge

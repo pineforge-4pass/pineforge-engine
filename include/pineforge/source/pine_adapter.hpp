@@ -3540,6 +3540,9 @@ private:
     void finish_retirement_phases();
     bool another_child_fills_on_leg(const PlacementSnapshot&, const native_order::ExecutionAppliedEvent&,
                                     const NativeDecisionContext&, bool closing_long) const;
+    std::int64_t margin_fx_time(const NativeCoordinate& point, std::int64_t bar_time) const noexcept {
+        return bar_magnifier_ ? point.effective_time_ms : bar_time;
+    }
 #ifndef NDEBUG
     std::array<std::uint64_t, 3> retirement_validation_state() const;
 #endif

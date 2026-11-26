@@ -2597,8 +2597,8 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
         f.u(precommit_digest_.count);
         f.u(precommit_digest_.h);
     }
-    // L4 durable liquidation state. It exists only under a declared margin
-    // model, and folds only there, so no pre-L4 continuation identity moves.
+    if (sub_bar_open_hook_) f.s("native-sub-bar-open/v1");
+    // Liquidation state belongs only to a run that declared a margin model.
     if (margin_model() != nullptr) {
         f.b(margin_liquidation_.has_value());
         if (margin_liquidation_) {
@@ -8656,24 +8656,24 @@ void NativeExecutionConsumer::recalculate_at_modeled_point(
 }
 
 void NativeExecutionConsumer::invoke_sub_bar_callback(
-        BacktestEngine& engine, const Bar& sub, const NativeDriverPoint& point) {
-    if (failed()) return;
-    if (in_callback_ || consuming_request_ || draining_notifications_) return;
+        BacktestEngine& engine, const Bar& sub, const NativeDriverPoint& point, bool opening) {
+    if (failed() || in_callback_ || consuming_request_ || draining_notifications_) return;
     auto* host = native_host(engine);
     if (!host) return;
-    enter_point_frame(engine, point_frame_view(point), CallbackPhase::Tick);
-    const uint64_t ordinal = callback_context_.coordinate.ordinal;
+    const auto phase = opening ? CallbackPhase::PreOpen : CallbackPhase::Tick;
+    enter_point_frame(engine, point_frame_view(point), phase);
     try {
         const NativeDecisionContext presented = callback_context_;
         detail::MapPairLimitScope map_policy(map_pair_limit_);
         detail::MapBarContextScope map_bar(&engine.bar_index_);
-        host->on_native_sub_bar(sub, presented);
+        if (opening) sub_bar_open_hook_(*host, sub, presented);
+        else host->on_native_sub_bar(sub, presented);
     } catch (const std::bad_alloc& e) {
         in_callback_ = false;
         callback_phase_ = CallbackPhase::None;
         current_frame_.reset();
         fail(engine, NativeFailure{NativeFailureCode::Allocation,
-                                   NativeFailureOperation::Callback, ordinal});
+                                   NativeFailureOperation::Callback, point.coordinate.ordinal});
         render_exception(engine, e);
         return;
     } catch (const std::exception& e) {
@@ -8681,7 +8681,7 @@ void NativeExecutionConsumer::invoke_sub_bar_callback(
         callback_phase_ = CallbackPhase::None;
         current_frame_.reset();
         if (!failed()) fail(engine, NativeFailure{NativeFailureCode::CallbackException,
-            NativeFailureOperation::Callback, ordinal});
+            NativeFailureOperation::Callback, point.coordinate.ordinal});
         render_exception(engine, e);
         return;
     } catch (...) {
@@ -8689,12 +8689,12 @@ void NativeExecutionConsumer::invoke_sub_bar_callback(
         callback_phase_ = CallbackPhase::None;
         current_frame_.reset();
         if (!failed()) fail(engine, NativeFailure{NativeFailureCode::CallbackException,
-            NativeFailureOperation::Callback, ordinal});
+            NativeFailureOperation::Callback, point.coordinate.ordinal});
         if (!recoverable_abort() && failure_value_of(engine).code == RunFailureCode::none)
             render_unclassified(engine, "native sub-bar callback exception");
         return;
     }
-    finish_callback(engine, ordinal);
+    finish_callback(engine, point.coordinate.ordinal);
 }
 
 void NativeExecutionConsumer::enqueue_applied_notification(AppliedNotification notification) {
@@ -9693,11 +9693,14 @@ void NativeExecutionConsumer::deliver_intrabar_script(
             point.matching = distribution_samples || sample_index == 0;
             point.excursion = sample_index != 0;
             record_driver(point);
-            // Same rule as the confirmed path: a discrete sample is its own
-            // cursor and folds before its callbacks, a segment folds after it
-            // has been consumed.
+            // Discrete samples fold before their callbacks; segments fold after matching.
             if (distribution_samples || sample_index == 0) {
                 note_partial_point(base.open_ms, price, 0.0);
+            }
+            if (sample_index == 0 && sub_index != 0 && sub_bar_open_hook_) {
+                const Bar open{price, price, price, price, 0.0, sub.timestamp};
+                invoke_sub_bar_callback(engine, open, point, true);
+                if (failed()) return;
             }
             if (sub_index == 0 && sample_index == 0) {
                 invoke_bar_open_callback(engine, script_bar, point);
@@ -9712,14 +9715,11 @@ void NativeExecutionConsumer::deliver_intrabar_script(
                     if (failed()) return;
                 }
             } else if (!distribution_samples) {
-                // No whole-bar waypoint model here, so every later sample of a
-                // continuous path is a check point of its own, measured at its
-                // price before it is matched: a mark-check liquidation rests at
-                // that sample, and the segment into it (or, at a sub-bar's
-                // open, the segment out of it) reaches it there. A one-price
-                // distribution sample is not offered one: a request armed at a
-                // discrete point is matched only at a later point, so a
-                // liquidation re-armed at every sample would never be.
+                // A mark-check liquidation rests at this sample. The segment
+                // into it (or out of a sub-bar open) can fill it there.
+                // A discrete sample could only fill it later, so re-arming at
+                // every such sample would never fill a liquidation. Check the
+                // book left by any open checkpoint before matching other orders.
                 maintain_margin_liquidation(
                     engine, make_cursor(point, 0.0), point.coordinate.path_phase, price,
                     NativeMarginCheckKind::IntrabarSample);
