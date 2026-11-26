@@ -977,22 +977,22 @@ public:
 class PineRci {
     ta::RCI rci_;
     long long length_;
-    long long values_ = 0;        // non-na sources taken, at most length_ + 1
-    long long saved_values_ = 0;  // the count before the last call
+    long long value_count_ = 0;        // non-na sources taken, at most length_ + 1
+    long long saved_value_count_ = 0;  // the count before the last call
 
     double step(double kernel, double src) {
-        if (values_ <= length_ && !is_na(src)) ++values_;
-        return values_ > length_ ? kernel : na<double>();
+        if (value_count_ <= length_ && !is_na(src)) ++value_count_;
+        return value_count_ > length_ ? kernel : na<double>();
     }
 
 public:
     explicit PineRci(int length) : rci_(length), length_(length) {}
     double compute(double src) {
-        saved_values_ = values_;
+        saved_value_count_ = value_count_;
         return step(rci_.compute(src), src);
     }
     double recompute(double src) {
-        values_ = saved_values_;
+        value_count_ = saved_value_count_;
         return step(rci_.recompute(src), src);
     }
     void observe_owned_storage(OwnedStorage& out) const noexcept {
