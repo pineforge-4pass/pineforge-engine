@@ -38,6 +38,12 @@ bool percentrank_less_equal(double lhs, double rhs) {
 Linreg::Linreg(int length) : length_(length) {}
 
 double Linreg::compute(double src, double offset) {
+    // A negative length has no window: nothing is kept, so the trim below has
+    // nothing to take out, and the value is na on every bar. (A length of 0
+    // needs no branch: its one value leaves as it enters.)
+    if (length_ < 0) {
+        return na<double>();
+    }
     // Pine parity: one slot per bar; na values stay in the window (ta.linreg includes na).
     buffer_.push_back(src);
     while ((int)buffer_.size() > length_) {
@@ -85,6 +91,13 @@ double PercentRank::compute(double src) {
     // mismatches TV as soon as count > 0. Once `length` values precede the bar, an
     // na current value (nothing is at most it) and an all-na lookback both count
     // none: 0, not na (tests/fixtures/percentile_window).
+    //
+    // A negative length has no lookback and no current slot: nothing is kept,
+    // and the value is na on every bar. (A length of 0 needs no branch: it
+    // keeps the current value alone.)
+    if (length_ < 0) {
+        return na<double>();
+    }
     buffer_.push_back(src);
     while (static_cast<long long>(buffer_.size()) > static_cast<long long>(length_) + 1) {
         buffer_.pop_front();

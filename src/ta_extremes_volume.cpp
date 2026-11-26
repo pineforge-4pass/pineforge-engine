@@ -269,6 +269,11 @@ PivotHigh::PivotHigh(int left_bars, int right_bars)
     : left_bars_(left_bars), right_bars_(right_bars) {}
 
 double PivotHigh::compute(double src) {
+    // A negative bar count on either side describes no window: nothing is
+    // kept, no candidate slot exists, and the value is na on every bar.
+    if (left_bars_ < 0 || right_bars_ < 0) {
+        return na<double>();
+    }
     buffer_.push_back(src);
 
     const long long total = static_cast<long long>(left_bars_) + right_bars_ + 1;
@@ -320,6 +325,11 @@ PivotLow::PivotLow(int left_bars, int right_bars)
     : left_bars_(left_bars), right_bars_(right_bars) {}
 
 double PivotLow::compute(double src) {
+    // A negative bar count on either side describes no window: nothing is
+    // kept, no candidate slot exists, and the value is na on every bar.
+    if (left_bars_ < 0 || right_bars_ < 0) {
+        return na<double>();
+    }
     buffer_.push_back(src);
 
     const long long total = static_cast<long long>(left_bars_) + right_bars_ + 1;
