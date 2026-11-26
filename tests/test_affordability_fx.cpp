@@ -25,6 +25,7 @@
 #include <string>
 #include <vector>
 
+#include <pineforge/pineforge.h>
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -456,6 +457,133 @@ private:
     int observed_trades_ = -1;
     double observed_qty_ = kNaN;
 };
+
+// Three five-minute chart bars. The middle one contains the fills. Both
+// walks get the same input; only the magnifier knows which minute hit a level.
+std::vector<Bar> fx_minutes(double price) {
+    constexpr int64_t start = 42'000'000;
+    std::vector<Bar> bars;
+    for (int i = 0; i < 15; ++i) bars.push_back(mk_bar(start + i * 60'000, price));
+    return bars;
+}
+
+bool run_fx_row(source::PineStrategyHost& host, const char* row, const std::vector<Bar>& bars,
+                bool magnify, const int64_t (&times)[2], const double (&rates)[2]) {
+    const int rc = strategy_set_account_currency_fx_series(static_cast<BacktestEngine*>(&host),
+                                                           times, rates, 2);
+    if (rc != 0) {
+        std::printf("  NOT COMPARED %s: FX setter expected=0 actual=%d\n", row, rc);
+        ++tests_failed;
+        return false;
+    }
+    host.run(bars.data(), static_cast<int>(bars.size()), "1", "5", magnify, 4,
+             MagnifierDistribution::ENDPOINTS);
+    if (!host.last_error().empty() || host.last_run_status() != 0
+        || host.script_bars_processed() != 3 || host.trade_count() != 1) {
+        std::printf("  NOT COMPARED %s: expected status=0 error='' chart_bars=3 trades=1; "
+                    "actual status=%d error='%s' chart_bars=%lld trades=%d\n", row, host.last_run_status(),
+                    host.last_error().c_str(), static_cast<long long>(host.script_bars_processed()),
+                    host.trade_count());
+        ++tests_failed;
+        return false;
+    }
+    return true;
+}
+
+void fx_at_each_fill(bool magnify) {
+    class Host final : public source::PineStrategyHost {
+    public:
+        Host() {
+            initial_capital_ = 8192;
+            commission_type_ = CommissionType::PERCENT;
+            commission_value_ = 12.5;
+            process_orders_on_close_ = false;
+            set_syminfo_metadata("account_currency_fx", 0.5);
+        }
+        void on_source_bar(const Bar&) override {
+            if (bar_index_ == 0) {
+                strategy_order("buy", true, 4);
+                strategy_order("sell", false, 4, 48);
+            }
+        }
+    } host;
+    auto bars = fx_minutes(32);
+    bars[7].high = 50;
+    const int64_t times[] = {bars[7].timestamp, bars[7].timestamp + 1};
+    const double rates[] = {1.75, 3.0};
+    const char* row = magnify ? "sub-bar fills" : "chart fills";
+    if (!run_fx_row(host, row, bars, magnify, times, rates)) return;
+    const auto trade = host.get_trade(0);
+    const auto label = static_cast<long long>(bars[5].timestamp);
+    if (!trade.is_long || trade.open_at_end || trade.qty != 4
+        || trade.entry_price != 32 || trade.exit_price != 48
+        || trade.entry_time != label || trade.exit_time != label) {
+        std::printf("  NOT COMPARED %s: expected long=1 open_at_end=0 qty=4 prices=32/48 labels=%lld/%lld; "
+                    "actual long=%d open_at_end=%d qty=%g prices=%g/%g labels=%lld/%lld\n",
+                    row, label, label, trade.is_long, trade.open_at_end, trade.qty,
+                    trade.entry_price, trade.exit_price, static_cast<long long>(trade.entry_time),
+                    static_cast<long long>(trade.exit_time));
+        ++tests_failed;
+        return;
+    }
+    // Entry fee: 4 * 32 * 12.5% * 0.5 = 8. On the chart path its high
+    // also uses 0.5. The magnified high uses exactly 1.75, never the point
+    // one millisecond later. Both fills still display the same chart label.
+    const double fees = magnify ? 50 : 20;
+    const double pnl = magnify ? 62 : 12;
+    if (trade.commission != fees || trade.pnl != pnl) {
+        std::printf("  FAIL %s: expected fees=%g pnl=%g; actual fees=%g pnl=%g\n",
+                    row, fees, pnl, trade.commission, trade.pnl);
+        ++tests_failed;
+        return;
+    }
+    ++tests_passed;
+    std::printf("  %s: fees=%g pnl=%g\n", row, trade.commission, trade.pnl);
+}
+
+void fx_margin_inside_entry_bar(bool at_open) {
+    class Host final : public source::PineStrategyHost {
+    public:
+        explicit Host(bool at_open) {
+            initial_capital_ = at_open ? 378 : 243;
+            margin_long_ = at_open ? 100 : 50;
+            margin_short_ = 100;
+            qty_step_ = 1;
+            process_orders_on_close_ = false;
+        }
+        void on_source_bar(const Bar&) override {
+            if (bar_index_ == 0) strategy_entry("buy", true, kNaN, kNaN, 12);
+        }
+    } host(at_open);
+    auto bars = fx_minutes(24);
+    if (at_open) bars[7] = mk_bar(bars[7].timestamp, 36);
+    else bars[7].low = 18;
+    // This rate expires before the next chart open. The twelve units are
+    // already on the book, even though they opened in this very chart bar.
+    const int64_t times[] = {bars[7].timestamp, bars[8].timestamp};
+    const double rates[] = {1.5, 1.0};
+    const char* row = at_open ? "sub-bar open margin" : "sub-bar low margin";
+    if (!run_fx_row(host, row, bars, true, times, rates)) return;
+    const auto trade = host.get_trade(0);
+    if (trade.exit_id != "__margin_call__" || trade.entry_price != 24 || trade.exit_time != bars[5].timestamp) {
+        std::printf("  NOT COMPARED %s: expected exit_id=__margin_call__ entry=24 label=%lld; "
+                    "actual exit_id=%s entry=%g label=%lld\n", row, static_cast<long long>(bars[5].timestamp),
+                    trade.exit_id.c_str(), trade.entry_price, static_cast<long long>(trade.exit_time));
+        ++tests_failed;
+        return;
+    }
+    // At 36: required 648, equity 594, four times (648-594)/54 = 4.
+    // At 24 the leveraged book fits; at 18: (162-135)/13.5 * 4 = 8.
+    const double qty = at_open ? 4 : 8, price = at_open ? 36 : 18, pnl = at_open ? 72 : -72;
+    if (trade.qty != qty || trade.exit_price != price || trade.pnl != pnl) {
+        std::printf("  FAIL %s: expected qty=%g exit=%g pnl=%g; actual qty=%g exit=%g pnl=%g\n",
+                    row, qty, price, pnl, trade.qty, trade.exit_price, trade.pnl);
+        ++tests_failed;
+        return;
+    }
+    ++tests_passed;
+    std::printf("  %s: qty=%g exit=%g pnl=%g\n", row, trade.qty, trade.exit_price, trade.pnl);
+}
 
 void run_case(double fx, int expected_trades, const char* label) {
     std::vector<Bar> bars = {
@@ -1043,8 +1171,11 @@ int main() {
         }
     }
 
-    // H. Timestamped FX is currently authoritative only on ordinary
-    // historical dispatch.  Unsupported schedulers fail before on_bar runs.
+    // H. Supported historical paths, followed by the unsupported schedulers.
+    fx_at_each_fill(false);
+    fx_at_each_fill(true);
+    fx_margin_inside_entry_bar(true);
+    fx_margin_inside_entry_bar(false);
     {
         std::vector<Bar> bars = {mk_bar(1000, 100.0), mk_bar(2000, 100.0)};
         const int64_t timestamps[] = {1000, 2000};
@@ -1056,13 +1187,6 @@ int main() {
         coof.run(bars.data(), (int)bars.size());
         CHECK(coof.last_error().find("calc_on_order_fills") != std::string::npos);
         CHECK(coof.on_bar_calls() == 0);
-
-        CarriedFxRolloverOrderingProbe magnifier;
-        CHECK(magnifier.set_account_currency_fx_series(timestamps, rates, 2));
-        magnifier.run(bars.data(), (int)bars.size(), "1", "1", true, 4,
-                      MagnifierDistribution::ENDPOINTS);
-        CHECK(magnifier.last_error().find("bar magnifier") != std::string::npos);
-        CHECK(magnifier.on_bar_calls() == 0);
 
         CarriedFxRolloverOrderingProbe stream;
         CHECK(stream.set_account_currency_fx_series(timestamps, rates, 2));

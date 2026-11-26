@@ -6,7 +6,7 @@
     "test_oracle_deferred_any_witnesses.cpp": "c7fc11a952d45971eb42a602bf5a37328b6527aabb1c1948e197383ff7727ab3",
     "test_oracle_deferred_birth.cpp": "1532354df0ffafacb892072d2721f29fb185bce3a53f52ed975f6e0cd5173774",
     "test_oracle_frozen_size.cpp": "4446e3985049c3127b41de7f9d9882bf10e4c4a54d5b20c47346e0fa4fa814b0",
-    "test_oracle_fx.cpp": "9716a1aa15dac317e8cd820fb1232e33cdb303c6745913cf304401d68d51fa90",
+    "test_oracle_fx.cpp": "007e8bc47f4a442612d000b49e11474cccb2ac49b8b395f997333b23131f4ef5",
     "test_oracle_magnifier_barstate.cpp": "fbcee8e3395d361745ca5585900af7fdc45f30257b29ba43b7f90e4858af1f61",
     "test_oracle_magnifier_distribution.cpp": "3ee60f78f8f15085e1cfb19e483f63cc43bafa047db9a55d49aaa6660c88af8e",
     "test_oracle_more_than_64_fills.cpp": "ff19519d679b794423ac32a0da4f4d93537bc6b183f397f626025ba98c12e24c",
@@ -22,11 +22,11 @@
     "test_oracle_stop_snapshot.cpp": "d3a14a771538873144c8f03a9d8cf391256e9967ad31a03e29e1ed46359daf1d"
   },
   "schema": "pineforge-r4-d-oracle-tree/v2",
-  "treeSha256": "1b9d7f43f7e2c2fd76b7d355a84591d65cd4fe354bfd35214259a2e662f57d02",
+  "treeSha256": "5463938f8b4cef2e6d4acd4181f069b4d460d920c0f79e4849a21802d2ba57f6",
   "privateFixtureAbsent": [
     "test_oracle_day_key.cpp",
     "test_oracle_reversal_same_bar_tx.cpp",
     "test_oracle_stop_snapshot.cpp"
   ],
-  "treeSha256WithoutPrivate": "1969702da418d98daf905d059187671b4f16552128d49c4ffb88dd98a5902e07"
+  "treeSha256WithoutPrivate": "68076e62c59a55299426a30c3ba22d29ec2eb4224f6fc7372feb993e98bf8472"
 }

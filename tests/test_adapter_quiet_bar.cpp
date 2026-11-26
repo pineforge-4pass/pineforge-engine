@@ -782,7 +782,7 @@ struct Observed {
 };
 
 bool runnable(const Scenario& s, bool magnifier) {
-    // A stream has no magnifier; the FX curve refuses one.
+    // The pinned baseline predates support for magnified FX; streams have no magnifier.
     return !magnifier || (s.stream_warmup == 0 && !s.setup.fx_series);
 }
 

@@ -46,7 +46,7 @@ FROZEN_BLOBS = {
     'tests/oracle/test_oracle_coof.cpp':
         'e006f06456b5020f51034a24b3dd99732df53028c8105a32220ad48790f0a903',
     'tests/oracle/test_oracle_fx.cpp':
-        '9716a1aa15dac317e8cd820fb1232e33cdb303c6745913cf304401d68d51fa90',
+        '007e8bc47f4a442612d000b49e11474cccb2ac49b8b395f997333b23131f4ef5',
     'tests/ownership/probes/report/buy_hold_return_overflow/NOTES.md':
         'cd3f14bdab8ccc2e1cb1ed35688bfe1f4c4bd8d7fe81e136999fc36089a50bef',
     'tests/test_adapter_quiet_bar_pinned.inc':
