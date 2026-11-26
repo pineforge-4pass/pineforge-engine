@@ -290,17 +290,17 @@ double PivotHigh::compute(double src) {
     // semantics by exporting per-bar pivot_high values from a TV indicator
     // and diffing against this engine).
     //
-    // LEFT side: equal-high left bars are allowed (non-strict). A run of
-    // identical highs to the left of the candidate should still confirm
-    // the right-most one as the pivot — TV reports the pivot exactly one
-    // bar after each flat-top, never on the first bar of a flat-top run.
+    // LEFT side: only a left VALUE above the candidate rejects it. Equal highs
+    // are allowed (non-strict): TV reports the right-most bar of a flat-top, one
+    // bar after the run. A left bar with no value (na: the source's own warm-up)
+    // does not compete, as on TradingView -- tests/test_ta_pivot_na_left_window.cpp.
     //
     // RIGHT side: equal-high right bars invalidate the candidate (strict).
     // While the flat-top continues to the right, no pivot has yet been
     // confirmed; the pivot is reported only on the bar AFTER the
     // flat-top finishes.
     for (int i = 0; i < left_bars_; i++) {
-        if (is_na(buffer_[i]) || buffer_[i] > pivot) {
+        if (!is_na(buffer_[i]) && buffer_[i] > pivot) {
             return na<double>();
         }
     }
@@ -338,11 +338,11 @@ double PivotLow::compute(double src) {
     }
 
     // Mirror of PivotHigh — see that function's comment for the TV-empirical
-    // rule rationale. LEFT non-strict (equal lows on left allowed), RIGHT
-    // strict (equal lows on right invalidate). Pivot lows confirm exactly
-    // one bar after each flat-bottom run.
+    // rule rationale. LEFT non-strict (equal lows on left allowed, an na left
+    // bar does not compete), RIGHT strict (equal lows on right invalidate).
+    // Pivot lows confirm exactly one bar after each flat-bottom run.
     for (int i = 0; i < left_bars_; i++) {
-        if (is_na(buffer_[i]) || buffer_[i] < pivot) {
+        if (!is_na(buffer_[i]) && buffer_[i] < pivot) {
             return na<double>();
         }
     }
@@ -877,7 +877,7 @@ double PivotHigh::recompute(double src) {
     if (is_na(pivot)) return na<double>();
 
     for (int i = 0; i < left_bars_; i++) {
-        if (is_na(buffer_[i]) || buffer_[i] > pivot) return na<double>();
+        if (!is_na(buffer_[i]) && buffer_[i] > pivot) return na<double>();
     }
     for (long long i = static_cast<long long>(left_bars_) + 1; i < total; i++) {
         if (is_na(buffer_[i]) || buffer_[i] >= pivot) return na<double>();
@@ -899,7 +899,7 @@ double PivotLow::recompute(double src) {
     if (is_na(pivot)) return na<double>();
 
     for (int i = 0; i < left_bars_; i++) {
-        if (is_na(buffer_[i]) || buffer_[i] < pivot) return na<double>();
+        if (!is_na(buffer_[i]) && buffer_[i] < pivot) return na<double>();
     }
     for (long long i = static_cast<long long>(left_bars_) + 1; i < total; i++) {
         if (is_na(buffer_[i]) || buffer_[i] <= pivot) return na<double>();
