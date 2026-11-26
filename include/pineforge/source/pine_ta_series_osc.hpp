@@ -21,6 +21,12 @@
 // changes are not recorded for these ten functions: the rule above is the
 // definition of each function applied to the last `length` bars.
 //
+// The fixed-length call is the Pine call's. For ta.mfi and ta.cci that is
+// the source layer's own type, PineMfi (pine_ta_length.hpp) and PineCci
+// (<pineforge/source/pine_ta_cci.hpp>). Each answers one case differently
+// from ta::MFI and ta::CCI, and SeriesMfi and SeriesCci answer that case as
+// the two types do (their bullets below).
+//
 // Which inputs a class keeps, and what an na input does, follow the
 // fixed-length class of the same function:
 //
@@ -38,13 +44,17 @@
 //   rises (falls) strictly, else 0; the result type is the double those two
 //   classes return.
 // * SeriesCci: the last `length` non-na sources, as ta::CCI keeps them. An na
-//   source answers na and records nothing.
+//   source answers na and records nothing. A window whose mean deviation is
+//   zero up to rounding (inside the comparison band) answers 0, as PineCci
+//   answers it.
 // * SeriesCog: one position per call, na included, as ta::COG keeps them; an
 //   na inside the window makes the answer na.
 // * SeriesCmo, SeriesMfi: one position per call, na included. The answer sums
 //   the last `length` bar-to-bar moves (ta::CMO) or money flows (ta::MFI) and
 //   is na until `length` earlier calls exist. A move out of an na source
-//   counts as zero, as in the two classes.
+//   counts as zero, as in the two classes. SeriesMfi has one value before
+//   that, PineMfi's first value: the call that completes the site's first
+//   `length` calls counts the first call's flow on both sides.
 // * SeriesStoch, SeriesWpr: the highest high and the lowest low of the last
 //   `length` bars come from SeriesWindowExtreme, the series-length rule of
 //   ta.highest and ta.lowest, where ta::Stoch and ta::WPR read ta::Highest
@@ -340,8 +350,15 @@ private:
 };
 
 // ta.cci(source, length) with a series length, over the last `length` non-na
-// sources: (source - mean) / (0.015 * mean absolute deviation), 0 on a zero
-// deviation, in ta::CCI's operation order (both sums oldest first).
+// sources: (source - mean) / (0.015 * mean absolute deviation) in ta::CCI's
+// operation order (both sums oldest first), and 0 on a deviation that is
+// zero up to rounding: at most 1e-10 from zero, the comparison band of
+// <pineforge/ta_compare_band.hpp>. That is the rule of PineCci
+// (<pineforge/source/pine_ta_cci.hpp>), the Pine call's fixed-length type:
+// identical values such as three of 0.1 leave a deviation of one rounding
+// step, on which the quotient would read about -66.67. The deviation tested
+// here is the one ta::Dev gives PineCci: the same window, summed in the same
+// order.
 class SeriesCci {
 public:
     SeriesCci() : SeriesCci(window_cache_capacity()) {}
@@ -366,7 +383,7 @@ private:
         for (std::size_t back = count; back > 0; --back)
             md_sum += std::abs(history_.newest(back - 1) - mean);
         const double mean_dev = md_sum / static_cast<double>(n);
-        if (mean_dev == 0.0) return 0.0;
+        if (float_band_eq(mean_dev, 0.0)) return 0.0;
         return (source - mean) / (0.015 * mean_dev);
     }
 
@@ -381,7 +398,15 @@ private:
 // is below by more than the band, zero otherwise and after an na source.
 // The answer is 100 - 100 / (1 + positive sum / negative sum) over the last
 // `length` flows, summed oldest first, 100 on a zero negative sum, and na
-// until `length` earlier calls exist.
+// until `length` earlier calls exist, with one exception: the call that
+// completes the site's first `length` calls has the first value of PineMfi
+// (pine_ta_length.hpp), the Pine call's fixed-length type. The first call
+// has no call before it and counts its flow on both sides; the other calls
+// count by direction as above; each side is summed oldest first. An na sum
+// answers na and a zero negative sum 100. One call later the window no
+// longer holds the first call, and the answer is ta::MFI's. With a length
+// that changes, every call that finds exactly `length` calls recorded, its
+// own included, is such a call.
 class SeriesMfi {
 public:
     SeriesMfi() : SeriesMfi(window_cache_capacity()) {}
@@ -408,8 +433,9 @@ private:
         }
         sources_.push(source);
         volumes_.push(volume);
-        if (sources_.size() <= n) return na<double>();
+        if (sources_.size() < n) return na<double>();
         const auto count = static_cast<std::size_t>(n);
+        if (sources_.size() == count) return first_value(count);
         double pos_sum = 0, neg_sum = 0;
         double previous = sources_.newest(count);
         for (std::size_t back = count; back > 0; --back) {
@@ -426,6 +452,25 @@ private:
         }
         if (neg_sum == 0) return 100.0;
         return 100.0 - 100.0 / (1.0 + pos_sum / neg_sum);
+    }
+
+    // The call that completes the first `count` calls, which are all the
+    // calls recorded (a lookback cap keeps one more than its longest
+    // length): PineMfi's first value, statement for statement.
+    double first_value(std::size_t count) const {
+        double previous = sources_.newest(count - 1);
+        double upper = previous * volumes_.newest(count - 1);
+        double lower = upper;
+        for (std::size_t back = count - 1; back > 0; --back) {
+            const double src = sources_.newest(back - 1);
+            const double flow = src * volumes_.newest(back - 1);
+            if (float_band_gt(src, previous)) upper += flow;
+            else if (float_band_lt(src, previous)) lower += flow;
+            previous = src;
+        }
+        if (is_na(upper) || is_na(lower)) return na<double>();
+        if (lower == 0) return 100.0;
+        return 100.0 - 100.0 / (1.0 + upper / lower);
     }
 
     std::int64_t max_lookback_ = ::pineforge::detail::ta_lookback_limit();
