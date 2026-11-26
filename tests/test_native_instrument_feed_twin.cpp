@@ -25,6 +25,7 @@
 
 #include <cstdlib>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -61,6 +62,7 @@ public:
     std::map<int, Row> value;
     std::map<int, Series<double>> hist_close, hist_time, hist_time_close;
     std::vector<std::map<int, Row>> rows;
+    std::vector<std::int64_t> chart_stamps;
     // What the payload saw of syminfo, and what the body sees after it.
     std::map<int, std::string> payload_tickerid, payload_type, payload_timezone;
     std::map<int, double> payload_mintick;
@@ -108,8 +110,9 @@ public:
         hist_time[sec_id].clear();
         hist_time_close[sec_id].clear();
     }
-    void on_source_bar(const Bar&) override {
+    void on_source_bar(const Bar& bar) override {
         rows.push_back(value);
+        chart_stamps.push_back(bar.timestamp);
         body_tickerid.push_back(syminfo_.tickerid);
     }
 };
@@ -138,8 +141,28 @@ bool install(ForeignShape& pine, const NativeInstrumentFeed& feed) {
 bool run_pine(ForeignShape& pine, const NativeRunSpec& spec, const std::vector<Bar>& chart) {
     pine.run(chart.data(), static_cast<int>(chart.size()), spec.input_tf, spec.script_tf, false,
              4, MagnifierDistribution::ENDPOINTS);
-    if (!pine.last_error().empty()) std::printf("  pine error: %s\n", pine.last_error().c_str());
-    return pine.last_error().empty();
+    if (!pine.last_error().empty()) {
+        std::printf("NOT COMPARED [%s]: expected completed run, pine error: %s\n",
+                    scenario, pine.last_error().c_str());
+        CHECK(pine.last_error().empty());
+        return false;
+    }
+    if (chart.empty() || pine.rows.size() != chart.size()) {
+        std::printf("NOT COMPARED [%s]: chart=%zu pine=%zu; need one row per input bar\n",
+                    scenario, chart.size(), pine.rows.size());
+        CHECK(!chart.empty() && pine.rows.size() == chart.size());
+        return false;
+    }
+    for (std::size_t j = 0; j < chart.size(); ++j) {
+        if (pine.chart_stamps[j] != chart[j].timestamp) {
+            std::printf("NOT COMPARED [%s]: bar=%zu chart=%lld pine=%lld\n", scenario, j,
+                        static_cast<long long>(chart[j].timestamp),
+                        static_cast<long long>(pine.chart_stamps[j]));
+            CHECK(pine.chart_stamps[j] == chart[j].timestamp);
+            return false;
+        }
+    }
+    return true;
 }
 
 bool same_value(double a, double b) {
@@ -150,10 +173,21 @@ bool same_value(double a, double b) {
 // Row j of the adapter against the kernel's reading of chart bar j.
 void check_rows(const ForeignShape& pine, int sec_id, const InstrumentHost& kernel,
                 std::size_t series, const NativeInstrumentFeed& feed, bool with_history) {
-    CHECK(pine.rows.size() == kernel.reads.size());
-    if (pine.rows.size() != kernel.reads.size()) return;
+    if (pine.rows.size() != kernel.reads.size()) {
+        std::printf("NOT COMPARED [%s]: pine=%zu kernel=%zu chart rows\n",
+                    scenario, pine.rows.size(), kernel.reads.size());
+        CHECK(pine.rows.size() == kernel.reads.size());
+        return;
+    }
     int mismatches = 0;
     for (std::size_t j = 0; j < pine.rows.size(); ++j) {
+        if (pine.chart_stamps[j] != kernel.reads[j].chart_open) {
+            std::printf("NOT COMPARED [%s]: bar=%zu pine=%lld kernel=%lld\n", scenario, j,
+                        static_cast<long long>(pine.chart_stamps[j]),
+                        static_cast<long long>(kernel.reads[j].chart_open));
+            CHECK(pine.chart_stamps[j] == kernel.reads[j].chart_open);
+            return;
+        }
         const Row& got = pine.rows[j].at(sec_id);
         const auto& visible = kernel.reads[j].visible[series];
         Row want;
@@ -463,21 +497,35 @@ void twin_hash() {
     const std::vector<Bar> chart = nyse_daily_chart(days);
     const NativeInstrumentFeed feed = us10y_like_daily_feed(days);
     const NativeRunSpec spec = nyse_spec("twin-hash", "D");
-    const auto run_hash = [&](const NativeInstrumentFeed& installed, bool with_site) {
+    const auto run_hash = [&](const NativeInstrumentFeed& installed, bool with_site)
+            -> std::optional<std::uint64_t> {
         ForeignShape pine;
         prime_chart(pine, spec);
         if (with_site) pine.sites = {{0, "SYN:US10Y", "D", false, false, false}};
-        if (!installed.bars.empty()) install(pine, installed);
-        run_pine(pine, spec, chart);
+        if (with_site) {
+            const bool ready = install(pine, installed);
+            CHECK(ready);
+            if (!ready) {
+                std::printf("NOT COMPARED [%s]: expected installed feed, got %s\n",
+                            scenario, pine.last_error().c_str());
+                return std::nullopt;
+            }
+        }
+        if (!run_pine(pine, spec, chart)) return std::nullopt;
         return pine.broker_state_hash();
     };
-    const std::uint64_t plain = run_hash(NativeInstrumentFeed{}, false);
-    const std::uint64_t with_feed = run_hash(feed, true);
-    CHECK(run_hash(feed, true) == with_feed);
-    CHECK(with_feed != plain);
+    const auto plain = run_hash(NativeInstrumentFeed{}, false);
+    if (!plain) return;
+    const auto with_feed = run_hash(feed, true);
+    if (!with_feed) return;
+    const auto replay = run_hash(feed, true);
+    if (!replay) return;
+    CHECK(*replay == *with_feed);
+    CHECK(*with_feed != *plain);
     NativeInstrumentFeed other = feed;
     other.close_ms[2] -= kMinute;
-    CHECK(run_hash(other, true) != with_feed);
+    const auto changed = run_hash(other, true);
+    if (changed) CHECK(*changed != *with_feed);
 }
 
 // A real run must reach the chosen refusal. A setup check, a different Pine
