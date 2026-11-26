@@ -1313,7 +1313,12 @@ class RealTree(unittest.TestCase):
         # builds (grown). Two site identities also enter the existing OPEN group
         # U1108 without adding a group: the whole-state restores of
         # PineDmiReference::recompute and PineSar::recompute. All remain OPEN.
-        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3 + 1 + 1 + 1 + 2 + 3 + 2 + 1 + 6 + 2
+        # expectation corrected: 1655 -> 1657, because U1967 and U1968 add two
+        # unreviewed groups in src/source/pine_host_reads.hpp: the allocation
+        # of the state that keeps the N-day partitions of timeframe.change for
+        # one run (TimeframeChangeState) and that state's rows, one for each
+        # N-day timeframe the script names. Both remain OPEN.
+        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3 + 1 + 1 + 1 + 2 + 3 + 2 + 1 + 6 + 2 + 2
         self.assertEqual(c['OPEN'], expected_open)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])

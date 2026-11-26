@@ -44708,6 +44708,42 @@
    "ordinal": 2
   },
   {
+   "file": "src/source/pine_host_reads.hpp",
+   "symbol": "partitions",
+   "scope": [
+    "namespace pineforge :: source #1",
+    "namespace detail #1",
+    "struct TimeframeChangeState : NativeHostState #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < TimeframeChangePeriods >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_host_reads.hpp",
+   "symbol": "fresh",
+   "scope": [
+    "namespace pineforge :: source #1",
+    "namespace detail #1",
+    "inline TimeframeChangeState * timeframe_change_state ( const NativeStrategyHost & host ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_host_reads.hpp",
+   "symbol": "partitions",
+   "scope": [
+    "namespace pineforge :: source #1",
+    "namespace detail #1",
+    "template < class Plan > TimeframeAggregator :: PeriodSource * timeframe_change_periods ( TimeframeChangeState & state , int days , Plan && plan ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "partitions . insert ( . . . )",
+   "ordinal": 1
+  },
+  {
    "file": "src/source/pine_intent_state.hpp",
    "symbol": "id",
    "scope": [
