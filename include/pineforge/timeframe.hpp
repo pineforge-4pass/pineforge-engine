@@ -192,9 +192,9 @@ int64_t session_period_open_ms(int64_t ms, const std::string& tz,
 /// asserted to be a raw first input. Aggregators retain their actual first
 /// input separately and supply it to the shared writer for a stable prefix
 /// label. Neither a grid label nor first printed data defines a session origin.
-/// Resolve the day stamp and the session close at their own local times.
-/// Intraday widths count elapsed time from the resolved origin, including
-/// on a day when the exchange clock skips or repeats an hour.
+/// This reader and the end reader resolve the day stamp and the session close at their own local
+/// times and count widths as elapsed time from that origin, also on a day whose clock skips or repeats
+/// an hour. In a named zone the aggregator and tf_change keep one zone offset per UTC date (its noon's).
 int64_t session_intraday_bucket_open_ms(int64_t ms, int64_t bucket_sec,
                                         const std::string& tz,
                                         const std::string& session);
