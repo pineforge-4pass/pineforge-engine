@@ -1,4 +1,6 @@
 #include <pineforge/source/pine_ta_series_osc.hpp>
+#include <pineforge/source/pine_ta_cci.hpp>
+#include <pineforge/source/pine_ta_length.hpp>
 #include <pineforge/detail/ta_lookback.hpp>
 #include <pineforge/na.hpp>
 #include <pineforge/run_failure.hpp>
@@ -23,6 +25,12 @@
 //
 // Target 1 (constant_length): a per-call length that never changes gives the
 // fixed-length class's value on every bar, bit for bit, na bars included.
+// For ta.mfi and ta.cci the fixed-length class is the Pine call's own type,
+// PineMfi and PineCci, and the tapes hold the case each of the two exists
+// for: ta.mfi's first value, on the call that completes the first `length`
+// calls, and ta.cci's 0 on a window whose mean deviation is zero only up to
+// rounding. pine_type_rows counts those rows, so a tape without them is not
+// a pass.
 // Target 2 (changing_length): a length that changes from bar to bar gives the
 // function recomputed directly over the last `length` bars of the tape.
 // The remaining functions cover what the two targets rest on: the length
@@ -101,6 +109,36 @@ Tapes generated_tape() {
     return t;
 }
 
+// 12 invented bars for ta.mfi's first value. The first bar has a volume of 0,
+// so the first call's flow is 0 on both sides, and bar 2, which rises, has no
+// volume. The first value is therefore 100 for the lengths 1 and 2 (a lower
+// sum of 0) and na for every longer length (an upper sum that holds the
+// missing volume, beside a lower sum that is 0 for length 3).
+Tapes zero_first_flow_tape() {
+    Tapes t;
+    t.source = {30.0, 30.5, 31.25, 30.75, 30.75, 32.0, 31.0, 33.25, 32.5, 34.0, 33.0, 35.5};
+    t.volume = {0.0, 400.0, NA, 250.0, 300.0, 350.0, 150.0, 500.0, 450.0, 200.0, 600.0, 100.0};
+    t.high.assign(t.source.size(), 40.0);
+    t.low.assign(t.source.size(), 20.0);
+    return t;
+}
+
+// 24 invented bars for ta.cci on a window that is flat up to rounding: 0.1 on
+// most bars, a 0.4 at bar 8, an na at bar 12 and 0.7 on bars 16 to 19. Three
+// values of 0.1 sum to 0.30000000000000004, so their mean is one step above
+// 0.1 and their mean deviation is that step, not 0. Other windows of equal
+// values round to an exact 0 or leave such a step; every row is compared with
+// PineCci either way.
+Tapes flat_window_tape() {
+    Tapes t;
+    t.source = {0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.4, 0.1, 0.1, 0.1,
+                NA,  0.1, 0.1, 0.1, 0.7, 0.7, 0.7, 0.7, 0.1, 0.1, 0.1, 0.1};
+    t.high.assign(t.source.size(), 1.0);
+    t.low.assign(t.source.size(), 0.0);
+    t.volume.assign(t.source.size(), 1000.0);
+    return t;
+}
+
 // One length per bar of the 24-bar tapes: it grows, shrinks and repeats, is
 // longer than the history at the start (bar 0, and bar 3 for the functions
 // that read `length` bars back) and carries two fractions, which truncate
@@ -175,7 +213,21 @@ double direct_cmo(const std::vector<double>& s, std::size_t i, std::size_t n) {
 
 double direct_mfi(const std::vector<double>& s, const std::vector<double>& v, std::size_t i,
                   std::size_t n) {
-    if (i < n) return NA;
+    if (i + 1 < n) return NA;
+    if (i + 1 == n) {
+        // The first value: bar 0 has no bar before it and counts on both
+        // sides, bars 1 .. i count by direction, and an na sum is na.
+        double upper = s[0] * v[0];
+        double lower = upper;
+        for (std::size_t j = 1; j <= i; ++j) {
+            const double flow = s[j] * v[j];
+            if (pineforge::float_band_gt(s[j], s[j - 1])) upper += flow;
+            else if (pineforge::float_band_lt(s[j], s[j - 1])) lower += flow;
+        }
+        if (std::isnan(upper) || std::isnan(lower)) return NA;
+        if (lower == 0) return 100.0;
+        return 100.0 - 100.0 / (1.0 + upper / lower);
+    }
     double pos_sum = 0;
     double neg_sum = 0;
     for (std::size_t j = i + 1 - n; j <= i; ++j) {
@@ -218,7 +270,8 @@ double direct_cci(const std::vector<double>& s, std::size_t i, std::size_t n) {
     double md_sum = 0.0;
     for (double value : window) md_sum += std::abs(value - mean);
     const double mean_dev = md_sum / static_cast<double>(n);
-    if (mean_dev == 0.0) return 0.0;
+    // Zero up to rounding: at most 1e-10 from zero, the comparison band.
+    if (pineforge::float_band_eq(mean_dev, 0.0)) return 0.0;
     return (s[i] - mean) / (0.015 * mean_dev);
 }
 
@@ -305,31 +358,49 @@ struct Wpr {
     }
 };
 
+// The fixed-length path of ta.cci is the Pine call's own type. PineCci is
+// ta::CCI (Kernel) except on a window whose mean deviation is zero up to
+// rounding, where it answers 0.
 struct Cci {
     static constexpr const char* name = "cci";
     static constexpr bool truth = false;
     using Series = pineforge::source::SeriesCci;
-    using Fixed = ta::CCI;
+    using Fixed = pineforge::source::PineCci;
+    using Kernel = ta::CCI;
     static double series(Series& s, const Tapes& t, std::size_t i, double n, bool again) {
         return again ? s.recompute(t.source[i], n) : s.compute(t.source[i], n);
     }
     static double fixed(Fixed& f, const Tapes& t, std::size_t i) { return f.compute(t.source[i]); }
+    static double kernel(Kernel& k, const Tapes& t, std::size_t i) {
+        return k.compute(t.source[i]);
+    }
     static double direct(const Tapes& t, std::size_t i, std::size_t n) {
         return direct_cci(t.source, i, n);
     }
 };
 
+// The fixed-length path of ta.mfi is the Pine call's own type. PineMfi is
+// ta::MFI (Kernel) except on the call that completes the first `length`
+// calls, where ta::MFI is still na and PineMfi has TradingView's first value.
+// expectation corrected: na -> PineMfi's first value on the six rows where
+// the call completes the first `length` calls (constant: bar length - 1 of
+// each of the five lengths; changing: bar 3, length 4), because the series
+// class is measured against the Pine call's fixed-length type, not ta::MFI.
 struct Mfi {
     static constexpr const char* name = "mfi";
     static constexpr bool truth = false;
     using Series = pineforge::source::SeriesMfi;
-    using Fixed = ta::MFI;
+    using Fixed = pineforge::source::PineMfi;
+    using Kernel = ta::MFI;
     static double series(Series& s, const Tapes& t, std::size_t i, double n, bool again) {
         return again ? s.recompute(t.source[i], t.volume[i], n)
                      : s.compute(t.source[i], t.volume[i], n);
     }
     static double fixed(Fixed& f, const Tapes& t, std::size_t i) {
         return f.compute(t.source[i], t.volume[i]);
+    }
+    static double kernel(Kernel& k, const Tapes& t, std::size_t i) {
+        return k.compute(t.source[i], t.volume[i]);
     }
     static double direct(const Tapes& t, std::size_t i, std::size_t n) {
         return direct_mfi(t.source, t.volume, i, n);
@@ -435,8 +506,9 @@ struct PineLayerRoc : Roc {
 #endif
 
 // Target 1: a constant per-call length against the fixed-length class.
+// `target` names the rows of a second tape of one function.
 template <class F>
-void constant_length(const Tapes& t) {
+void constant_length(const Tapes& t, const char* target = "constant") {
     const std::size_t before = g_rows;
     std::size_t lengths = 0;
     std::size_t values = 0;
@@ -450,8 +522,7 @@ void constant_length(const Tapes& t) {
             if (!std::isnan(expected)) ++values;
             if (expected == 1.0) ++ones;
             if (expected == 0.0) ++zeros;
-            check(F::name, "constant", i, length, F::series(series, t, i, length, false),
-                  expected);
+            check(F::name, target, i, length, F::series(series, t, i, length, false), expected);
         }
         ++lengths;
     }
@@ -461,9 +532,32 @@ void constant_length(const Tapes& t) {
     if (F::truth) assert(ones > 0 && zeros > 0);
 }
 
-// Target 2: a length that changes per bar against the direct recomputation.
+// The rows of constant_length on which a function's Pine-layer type and its
+// kernel class differ: the case the Pine-layer type exists for. A tape with
+// fewer such rows than `minimum` does not hold that case, and its
+// constant-length rows would compare nothing the two classes do not share.
 template <class F>
-void changing_length(const Tapes& t) {
+void pine_type_rows(const Tapes& t, const char* tape, std::size_t minimum) {
+    std::size_t rows = 0;
+    for (int length : {1, 2, 3, 5, 8}) {
+        typename F::Fixed pine(length);
+        typename F::Kernel kernel(length);
+        for (std::size_t i = 0; i < t.bars(); ++i) {
+            if (!same_bits(F::fixed(pine, t, i), F::kernel(kernel, t, i))) ++rows;
+        }
+    }
+    if (rows >= minimum) return;
+    ++g_failures;
+    std::fprintf(stderr,
+                 "FAIL %s %s NOT COMPARED: the Pine-layer type and the kernel class differ on "
+                 "%zu rows, at least %zu expected\n",
+                 F::name, tape, rows, minimum);
+}
+
+// Target 2: a length that changes per bar against the direct recomputation.
+// `target` names the rows of a second tape of one function.
+template <class F>
+void changing_length(const Tapes& t, const char* target = "changing") {
     assert(kChangingLengths.size() == t.bars());
     const std::size_t before = g_rows;
     std::size_t values = 0;
@@ -474,7 +568,7 @@ void changing_length(const Tapes& t) {
         const double expected = F::direct(t, i, static_cast<std::size_t>(length));
         if (!std::isnan(expected)) ++values;
         if (expected == 1.0) ++ones;
-        check(F::name, "changing", i, length, F::series(series, t, i, length, false), expected);
+        check(F::name, target, i, length, F::series(series, t, i, length, false), expected);
     }
     assert(g_rows - before == t.bars());
     assert(values > 0);
@@ -647,6 +741,8 @@ int main() {
     const Tapes clean_extremes = clean_extremes_tape();
     const Tapes leading_na = leading_na_tape();
     const Tapes generated = generated_tape();
+    const Tapes zero_first_flow = zero_first_flow_tape();
+    const Tapes flat_window = flat_window_tape();
 
     // Target 1. ta::Mom and ta::ROC keep a window of present samples, so
     // they are the fixed-length path of SeriesMom and SeriesRoc only on a
@@ -666,6 +762,18 @@ int main() {
     constant_length<PineLayerRoc>(with_na);
 #endif
 
+    // Target 1 on the case the Pine-layer types of ta.mfi and ta.cci exist
+    // for. The na tape has one first value per length (5). The tape whose
+    // first flow is 0 has the two first values of 100; its three longer
+    // lengths have an na first value, as ta::MFI has. The flat tape has
+    // twelve windows of three values of 0.1 (length 3: bars 2 to 7, 11, 13
+    // to 15, 22 and 23).
+    pine_type_rows<Mfi>(with_na, "na-tape", 5);
+    pine_type_rows<Mfi>(zero_first_flow, "zero-first-flow", 2);
+    pine_type_rows<Cci>(flat_window, "flat-window", 12);
+    constant_length<Mfi>(zero_first_flow, "constant-zero-first-flow");
+    constant_length<Cci>(flat_window, "constant-flat-window");
+
     // Target 2. The highs and lows hold no na here. The window extremes of a
     // changing length are SeriesWindowExtreme's, which answers from its cached
     // extremum when a window that has just grown holds an na; without an na
@@ -673,6 +781,7 @@ int main() {
     changing_length<Stoch>(clean_extremes);
     changing_length<Wpr>(clean_extremes);
     changing_length<Cci>(with_na);
+    changing_length<Cci>(flat_window, "changing-flat-window");
     changing_length<Mfi>(with_na);
     changing_length<Mom>(with_na);
     changing_length<Roc>(with_na);
