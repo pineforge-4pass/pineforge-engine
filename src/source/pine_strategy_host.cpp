@@ -4181,9 +4181,9 @@ int64_t source::PineStrategyHost::chart_bar_close_ms(int64_t stamp) const {
 // ET slot and Good Friday, the test's no-bar slots). So the host reads the
 // bars from the input it retains (a batch's, or a stream's warmup); past its
 // edges it walks the symbol's session calendar (session_trades_at): a batch's
-// final bar asks the calendar for the bar after it, as a live bar does. One
-// slot the input does not hold is read forward all the same: a session slot
-// between two bars the input holds in one session day (unprinted_slot below).
+// final bar asks the calendar for the bar after it, as a live bar does. One slot the input does
+// not hold is read forward all the same: a session slot between two bars the input holds in one
+// session day, or in any days of a session that never closes (unprinted_slot below).
 namespace {
 
 constexpr std::int64_t kTimeOffsetMinuteMs = 60'000;
@@ -4291,25 +4291,25 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
         }
         return na<int64_t>();
     };
-    // A slot of the symbol's session that the input holds no bar for: the
-    // first one at or after `from` and before `held`, the input's next chart
-    // bar past the bar or slot `after`. TradingView reads the bar after a chart
-    // bar from its calendar for the symbol, not from the chart's bars
-    // (tests/test_symbol_calendar_tapes.cpp, its opening note), and a calendar
-    // day runs from its open to its close (set_symbol_calendar). A later bar of
-    // the same session day therefore puts every session slot before it inside
-    // that day, with no calendar installed too: the 09:05 bar of a 5-minute
-    // chart whose input goes on at 09:15 reads 09:10 next. Only the calendar
-    // says whether a day went on past its last bar (an early close) or whether
-    // a day without bars is one of its days (a holiday): there, on a D, W or M
-    // chart, and where no session slot lies between, this is na and the
-    // input's next bar stands.
+    // A slot of the symbol's session that the input holds no bar for: the first one at or after
+    // `from` and before `held`, the input's next chart bar past the bar or slot `after`.
+    // TradingView reads the bar after a chart bar from its calendar for the symbol, not from the
+    // chart's bars (tests/test_symbol_calendar_tapes.cpp, its opening note), and a calendar day
+    // runs from its open to its close (set_symbol_calendar). A later bar of the same session day
+    // therefore puts every session slot before it inside that day, with no calendar installed too:
+    // the 09:05 bar of a 5-minute chart whose input goes on at 09:15 reads 09:10 next. Only the
+    // calendar says whether a day went on past its last bar (an early close) or whether a day
+    // without bars is one of its days (a holiday): there, on a D, W or M chart, and where no
+    // session slot lies between, this is na and the input's next bar stands. A session that never
+    // closes ("24x7" or none) has neither, so its slots are read across the trading-day roll and
+    // at a day's edge too (observed on TradingView with a synthetic script).
     const auto unprinted_slot = [&](std::int64_t after, std::int64_t from,
                                     std::int64_t held) -> std::int64_t {
         if (daily_chart || chart_step_ms <= 0 || is_na(from) || is_na(held) || from <= after
             || from >= held
-            || pineforge::internal::session_trading_day_index(after, sym_tz, sym_session)
-                   != pineforge::internal::session_trading_day_index(held, sym_tz, sym_session)) {
+            || (!(sym_session.empty() || sym_session == "24x7")
+                && pineforge::internal::session_trading_day_index(after, sym_tz, sym_session)
+                    != pineforge::internal::session_trading_day_index(held, sym_tz, sym_session))) {
             return na<std::int64_t>();
         }
         for (std::int64_t t = from; t < held; t += kTimeOffsetMinuteMs) {
