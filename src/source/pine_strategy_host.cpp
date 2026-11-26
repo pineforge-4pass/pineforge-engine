@@ -4736,4 +4736,86 @@ double source::PineStrategyHost::request_currency_rate(
                                  : 1.0 / conversion.account_per_symbol;
 }
 
+// Pine's timeframe.change(tf) behind the generated class-scope call. The
+// namespace-level tf_change takes a calendar timeframe's unit from its last
+// character and drops the count, so "2D" answered as "D" does: true on every
+// trading day. TradingView reports the opening of a new requested period, and
+// its N-day periods are N trading dates counted from the year's first
+// (multi_day_periods.hpp). The two bars are therefore compared by the open of
+// the period of that partition holding each: the partition an N-day
+// request.security reads (scheduler_prepare_security_sequence), from the same
+// feeds and symbol facts. The zero-stamp guard, a single-unit or intraday
+// timeframe, a W or M multiple, another symbol's requested context and a
+// partition the rule does not yield stay the namespace-level answer.
+//
+// The run's partitions are kept in the run cache the consumer holds for this
+// host (PineRunCache::timeframe_change_periods, pine_host_reads.hpp), never in
+// this object, whose layout is the generated script's ABI. Each is built on
+// the first call naming its timeframe and read until the consumer drops the
+// cache as the next run begins, before that run's prepare: it reads the bars
+// of the run that built it. A partition is derived from the run's bars and
+// the symbol's facts alone, so where the consumer holds no cache for this
+// host and run (its switch is off, or the cache could not be allocated), or
+// the cache's slots are all taken by other timeframes, the same partition is
+// built for the call and not kept.
+bool source::PineStrategyHost::tf_change(std::int64_t prev_ms, std::int64_t curr_ms,
+                                         const std::string& tf, const std::string& tz,
+                                         const std::string& session) const {
+    if (prev_ms == 0 || curr_ms == 0) return false;
+    const int days = multi_day_count(tf);
+    if (days == 0 || foreign_context_ != nullptr || tz != syminfo_.timezone
+        || session != syminfo_.session) {
+        return pineforge::tf_change(prev_ms, curr_ms, tf, tz, session);
+    }
+    const auto build_partition = [&] {
+        const auto bars = scheduler_.retained_input();
+        MultiDayFeeds feeds;
+        feeds.days = days;
+        feeds.chart = bars.data();
+        feeds.n_chart = static_cast<int>(bars.size());
+        feeds.daily_chart = tf_to_seconds(input_tf_) == 86400;
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+        if (aux_security_feed_enabled()) {
+            feeds.aux = aux_security_bars_.data();
+            feeds.n_aux = aux_security_bars_.size();
+        }
+#endif
+        feeds.tz = syminfo_.timezone;
+        feeds.session = syminfo_.session;
+        feeds.exchange_calendar = session_template_knows_early_close();
+        return make_multi_day_period_source(feeds);
+    };
+    std::shared_ptr<TimeframeAggregator::PeriodSource> unkept;
+    TimeframeAggregator::PeriodSource* periods = nullptr;
+    bool kept = false;
+    if (detail::PineRunCache* const run_facts = detail::run_cache(
+            detail::run_consumer(*this), &adapter_, adapter_.run_counter_)) {
+        for (auto& slot : run_facts->timeframe_change_periods) {
+            if (slot.days == 0) {
+                // The first free slot: this timeframe has none yet. A build
+                // that throws leaves the slot free.
+                slot.periods = build_partition();
+                slot.days = days;
+            }
+            if (slot.days == days) {
+                periods = slot.periods.get();
+                kept = true;
+                break;
+            }
+        }
+    }
+    if (!kept) {
+        unkept = build_partition();
+        periods = unkept.get();
+    }
+    std::int64_t prev_open = 0;
+    std::int64_t curr_open = 0;
+    bool last = false;
+    if (periods == nullptr || !periods->stamp_at(prev_ms, prev_open, last)
+        || !periods->stamp_at(curr_ms, curr_open, last)) {
+        return pineforge::tf_change(prev_ms, curr_ms, tf, tz, session);
+    }
+    return prev_open != curr_open;
+}
+
 }  // namespace pineforge

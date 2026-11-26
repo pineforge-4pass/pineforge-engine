@@ -21,7 +21,12 @@
 #include "../native_execution_consumer.hpp"
 #include "pine_intent_state.hpp"
 
+#include <pineforge/timeframe.hpp>
+
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 
 namespace pineforge::source {
@@ -82,6 +87,17 @@ inline const NativeCurrentPointView* callback_point(const NativeStrategyHost& ho
     return live_callback_point(host);
 }
 
+// One N-day timeframe's partition among PineRunCache::timeframe_change_periods:
+// `days` is N, 0 in a free slot; a null `periods` in a taken slot is a
+// timeframe TradingView's rule yields no partition for.
+struct TimeframeChangePeriods {
+    int days = 0;
+    std::shared_ptr<TimeframeAggregator::PeriodSource> periods;
+};
+// How many N-day timeframes one run keeps such a partition for. A script names
+// one or two.
+inline constexpr std::size_t kTimeframeChangeSlots = 8;
+
 // The source layer's state parked with the consumer for one run (the
 // host bookkeeping index cache's NativeHostCache: the adapter's lookup index derives from this,
 // pine_adapter.cpp). The consumer drops it at every run begin and never reads
@@ -97,6 +113,17 @@ struct PineRunCache : NativeHostCache {
     // Reads the facts answered (the witness's probe), apart from the
     // lookups the index answers.
     std::uint64_t fact_answers = 0;
+    // timeframe.change's N-day partitions of this run
+    // (PineStrategyHost::tf_change), one slot per N, taken in the order the
+    // script first names them: each is built on the first call naming its
+    // timeframe and read until the consumer drops this cache at the next
+    // run's begin, as it reads the run's bars. Unlike the facts above they
+    // are not the spec's: they are derived from the run's bars and the
+    // symbol's facts alone, so a host without this cache, or with every slot
+    // taken, builds the same partition again for the call. The slots are a
+    // fixed array and each partition is of bounded memory
+    // (multi_day_periods.hpp): nothing here grows with the run.
+    std::array<TimeframeChangePeriods, kTimeframeChangeSlots> timeframe_change_periods;
 };
 
 // The consumer's PineRunCache for the adapter at `owner` in run `run`, or null.
