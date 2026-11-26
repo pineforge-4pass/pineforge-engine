@@ -40,7 +40,7 @@
 #include <pineforge/ta.hpp>
 #include <pineforge/na.hpp>
 #include <pineforge/detail/ta_lookback.hpp>
-
+#include <pineforge/ta_compare_band.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -891,6 +891,115 @@ private:
     State saved_state_;  // the state before the current bar
 };
 
+// ta.mfi(series, length) with TradingView's first value. TradingView's
+// built-in equals its published Pine definition
+//   upper = math.sum(volume * (ta.change(src) <= 0 ? 0 : src), length)
+//   lower = math.sum(volume * (ta.change(src) >= 0 ? 0 : src), length)
+//   mfi   = 100 - 100 / (1 + upper / lower)
+// on every bar from its first value (observed on a synthetic script, length
+// 5). On the first bar of a series the change is na, so neither comparison
+// holds and BOTH sums take that bar's source * volume; the first value is on
+// bar length - 1. ta::MFI counts transitions instead: its first slot is zero
+// on both sides and its first value is on bar `length`, when that slot has
+// left the window. From that bar on the two windows hold the same flows, so
+// the length-th call is the only one that differs, and the adapter answers
+// that call itself: the first call's source * volume on both sides, then the
+// flows of calls 2 .. length classified as ta::MFI classifies them (the
+// absolute comparison band of <pineforge/ta_compare_band.hpp>; no flow on an
+// na source or on the call after one), each side summed oldest first. A lower
+// sum of zero answers 100, as in ta::MFI; an na sum (an na source or volume
+// on the first call, an na volume on a later flow) answers na. Every other
+// call is ta::MFI's own answer, so an na source after the first call, a flat
+// window and a zero volume keep that class's values: TradingView's values for
+// those are not pinned here. Calls are counted as ta::MFI counts them, one
+// per compute(), an na source included. recompute() replaces the last call.
+// A length below 1 never reaches the adapter's own call. The members are the
+// ones generated code uses on ta::MFI: the length constructor, compute,
+// recompute and observe_owned_storage.
+class PineMfi {
+    struct Warmup {
+        long long calls = 0;             // compute() calls taken, at most the length
+        double prev_src = na<double>();  // the source of the call before
+        double upper = 0.0;              // the first flow, then the rising flows
+        double lower = 0.0;              // the first flow, then the falling flows
+    };
+
+    ta::MFI mfi_;
+    long long length_;
+    Warmup warmup_;
+    Warmup saved_warmup_;                // the state before the last call
+
+    double step(double kernel, double src, double vol) {
+        if (warmup_.calls >= length_) return kernel;
+        ++warmup_.calls;
+        const double flow = src * vol;
+        if (warmup_.calls == 1) {
+            warmup_.upper = flow;
+            warmup_.lower = flow;
+        } else if (float_band_gt(src, warmup_.prev_src)) {
+            warmup_.upper += flow;
+        } else if (float_band_lt(src, warmup_.prev_src)) {
+            warmup_.lower += flow;
+        }
+        warmup_.prev_src = src;
+        if (warmup_.calls < length_) return kernel;
+        if (is_na(warmup_.upper) || is_na(warmup_.lower)) return na<double>();
+        if (warmup_.lower == 0) return 100.0;
+        return 100.0 - 100.0 / (1.0 + warmup_.upper / warmup_.lower);
+    }
+
+public:
+    explicit PineMfi(int length) : mfi_(length), length_(length) {}
+    double compute(double src, double vol) {
+        saved_warmup_ = warmup_;
+        return step(mfi_.compute(src, vol), src, vol);
+    }
+    double recompute(double src, double vol) {
+        warmup_ = saved_warmup_;
+        return step(mfi_.recompute(src, vol), src, vol);
+    }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        mfi_.observe_owned_storage(out);
+    }
+};
+
+// ta.rci(source, length) with TradingView's first value. TradingView's value
+// is the rank correlation ta::RCI computes over the last `length` values, but
+// it is na on bar length - 1, where ta::RCI's window first holds `length`
+// values, and starts on bar `length` (observed on a synthetic script, length
+// 5). The adapter answers na until ta::RCI has taken length + 1 values and
+// ta::RCI's own answer from then on. Values are counted as ta::RCI's window
+// counts them: an na source adds none, so a series with na values starts one
+// value after ta::RCI would; TradingView's start on such a series is not
+// pinned here. recompute() replaces the last call. The members are the ones
+// generated code uses on ta::RCI: the length constructor, compute, recompute
+// and observe_owned_storage.
+class PineRci {
+    ta::RCI rci_;
+    long long length_;
+    long long values_ = 0;        // non-na sources taken, at most length_ + 1
+    long long saved_values_ = 0;  // the count before the last call
+
+    double step(double kernel, double src) {
+        if (values_ <= length_ && !is_na(src)) ++values_;
+        return values_ > length_ ? kernel : na<double>();
+    }
+
+public:
+    explicit PineRci(int length) : rci_(length), length_(length) {}
+    double compute(double src) {
+        saved_values_ = values_;
+        return step(rci_.compute(src), src);
+    }
+    double recompute(double src) {
+        values_ = saved_values_;
+        return step(rci_.recompute(src), src);
+    }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        rci_.observe_owned_storage(out);
+    }
+};
+
 }  // namespace source
 }  // namespace pineforge
 
@@ -906,3 +1015,6 @@ private:
 #define PINEFORGE_HAS_PINE_DMI_REFERENCE 1
 // Feature macro: PineSar exists.
 #define PINEFORGE_HAS_PINE_SAR 1
+// Feature macros: PineMfi and PineRci exist.
+#define PINEFORGE_HAS_PINE_MFI 1
+#define PINEFORGE_HAS_PINE_RCI 1
