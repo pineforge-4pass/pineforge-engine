@@ -45584,6 +45584,18 @@
   },
   {
    "file": "src/source/pine_security_eval.cpp",
+   "symbol": "scope",
+   "scope": [
+    "namespace pineforge #1",
+    "void source :: PineStrategyHost :: pine_feed_security_eval_state ( SecurityEvalState & state , const Bar & input_bar , bool calling_bar_complete ) #1",
+    "if ( pine . lower_tf_emulation ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "scope . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_security_eval.cpp",
    "symbol": "tf",
    "scope": [
     "namespace pineforge #1",
@@ -47237,7 +47249,7 @@
    "symbol": "request_delivery_stack_",
    "scope": [
     "namespace pineforge #1",
-    "void source :: PineStrategyHost :: push_request_delivery ( int sec_id , const PineRequestDelivery & delivery , std :: int64_t body_open_ms ) #1"
+    "source :: PineRequestDeliveryScope :: PineRequestDeliveryScope ( PineStrategyHost & host , int sec_id , const PineRequestDelivery & delivery , std :: int64_t body_open_ms ) : host_ ( host ) #1"
    ],
    "cls": "grow",
    "spelling": "request_delivery_stack_ . push_back ( . . . )",
