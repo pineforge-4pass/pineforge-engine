@@ -11,6 +11,7 @@ version number follows semantic versioning over the surfaces the
 
 ### Fixed
 
+- Calendar day, week and month boundaries in a named timezone use the offset at the boundary. A New York day can span 23 or 25 hours; session opens, closes and intraday grids now use each boundary's local clock.
 - The corpus grader scales the entry price tolerance for pairing trades to 0.15% of TradingView's entry price, replacing the fixed three-unit limit. (#836)
 - The corpus grader pairs trades and still-open marks only at equal entry times, choosing the nearest eligible entry price on that bar. The comparison starts at the first pair and ends one hour after the last pair (#836)
 - Corrected the parity grading for the historical population reported in [#836](https://github.com/pineforge-4pass/pineforge-engine/issues/836) on 2026-11-11: counting unmatched trades net instead of gross overstated the excellent tier by 10 of 312 reference probes (311 instead of 301) and by 24 of 7,989 graded probes. The trade data is unchanged. Measured on 2026-11-19 on the pinned reference corpus (93d956a2): 303 excellent and 8 strong with one declared anomaly, where the net count gave 311 excellent and 0 strong; all 312 pinned trade outputs still match their baseline hashes.

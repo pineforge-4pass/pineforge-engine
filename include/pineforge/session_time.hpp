@@ -143,9 +143,9 @@ bool passes_session_filter(const std::string& session,
 // and uses the first that converts. A result of -1 with errno unset is a
 // valid boundary (Unix second -1) and is kept. If no candidate converts,
 // the run stops with the coded run failure engine_unclassified_error;
-// nothing is printed to stderr. The returned timestamp is never more than
-// 2 hours later than the true calendar-day start; downstream consumers
-// (session_trading_day_open_ms) inherit the same semantics.
+// nothing is printed to stderr. The offset used for midnight is the one
+// at that local boundary, even if the exchange clock has changed by the
+// time of the query.
 int64_t calendar_day_open_local_ms(int64_t bar_ms, const std::string& tz);
 
 // -------------------------------------------------------------------------
