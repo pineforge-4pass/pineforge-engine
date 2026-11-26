@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_ta_pivot_na_left_window)
+pineforge_add_unit_test(test_ta_pivot_na_left_window)
