@@ -23,6 +23,7 @@
 #include <pineforge/na.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
+#include <cstdlib>
 #include <map>
 #include <string>
 #include <vector>
@@ -479,9 +480,39 @@ void twin_hash() {
     CHECK(run_hash(other, true) != with_feed);
 }
 
+// A real run must reach the chosen refusal. A setup check, a different Pine
+// error, missing rows after a successful run, or a crash cannot prove it.
+int failed_run_child(bool wrong_cause) {
+    scenario = "injected run";
+    const auto days = weekdays_from(monday(), 3);
+    const auto chart = nyse_daily_chart(days);
+    const auto feed = us10y_like_daily_feed(days);
+    const auto spec = nyse_spec("twin-control", "D");
+    ForeignShape pine;
+    prime_chart(pine, spec);
+    pine.sites = {{0, "SYN:US10Y", "60", false, false, false}};
+    CHECK(install(pine, feed));  // D exists; 60 does not.
+    if (wrong_cause) CHECK(pine.set_symbol_facts("SYN:US10Y", "valid", "false"));
+    if (failures != 0) return 2;
+
+    const int before = failures;
+    const bool ran = run_pine(pine, spec, chart);
+    std::printf("child: run=%s failures=%d error=%s\n", ran ? "completed" : "refused",
+                failures - before, pine.last_error().c_str());
+    return failures == 0 ? 0 : 1; // The same failure counter that decides the normal twin.
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 2 && std::string(argv[1]) == "--crash-control") {
+        std::fputs("twin crash control: aborting\n", stderr);
+        std::fflush(stderr);
+        std::abort();
+    }
+    if (argc == 2 && std::string(argv[1]) == "--missing-feed") return failed_run_child(false);
+    if (argc == 2 && std::string(argv[1]) == "--invalid-symbol") return failed_run_child(true);
+    if (argc != 1) return 2;
     twin_foreign_session();
     twin_daily_late();
     twin_weekend();
