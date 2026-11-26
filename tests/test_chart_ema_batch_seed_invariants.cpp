@@ -5,10 +5,12 @@
 // top-level chart TA for the whole feed when the engine allows it; see
 // test_chart_ema_batch_origin_seed for the declared-origin behaviour. This
 // file holds the runs that declare nothing, or switch the chart seeding off on
-// purpose, or use no EMA at all: a feed-first-bar EMA script keeps its
-// first-close seed on both paths, a deliberate chart_ema_na_warmup=0 after a
-// declared origin wins, an RSI/ATR script is the same with and without a
-// declaration, and a preparation that throws leaves the ambient default off.
+// purpose, or use no EMA at all: a script that declares nothing gets the SMA
+// seed on both paths, on a feed with no bar before its first; a deliberate
+// chart_ema_na_warmup=0, alone or after a declared origin, keeps the
+// first-close seed on both paths; an RSI/ATR script is the same with and
+// without a declaration; and a preparation that throws leaves the ambient
+// default off.
 //
 // Public synthetic bars only: no TradingView measurement and no private data.
 // The EMA expectations come from the definition (oracle_ema, oracle_run), never
@@ -545,29 +547,43 @@ std::vector<Bar> minute_bars(const std::vector<double>& closes) {
     return bars;
 }
 
-// No declaration: the cached and the per-bar EMA 3 both start from the first close.
-void undeclared_series_row() {
-    row = "undeclared EMA 3 over closes 10 20 30 18 42 30 keeps the first-close seed";
+// The cached and the per-bar EMA 3 over six closes, against the written values.
+// With nothing declared both are na for two bars and then start from the
+// average of the first three closes; chart_ema_na_warmup = 0 keeps the
+// first-close seed on both.
+// expectation corrected: an undeclared run read 10 15 22.5 20.25 31.125 30.5625
+// -> na na 20 19 30.5 30.25, because the chart ta.ema default is now the SMA
+// seed with nothing declared; the first-close values are those of the row that
+// sets chart_ema_na_warmup = 0.
+void series_row(const char* name, const Metadata& metadata, const std::vector<double>& written,
+                bool sma_seed) {
+    row = name;
     const int before = failures;
     const std::vector<Bar> bars = minute_bars({10.0, 20.0, 30.0, 18.0, 42.0, 30.0});
-    const std::vector<double> written{10.0, 15.0, 22.5, 20.25, 31.125, 30.5625};
     const Script script{3, 3, false, 0, 0};
-    const Observed cached = run_script(script, {}, bars, nullptr);
-    const Observed per_bar = run_script(script, {}, bars, "1");
+    const Observed cached = run_script(script, metadata, bars, nullptr);
+    const Observed per_bar = run_script(script, metadata, bars, "1");
     print_observed("cached", cached, bars);
     print_observed("per-bar", per_bar, bars);
     check_run_path("cached", cached, bars, /*cached=*/true);
     check_run_path("per-bar", per_bar, bars, /*cached=*/false);
     expect_series(cached.fast, written, true, "cached chart EMA against the written values");
     expect_series(per_bar.fast, written, true, "per-bar chart EMA against the written values");
-    expect_series(cached.fast, oracle_ema(bars, 3, /*sma_seed=*/false), false,
-                  "cached chart EMA against the first-close definition");
+    expect_series(cached.fast, oracle_ema(bars, 3, sma_seed), false,
+                  "cached chart EMA against the definition");
+    expect_int(first_finite(cached.fast), sma_seed ? 2 : 0, "cached chart EMA: first finite bar");
+    expect_int(first_finite(per_bar.fast), sma_seed ? 2 : 0, "per-bar chart EMA: first finite bar");
     finish_row(before);
 }
 
-// The EMA 30/50 short breakdown script with a first-close seed: the cooldown
-// ends on bar 48 and the short is placed there, on both paths.
-void first_close_trading_row(const char* name, const Metadata& metadata) {
+// The EMA 30/50 short breakdown script on a feed with no bar before its first:
+// with the SMA seed, the default, the slow EMA is na until bar 49 and the short
+// is placed there; with the first-close seed the cooldown ends on bar 48 and
+// the short is placed there. Both paths agree either way.
+// expectation corrected: an undeclared run placed the short on bar 48 -> bar
+// 49, because the chart ta.ema default is now the SMA seed with nothing
+// declared; bar 48 is the row that sets chart_ema_na_warmup = 0.
+void trading_row(const char* name, const Metadata& metadata, bool sma_seed) {
     row = name;
     const int before = failures;
     const std::vector<Bar> supplied = falling_feed(90);
@@ -578,13 +594,17 @@ void first_close_trading_row(const char* name, const Metadata& metadata) {
         applied.push_back({item.first, item.first == "series_origin_ms"
                                            ? static_cast<double>(bars.front().timestamp)
                                            : item.second});
-    const OracleRun plan = oracle_run(bars, script, /*sma_seed=*/false);
+    const int signal_bar = sma_seed ? 49 : 48;
+    const OracleRun plan = oracle_run(bars, script, sma_seed);
+    const OracleRun other = oracle_run(bars, script, !sma_seed);
     expect_int(static_cast<long long>(plan.entry_signals.size()), 1,
-               "definition: first-close entry signals");
-    expect_int(plan.entry_signals.empty() ? -1 : plan.entry_signals.front(), 48,
-               "definition: first-close entry signal bar");
-    const std::vector<double> fast = oracle_ema(bars, 30, /*sma_seed=*/false);
-    const std::vector<double> slow = oracle_ema(bars, 50, /*sma_seed=*/false);
+               "definition: entry signals");
+    expect_int(plan.entry_signals.empty() ? -1 : plan.entry_signals.front(), signal_bar,
+               "definition: entry signal bar");
+    expect_int(other.entry_signals.empty() ? -1 : other.entry_signals.front(),
+               sma_seed ? 48 : 49, "definition: entry signal bar under the other seed");
+    const std::vector<double> fast = oracle_ema(bars, 30, sma_seed);
+    const std::vector<double> slow = oracle_ema(bars, 50, sma_seed);
     const Observed cached = run_script(script, applied, bars, nullptr);
     const Observed per_bar = run_script(script, applied, bars, "15");
     print_observed("cached", cached, bars);
@@ -596,16 +616,20 @@ void first_close_trading_row(const char* name, const Metadata& metadata) {
     for (int leg = 0; leg < 2; ++leg) {
         const Observed& o = *legs[leg];
         const std::string name_of(names[leg]);
-        expect_int(first_finite(o.fast), 0, name_of + ": fast EMA first finite bar");
-        expect_int(first_finite(o.slow), 0, name_of + ": slow EMA first finite bar");
-        expect_series(o.fast, fast, false, name_of + ": fast EMA against the first-close definition");
-        expect_series(o.slow, slow, false, name_of + ": slow EMA against the first-close definition");
+        expect_int(first_finite(o.fast), sma_seed ? 29 : 0, name_of + ": fast EMA first finite bar");
+        expect_int(first_finite(o.slow), sma_seed ? 49 : 0, name_of + ": slow EMA first finite bar");
+        expect_series(o.fast, fast, false, name_of + ": fast EMA against the definition");
+        expect_series(o.slow, slow, false, name_of + ": slow EMA against the definition");
         expect_int(static_cast<long long>(o.signals.size()), 1, name_of + ": entry signals");
-        expect_int(o.signals.empty() ? -1 : o.signals.front(), 48, name_of + ": entry signal bar");
+        expect_int(o.signals.empty() ? -1 : o.signals.front(), signal_bar,
+                   name_of + ": entry signal bar");
         expect_int(static_cast<long long>(o.trades.size()), 1, name_of + ": closed trades");
         if (o.trades.empty()) continue;
-        expect_int(o.trades.front().entry_time, bars[49].timestamp, name_of + ": entry time");
-        expect_int(bar_of(bars, o.trades.front().entry_time), 49, name_of + ": entry bar");
+        expect_int(o.trades.front().entry_time,
+                   bars[static_cast<std::size_t>(signal_bar) + 1].timestamp,
+                   name_of + ": entry time");
+        expect_int(bar_of(bars, o.trades.front().entry_time), signal_bar + 1,
+                   name_of + ": entry bar");
         expect(!o.trades.front().is_long, name_of + ": entry side");
     }
     expect_series(cached.fast, per_bar.fast, true, "cached fast EMA against the per-bar series");
@@ -691,10 +715,16 @@ void throwing_preparation_row() {
 }  // namespace
 
 int main() {
-    undeclared_series_row();
-    first_close_trading_row("feed-first-bar EMA 30/50 script, nothing declared", {});
-    first_close_trading_row("declared origin, then chart_ema_na_warmup=0 on purpose",
-                            {{"series_origin_ms", 0.0}, {"chart_ema_na_warmup", 0.0}});
+    series_row("undeclared EMA 3 over closes 10 20 30 18 42 30 takes the SMA seed", {},
+               {na<double>(), na<double>(), 20.0, 19.0, 30.5, 30.25}, /*sma_seed=*/true);
+    series_row("chart_ema_na_warmup=0 EMA 3 over closes 10 20 30 18 42 30 keeps the first-close seed",
+               {{"chart_ema_na_warmup", 0.0}}, {10.0, 15.0, 22.5, 20.25, 31.125, 30.5625},
+               /*sma_seed=*/false);
+    trading_row("feed-first-bar EMA 30/50 script, nothing declared", {}, /*sma_seed=*/true);
+    trading_row("feed-first-bar EMA 30/50 script, chart_ema_na_warmup=0 on purpose",
+                {{"chart_ema_na_warmup", 0.0}}, /*sma_seed=*/false);
+    trading_row("declared origin, then chart_ema_na_warmup=0 on purpose",
+                {{"series_origin_ms", 0.0}, {"chart_ema_na_warmup", 0.0}}, /*sma_seed=*/false);
     non_ema_row();
     throwing_preparation_row();
 

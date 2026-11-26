@@ -1,13 +1,14 @@
-// test_chart_tsi_batch_origin_seed -- the chart seeding a run declares also
-// governs the EMAs inside a ta.tsi a script computes in its run preparation.
+// test_chart_tsi_batch_origin_seed -- the chart EMA seeding also governs the
+// EMAs inside a ta.tsi a script computes in its run preparation.
 //
 // ta.tsi(source, short, long) is the ratio of two double-smoothed series: the
 // source's bar-to-bar change, and that change's absolute value, each through
-// an EMA of `long` and then an EMA of `short`. With the chart seeding declared
-// the inner EMAs are na until `long` changes exist and the outer ones until
-// `short` inner values exist, so the first value is on bar long + short - 1;
-// with nothing declared every EMA starts from its first input and the first
-// value is on bar 1. TsiStrategy is the generated shape of
+// an EMA of `long` and then an EMA of `short`. With the chart seeding, which
+// is the default, the inner EMAs are na until `long` changes exist and the
+// outer ones until `short` inner values exist, so the first value is on bar
+// long + short - 1; with chart_ema_na_warmup = 0 every EMA starts from its
+// first input and the first value is on bar 1. TsiStrategy is the generated
+// shape of
 // test_chart_ema_generated_cache_seed with the checked ta.tsi adapter and
 // constant lengths.
 //
@@ -342,9 +343,12 @@ void tsi_row(const char* name, const Metadata& metadata, bool sma_seed) {
 }  // namespace
 
 int main() {
+    tsi_row("ta.tsi 3/5, nothing declared", {}, /*sma_seed=*/true);
     tsi_row("ta.tsi 3/5, declared origin", {{"series_origin_ms", 0.0}}, /*sma_seed=*/true);
-    tsi_row("ta.tsi 3/5, raw chart key", {{"chart_ema_na_warmup", 1.0}}, /*sma_seed=*/true);
-    tsi_row("ta.tsi 3/5, nothing declared", {}, /*sma_seed=*/false);
+    tsi_row("ta.tsi 3/5, chart_ema_na_warmup=1", {{"chart_ema_na_warmup", 1.0}},
+            /*sma_seed=*/true);
+    tsi_row("ta.tsi 3/5, chart_ema_na_warmup=0 on purpose", {{"chart_ema_na_warmup", 0.0}},
+            /*sma_seed=*/false);
     tsi_row("ta.tsi 3/5, declared origin, then chart_ema_na_warmup=0 on purpose",
             {{"series_origin_ms", 0.0}, {"chart_ema_na_warmup", 0.0}}, /*sma_seed=*/false);
 

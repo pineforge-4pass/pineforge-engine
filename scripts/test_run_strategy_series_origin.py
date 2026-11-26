@@ -3,12 +3,13 @@
 engine as the series origin.
 
 TradingView computes a script from the first chart bar of its backtest range
-and from no earlier bar, and ta.ema there is na for length - 1 bars and then
-starts from the simple average of the first length values. A tape's
-metrics.json records that bar as ``rangeProvenance.returnedRange.from``
-(_tv_first_bar). When it is recorded, the driver declares it to the engine as
-``series_origin_ms``, which turns the chart EMA seeding on; when it is not,
-nothing is declared and the engine keeps its first-value seed.
+and from no earlier bar. A tape's metrics.json records that bar as
+``rangeProvenance.returnedRange.from`` (_tv_first_bar). When it is recorded,
+the driver declares it to the engine as ``series_origin_ms``; when it is not,
+nothing is declared. The chart ta.ema seeding does not hang on the
+declaration: the engine's default is already TradingView's (na for length - 1
+bars, then the simple average of the first length values), and the driver
+never writes ``chart_ema_na_warmup`` itself.
 
 What the rows hold apart:
 

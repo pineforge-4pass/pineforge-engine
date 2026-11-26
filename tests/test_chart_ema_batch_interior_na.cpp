@@ -8,6 +8,9 @@
 // source continues from the last valid EMA. A missing bar is no sample: the
 // warm-up needs `length` bars that have a source. MissingSourceStrategy is the
 // generated shape of test_chart_ema_generated_cache_seed with that source.
+// The rows run with nothing declared (the default: na, then the simple
+// average), with a declared origin, and with chart_ema_na_warmup = 0 (the
+// first-close seed).
 //
 // Wrong answers the rows tell apart: the missing bar's close taken as the
 // source, the previous EMA repeated on the missing bar, and a recursion that
@@ -187,15 +190,22 @@ struct Observed {
     bool ambient_after = false;
 };
 
+enum class Declared {
+    Nothing,     // the default: the SMA seed
+    Origin,      // series_origin_ms: the SMA seed
+    FirstClose,  // chart_ema_na_warmup = 0: the first-close seed, on purpose
+};
+
 // timeframe == nullptr is the batch run that allows precalculation; a named
 // timeframe is the same feed on the per-bar path.
-Observed run_script(bool declared, const std::vector<Bar>& bars, const char* timeframe) {
+Observed run_script(Declared declared, const std::vector<Bar>& bars, const char* timeframe) {
     ta::ema_na_warmup_flag() = false;
     MissingSourceStrategy host;
     host.set_syminfo_timezone("UTC");
     host.set_syminfo_session("24x7");
-    if (declared)
+    if (declared == Declared::Origin)
         host.set_syminfo_metadata("series_origin_ms", static_cast<double>(bars.front().timestamp));
+    if (declared == Declared::FirstClose) host.set_syminfo_metadata("chart_ema_na_warmup", 0.0);
     if (timeframe == nullptr) {
         host.run(bars.data(), static_cast<int>(bars.size()));
     } else {
@@ -248,15 +258,16 @@ std::vector<Bar> bars_for(const std::vector<double>& sources, double missing_clo
 }
 
 void series_row(const char* name, const std::vector<double>& sources, double missing_close,
-                bool declared, const std::vector<double>& written) {
+                Declared declared, const std::vector<double>& written) {
     row = name;
     const int before = failures;
     const std::vector<Bar> bars = bars_for(sources, missing_close);
-    const std::vector<double> expected = oracle_ema(sources, 3, /*sma_seed=*/declared);
+    const bool sma_seed = declared != Declared::FirstClose;
+    const std::vector<double> expected = oracle_ema(sources, 3, sma_seed);
     // The same definition if the missing bars' closes were taken as sources.
     std::vector<double> closes;
     for (const Bar& bar : bars) closes.push_back(bar.close);
-    const std::vector<double> close_taken = oracle_ema(closes, 3, /*sma_seed=*/declared);
+    const std::vector<double> close_taken = oracle_ema(closes, 3, sma_seed);
     const Observed cached = run_script(declared, bars, nullptr);
     const Observed per_bar = run_script(declared, bars, "1");
     for (std::size_t i = 0; i < bars.size(); ++i)
@@ -295,24 +306,32 @@ void series_row(const char* name, const std::vector<double>& sources, double mis
 
 int main() {
     const double none = na<double>();
-    // Warm state, then one missing bar: na there, 20 -> 30 -> 40 after it.
-    series_row("declared origin, sources 10 20 30 na 40 50",
-               {10.0, 20.0, 30.0, none, 40.0, 50.0}, 35.0, /*declared=*/true,
+    // Nothing declared. Warm state, then one missing bar: na there, 20 -> 30
+    // -> 40 after it.
+    series_row("nothing declared, sources 10 20 30 na 40 50",
+               {10.0, 20.0, 30.0, none, 40.0, 50.0}, 35.0, Declared::Nothing,
                {none, none, 20.0, none, 30.0, 40.0});
-    series_row("declared origin, changed sources 12 18 33 na 21 9",
-               {12.0, 18.0, 33.0, none, 21.0, 9.0}, 60.0, /*declared=*/true,
+    series_row("nothing declared, changed sources 12 18 33 na 21 9",
+               {12.0, 18.0, 33.0, none, 21.0, 9.0}, 60.0, Declared::Nothing,
                {none, none, 21.0, none, 21.0, 15.0});
-    series_row("declared origin, two missing bars in a row: 10 20 30 na na 40",
-               {10.0, 20.0, 30.0, none, none, 40.0}, 35.0, /*declared=*/true,
+    series_row("nothing declared, two missing bars in a row: 10 20 30 na na 40",
+               {10.0, 20.0, 30.0, none, none, 40.0}, 35.0, Declared::Nothing,
                {none, none, 20.0, none, none, 30.0});
     // A missing bar inside the warm-up is no sample: the seed is one bar later.
-    series_row("declared origin, a missing bar inside the warm-up: 10 na 20 30 40 50",
-               {10.0, none, 20.0, 30.0, 40.0, 50.0}, 35.0, /*declared=*/true,
+    series_row("nothing declared, a missing bar inside the warm-up: 10 na 20 30 40 50",
+               {10.0, none, 20.0, 30.0, 40.0, 50.0}, 35.0, Declared::Nothing,
                {none, none, none, 20.0, 30.0, 40.0});
-    // Nothing declared: the first-close recursion skips the missing bar too.
-    series_row("nothing declared, sources 10 20 30 na 40 50",
-               {10.0, 20.0, 30.0, none, 40.0, 50.0}, 35.0, /*declared=*/false,
+    // A declared origin asks for what the default gives.
+    series_row("declared origin, sources 10 20 30 na 40 50",
+               {10.0, 20.0, 30.0, none, 40.0, 50.0}, 35.0, Declared::Origin,
+               {none, none, 20.0, none, 30.0, 40.0});
+    // chart_ema_na_warmup = 0: the first-close recursion skips the missing bar too.
+    series_row("chart_ema_na_warmup=0, sources 10 20 30 na 40 50",
+               {10.0, 20.0, 30.0, none, 40.0, 50.0}, 35.0, Declared::FirstClose,
                {10.0, 15.0, 22.5, none, 31.25, 40.625});
+    series_row("chart_ema_na_warmup=0, changed sources 12 18 33 na 21 9",
+               {12.0, 18.0, 33.0, none, 21.0, 9.0}, 60.0, Declared::FirstClose,
+               {12.0, 15.0, 24.0, none, 22.5, 15.75});
 
     std::printf("chart EMA batch interior na: %d checks, %d failed\n", checks, failures);
     return failures == 0 ? 0 : 1;

@@ -1,6 +1,8 @@
-// test_chart_ema_generated_cache_seed -- the static TA cache a generated
-// strategy fills in its run preparation takes the chart EMA seeding the run
-// declares, for a constant-length top-level ta.ema.
+// test_chart_ema_generated_cache_seed -- a chart ta.ema is na until `length`
+// closes exist and then starts from their simple average, with nothing
+// declared, whether a generated strategy reads it from the static TA cache it
+// fills in its run preparation or computes it per bar; chart_ema_na_warmup = 0
+// asks for the first-close seed on both paths.
 //
 // For `x = ta.ema(close, 3)` the code generator emits a member built with the
 // literal, a `_precalc__ta_ema_1` vector, a `_use_precalc` flag, a
@@ -353,22 +355,25 @@ std::vector<Bar> minute_bars(const std::vector<double>& closes) {
     return bars;
 }
 
-Metadata declared_for(const std::vector<Bar>& bars, const char* key) {
-    const std::string name(key);
-    if (name.empty()) return {};
-    return {{name, name == "series_origin_ms" ? static_cast<double>(bars.front().timestamp)
-                                              : 1.0}};
+// The metadata of a row, with series_origin_ms set to the feed's first bar.
+Metadata applied_to(const Metadata& declared, const std::vector<Bar>& bars) {
+    Metadata applied;
+    for (const auto& item : declared)
+        applied.push_back({item.first, item.first == "series_origin_ms"
+                                           ? static_cast<double>(bars.front().timestamp)
+                                           : item.second});
+    return applied;
 }
 
 // One literal-length strategy on the cache and one on the per-bar path, under
-// the same declaration. key "" declares nothing.
-void literal_row(const char* name, const std::vector<double>& closes, const char* key,
-                 const std::vector<double>& written) {
+// the same metadata. An empty list declares nothing: the default, which is the
+// SMA seed; chart_ema_na_warmup = 0 asks for the first-close seed.
+void literal_row(const char* name, const std::vector<double>& closes, const Metadata& declared,
+                 bool sma_seed, const std::vector<double>& written) {
     row = name;
     const int before = failures;
     const std::vector<Bar> bars = minute_bars(closes);
-    const Metadata metadata = declared_for(bars, key);
-    const bool sma_seed = !metadata.empty();
+    const Metadata metadata = applied_to(declared, bars);
     const std::vector<double> expected = oracle_ema(bars, 3, sma_seed);
     LiteralLengthStrategy cached_host;
     configure(cached_host, metadata);
@@ -383,8 +388,9 @@ void literal_row(const char* name, const std::vector<double>& closes, const char
     expect(cached.seeding_in_preparation == sma_seed,
            "cached: the seeding default inside the batch preparation is the chart's");
     expect(!per_bar.seeding_in_preparation,
-           "per-bar: the preparation of a run with timeframes sees the default off");
+           "per-bar: the preparation of a run with timeframes is outside the chart scope");
     expect_series(expected, written, false, "definition against the written values");
+    expect_series(per_bar.seen, written, true, "per-bar chart EMA against the written values");
     expect_series(per_bar.seen, expected, false, "per-bar chart EMA against the definition");
     expect_series(cached.seen, expected, false, "cached chart EMA against the definition");
     expect_series(cached.seen, written, true, "cached chart EMA against the written values");
@@ -395,13 +401,14 @@ void literal_row(const char* name, const std::vector<double>& closes, const char
 
 // The literal-length strategy against its input-length twin in the same batch
 // run: one reads the cache, the other computes per bar.
-void twin_row(const char* name, const std::vector<double>& closes, int length_input) {
+void twin_row(const char* name, const std::vector<double>& closes, int length_input,
+              const Metadata& declared, bool sma_seed) {
     row = name;
     const int before = failures;
     const std::vector<Bar> bars = minute_bars(closes);
-    const Metadata metadata = declared_for(bars, "series_origin_ms");
+    const Metadata metadata = applied_to(declared, bars);
     const int length = length_input > 0 ? length_input : 3;
-    const std::vector<double> expected = oracle_ema(bars, length, /*sma_seed=*/true);
+    const std::vector<double> expected = oracle_ema(bars, length, sma_seed);
     InputLengthStrategy twin_host;
     configure(twin_host, metadata);
     if (length_input > 0) twin_host.set_input("Length", std::to_string(length_input));
@@ -409,7 +416,8 @@ void twin_row(const char* name, const std::vector<double>& closes, int length_in
     print_observed("input-length twin", twin);
     check_path("input-length twin", twin, bars, Path::CacheUnread, 1);
     expect_series(twin.seen, expected, false, "input-length twin against the definition");
-    expect_int(first_finite(twin.seen), length - 1, "input-length twin: first finite bar");
+    expect_int(first_finite(twin.seen), sma_seed ? length - 1 : 0,
+               "input-length twin: first finite bar");
     if (length == 3) {
         LiteralLengthStrategy literal_host;
         configure(literal_host, metadata);
@@ -422,14 +430,14 @@ void twin_row(const char* name, const std::vector<double>& closes, int length_in
     finish_row(before);
 }
 
-// One host, three runs: batch, with timeframes, batch again.
+// One host, three runs: batch, with timeframes, batch again. Nothing declared.
 void reuse_row() {
-    row = "one host reused: batch, then with timeframes, then batch";
+    row = "one host reused, nothing declared: batch, then with timeframes, then batch";
     const int before = failures;
     const std::vector<Bar> bars = minute_bars({10.0, 20.0, 30.0, 18.0, 42.0, 30.0});
     const std::vector<double> expected = oracle_ema(bars, 3, /*sma_seed=*/true);
     LiteralLengthStrategy host;
-    configure(host, declared_for(bars, "series_origin_ms"));
+    configure(host, {});
     const Observed first = run_once(host, bars, nullptr);
     const Observed second = run_once(host, bars, "1");
     const Observed third = run_once(host, bars, nullptr);
@@ -441,7 +449,7 @@ void reuse_row() {
     check_path("second batch", third, bars, Path::CacheRead, 3);
     expect(first.seeding_in_preparation, "first batch: chart seeding inside the preparation");
     expect(!second.seeding_in_preparation,
-           "with timeframes: the preparation sees the default off");
+           "with timeframes: the preparation is outside the chart scope");
     expect(third.seeding_in_preparation, "second batch: chart seeding inside the preparation");
     expect_series(first.seen, expected, false, "first batch against the definition");
     expect_series(second.seen, expected, false, "with timeframes against the definition");
@@ -451,10 +459,10 @@ void reuse_row() {
     finish_row(before);
 }
 
-// One host, three batch runs: nothing declared, an origin declared, the chart
-// seeding switched off on purpose. Each run's cache is its own.
+// One host, three batch runs: nothing declared, the chart seeding switched off
+// on purpose, an origin declared after that. Each run's cache is its own.
 void redeclared_row() {
-    row = "one host, three batch runs: undeclared, declared, switched off";
+    row = "one host, three batch runs: nothing declared, switched off, origin declared";
     const int before = failures;
     const std::vector<Bar> bars = minute_bars({10.0, 20.0, 30.0, 18.0, 42.0, 30.0});
     const std::vector<double> first_close = oracle_ema(bars, 3, /*sma_seed=*/false);
@@ -462,43 +470,64 @@ void redeclared_row() {
     LiteralLengthStrategy host;
     configure(host, {});
     const Observed undeclared = run_once(host, bars, nullptr);
-    host.set_syminfo_metadata("series_origin_ms", static_cast<double>(bars.front().timestamp));
-    const Observed declared = run_once(host, bars, nullptr);
     host.set_syminfo_metadata("chart_ema_na_warmup", 0.0);
     const Observed switched_off = run_once(host, bars, nullptr);
-    print_observed("undeclared", undeclared);
-    print_observed("declared", declared);
+    host.set_syminfo_metadata("series_origin_ms", static_cast<double>(bars.front().timestamp));
+    const Observed declared = run_once(host, bars, nullptr);
+    print_observed("nothing declared", undeclared);
     print_observed("switched off", switched_off);
-    check_path("undeclared", undeclared, bars, Path::CacheRead, 1);
-    check_path("declared", declared, bars, Path::CacheRead, 2);
-    check_path("switched off", switched_off, bars, Path::CacheRead, 3);
-    expect(!undeclared.seeding_in_preparation, "undeclared: the preparation sees the default off");
-    expect(declared.seeding_in_preparation, "declared: chart seeding inside the preparation");
+    print_observed("origin declared", declared);
+    check_path("nothing declared", undeclared, bars, Path::CacheRead, 1);
+    check_path("switched off", switched_off, bars, Path::CacheRead, 2);
+    check_path("origin declared", declared, bars, Path::CacheRead, 3);
+    expect(undeclared.seeding_in_preparation,
+           "nothing declared: chart seeding inside the preparation");
     expect(!switched_off.seeding_in_preparation,
-           "switched off: the preparation sees the default off");
-    expect_series(undeclared.seen, first_close, false, "undeclared against the first-close definition");
-    expect_series(declared.seen, sma, false, "declared against the SMA-seed definition");
+           "switched off: no chart seeding inside the preparation");
+    expect(declared.seeding_in_preparation,
+           "origin declared: chart seeding inside the preparation");
+    expect_series(undeclared.seen, sma, false, "nothing declared against the SMA-seed definition");
     expect_series(switched_off.seen, first_close, false,
                   "switched off against the first-close definition");
-    expect_series(switched_off.seen, undeclared.seen, true, "switched off against undeclared");
+    expect_series(declared.seen, sma, false, "origin declared against the SMA-seed definition");
+    expect_series(declared.seen, undeclared.seen, true, "origin declared against nothing declared");
     finish_row(before);
 }
 
 }  // namespace
 
 int main() {
+    const double none = na<double>();
     const std::vector<double> closes{10.0, 20.0, 30.0, 18.0, 42.0, 30.0};
     const std::vector<double> changed{12.0, 18.0, 33.0, 21.0, 9.0, 27.0};
+    const std::vector<double> sma_closes{none, none, 20.0, 19.0, 30.5, 30.25};
+    const std::vector<double> sma_changed{none, none, 21.0, 21.0, 15.0, 21.0};
+    const std::vector<double> first_closes{10.0, 15.0, 22.5, 20.25, 31.125, 30.5625};
+    const std::vector<double> first_changed{12.0, 15.0, 24.0, 22.5, 15.75, 21.375};
+    // Nothing declared: the default is the SMA seed, on the cache and per bar.
+    literal_row("literal EMA 3 over closes 10 20 30 18 42 30, nothing declared", closes, {},
+                /*sma_seed=*/true, sma_closes);
+    literal_row("literal EMA 3 over changed closes 12 18 33 21 9 27, nothing declared", changed,
+                {}, /*sma_seed=*/true, sma_changed);
+    // A declared origin and the raw chart key ask for what the default gives.
     literal_row("literal EMA 3 over closes 10 20 30 18 42 30, declared origin", closes,
-                "series_origin_ms", {na<double>(), na<double>(), 20.0, 19.0, 30.5, 30.25});
-    literal_row("literal EMA 3 over changed closes 12 18 33 21 9 27, declared origin", changed,
-                "series_origin_ms", {na<double>(), na<double>(), 21.0, 21.0, 15.0, 21.0});
-    literal_row("literal EMA 3 over closes 10 20 30 18 42 30, raw chart key", closes,
-                "chart_ema_na_warmup", {na<double>(), na<double>(), 20.0, 19.0, 30.5, 30.25});
-    literal_row("literal EMA 3 over closes 10 20 30 18 42 30, nothing declared", closes, "",
-                {10.0, 15.0, 22.5, 20.25, 31.125, 30.5625});
-    twin_row("literal EMA 3 against its input-length twin, declared origin", closes, 0);
-    twin_row("input-length twin with the length input changed to 2, declared origin", closes, 2);
+                {{"series_origin_ms", 0.0}}, /*sma_seed=*/true, sma_closes);
+    literal_row("literal EMA 3 over closes 10 20 30 18 42 30, chart_ema_na_warmup=1", closes,
+                {{"chart_ema_na_warmup", 1.0}}, /*sma_seed=*/true, sma_closes);
+    // chart_ema_na_warmup = 0 is the first-close seed, on purpose.
+    literal_row("literal EMA 3 over closes 10 20 30 18 42 30, chart_ema_na_warmup=0", closes,
+                {{"chart_ema_na_warmup", 0.0}}, /*sma_seed=*/false, first_closes);
+    literal_row("literal EMA 3 over changed closes 12 18 33 21 9 27, chart_ema_na_warmup=0",
+                changed, {{"chart_ema_na_warmup", 0.0}}, /*sma_seed=*/false, first_changed);
+    literal_row("literal EMA 3, declared origin, then chart_ema_na_warmup=0", closes,
+                {{"series_origin_ms", 0.0}, {"chart_ema_na_warmup", 0.0}}, /*sma_seed=*/false,
+                first_closes);
+    twin_row("literal EMA 3 against its input-length twin, nothing declared", closes, 0, {},
+             /*sma_seed=*/true);
+    twin_row("input-length twin with the length input changed to 2, nothing declared", closes, 2,
+             {}, /*sma_seed=*/true);
+    twin_row("literal EMA 3 against its input-length twin, chart_ema_na_warmup=0", closes, 0,
+             {{"chart_ema_na_warmup", 0.0}}, /*sma_seed=*/false);
     reuse_row();
     redeclared_row();
 

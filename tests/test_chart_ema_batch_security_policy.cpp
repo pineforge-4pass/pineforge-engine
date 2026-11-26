@@ -1,24 +1,29 @@
-// test_chart_ema_batch_security_policy -- the warm-up of a request.security
-// series is its own policy: the chart EMA seeding of a run, and the chart
-// seeding of a script's run preparation, leave it as it is.
+// test_chart_ema_batch_security_policy -- the chart EMA seeding and the
+// warm-up of a request.security series are two policies, and neither moves
+// the other: the chart's default (na, then the simple average) holds whatever
+// the request.security policy is, and the request.security series is as it
+// is with nothing declared whatever the chart's seeding is.
 //
 // SecurityStrategy holds a chart ta.ema (the generated shape of
 // test_chart_ema_generated_cache_seed, cached in a batch run) and the EMA of a
-// request.security("60", ta.ema(close, 3)) on a 15-minute chart. Five
+// request.security("60", ta.ema(close, 3)) on a 15-minute chart. Seven
 // declarations are run on the batch path and on the per-bar path:
 //
-//   nothing                                  chart first value, security first value
+//   nothing                                  chart SMA seed,    security first value
 //   chart_ema_na_warmup = 1                  chart SMA seed,    security as with nothing
+//   chart_ema_na_warmup = 0                  chart first value, security as with nothing
 //   series_origin_ms, then
 //     security_range_start_na_warmup = 0     chart SMA seed,    security as with nothing
 //   series_origin_ms                         chart SMA seed,    security SMA seed
-//   security_range_start_na_warmup           chart first value, security SMA seed
+//   security_range_start_na_warmup           chart SMA seed,    security SMA seed
+//   security_range_start_na_warmup, then
+//     chart_ema_na_warmup = 0                chart first value, security SMA seed
 //
-// The third is how a caller declares the reference origin for the chart alone.
+// The fourth is how a caller declares a reference origin without the
+// request.security warm-up.
 // The rows read the seeding default inside the security evaluation and inside
 // the chart callback, the completed hourly bars, and the security EMA over
-// them. The cached chart EMA itself is printed, not asserted: the two tests
-// named above assert it.
+// them, and the chart EMA on the cache and per bar.
 //
 // Public synthetic bars only: no TradingView measurement and no private data.
 // The EMA expectations come from the definition (oracle_ema) over the hourly
@@ -386,13 +391,16 @@ int main() {
     const std::vector<Bar> bars = quarter_feed();
     const double origin = static_cast<double>(bars.front().timestamp);
     const std::vector<Policy> policies{
-        {"nothing declared", {}, false, false},
+        {"nothing declared", {}, true, false},
         {"chart_ema_na_warmup=1", {{"chart_ema_na_warmup", 1.0}}, true, false},
+        {"chart_ema_na_warmup=0", {{"chart_ema_na_warmup", 0.0}}, false, false},
         {"series_origin_ms, then security_range_start_na_warmup=0",
          {{"series_origin_ms", origin}, {"security_range_start_na_warmup", 0.0}}, true, false},
         {"series_origin_ms", {{"series_origin_ms", origin}}, true, true},
-        {"security_range_start_na_warmup", {{"security_range_start_na_warmup", origin}}, false,
+        {"security_range_start_na_warmup", {{"security_range_start_na_warmup", origin}}, true,
          true},
+        {"security_range_start_na_warmup, chart_ema_na_warmup=0",
+         {{"security_range_start_na_warmup", origin}, {"chart_ema_na_warmup", 0.0}}, false, true},
     };
     std::vector<double> closes;
     for (const Bar& bar : bars) closes.push_back(bar.close);
@@ -409,9 +417,14 @@ int main() {
         print_observed("per-bar", per_bar);
         check_leg("batch", batch, bars, policy, /*batch=*/true);
         check_leg("per-bar", per_bar, bars, policy, /*batch=*/false);
-        // The chart EMA the per-bar path computes follows the chart policy.
-        expect_series(per_bar.chart_seen, oracle_ema(closes, kLength, policy.chart_sma), false,
-                      "per-bar: chart EMA against the definition");
+        // The chart EMA follows the chart policy on both paths, and only it.
+        const std::vector<double> chart = oracle_ema(closes, kLength, policy.chart_sma);
+        expect_series(per_bar.chart_seen, chart, false, "per-bar: chart EMA against the definition");
+        expect_series(batch.chart_seen, chart, false, "batch: cached chart EMA against the definition");
+        expect_series(batch.chart_seen, per_bar.chart_seen, true,
+                      "batch: cached chart EMA against the per-bar series");
+        expect_int(first_finite(batch.chart_seen), policy.chart_sma ? kLength - 1 : 0,
+                   "batch: cached chart EMA first finite bar");
         if (index == 0) {
             undeclared_batch = batch;
             undeclared_per_bar = per_bar;
