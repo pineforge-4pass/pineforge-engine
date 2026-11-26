@@ -4181,7 +4181,9 @@ int64_t source::PineStrategyHost::chart_bar_close_ms(int64_t stamp) const {
 // ET slot and Good Friday, the test's no-bar slots). So the host reads the
 // bars from the input it retains (a batch's, or a stream's warmup); past its
 // edges it walks the symbol's session calendar (session_trades_at): a batch's
-// final bar asks the calendar for the bar after it, as a live bar does.
+// final bar asks the calendar for the bar after it, as a live bar does. One
+// slot the input does not hold is read forward all the same: a session slot
+// between two bars the input holds in one session day (unprinted_slot below).
 namespace {
 
 constexpr std::int64_t kTimeOffsetMinuteMs = 60'000;
@@ -4289,8 +4291,38 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
         }
         return na<int64_t>();
     };
+    // A slot of the symbol's session that the input holds no bar for: the
+    // first one at or after `from` and before `held`, the input's next chart
+    // bar past the bar or slot `after`. TradingView reads the bar after a chart
+    // bar from its calendar for the symbol, not from the chart's bars
+    // (tests/test_symbol_calendar_tapes.cpp, its opening note), and a calendar
+    // day runs from its open to its close (set_symbol_calendar). A later bar of
+    // the same session day therefore puts every session slot before it inside
+    // that day, with no calendar installed too: the 09:05 bar of a 5-minute
+    // chart whose input goes on at 09:15 reads 09:10 next. Only the calendar
+    // says whether a day went on past its last bar (an early close) or whether
+    // a day without bars is one of its days (a holiday): there, on a D, W or M
+    // chart, and where no session slot lies between, this is na and the
+    // input's next bar stands.
+    const auto unprinted_slot = [&](std::int64_t after, std::int64_t from,
+                                    std::int64_t held) -> std::int64_t {
+        if (daily_chart || chart_step_ms <= 0 || is_na(from) || is_na(held) || from <= after
+            || from >= held
+            || pineforge::internal::session_trading_day_index(after, sym_tz, sym_session)
+                   != pineforge::internal::session_trading_day_index(held, sym_tz, sym_session)) {
+            return na<std::int64_t>();
+        }
+        for (std::int64_t t = from; t < held; t += kTimeOffsetMinuteMs) {
+            if (!session_trades_at(sym_session, sym_tz, t)) continue;
+            const std::int64_t slot = chart_slot_of(t);
+            return is_na(slot) || slot < from ? t : slot;
+        }
+        return na<std::int64_t>();
+    };
     // The chart bar after the one opening at `open_ms`: the retained input's
-    // next bar, else the calendar's first traded slot past its close.
+    // next bar, or the session slot before it that the input holds no bar for
+    // (unprinted_slot); past the input, the calendar's first traded slot past
+    // its close.
     const auto next_chart_open = [&](std::int64_t open_ms) -> std::int64_t {
         if (calendar_chart && symbol_calendar_day(open_ms) != nullptr) {
             if (const std::int64_t slot = symbol_calendar_open_from(open_ms + 1); !is_na(slot))
@@ -4302,9 +4334,28 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
                                    });
         while (!input_is_chart && it != input.end() && chart_open_of(it->timestamp) <= open_ms)
             ++it;
-        if (it != input.end()) return chart_open_of(it->timestamp);
+        if (it != input.end()) {
+            const std::int64_t held = chart_open_of(it->timestamp);
+            // A chart bar is at most one step long: nothing fits before a bar
+            // that opens within one step of this one.
+            if (is_na(held) || daily_chart || chart_step_ms <= 0
+                || held - open_ms <= chart_step_ms) {
+                return held;
+            }
+            const std::int64_t slot = unprinted_slot(open_ms, chart_close_of(open_ms), held);
+            return is_na(slot) ? held : slot;
+        }
         const std::int64_t end = chart_close_of(open_ms);
         return chart_open_from(is_na(end) || end <= open_ms ? open_ms + 1 : end);
+    };
+    // The first chart bar opening at or after `at`, stepping on from the bar
+    // or slot `after`: chart_open_from's, or the session slot before it that
+    // the input holds no bar for. The calendar's own slot stands as it is.
+    const auto chart_open_past = [&](std::int64_t after, std::int64_t at) -> std::int64_t {
+        const std::int64_t held = chart_open_from(at);
+        if (calendar_chart && !is_na(symbol_calendar_open_from(at))) return held;
+        const std::int64_t slot = unprinted_slot(after, at, held);
+        return is_na(slot) ? held : slot;
     };
 
     // A chart bar before the current one is one the run has had: the
@@ -4403,7 +4454,7 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
     for (int k = 0; k < -timeframe_bars_back && !is_na(open); ++k) {
         // The first chart bar past this tf bar's end that a tf bar holds.
         const std::int64_t end = tf_close_of(open);
-        std::int64_t at = chart_open_from(is_na(end) || end <= open ? open + 1 : end);
+        std::int64_t at = chart_open_past(open, is_na(end) || end <= open ? open + 1 : end);
         std::int64_t next = na<int64_t>();
         for (int guard = 0; guard < kTimeOffsetBarsPerStep && !is_na(at); ++guard) {
             next = tf_open_of(at);

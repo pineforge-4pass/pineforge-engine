@@ -587,10 +587,10 @@ public:
     // chart's next day -- for session.islastbar / islastbar_regular and for
     // time() / time_close() reading a later bar, as TradingView reads them;
     // everywhere else (a W, M or multi-day chart's own bars among them), and
-    // with no calendar (the default), the feed's own bars answer. False, and
-    // nothing installed, for sessions out of order; an empty list removes the
-    // calendar. The C ABI carries it as syminfo metadata ("symbol_calendar_*",
-    // set_syminfo_metadata), installed when the run begins.
+    // with no calendar (the default), the feed's own bars answer, with one slot more for time() /
+    // time_close(): a session slot between two feed bars of one session day. False, and nothing
+    // installed, for sessions out of order; an empty list removes the calendar. The C ABI carries
+    // it as syminfo metadata ("symbol_calendar_*", set_syminfo_metadata), installed at run begin.
     bool set_symbol_calendar(std::vector<std::pair<std::int64_t, std::int64_t>> sessions);
     const std::vector<std::pair<std::int64_t, std::int64_t>>& symbol_calendar() const noexcept {
         return symbol_calendar_;
