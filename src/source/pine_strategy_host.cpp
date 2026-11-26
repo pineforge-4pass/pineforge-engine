@@ -1929,7 +1929,9 @@ source::PineRequestDeliveryScope::PineRequestDeliveryScope(
         PineStrategyHost& host, int sec_id,
         const PineRequestDelivery& delivery, std::int64_t body_open_ms)
     : host_(host) {
-    host_.push_request_delivery(sec_id, delivery, body_open_ms);
+    PineStrategyHost::RequestDeliveryFrame frame;
+    host_.set_static_request_delivery(frame, sec_id, delivery, body_open_ms);
+    host_.request_delivery_stack_.push_back(frame);
 }
 
 source::PineRequestDeliveryScope::PineRequestDeliveryScope(
@@ -2041,25 +2043,27 @@ std::optional<std::uint64_t> source::PineStrategyHost::RequestCallerIds::find(
 bool source::PineStrategyHost::RequestCallerIds::append_static_next(
         int sec_id, std::int64_t slot, std::int64_t phase,
         std::uint64_t caller) noexcept {
-    // Every fact is read from the live rows: the hint is this catalog's and
-    // this generation's, no row was added since its two rows were neighbours,
-    // its row is this site's run in this phase ending one slot earlier with
-    // consecutive callers, and no later row of the site follows it.
-    Hint& mine = hint();
+    // The rightmost run needs no hint: no later key can overlap it.
+    if (runs_.empty()) return false;
+    auto row = std::prev(runs_.end());
     constexpr std::uint8_t kind = 5;
-    const std::size_t index = Hint::entry(kind, sec_id);
-    if (mine.owner != this || !mine.known[index] || mine.rows[index] != runs_.size()
-        || mine.generation != request_caller_generation.load(std::memory_order_relaxed))
-        return false;
-    const RequestCallerKey& first = mine.at[index]->first;
-    Run& run = mine.at[index]->second;
+    if (row->first.kind != kind || row->first.first != sec_id) {
+        Hint& mine = hint();
+        const auto index = Hint::entry(kind, sec_id);
+        if (mine.owner != this || !mine.known[index] || mine.rows[index] != runs_.size()
+            || mine.generation != request_caller_generation.load(std::memory_order_relaxed))
+            return false;
+        const auto next = mine.next[index];
+        if (next != runs_.end() && next->first.kind == kind && next->first.first == sec_id)
+            return false;
+        row = mine.at[index];
+    }
+    const RequestCallerKey& first = row->first;
+    Run& run = row->second;
     if (first.kind != kind || first.first != sec_id || first.third != phase
         || first.occurrence != 0 || !first.text.empty() || slot - 1 != run.last
         || (run.stride != 1 && first.second != run.last)
         || caller != caller_at(first, run, run.last) + 1)
-        return false;
-    const auto beyond = mine.next[index];
-    if (beyond != runs_.end() && beyond->first.kind == kind && beyond->first.first == sec_id)
         return false;
     run.last = slot;
     run.stride = 1;
@@ -2369,22 +2373,18 @@ void source::PineStrategyHost::set_request_caller_scope(
     request_active_chart_caller_ = chart_caller;
 }
 
-void source::PineStrategyHost::push_request_delivery(
+void source::PineStrategyHost::set_static_request_delivery(RequestDeliveryFrame& frame,
         int sec_id, const PineRequestDelivery& delivery, std::int64_t body_open_ms) {
-    const auto slot = delivery.requested_slot;
     std::uint64_t body_caller = 0;
-    if (delivery.caller_valid && slot >= 0) {
-        // A callback can fail the run, so read the live phase.
+    if (const auto slot = delivery.requested_slot; delivery.caller_valid && slot >= 0) {
         const auto phase = static_cast<std::int64_t>(detail::run_phase(*this));
-        if (!delivery.replay
-            && request_caller_ids_.append_static_next(
-                sec_id, slot, phase, request_next_caller_)) {
+        if (!delivery.replay && request_caller_ids_.append_static_next(sec_id, slot, phase, request_next_caller_)) {
             body_caller = request_next_caller_++;
         } else {
             body_caller = request_caller_id({5, sec_id, slot, phase, 0, {}}); // static body
         }
     }
-    request_delivery_stack_.push_back({sec_id, nullptr, delivery, body_caller, body_open_ms});
+    frame = {sec_id, nullptr, delivery, body_caller, body_open_ms};
 }
 
 void source::PineStrategyHost::push_request_delivery(

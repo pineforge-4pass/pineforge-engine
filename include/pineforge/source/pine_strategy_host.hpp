@@ -1161,8 +1161,8 @@ private:
         const std::string* timeframe = nullptr;
     };
 
-    void push_request_delivery(int sec_id, const PineRequestDelivery&,
-                               std::int64_t body_open_ms);
+    void set_static_request_delivery(RequestDeliveryFrame&, int sec_id, const PineRequestDelivery&,
+                                     std::int64_t body_open_ms);
     void push_request_delivery(const PineRuntimeSecurityCursor&,
                                const PineRequestDelivery&, std::int64_t body_open_ms);
     void pop_request_delivery() noexcept;
