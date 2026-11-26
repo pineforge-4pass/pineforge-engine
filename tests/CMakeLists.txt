@@ -879,6 +879,11 @@ list(APPEND TEST_SOURCES test_checked_ema_family)
 # for a valid pair.
 list(APPEND TEST_SOURCES test_checked_supertrend)
 
+# Pine ta.dmi by the reference definition (source::PineDmiReference): a bar
+# with a zero averaged true range holds both directional indices and steps
+# ADX, where the kernel class answers three na.
+list(APPEND TEST_SOURCES test_pine_dmi_zero_range)
+
 # R5 R2 re-lowering of the Pine adapter's default quantity onto the core's
 # Sized intent: the classification, the neutrality of the re-lowering and the
 # core-plus-override differential.
