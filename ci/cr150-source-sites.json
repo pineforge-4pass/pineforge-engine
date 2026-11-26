@@ -12588,6 +12588,33 @@
    "ordinal": 1
   },
   {
+   "file": "include/pineforge/source/pine_ta_length.hpp",
+   "symbol": "object_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "template < class Object > class PineFixedLength #1",
+    "Object & bound ( ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "object_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_length.hpp",
+   "symbol": "object_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "template < class Object > class PineFixedDmiLengths #1",
+    "Object & bound ( ) #1",
+    "if ( ! object_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "object_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
    "file": "include/pineforge/str_utils.hpp",
    "symbol": "text",
    "scope": [

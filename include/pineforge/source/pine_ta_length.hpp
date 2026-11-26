@@ -59,7 +59,7 @@ namespace source {
 // of the '<argument>' argument (<value>) in the '<function>' function. It
 // must be > 0." (RE10001) -- pinned on ta.rsi / ta.ema with a simple length
 // of 0, -3 and na (tv/edge). A float value truncates toward zero, as Pine's
-// int() does.
+// int() does. The text names the call as TradingView does: PineLengthWording.
 int simple_ta_length(double value, const char* function, const char* argument);
 int simple_ta_length(int value, const char* function, const char* argument);
 int simple_ta_length(std::int64_t value, const char* function, const char* argument);
@@ -1000,6 +1000,234 @@ public:
     }
 };
 
+// How TradingView words the error of an invalid length for one Pine call:
+//
+//   Invalid value of the '<argument>' argument (<value>) in the
+//   <caller>'<function>' function. It must be <relation> 0.
+//
+// For most calls the argument is the signature's name, the function is the
+// call's own and the relation is ">": "in the 'sma' function. It must be
+// > 0.". Observed on TradingView, each call with a length of 0 as a constant
+// and as an input (both give the same text):
+//
+//   ta.rma, ta.sma, ta.hma, ta.mfi, ta.highest, ta.lowest, ta.highestbars,
+//   ta.lowestbars            'length' in the call's own function
+//   ta.rsi                   'y' in 'rsi'
+//   ta.atr                   'length' in 'atr'->'rma': the error is raised in
+//                            the ta.rma that ta.atr calls
+//   ta.vwma                  'length' in 'vwma'->'sma', likewise
+//   ta.dmi, diLength         'DI Length' in 'dmi'
+//   ta.dmi, adxSmoothing     'ADX Smoothing' in 'dmi', with the relation
+//                            "greater than": "It must be greater than 0."
+//
+// TradingView's reply carries the function part as a field of its own, with
+// its quotes for most calls ('sma', 'atr'->'rma') and bare for ta.rsi and
+// ta.mfi, inside a template that quotes the field again. This header writes
+// one pair of quotes around each name, as its texts always did. An na length
+// keeps the same names in "Invalid value of the '<argument>' argument in the
+// <caller>'<function>' function. It must not be na"; that text was not
+// observed for the calls above, nor was a negative length.
+//
+// pine_length_wording(function, argument) answers the wording for a Pine
+// function and argument as generated code spells them ("atr", "length"); a
+// pair that is not listed above answers the two names as given, with no
+// caller and the relation ">". simple_ta_length words its error through it,
+// and so does every check made with simple_ta_length, whatever the qualifier
+// of the length: a simple length, the checked adapters below, and the
+// series-length classes that check their length with it. Of the calls listed
+// above only ta.vwma has such a class (SeriesVwma, pine_ta_series_ma.hpp), so
+// a series length of ta.vwma reads 'vwma'->'sma' as well; TradingView's text
+// for a series length of that call was not observed. The coded failure keeps
+// naming the function and the argument as the compiled strategy spells them
+// (function "atr", argument "length").
+struct PineLengthWording {
+    const char* caller;    // "'atr'->" where TradingView names a calling function, else ""
+    const char* function;  // the function TradingView names, without quotes
+    const char* argument;  // the argument TradingView names
+    const char* relation;  // ">" or "greater than"
+};
+PineLengthWording pine_length_wording(const char* function, const char* argument) noexcept;
+
+// Checked fixed-length adapters: a ta.* call whose length is a constant or an
+// input, with the length check of simple_ta_length.
+//
+// A constant or input length reaches the object a call is built with through
+// that object's constructor, and neither the fixed-length classes of
+// <pineforge/ta.hpp> nor the Pine types above (PineVwma, PineMfi,
+// PineDmiReference) hold a Pine argument rule there. With a length of 0 or
+// less ta::RMA, ta::RSI, ta::ATR and ta::HMA answer na on every bar;
+// ta::Highest, ta::Lowest, ta::HighestBars and ta::LowestBars too (their
+// empty-window rule); PineMfi answers 100, as the ta::MFI inside it does;
+// PineDmiReference answers both directional indices beside an na ADX when
+// only adxSmoothing is invalid, as ta::DMI does; ta::SMA, and so the two
+// windows of PineVwma, are outside the positive length their windows assume.
+// Those are the types' own contracts and stay as they are. A Pine call stops
+// instead. TradingView compiles each of these calls with a constant or an
+// input length of 0 and stops the run on the bar where the call first
+// executes; no call computes (the observation above: every function below,
+// both lengths of ta.dmi). The adapters make the check a simple length of the
+// same value gets (simple_ta_length), so a negative length and an na length
+// stop the same way; those two were not observed with a constant or input
+// length. For 0 and a negative value the error is also, code and text, the
+// one the series-length classes of this header raise for ta.highest,
+// ta.lowest, ta.highestbars, ta.lowestbars and ta.sma. Those classes also
+// enforce the lookback cap, which a fixed length is not held to here, and the
+// four window extremes report an na length as 0.
+//
+// The wrapped type is the one a call with a valid constant or input length
+// is built with, so the values of a valid length are that type's own: the
+// fixed-length class of <pineforge/ta.hpp> for ta.rma, ta.sma, ta.rsi,
+// ta.atr, ta.hma, ta.highest, ta.lowest, ta.highestbars and ta.lowestbars,
+// and the Pine type for ta.vwma (PineVwma), ta.mfi (PineMfi) and ta.dmi
+// (PineDmiReference).
+//
+// PineLengthCall<Object>::function is the Pine function name (without "ta.")
+// the check is made under for the type Object; the argument is named
+// "length" in every one of these signatures. The text names both as
+// TradingView does (PineLengthWording above).
+template <class Object>
+struct PineLengthCall;
+template <>
+struct PineLengthCall<ta::RMA> {
+    static constexpr const char* function = "rma";
+};
+template <>
+struct PineLengthCall<ta::SMA> {
+    static constexpr const char* function = "sma";
+};
+template <>
+struct PineLengthCall<ta::RSI> {
+    static constexpr const char* function = "rsi";
+};
+template <>
+struct PineLengthCall<ta::ATR> {
+    static constexpr const char* function = "atr";
+};
+template <>
+struct PineLengthCall<ta::HMA> {
+    static constexpr const char* function = "hma";
+};
+template <>
+struct PineLengthCall<PineVwma> {
+    static constexpr const char* function = "vwma";
+};
+template <>
+struct PineLengthCall<PineMfi> {
+    static constexpr const char* function = "mfi";
+};
+template <>
+struct PineLengthCall<ta::Highest> {
+    static constexpr const char* function = "highest";
+};
+template <>
+struct PineLengthCall<ta::Lowest> {
+    static constexpr const char* function = "lowest";
+};
+template <>
+struct PineLengthCall<ta::HighestBars> {
+    static constexpr const char* function = "highestbars";
+};
+template <>
+struct PineLengthCall<ta::LowestBars> {
+    static constexpr const char* function = "lowestbars";
+};
+
+// The checked form of a type built from one length, as PineEma is of
+// ta::EMA. The constructor stores the length and never throws, so an invalid
+// length cannot stop a run before its first bar, nor a call site that is
+// never reached. The first compute() or recompute() checks the length, then
+// builds Object from the checked value. A failed check builds nothing, so the
+// next call checks again. After a passed check every call delegates to that
+// object with the arguments it was given (the three- and the four-argument
+// form of ta::ATR alike), so the values for a valid length are Object's own.
+// A length is taken as an int, int64 or double (ta_length_number keeps an
+// integer na as na; a double truncates toward zero in the check). Covered:
+// the length constructor (explicit), compute, recompute and
+// observe_owned_storage, the members generated code calls on these types.
+template <class Object>
+class PineFixedLength {
+    double length_;
+    std::optional<Object> object_;
+
+    Object& bound() {
+        if (!object_)
+            object_.emplace(simple_ta_length(length_, PineLengthCall<Object>::function, "length"));
+        return *object_;
+    }
+
+public:
+    // Arithmetic lengths only, so the copy constructor is never shadowed.
+    template <class Length,
+              class = std::enable_if_t<std::is_arithmetic<Length>::value>>
+    explicit PineFixedLength(Length length) : length_(ta_length_number(length)) {}
+    template <class... Args>
+    decltype(auto) compute(Args&&... args) {
+        return bound().compute(std::forward<Args>(args)...);
+    }
+    template <class... Args>
+    decltype(auto) recompute(Args&&... args) {
+        return bound().recompute(std::forward<Args>(args)...);
+    }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        ::pineforge::observe_owned_storage(out, object_);
+    }
+};
+
+// ta.dmi(diLength, adxSmoothing) with constant or input lengths: the checked
+// form of a type with ta::DMI's constructor and members, as PineTsi is of
+// ta::TSI. Both lengths are checked on the first compute() or recompute(),
+// diLength first (the signature's order; which of two invalid lengths
+// TradingView reports first is not recorded), then Object is built from the
+// two checked values and every call delegates to it. The text names the two
+// 'DI Length' and 'ADX Smoothing', as TradingView does (PineLengthWording).
+template <class Object>
+class PineFixedDmiLengths {
+    double di_length_;
+    double adx_smoothing_;
+    std::optional<Object> object_;
+
+    Object& bound() {
+        if (!object_) {
+            const int di_length = simple_ta_length(di_length_, "dmi", "diLength");
+            const int adx_smoothing = simple_ta_length(adx_smoothing_, "dmi", "adxSmoothing");
+            object_.emplace(di_length, adx_smoothing);
+        }
+        return *object_;
+    }
+
+public:
+    template <class DiLength, class AdxSmoothing>
+    PineFixedDmiLengths(DiLength di_length, AdxSmoothing adx_smoothing)
+        : di_length_(ta_length_number(di_length)),
+          adx_smoothing_(ta_length_number(adx_smoothing)) {}
+    ta::DMIResult compute(double high, double low, double close) {
+        return bound().compute(high, low, close);
+    }
+    ta::DMIResult recompute(double high, double low, double close) {
+        return bound().recompute(high, low, close);
+    }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        ::pineforge::observe_owned_storage(out, object_);
+    }
+};
+
+// The types a Pine call with constant or input lengths is built with. Three
+// wrap the Pine type of their call, not the class of <pineforge/ta.hpp>:
+// PineFixedVwma (PineVwma), PineFixedMfi (PineMfi) and PineFixedDmi
+// (PineDmiReference).
+using PineFixedRma = PineFixedLength<ta::RMA>;
+using PineFixedSma = PineFixedLength<ta::SMA>;
+using PineFixedRsi = PineFixedLength<ta::RSI>;
+using PineFixedAtr = PineFixedLength<ta::ATR>;
+using PineFixedHma = PineFixedLength<ta::HMA>;
+using PineFixedVwma = PineFixedLength<PineVwma>;
+using PineFixedMfi = PineFixedLength<PineMfi>;
+using PineFixedHighest = PineFixedLength<ta::Highest>;
+using PineFixedLowest = PineFixedLength<ta::Lowest>;
+using PineFixedHighestBars = PineFixedLength<ta::HighestBars>;
+using PineFixedLowestBars = PineFixedLength<ta::LowestBars>;
+using PineFixedDmi = PineFixedDmiLengths<PineDmiReference>;
+
 }  // namespace source
 }  // namespace pineforge
 
@@ -1018,3 +1246,5 @@ public:
 // Feature macros: PineMfi and PineRci exist.
 #define PINEFORGE_HAS_PINE_MFI 1
 #define PINEFORGE_HAS_PINE_RCI 1
+// Feature macro: PineFixedLength, PineFixedDmiLengths and their aliases exist.
+#define PINEFORGE_HAS_PINE_FIXED_LENGTH 1
