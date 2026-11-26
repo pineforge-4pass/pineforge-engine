@@ -6,8 +6,11 @@
 // opening note). A slot of the symbol's session that lies between two bars the
 // input holds in one session day is such a calendar slot, so the host reads it
 // forward without a calendar too (PineStrategyHost::pine_time_offset,
-// unprinted_slot). Every bar here is invented: a five-minute UTC chart on a
-// 0900-1000 session.
+// unprinted_slot). A session that never closes ("24x7") has no day that ends
+// early and none to skip, so there the slot is read between two bars on any
+// days: across the trading-day roll and at a day's edge. Every bar here is
+// invented: UTC charts, five-minute on a 0900-1000 session unless a scenario
+// names another.
 //
 // 1. One slot without a bar (09:10): each overload reads it as the next bar,
 //    through the calls generated code makes.
@@ -18,6 +21,15 @@
 // 4. The input's next bar on another session day stands: only a calendar says
 //    whether the day went on past its last bar. The control for what does not
 //    move.
+// 5. A 24x7 session, one minute, bars at 23:53, 23:58 and 00:01: time("", -1)
+//    reads 23:54, 23:59 and 00:02. The 23:59 slot lies across the trading-day
+//    roll from the input's next bar, and is read as the 23:54 slot inside the
+//    day is. These three readings were observed on TradingView with a
+//    synthetic script; nothing else is asserted on these bars.
+// 6. A session with an overnight break (0900-1000), slots without a bar at
+//    the day's edges on both sides of the break: the input's next bar stands,
+//    as in 4. Not compared with TradingView: these rows pin the answer the
+//    24x7 reading leaves alone.
 //
 // Source-bound (includes pineforge/source): release profile only.
 
@@ -51,6 +63,8 @@ const char* scenario = "init";
 constexpr std::int64_t kMinute = 60'000;
 constexpr std::int64_t kDay = 24 * 60 * kMinute;
 const char* const kSession = "0900-1000";
+// The session that never closes.
+const char* const kAllDay = "24x7";
 using Sessions = std::vector<std::pair<std::int64_t, std::int64_t>>;
 
 std::int64_t days_from_civil(int y, unsigned m, unsigned d) {
@@ -107,8 +121,9 @@ struct Reading {
 
 class SlotHost final : public source::PineStrategyHost {
 public:
-    SlotHost() {
-        set_syminfo_session(kSession);
+    // A UTC symbol whose session is `symbol_session`.
+    explicit SlotHost(const char* symbol_session) {
+        set_syminfo_session(symbol_session);
         set_syminfo_timezone("UTC");
     }
     void on_source_bar(const Bar&) override {
@@ -135,10 +150,13 @@ public:
     std::map<std::int64_t, Reading> seen;
 };
 
-// Runs a five-minute chart holding one bar at each of `opens`; `calendar`,
-// when given, is installed as the symbol calendar.
+// Runs a chart of `timeframe` (five minutes unless named) holding one bar at
+// each of `opens`, on a symbol whose session is `symbol_session` (0900-1000
+// unless named); `calendar`, when given, is installed as the symbol calendar.
 std::map<std::int64_t, Reading> read(const std::vector<std::int64_t>& opens,
-                                     const Sessions* calendar = nullptr) {
+                                     const Sessions* calendar = nullptr,
+                                     const char* timeframe = "5",
+                                     const char* symbol_session = kSession) {
     std::vector<Bar> bars;
     double close = 4.0;
     for (const std::int64_t ts : opens) {
@@ -149,9 +167,9 @@ std::map<std::int64_t, Reading> read(const std::vector<std::int64_t>& opens,
         bars.push_back(b);
         close += 1.0;
     }
-    SlotHost host;
+    SlotHost host(symbol_session);
     if (calendar != nullptr) CHECK(host.set_symbol_calendar(*calendar));
-    host.run(bars.data(), static_cast<int>(bars.size()), "5", "5");
+    host.run(bars.data(), static_cast<int>(bars.size()), timeframe, timeframe);
     CHECK(host.last_error().empty());
     CHECK(host.seen.size() == opens.size());
     return host.seen;
@@ -252,6 +270,61 @@ void test_next_session_day_stands() {
         expect("time(\"\", -1)", at(1, 9, 5), r->next_open, at(1, 9, 10));
 }
 
+void test_slot_across_the_day_roll() {
+    scenario = "24x7, one minute: the slot across the trading-day roll";
+    // No bar at 23:54-23:57, at 23:59 or at the next day's 00:00.
+    const auto seen = read({at(0, 23, 53), at(0, 23, 58), at(1, 0, 1)}, nullptr, "1", kAllDay);
+    struct Row {
+        std::int64_t bar, next_open;
+    };
+    const Row rows[] = {
+        // Inside the day: the next minute, which holds no bar.
+        {at(0, 23, 53), at(0, 23, 54)},
+        // Across the roll: the day's last minute, which holds no bar.
+        {at(0, 23, 58), at(0, 23, 59)},
+        // The input's last bar: the session clock answers.
+        {at(1, 0, 1), at(1, 0, 2)},
+    };
+    for (const Row& row : rows) {
+        if (const Reading* r = reading_at(seen, row.bar))
+            expect("time(\"\", -1)", row.bar, r->next_open, row.next_open);
+    }
+}
+
+// One bar's readings on the chart's own timeframe, with no session argument:
+// the bar after it and that bar's close, the second bar after it, and the bar
+// before it.
+struct ChartRow {
+    std::int64_t bar, next_open, next_close, second_open, prior_open;
+};
+
+void check_chart_rows(const std::map<std::int64_t, Reading>& seen,
+                      const std::vector<ChartRow>& rows) {
+    for (const ChartRow& row : rows) {
+        const Reading* r = reading_at(seen, row.bar);
+        if (r == nullptr) continue;
+        expect("time(\"\", -1)", row.bar, r->next_open, row.next_open);
+        expect("time_close(\"\", -1)", row.bar, r->next_close, row.next_close);
+        expect("time(\"\", 0, -1)", row.bar, r->step_open, row.next_open);
+        expect("time_close(\"\", 0, -1)", row.bar, r->step_close, row.next_close);
+        expect("time(\"\", -2)", row.bar, r->second_open, row.second_open);
+        expect("time(\"\", 1)", row.bar, r->prior_open, row.prior_open);
+    }
+}
+
+void test_overnight_break_stands() {
+    scenario = "an overnight break: slots at the day's edges on both sides";
+    // No bar at 09:50 or 09:55 before the break, nor at 09:00 after it. The
+    // input's next bar stands on both counts, with no calendar to say that
+    // the first day went on to its close or that the second opened on time.
+    // Pinned rows: the same readings with and without the 24x7 rule.
+    const auto seen = read({at(0, 9, 45), at(1, 9, 5)});
+    check_chart_rows(seen, {
+        {at(0, 9, 45), at(1, 9, 5), at(1, 9, 10), at(1, 9, 10), na<std::int64_t>()},
+        {at(1, 9, 5), at(1, 9, 10), at(1, 9, 15), at(1, 9, 15), at(0, 9, 45)},
+    });
+}
+
 }  // namespace
 
 int main() {
@@ -260,6 +333,8 @@ int main() {
     test_calendar_control();
     test_whole_timeframe_bar_without_bars();
     test_next_session_day_stands();
+    test_slot_across_the_day_roll();
+    test_overnight_break_stands();
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }
