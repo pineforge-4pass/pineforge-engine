@@ -3,7 +3,7 @@
 #   ./scripts/check_corpus_parity.sh && \
 #     python3 scripts/corpus_trades_identity.py --update
 # and carry the evidence in the commit that moves it.
-# corpus 93d956a2be9e6f7bc359286dcfeda76023176b2a
+# corpus 52d29a2d7d7eb9833a1c6dffdc83462e3e2e0c1a
 
 a72ee904563a1787ca8371f37f98cec74f6fb44163a5dfac169b77755a05ed1a  validation/analyzer-anvil-percent-costs-01/engine_trades.csv
 df7fbdb2082c8982e8c38d8843fc53262df693d4ce8b32bf05bc0acd1ef41a16  validation/analyzer-cashflow-cash-costs-01/engine_trades.csv
@@ -80,7 +80,7 @@ f7b73457565b6a4120e20c2603223b4facaa393573e9a041ccfefeadd5fd0bb5  validation/com
 45a5da914ebf7c3fe0b2a6eb806cfc175a25d52c20c928fd22dc8c7621f45f49  validation/composite-scalping-tight-tp-sl-points-01/engine_trades.csv
 0249dad411940c3dbf796cdd61dfe7c51cb0d0914148ef3b27b20a2c865959b9  validation/composite-trendmaster-integration-01/engine_trades.csv
 9f9c06131cee6292ebd5409050e57151ebf50f5dbd744a2d1ba3bee481f3d3e7  validation/composite-trendmaster-line-new-projection-01/engine_trades.csv
-1214d0242b57785c9160f551fd5e6f66c18837d116858f8b66b571ad3e5fa7d0  validation/composite-trendmaster-pivot-anchored-bracket-01/engine_trades.csv
+8348fbe5b61524debe71b414d4dcdb37e18e82a863ff8fc39e899e2b83ac7767  validation/composite-trendmaster-pivot-anchored-bracket-01/engine_trades.csv
 630443d6f90b40298d36bd371c4e9ca87f638bd687cc16a09568407af5cd1c68  validation/composite-trendmaster-three-tier-ema-state-01/engine_trades.csv
 0236aa64c11f2b00540ce396963395102bd89386b81d332379de5e7aab9326fb  validation/composite-trendmaster-trend-momentum-structure-gate-01/engine_trades.csv
 0dbc76351482c38379d404e0fa7f9e0dc937be7bb8389daf3eeac0f844000333  validation/composite-vcp-cumulative-volume-delta-01/engine_trades.csv
