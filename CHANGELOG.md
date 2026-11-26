@@ -259,6 +259,13 @@ version number follows semantic versioning over the surfaces the
   retains the strategy's lookback setting. Rebuild live strategy modules
   against the matching engine headers. Public C structures and ABI 5 are
   unchanged.
+- Disclosed: 1.12.0, like 1.13.0, changed the internal layout that
+  `pineforge-live` reads while keeping `PF_STREAM_ENGINE_LAYOUT_VERSION` at 4.
+  A 1.12.x `pineforge-live` therefore did not refuse a module built against
+  1.11.x headers, and a 1.13.x one did not refuse a 1.11.x or 1.12.x module.
+  The ABI stability page now names both releases. Build each strategy module
+  against the headers and archive of the release whose `pineforge-live` loads
+  it. (#1042)
 ### State hashes
 - A positive series-length TA lookback cap is included in the continuation
   hash. The unlimited setting adds no field to the hash.
