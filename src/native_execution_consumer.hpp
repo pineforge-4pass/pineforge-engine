@@ -1557,7 +1557,7 @@ private:
     void recalculate_at_modeled_point(BacktestEngine& engine, const Bar& bar,
                                       const NativeDriverPoint& point);
     void invoke_sub_bar_callback(BacktestEngine& engine, const Bar& sub,
-                                 const NativeDriverPoint& point);
+                                 const NativeDriverPoint& point, bool opening = false);
     // Frame bookkeeping shared by the mid-path callbacks above and by
     // invoke_applied_callback: one owning current point, one decision
     // context, and the engine's callback timestamp.
@@ -3113,11 +3113,19 @@ public:
         scratch_live_order_ids_limit_ = limit;
     }
 
+    // Optional host checkpoint with just the opening quote, before matching.
+    // The first lower bar already has the script bar's open callback. A host
+    // selects this at begin; null preserves the ordinary lower-bar walk.
+    // The continuation identifies an enabled checkpoint, never its address.
+    using SubBarOpenHook = void (*)(NativeStrategyHost&, const Bar&, const NativeDecisionContext&);
+    void set_sub_bar_open_hook(SubBarOpenHook hook) noexcept { sub_bar_open_hook_ = hook; }
+
 private:
     std::uint64_t scratch_live_order_ids_limit_ = 0;
     const std::int64_t ta_lookback_limit_ = detail::ta_lookback_limit();
     // The admitted book keeps its cap when the host stages the next run.
     std::uint64_t run_live_order_ids_limit_ = 0;
+    SubBarOpenHook sub_bar_open_hook_ = nullptr;
 };
 
 // The same lazy backing used by RunCommandScratch's Book binding. Kept in

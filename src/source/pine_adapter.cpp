@@ -6644,13 +6644,13 @@ double PineExecutionAdapter::active_staged_fx(std::int64_t timestamp_ms) const n
 // this checkpoint -- see margin_check_allowed.
 void PineExecutionAdapter::apply_fx_open_margin_slice(
         const Bar& bar, const NativeDecisionContext& context) {
-    const double rate = active_staged_fx(context.sub_bar_open_ms);
+    const double rate = active_staged_fx(margin_fx_time(context.coordinate, context.sub_bar_open_ms));
     const double prior = last_fx_rate_;
     last_fx_rate_ = rate;
     if (!std::isfinite(prior) || prior == rate) return;
-    const auto position = detail::run_position(require_host());
-    if (position.signed_units == 0.0
-        || position_open_script_bar_ >= context.script_bar_open_ms) return;
+    // Before matching a later sub-bar, even this chart bar's new position is carried.
+    if ((context.sub_index == 0 && position_open_script_bar_ >= context.script_bar_open_ms)
+        || detail::run_position(require_host()).signed_units == 0.0) return;
     (void)submit_margin_call_slice(bar.open, context);
 }
 
@@ -6677,7 +6677,7 @@ void PineExecutionAdapter::apply_fx_opening_margin_slice(
         || !(config_.commission_value > 0.0)) {
         return;
     }
-    const double rate = active_staged_fx(context.sub_bar_open_ms);
+    const double rate = active_staged_fx(margin_fx_time(context.coordinate, context.sub_bar_open_ms));
     if (!std::isfinite(opening_snapshot->sizing.fx) || opening_snapshot->sizing.fx == rate) return;
     // The FX twin of on_applied's opening checkpoint (a full-margin opening
     // whose rate moved between its signal and its fill): the same TradingView
@@ -20019,18 +20019,18 @@ PineExecutionAdapter::SourceMarginMoney PineExecutionAdapter::source_margin_mone
             }
         }
     }
-    // ab9714be pine_fills.cpp:1411-1423: fee-adjusted live equity -- on
-    // TradingView's own money (gain_loss_money) where the mirror holds.
-    money.equity = percent_commission_live_equity(mark_price);
+    // An intrabar check may precede matching: the presented clock can still be at the prior fill.
+    const auto mark_fx = bar_magnifier_ && !staged_.account_fx_effective_from_ms.empty()
+        ? std::optional<double>{fx} : std::nullopt;
+    money.equity = percent_commission_live_equity(mark_price, mark_fx);
     if (const double mirrored = gain_loss_signal_equity(mark_price); std::isfinite(mirrored))
         money.equity = mirrored;
     // Cash-per-contract margin charges the open entry fees. Cash-per-order
-    // retains the legacy restoring basis: cash_fee_sizing/pcf-order-p100-m100
-    // shows TradingView charging fees too, but its distinct margin schedule
-    // remains a recorded divergence, not covered by the contract-fee rule.
+    // retains its restoring basis; cash_fee_sizing/pcf-order-p100-m100
+    // records its distinct margin schedule.
     if (config_.commission_type == static_cast<int>(CommissionType::CASH_PER_CONTRACT)
         && config_.commission_value > 0.0) {
-        money.equity = strategy_equity_at(mark_price, std::nullopt);
+        money.equity = strategy_equity_at(mark_price, mark_fx);
     }
     money.valid = finite_positive(money.unit_margin) && std::isfinite(money.equity);
     return money;
@@ -20341,7 +20341,7 @@ bool PineExecutionAdapter::intrabar_sample_checked(
 // requirement against its own marked equity, which is a different broker.
 std::optional<NativeMarginDecision> PineExecutionAdapter::resolve_margin_requirement(
         const NativeMarginRequirementView& view) const {
-    const auto money = source_margin_money(view.mark, view.cursor.point.open_ms);
+    const auto money = source_margin_money(view.mark, margin_fx_time(view.cursor.point, view.cursor.point.open_ms));
     if (!money.valid) return std::nullopt;
     NativeMarginDecision decision;
     decision.required = money.required;
@@ -20373,7 +20373,7 @@ std::optional<double> PineExecutionAdapter::resolve_margin_call_units(
     // A point whose only adverse mark is the close: the call is taken there
     // after the script (close_point_margin_call), not rested at the close.
     if (view.cursor.point.ordinal == close_margin_point_) return 0.0;
-    const auto money = source_margin_money(view.mark, view.cursor.point.open_ms);
+    const auto money = source_margin_money(view.mark, margin_fx_time(view.cursor.point, view.cursor.point.open_ms));
     return source_margin_units(money, false);
 }
 
@@ -20388,7 +20388,7 @@ bool PineExecutionAdapter::submit_margin_call_slice(
         double mark_price, const NativeDecisionContext& context,
         bool opening_checkpoint, std::optional<double> resolved_execution_price) {
     const auto position = detail::run_position(require_host());
-    const auto money = source_margin_money(mark_price, context.sub_bar_open_ms);
+    const auto money = source_margin_money(mark_price, margin_fx_time(context.coordinate, context.sub_bar_open_ms));
     mark_price = money.mark;
     if (!money.valid) return false;
     if (source_margin_rounded_tie_veto()) return false;
@@ -28929,7 +28929,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         // flat, producing a false margin row on the subsequent opening.
         const bool stable_opening_fx = staged_.account_fx_effective_from_ms.empty()
             || placement_snapshot->sizing.fx
-                == active_staged_fx(context.sub_bar_open_ms);
+                == active_staged_fx(margin_fx_time(context.coordinate, context.sub_bar_open_ms));
         // A book two or more of one bar's flat entries of this side opened
         // here, this fill included, is margined as one once the last of them
         // has filled (flat_sibling_fill_follows): at that fill, or under

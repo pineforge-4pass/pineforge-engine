@@ -1744,6 +1744,7 @@ private:
                                            const std::string& from, const std::string& to,
                                            const std::string& account_currency,
                                            std::int64_t at_ms) const;
+    static void on_fx_sub_bar_open(NativeStrategyHost&, const Bar&, const NativeDecisionContext&);
 };
 
 class PineRequestCallerScope {

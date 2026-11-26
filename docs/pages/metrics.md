@@ -58,11 +58,17 @@ single cash-per-order ticket belongs to the native execution as a whole and is
 allocated proportionally across its physical close/open effects; it is not
 charged once per trade row. The shared native close helper consumes these
 historical paid costs, and generated Pine strategies settle on the native
-kernel too since the legacy loop was retired (#254). A timestamped FX curve
-still fails closed on streaming, `calc_on_order_fills` and bar-magnifier runs;
-a leveraged position carried across a rate step takes the broker-open margin
-checkpoint at the step bar's open. Pine sizing, source-specific reporting,
-and range-end conventions remain compatibility behavior.
+kernel too since the legacy loop was retired (#254). With the bar magnifier,
+each sub-bar fill uses the latest FX point at or before the sub-bar's open;
+an execution at the chart close uses its own execution time. Before the first
+point the scalar rate applies. The trade list still dates fills on an
+aggregated chart at the chart bar's open. A position carried into a sub-bar
+at a new rate takes its margin check at that sub-bar's open, before matching.
+Without the magnifier, a leveraged position carried across a rate step still
+takes the broker-open margin checkpoint at the step bar's open.
+Streaming and `calc_on_order_fills` still refuse a curve in use.
+Pine sizing, source-specific reporting, and range-end conventions remain
+compatibility behavior.
 
 ## Equity statistics (`metrics.equity`, all-trades only)
 

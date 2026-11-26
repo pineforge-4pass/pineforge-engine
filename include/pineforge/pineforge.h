@@ -1724,10 +1724,10 @@ PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
  *  For a different currency the curve selects conversion even before its first point.
  *  Arrays are copied. Timestamps must be strictly increasing and rates
  *  positive and finite. Pass `n == 0` to clear the curve and restore scalar
- *  behavior. Timestamped curves used for broker conversion support ordinary
- *  historical runs. Broker-open rate changes: carried 1× longs and 1× shorts
- *  are supported; leveraged positions fail closed at the crossing. Streaming,
- *  calc-on-order-fills, and bar-magnifier runs refuse a curve in use.
+ *  behavior. Historical fills convert at their execution time. Under bar
+ *  magnification every price sample of a sub-bar uses that sub-bar's open time;
+ *  a carried position is revalued at the first broker open under a new rate.
+ *  Streaming and calc-on-order-fills runs still refuse a curve in use.
  *  An unused curve remains installed for a later run on the same handle.
  *
  *  @return 0 on success, -1 for a null strategy or invalid arrays. */

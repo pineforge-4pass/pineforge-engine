@@ -897,8 +897,7 @@ int main() {
         CHECK(eng.observed_qty() > 0.0);
     }
 
-    // H. Timestamped FX is currently authoritative only on ordinary
-    // historical dispatch.  Unsupported schedulers fail before on_bar runs.
+    // H. Historical dispatch accepts a curve. Unsupported schedulers fail before on_bar runs.
     {
         std::vector<Bar> bars = {mk_bar(1000, 100.0), mk_bar(2000, 100.0)};
         const int64_t timestamps[] = {1000, 2000};
@@ -915,8 +914,10 @@ int main() {
         CHECK(magnifier.set_account_currency_fx_series(timestamps, rates, 2));
         magnifier.run(bars.data(), (int)bars.size(), "1", "1", true, 4,
                       MagnifierDistribution::ENDPOINTS);
-        CHECK(magnifier.last_error().find("bar magnifier") != std::string::npos);
-        CHECK(magnifier.on_bar_calls() == 0);
+        // expectation corrected: magnifier refusal, 0 callbacks -> success, 2 callbacks,
+        // because synthesized samples now use their containing bar's FX rate.
+        CHECK(magnifier.last_error().empty());
+        CHECK(magnifier.on_bar_calls() == 2);
 
         CarriedFxRolloverOrderingProbe stream;
         CHECK(stream.set_account_currency_fx_series(timestamps, rates, 2));
