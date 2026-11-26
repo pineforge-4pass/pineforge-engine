@@ -900,6 +900,8 @@ private:
 #define PINEFORGE_HAS_PINE_POSITIONAL_LAG 1
 // Feature macro: PineFixedSupertrend exists.
 #define PINEFORGE_HAS_PINE_FIXED_SUPERTREND 1
+// Feature macro: PineVwma exists.
+#define PINEFORGE_HAS_PINE_VWMA 1
 // Feature macro: PineDmiReference exists.
 #define PINEFORGE_HAS_PINE_DMI_REFERENCE 1
 // Feature macro: PineSar exists.
