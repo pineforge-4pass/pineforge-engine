@@ -379,6 +379,10 @@ adds it lowers that call, and earlier releases refuse it. A call inside an `if`
 appends only when it runs, and no TradingView tape pins that shape or the
 replay of the retained values when the length changes.
 
+A series-length window has no lookback limit by default, where TradingView
+stops a script whose window reaches more than 15,000 bars back: see
+"Deliberate differences from TradingView" below.
+
 `PineEma`, `PineTsi`, `PineMacd`, `PineKc` and `PineKcw` in the same header
 (`pineforge/source/pine_ta_length.hpp`) compute the values of `ta::EMA`,
 `ta::TSI`, `ta::MACD`, `ta::KC` and `ta::KCW` and stop the first call with an
@@ -1007,6 +1011,102 @@ Currently `ensure_supported_lower_tf_emulation_flags(...)` throws when
 - **Feasibility:** *Out of scope by design*. PRNG is deterministic and reproducible across runs / platforms; that is the contract PineForge advertises for paid-parity. TV's PRNG is undocumented and would need black-box reverse engineering to match exactly.
 - **Future story:** None. Determinism is preferred over TV-byte parity. If TradingView publishes their generator we can revisit.
 - **Why not done yet:** Trade-off was made explicitly; see the `pine_random` SplitMix64 comment in `math.hpp`.
+
+## Deliberate differences from TradingView
+
+Each entry in this section is a behaviour PineForge keeps different from
+TradingView on purpose. An entry gives TradingView's behaviour, PineForge's
+default, and every way to select TradingView's behaviour for a run.
+
+### Lookback limit of series-length `ta.*` windows
+
+A `ta.*` call whose length changes from bar to bar (a series length) reads a
+window over the history of its own call site. TradingView limits how far back
+that window may reach: a call that asks for more than 15,000 bars back stops
+the script with a runtime error (RE10008). PineForge sets no limit unless the
+run selects one, so the same call answers `na` until its window fills and the
+script keeps running. [`CHANGELOG.md`](../CHANGELOG.md) records this default
+under #931. Only series lengths are concerned: a call with a constant, input
+or simple length builds a fixed-length class, which never reads this limit.
+
+| Pine call with a series length | Adapter class and entry point | TradingView | PineForge default | Selecting TradingView's limit |
+| --- | --- | --- | --- | --- |
+| `ta.highest` | `SeriesHighest` (`include/pineforge/source/pine_ta_length.hpp:385`), `SeriesHighest::compute` (`src/source/pine_ta_length.cpp:353`) | Runtime error RE10008 stops the script when the call asks for more than 15,000 bars back. | No limit. The call answers `na` while its context has fewer than `length` bars, and the run continues. | `--limit-ta-lookback 15000`, `PINEFORGE_LIMIT_TA_LOOKBACK=15000`, `--tv-compat`, `PINEFORGE_TV_COMPAT=1`, or `pf_ta_lookback_limit_set_checked` with 15000. |
+| `ta.lowest` | `SeriesLowest` (`include/pineforge/source/pine_ta_length.hpp:398`), `SeriesLowest::compute` (`src/source/pine_ta_length.cpp:359`) | Runtime error RE10008 stops the script when the call asks for more than 15,000 bars back. | No limit. The call answers `na` while its context has fewer than `length` bars, and the run continues. | `--limit-ta-lookback 15000`, `PINEFORGE_LIMIT_TA_LOOKBACK=15000`, `--tv-compat`, `PINEFORGE_TV_COMPAT=1`, or `pf_ta_lookback_limit_set_checked` with 15000. |
+| `ta.highestbars` | `SeriesHighestBars` (`include/pineforge/source/pine_ta_length.hpp:411`), `SeriesHighestBars::compute` (`src/source/pine_ta_length.cpp:365`) | Runtime error RE10008 stops the script when the call asks for more than 15,000 bars back. | No limit. The offset is `na` while its context has fewer than `length` bars, and the run continues. | `--limit-ta-lookback 15000`, `PINEFORGE_LIMIT_TA_LOOKBACK=15000`, `--tv-compat`, `PINEFORGE_TV_COMPAT=1`, or `pf_ta_lookback_limit_set_checked` with 15000. |
+| `ta.lowestbars` | `SeriesLowestBars` (`include/pineforge/source/pine_ta_length.hpp:424`), `SeriesLowestBars::compute` (`src/source/pine_ta_length.cpp:371`) | Runtime error RE10008 stops the script when the call asks for more than 15,000 bars back. | No limit. The offset is `na` while its context has fewer than `length` bars, and the run continues. | `--limit-ta-lookback 15000`, `PINEFORGE_LIMIT_TA_LOOKBACK=15000`, `--tv-compat`, `PINEFORGE_TV_COMPAT=1`, or `pf_ta_lookback_limit_set_checked` with 15000. |
+| `ta.sma` | `SeriesSma` (`include/pineforge/source/pine_ta_length.hpp:523`), `SeriesSma::checked_length` (`src/source/pine_ta_length.cpp:501`) | Runtime error RE10008 stops the script when the call asks for more than 15,000 bars back. | No limit. The call answers `na` until `length` non-`na` values of its source exist, and the run continues. | `--limit-ta-lookback 15000`, `PINEFORGE_LIMIT_TA_LOOKBACK=15000`, `--tv-compat`, `PINEFORGE_TV_COMPAT=1`, or `pf_ta_lookback_limit_set_checked` with 15000. |
+| `ta.percentile_nearest_rank` | `SeriesPercentileNearestRank` (`include/pineforge/source/pine_ta_length.hpp:448`), `SeriesPercentileNearestRank::compute` (`src/source/pine_ta_length.cpp:427`) | Not recorded in this tree. The selectable limit treats this call like the five above. | No limit. The call answers `na` until `length` values have been appended, and the run continues. | `--limit-ta-lookback 15000`, `PINEFORGE_LIMIT_TA_LOOKBACK=15000`, `--tv-compat`, `PINEFORGE_TV_COMPAT=1`, or `pf_ta_lookback_limit_set_checked` with 15000. |
+
+The engine records TradingView's limit and its error for `ta.lowest`,
+`ta.highestbars` and `ta.sma`, in the comment above `SeriesWindowExtreme`
+(`include/pineforge/source/pine_ta_length.hpp:342`). `ta.highest` and
+`ta.lowestbars` run in that same class. For `ta.percentile_nearest_rank` the
+tree holds no TradingView recording at the limit.
+
+With a limit of N bars, a length up to N + 1 is accepted, because it reads N
+bars back. A longer length stops the run: the failure code is
+`pine_runtime_limit` with the arguments `limit: max_bars_back` and `max: N`,
+raised by `max_bars_back_exceeded` (`src/source/pine_ta_length.cpp:52`). The
+length is checked before the call answers, in `series_length`
+(`src/source/pine_ta_length.cpp:325`), so under a limit a longer length stops
+the run even on a bar where the default answers `na`. Under a limit a call
+site keeps a history bounded by it instead of its whole history
+([Memory management](pages/memory-management.md) has the row). A positive
+limit is part of the run's continuation hash, and no limit adds nothing to it.
+
+For example, take a call whose length is 15,002 on the fifth bar of a chart
+and 2 on every other bar. By default the fifth bar answers `na` and the sixth
+bar answers from the last two bars. With a limit of 15,000 the run stops on
+the fifth bar. A length of 15,001 reads exactly 15,000 bars back, so it is
+accepted under both settings and answers `na` on that short chart.
+
+`run_cap_control` (`tests/test_issue_931_series_lookback.cpp:95`) runs both
+settings on `SeriesSma`: under a limit of 15000 a length of 15,002 stops the
+run with `pine_runtime_limit`, and with no limit the same length answers
+`na`. `run_length_boundary` (`tests/test_issue_931_series_lookback.cpp:20`)
+checks the N + 1 boundary on all six classes.
+
+**Selecting the limit.** Every selector sets one number, the most bars back a
+series-length window may reach. Zero means no limit and is the initial value
+of `current_ta_lookback_limit` (`src/ta_extremes_volume.cpp:1069`). A call
+site copies the setting when it is constructed:
+`SeriesWindowExtreme::max_lookback_`
+(`include/pineforge/source/pine_ta_length.hpp:382`),
+`SeriesPercentileNearestRank::max_lookback_`
+(`include/pineforge/source/pine_ta_length.hpp:464`) and
+`SeriesSma::max_lookback_` (`include/pineforge/source/pine_ta_length.hpp:557`).
+TradingView's value is the constant `SeriesWindowExtreme::kMaxBarsBack`
+(`include/pineforge/source/pine_ta_length.hpp:345`).
+
+| Selector | Kind | What it does |
+| --- | --- | --- |
+| `--limit-ta-lookback N` (`docker/run_json.py:9647`) | Flag of the JSON runner, `docker/run_json.py` | Limits the lookback to N bars; `0` selects no limit. It wins over every selector below. An empty, negative or non-integer value is a usage error. |
+| `PINEFORGE_LIMIT_TA_LOOKBACK` (`docker/run_json.py:9648`) | Environment variable read by the JSON runner | The default of the flag above, with the same values. In the release container set this variable: the entrypoint passes no `--limit-ta-lookback` flag to the runner. |
+| `--tv-compat` (`docker/run_json.py:5554`) | Flag of the JSON runner | Selects 15000 when neither selector above is given, in `_create_strategy_with_ta_lookback` (`docker/run_json.py:9729`). It also selects the runner's other compatibility defaults, 256 symbols and feeds and 8 MiB of request-feed inventory: `TV_COMPAT_LIMITS` (`docker/run_json.py:5473`). To select only this limit, use `--limit-ta-lookback 15000`. |
+| `PINEFORGE_TV_COMPAT` (`docker/run_json.py:9627`) | Environment variable read by the JSON runner; `1`, `true`, `yes` or `on` | The same as `--tv-compat`. |
+| `pf_ta_lookback_limit_set_checked` (`include/pineforge/pineforge.h:2325`) | C function of the strategy library | For a host that loads the library itself. It sets the limit of the calling thread: call it before creating the strategy, which captures the limit, then call it with `NULL` to restore the default. `NULL` or 0 selects no limit; a negative value is refused and changes nothing. `PINEFORGE_HAS_TA_LOOKBACK_LIMIT_V1` (`include/pineforge/pineforge.h:2328`) marks a header that declares it. |
+
+A value of 0 from the flag or from `PINEFORGE_LIMIT_TA_LOOKBACK` selects no
+limit even with `--tv-compat`. When a limit is supplied for a strategy library
+that does not export the function, the runner refuses the run and the library
+has to be rebuilt against the paired engine.
+
+A host that calls the C function follows this order:
+
+```c
+int64_t limit = 15000;                 /* TradingView's value */
+char error[256];
+if (pf_ta_lookback_limit_set_checked(&limit, error, sizeof error) != PF_SETTINGS_OK) {
+    /* refused: error holds the reason and the previous setting stays */
+}
+/* create the strategy here: it captures the limit of this thread */
+pf_ta_lookback_limit_set_checked(NULL, error, sizeof error);   /* this thread: no limit again */
+```
+
+The same option is described in the [public contract](pages/public-contract.md),
+the [run-failure codes](pages/run-failure-codes.md) and
+[Memory management](pages/memory-management.md).
 
 ## Verifying the surface yourself
 
