@@ -160,6 +160,12 @@ double RMA::compute(double src) {
     if (is_na(src)) {
         return na<double>();
     }
+    // A length of zero or less has no seed window and no recursion: the
+    // value is na on every bar. Answering here keeps `length - 1` below from
+    // being evaluated at the smallest int, where the subtraction overflows.
+    if (length <= 0) {
+        return na<double>();
+    }
 
     detail::advance_observation_count(bar_count);
 
@@ -195,6 +201,12 @@ double RMA::compute(double src) {
 SMA::SMA(int length) : window_(length) {}
 
 double SMA::compute(double src) {
+    // A length of zero or less has no window: no source enters it (the
+    // window sum takes a positive length only) and the value is na on every
+    // bar.
+    if (window_.length() <= 0) {
+        return na<double>();
+    }
     if (is_na(src)) {
         // A missing bar holds the seeded mean and consumes no slot.
         window_.note_no_push();
@@ -399,6 +411,12 @@ double VWMA::compute(double src, double vol) {
     evicted_ = false;
     saw_na_ = is_na(src) || is_na(vol);
     if (saw_na_) {
+        return na<double>();
+    }
+    // A negative length has no window: no pair enters it, so the eviction
+    // loop below has nothing to take out and recompute() nothing to undo.
+    // (A length of 0 needs no branch: its one pair leaves as it enters.)
+    if (length_ < 0) {
         return na<double>();
     }
 
