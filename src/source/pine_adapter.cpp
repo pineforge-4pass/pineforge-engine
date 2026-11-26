@@ -19678,7 +19678,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
                 && !config_.process_orders_on_close;
             if (true_flat_gap_scope
                 && fill_required > source.sizing.equity + float_guard
-                && !price_gap_affordable) {
+                && !price_gap_affordable && !level_sized_stop_fill_admits(source, view)) {
                 return NativePrecommitVerdict::Refuse;
             }
             if (source.family == PineOrderFamily::Entry
@@ -33695,6 +33695,62 @@ bool PineExecutionAdapter::another_child_fills_on_leg(
         }
     }
     return reached;
+}
+
+// validate_precommit's true-flat gap check, for a default percent-of-equity
+// stop entry that fills at the level it was sized at (engine issue 1031);
+// kept after the adapter's cited implementation regions as the bodies above
+// are.
+//
+// Such an order is sized at its own level from the ten-significant-digit
+// money (default_sizing_cash, default_stop_sizing_price), so at that level it
+// costs no more than that money. Where the rounding raised the money above
+// the binary equity, the cost exceeds the equity by less than half a unit of
+// the tenth digit, and the gap check -- the cost against the binary equity
+// and a 1e-12 float guard -- refused the whole order. TradingView fills it
+// and calls the excess on the fill bar: 80000 units at a stop of 1.15625 cost
+// 92500 on a capital of 92499.9999999; it opens 80000 and closes 1 unit by
+// "Margin call" on that bar, keeping 79999, while a capital of 92500 or of
+// 92500.01 opens 80000 with no call.
+//
+// So that order is not refused for its money where the price-scale fill
+// check admits it (unified_fill_admits: sig10(sig10(E) / Q) is not below the
+// fill's tick): it fills whole, and the opening margin check takes the unit
+// (schedule_priced_opening_margin, source_margin_units). True only for the
+// measured shape: a commission-free long stop placed and filled from flat at
+// 100 % of equity and full margin, without slippage, calc_on_order_fills or
+// the bar magnifier, point value 1, no FX, a power-of-ten lot step of at most
+// one unit, no risk rule, filled on the tick it was sized at. A fill through
+// a gap, a short, a limit leg, a commission, slippage, another percentage or
+// margin are not measured and keep the gap check; so does an order the
+// price-scale check refuses.
+bool PineExecutionAdapter::level_sized_stop_fill_admits(
+        const PlacementSnapshot& source, const NativePrecommitView& view) const {
+    const double tick = staged_.syminfo.mintick;
+    if (source.family != PineOrderFamily::Entry || !source.is_long
+        || std::isfinite(source.requested_qty) || source.sizing.at_fill
+        || !finite_positive(source.exit_levels.stop) || finite_positive(source.exit_levels.limit)
+        || !source.oca_name.empty() || source.birth.from_fill() || !view.definition
+        || !std::holds_alternative<native_order::Stop>(view.definition->request.trigger)
+        || config_.default_qty_type != static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+        || config_.default_qty_value != 100.0 || config_.margin_long != 100.0
+        || config_.commission_value != 0.0 || config_.slippage != 0
+        || config_.pyramiding < 0 || config_.pyramiding > 1
+        || config_.process_orders_on_close || config_.calc_on_order_fills || bar_magnifier_
+        || !lot_grid_pinned_ || *staged_.quantity_grid > 1.0
+        || staged_.syminfo.pointvalue != 1.0 || source.sizing.fx != 1.0
+        || staged_.account_fx != 1.0 || !staged_.account_fx_effective_from_ms.empty()
+        || cap.active() || risk_.max_intraday_loss > 0.0 || risk_.max_drawdown > 0.0
+        || risk_.max_cons_loss_days > 0 || risk_.max_position_size > 0.0
+        || !finite_positive(tick) || !finite_positive(source.sizing.frozen_units)
+        || !finite_positive(source.sizing.price) || !std::isfinite(source.sizing.equity)
+        || !finite_positive(view.resolved_price)) {
+        return false;
+    }
+    // On the tick it was sized at: a fill through a gap keeps the gap check.
+    if (nearest_tick(view.resolved_price, tick) != nearest_tick(source.sizing.price, tick))
+        return false;
+    return unified_fill_admits(source, source.sizing.frozen_units, view.resolved_price);
 }
 
 } // namespace pineforge::source
