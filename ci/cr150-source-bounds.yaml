@@ -257,7 +257,12 @@ ceilings:
   # state and one row for each distinct N-day timeframe its script names. No
   # fixed input is declared for either, so neither is bounded in the gate's
   # sense.
-  unreviewed: 1479
+  # expectation corrected: 1479 -> 1478, because session_trading_day_open_ms
+  # no longer copies eff_tz (U0759 is retired). The wall-minute cache keeps
+  # its slot member named tz, so U1184 stays one group: its two cache sites
+  # move from tz_offset_ms to session_wall_minute_ms, and the partition's
+  # p.tz assignment (src/timeframe.cpp:857) stays indexed. No group is added.
+  unreviewed: 1478
   pending-flat-memory: 179
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1032,28 +1037,27 @@ entries:
   - {id: "U0756", file: "src/session_time.cpp", symbol: "day_filter", ops: ["decl"], container: "std::unordered_set<int>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1560}
   - {id: "U0757", file: "src/session_time.cpp", symbol: "days", ops: ["assign", "decl"], container: "std::unordered_set<int>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 48}
   - {id: "U0758", file: "src/session_time.cpp", symbol: "days_out", ops: ["grow"], container: "unresolved by the index: days_out.insert(...)", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 421}
-  - {id: "U0759", file: "src/session_time.cpp", symbol: "eff_tz", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 2158}
-  - {id: "U0760", file: "src/session_time.cpp", symbol: "end", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 658}
+  - {id: "U0760", file: "src/session_time.cpp", symbol: "end", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", note: "The declaration is the end text of a parsed window. The assign sites with the same name are scalar endpoints in the session clock.", line: 689}
   - {id: "U0761", file: "src/session_time.cpp", symbol: "end4", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 631}
-  - {id: "U0762", file: "src/session_time.cpp", symbol: "entries", ops: ["decl", "grow"], container: "std::vector<std::unique_ptr<ArgCache>>", owner: "calendar-time", phase: "bar", state: "pending-flat-memory", inventory: "C04", grows_with: ["unproved-bound"], line: 960}
-  - {id: "U0763", file: "src/session_time.cpp", symbol: "first", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 605}
+  - {id: "U0762", file: "src/session_time.cpp", symbol: "entries", ops: ["decl", "grow"], container: "std::vector<std::unique_ptr<ArgCache>>", owner: "calendar-time", phase: "bar", state: "pending-flat-memory", inventory: "C04", grows_with: ["unproved-bound"], line: 1003}
+  - {id: "U0763", file: "src/session_time.cpp", symbol: "first", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", note: "The parser copies the first window's text. The two assign sites in arg_day_bar use the same name for a scalar minute.", line: 636}
   - {id: "U0764", file: "src/session_time.cpp", symbol: "kAllDaySession", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1980}
   - {id: "U0765", file: "src/session_time.cpp", symbol: "kNoSession", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1761}
   - {id: "U0766", file: "src/session_time.cpp", symbol: "kOneMinute", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1772}
   - {id: "U0767", file: "src/session_time.cpp", symbol: "kUtc", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1762}
-  - {id: "U0768", file: "src/session_time.cpp", symbol: "make_unique", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 977}
-  - {id: "U0769", file: "src/session_time.cpp", symbol: "occurrences", ops: ["assign", "decl"], container: "std::vector<WallOccurrence>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 944}
-  - {id: "U0770", file: "src/session_time.cpp", symbol: "out", ops: ["assign", "decl"], container: "std::vector<WallOccurrence>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 815}
+  - {id: "U0768", file: "src/session_time.cpp", symbol: "make_unique", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1020}
+  - {id: "U0769", file: "src/session_time.cpp", symbol: "occurrences", ops: ["assign", "decl"], container: "std::vector<WallOccurrence>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 987}
+  - {id: "U0770", file: "src/session_time.cpp", symbol: "out", ops: ["assign", "decl"], container: "std::vector<WallOccurrence>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 846}
   - {id: "U0771", file: "src/session_time.cpp", symbol: "parts", ops: ["decl", "grow"], container: "std::vector<std::string>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1514}
-  - {id: "U0772", file: "src/session_time.cpp", symbol: "push_back", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 969}
-  - {id: "U0773", file: "src/session_time.cpp", symbol: "s", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1008}
+  - {id: "U0772", file: "src/session_time.cpp", symbol: "push_back", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1012}
+  - {id: "U0773", file: "src/session_time.cpp", symbol: "s", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1051}
   - {id: "U0774", file: "src/session_time.cpp", symbol: "seg", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1518}
-  - {id: "U0775", file: "src/session_time.cpp", symbol: "session", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 947}
+  - {id: "U0775", file: "src/session_time.cpp", symbol: "session", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 990}
   - {id: "U0776", file: "src/session_time.cpp", symbol: "start4", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 630}
   - {id: "U0777", file: "src/session_time.cpp", symbol: "t", ops: ["append", "assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 153}
-  - {id: "U0778", file: "src/session_time.cpp", symbol: "tz", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 948}
+  - {id: "U0778", file: "src/session_time.cpp", symbol: "tz", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 991}
   - {id: "U0779", file: "src/session_time.cpp", symbol: "win", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 650}
-  - {id: "U0780", file: "src/session_time.cpp", symbol: "windows", ops: ["assign", "decl", "grow"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 598}
+  - {id: "U0780", file: "src/session_time.cpp", symbol: "windows", ops: ["assign", "decl", "grow"], container: "std::string, std::vector<ArgWindow>, std::vector<std::pair<int64_t, int64_t>>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", note: "The session text supplies the parsed windows and the per-day vector of open/close pairs. Each valid window can add one pair; no fixed input bounds their number.", line: 629}
   - {id: "U0781", file: "src/source/magnifier_intrabars.cpp", symbol: "charts", ops: ["decl", "grow"], container: "std::vector<Span>", owner: "source-layer", phase: "bar", state: "pending-flat-memory", inventory: "F22", grows_with: ["bars"], line: 125}
   - {id: "U0782", file: "src/source/magnifier_intrabars.cpp", symbol: "path", ops: ["decl", "grow"], container: "std::vector<Bar>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 138}
   - {id: "U0783", file: "src/source/magnifier_intrabars.cpp", symbol: "rows", ops: ["decl"], container: "std::vector<Row>", owner: "source-layer", phase: "bar", state: "pending-flat-memory", inventory: "F22", grows_with: ["bars"], line: 103}
@@ -1438,7 +1442,7 @@ entries:
   - {id: "U1181", file: "src/timeframe.cpp", symbol: "stamps", ops: ["assign", "decl"], container: "std::vector<int64_t>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", note: "Partition setup still copies every supplied native daily stamp into p.stamps; only the overload signature changed. Resident owning storage remains O(input daily stamps), independent of the three projection cache budgets. Other declaration sites are retained.", line: 826}
   - {id: "U1507", file: "src/timeframe.cpp", symbol: "starts", ops: ["decl"], container: "std::vector<int>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", note: "CR150-CX 10-26 (c171d), class: scratch of one call. Local in SessionDaySchedule::parse_many (more than 8 windows only): sized by the number of windows in ONE session string, an input value; freed on return; nothing is retained across bars. Bound not argued, so OPEN.", line: 1930}
   - {id: "U1183", file: "src/timeframe.cpp", symbol: "trade_instants", ops: ["decl"], container: "std::vector<int64_t>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1770}
-  - {id: "U1184", file: "src/timeframe.cpp", symbol: "tz", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", note: "Partition setup copies the caller timezone into one p.tz string in the explicit-cache overload. Payload length follows the input string, with no proved byte cap; other timezone declarations stay inventoried.", line: 200}
+  - {id: "U1184", file: "src/timeframe.cpp", symbol: "tz", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", note: "Each of the eight thread-local wall-minute cache slots owns one timezone string (the Slot member tz of session_wall_minute_ms); a miss copies the input spelling, and the slot count does not bound its bytes. Partition setup also copies the caller timezone into one p.tz string in the explicit-cache overload (src/timeframe.cpp:857). Payload length follows the input string, with no proved byte cap. OPEN.", line: 215}
   - {id: "U1851", file: "src/timezone.cpp", symbol: "<temp:string>", ops: ["temp"], container: "unresolved by the index: std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 86}
   - {id: "U1186", file: "src/timezone.cpp", symbol: "body", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 130}
   - {id: "U1852", file: "src/timezone.cpp", symbol: "english", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 86}

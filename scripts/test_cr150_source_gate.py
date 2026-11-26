@@ -1319,7 +1319,10 @@ class RealTree(unittest.TestCase):
         # of the state that keeps the N-day partitions of timeframe.change for
         # one run (TimeframeChangeState) and that state's rows, one for each
         # N-day timeframe the script names. Both remain OPEN.
-        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3 + 1 + 1 + 1 + 2 + 3 + 2 + 1 + 6 + 1 + 2 + 2
+        # expectation corrected: 1658 -> 1657, because the trading-day helper
+        # no longer owns eff_tz (U0759). The wall-minute cache keeps its tz
+        # group (U1184); moving session sites adds no group.
+        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3 + 1 + 1 + 1 + 2 + 3 + 2 + 1 + 6 + 1 + 2 + 2 - 1
         self.assertEqual(c['OPEN'], expected_open)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
