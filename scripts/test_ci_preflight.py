@@ -13922,9 +13922,12 @@ class AbiPinGuardStage(unittest.TestCase):
         self.assertIs(rows[0][3], False)
         return (code, rows[0][1], rows[0][2]), (output / (self.NAME + '.log')).read_text()
 
-    def judge(self, *changes, stamps=()):
+    def judge(self, *changes, stamps=(), arrange=None):
         """Commit the edits and the named stamp raises on the seed; judge that pair as a pull request."""
         repo, base = self.repository()
+        if arrange is not None:
+            arrange(repo)
+            base = self.commit(repo, 'Arrange the base declaration')
         for change in changes:
             change(repo)
         for name in stamps:
@@ -14110,6 +14113,54 @@ class AbiPinGuardStage(unittest.TestCase):
             '    double  open;       /**< Opening price of the bar. */')), changes={})
 
     # -- (B) the engine layout the stream stamp covers -------------------------------
+    def test_abi_pin_guard_refuses_namespace_scope_pack_for_both_stamps(self):
+        def pack_equity_point(repo):
+            opening = "typedef struct pf_equity_point_s {\n"
+            closing = "} pf_equity_point_t;\n"
+            self.edit(repo, self.HEADER, opening, "#pragma pack(push, 1)\n" + opening)
+            self.edit(repo, self.HEADER, closing, closing + "#pragma pack(pop)\n")
+
+        for stamps in ((), (self.ABI, self.STREAM)):
+            with self.subTest(stamps=stamps):
+                outcome, log = self.judge(pack_equity_point, stamps=stamps)
+                self.assertEqual(outcome, (1, 'failed', 1), log)
+                for rule in ('c-abi', 'stream-layout'):
+                    self.assertRegex(log, rf'(?m)^abi pin guard: FAIL {rule}: .*#pragma pack.*$')
+                self.assertNotIn('FAIL stream-pins:', log)
+                self.assertNotIn('abi pin guard: OK', log)
+
+    def test_abi_pin_guard_ignores_pack_text_in_comments(self):
+        self.assert_passed(self.judge(lambda repo: self.edit(
+            repo, self.ENGINE, self.ENGINE_MEMBER,
+            '    /*\n#pragma pack(push, 1)\n    */\n' + self.ENGINE_MEMBER)), changes={})
+
+    def test_abi_pin_guard_refuses_changes_to_layout_declaration_forms(self):
+        cases = (
+            (self.ENGINE_MEMBER, '    alignas(32) double position_qty_ = 0.0;\n',
+             'BacktestEngine'),
+            ('enum class PositionSide { FLAT, LONG, SHORT };',
+             'enum class PositionSide : unsigned char { FLAT, LONG, SHORT };', 'PositionSide'),
+            ('class BacktestEngine {',
+             'struct MeasuredLayoutBase { int value = 0; };\n'
+             'class BacktestEngine : private MeasuredLayoutBase {', 'BacktestEngine'),
+        )
+        for old, new, name in cases:
+            with self.subTest(declaration=new):
+                result = self.judge(lambda repo: self.edit(repo, self.ENGINE, old, new))
+                self.assert_refused(result, 'stream-layout', self.STREAM)
+                self.assertRegex(result[1], r'(?m)^abi pin guard: stream-layout change: '
+                                 rf'include/pineforge/engine\.hpp: (?:\w+::)*{name}: layout changed$')
+
+    def test_abi_pin_guard_refuses_a_changed_bit_field_width(self):
+        member = '    int64_t next_position_cycle_seq_'
+        bit_field = member + ' : 48;\n'
+        result = self.judge(
+            lambda repo: self.edit(repo, self.ENGINE, bit_field, member + ' : 47;\n'),
+            arrange=lambda repo: self.edit(repo, self.ENGINE, member + ' = 1;\n', bit_field))
+        self.assert_refused(result, 'stream-layout', self.STREAM)
+        self.assertRegex(result[1], r'(?m)^abi pin guard: stream-layout change: '
+                         r'include/pineforge/engine\.hpp: (?:\w+::)*BacktestEngine: layout changed$')
+
     def test_abi_pin_guard_refuses_an_added_engine_member_without_the_stream_stamp(self):
         result = self.judge(self.add_engine_member)
         self.assert_refused(result, 'stream-layout', self.STREAM)

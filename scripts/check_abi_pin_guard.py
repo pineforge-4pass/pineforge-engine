@@ -44,6 +44,10 @@ may rise without a layout change and may never fall. Comments, white space,
 line breaks, assertion messages, function bodies, non-virtual member functions
 and static members are not layout and need no stamp.
 
+Adding, removing or changing a #pragma pack directive in a file scanned by
+(A) or (B) fails even with a stamp raise: the declaration reader does not
+model the packing state at each declaration.
+
 (B) is deliberately wider than what the live runner reads directly: the
 runner also runs its own copy of kernel functions on a module's objects, and
 those functions reach types this check cannot enumerate one by one. A change
@@ -157,6 +161,7 @@ TOKEN = re.compile(
     r"|\.?[0-9](?:[eEpP][+-]|'[0-9A-Za-z_]|[0-9A-Za-z_.])*"
     r"|<<=|>>=|<=>|<=|>=|<<|::|->|==|!=|&&|\|\||\"\"|''|\S")
 DIRECTIVE = re.compile(r'[ \t]*#[ \t]*([A-Za-z_]*)(.*)', re.S)
+PACK_DIRECTIVE = re.compile(r'^[ \t]*#[ \t]*pragma[ \t]+pack\b([^\n]*)', re.M)
 TYPE_KEYWORD = re.compile(r'\b(?:class|struct|union|enum)\b')
 INTEGER = re.compile(r'\(?[ \t]*([0-9]+)[uUlL]*[ \t]*\)?')
 # The three row forms of the pin file.
@@ -197,6 +202,12 @@ def _neutral(match: re.Match) -> str:
 def without_comments(text: str) -> str:
     """Comments become white space; string and character literals lose their text."""
     return LEXEME.sub(_neutral, text)
+
+
+def pack_directives(text: str) -> list[list[str]]:
+    """Read pack directives in order, including in preprocessor branches not parsed as code."""
+    clean = without_comments(re.sub(r'\\\r?\n', '', text))
+    return [TOKEN.findall(args) for args in PACK_DIRECTIVE.findall(clean)]
 
 
 def without_directives(clean: str) -> str:
@@ -1119,9 +1130,21 @@ class Finding:
         self.covered: dict[str, str] = {}
 
 
+def changed_packing(base: Tree, head: Tree, paths: list[str]) -> list[str]:
+    """Refuse a packing delta rather than treating it as a stamped declaration change."""
+    changed = [path for path in paths if base.entries.get(path) != head.entries.get(path)]
+    for tree in (base, head):
+        tree.read([path for path in changed if path in tree.entries])
+    return [f'{path}: #pragma pack directives added, removed or changed; '
+            'the declaration reader does not track packing state'
+            for path in changed
+            if pack_directives(base.texts.get(path, '')) != pack_directives(head.texts.get(path, ''))]
+
+
 def abi_changes(base: Tree, head: Tree) -> Finding:
     """Rule (A): the pins of src/c_abi.cpp and the pf_* members of pineforge.h."""
     finding = Finding()
+    finding.failures.extend(changed_packing(base, head, [HEADER, RUNTIME]))
     old_pins, new_pins = abi_pins(base.source(RUNTIME)), abi_pins(head.source(RUNTIME))
     old_structs = abi_structs(base.source(HEADER))
     new_structs = abi_structs(head.source(HEADER))
@@ -1145,6 +1168,10 @@ def layout_changes(classes: tuple[tuple[str, str], ...], roots: tuple[str, ...],
 
     def compare(base: Tree, head: Tree) -> Finding:
         finding = Finding()
+        paths = [path for path in sorted(base.entries.keys() | head.entries.keys())
+                 if path.startswith(roots) and not path.startswith(excluded)
+                 and path.endswith(LAYOUT_SUFFIXES)]
+        finding.failures.extend(changed_packing(base, head, paths))
         old = base.layout(classes, roots, excluded)
         new = head.layout(classes, roots, excluded)
         for key in sorted(old.covered | new.covered):
