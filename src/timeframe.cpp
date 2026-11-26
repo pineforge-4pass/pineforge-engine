@@ -212,13 +212,13 @@ static bool is_utc_tz(const std::string& tz) {
 static int64_t session_wall_minute_ms(int64_t minute, const std::string& tz) {
     if (is_utc_tz(tz) && minute >= std::numeric_limits<int64_t>::min() / 60000
         && minute <= std::numeric_limits<int64_t>::max() / 60000) return minute * 60000;
-    struct Slot { int64_t minute = 0, ms = 0; std::string zone; };
+    struct Slot { int64_t minute = 0, ms = 0; std::string tz; };
     thread_local Slot cache[8];
     const auto key = static_cast<uint64_t>(minute);
     Slot& slot = cache[(key ^ (key / 1440)) % 8];  // Separate neighbouring midnights.
-    if (slot.minute == minute && slot.zone == tz) return slot.ms;
+    if (slot.minute == minute && slot.tz == tz) return slot.ms;
     const int64_t ms = wall_minute_ms(minute, tz);
-    slot.zone = tz;
+    slot.tz = tz;
     slot.minute = minute;
     slot.ms = ms;
     return ms;
@@ -240,24 +240,24 @@ static int session_open_offset_minutes(const std::string& session) {
     return (value / 100) * 60 + (value % 100);
 }
 
-/// Timestamp moved onto the exchange clock (tz offset only). This is the clock for CALENDAR periods:
-/// TV splits D/W/M at symbol-local midnight. Subtracting the session open here too would SHIFT each
-/// session wholesale instead of anchoring it — daily grouping became tz-invariant, which is exactly
-/// the bug this split fixes. A named zone reads ONE offset per UTC date, the one in force at that
-/// date's noon, so on the date of a clock change it steps at 00:00 UTC; `at_instant` reads `ts`.
+static int session_length_minutes(const std::string& session);
+static int64_t floor_div_day(int64_t ms);
+static int64_t calendar_sum(int64_t a, int64_t b);  // a + b, or the coded EOVERFLOW past int64
+
+/// Timestamp moved onto the exchange clock (tz offset only), the clock for CALENDAR periods: TV splits
+/// D/W/M at symbol-local midnight, and subtracting the session open here too would SHIFT each session
+/// instead of anchoring it. A named zone reads ONE offset per UTC date, its noon's, so on the date of
+/// a clock change it steps at 00:00 UTC; `at_instant` reads `ts`. The first and the last UTC date are
+/// partial (no midnight, no noon): the per-date clock refuses both, as it does a value past int64.
 static int64_t calendar_clock_ms(int64_t ts, const std::string& tz, bool at_instant = false) {
     if (is_utc_tz(tz)) return ts;
     const int64_t date = ts / kMsPerDay - (ts % kMsPerDay < 0);  // the UTC date, floored
-    if (!at_instant && date < std::numeric_limits<int64_t>::min() / kMsPerDay)
-        return calendar_day_open_local_ms(ts, "UTC");  // no UTC midnight to count from: coded EOVERFLOW
+    constexpr int64_t kLast = std::numeric_limits<int64_t>::max() / kMsPerDay;  // the last UTC date
+    if (!at_instant && (date < -kLast || date >= kLast)) return calendar_sum(kLast * kMsPerDay, kMsPerDay);
     std::tm local{};
-    decompose_ms_local((at_instant || date >= std::numeric_limits<int64_t>::max() / kMsPerDay)
-                           ? ts : date * kMsPerDay + kMsPerDay / 2, tz, local);
-    return ts + static_cast<int64_t>(local.tm_gmtoff) * 1000;
+    decompose_ms_local(at_instant ? ts : date * kMsPerDay + kMsPerDay / 2, tz, local);
+    return calendar_sum(ts, static_cast<int64_t>(local.tm_gmtoff) * 1000);
 }
-
-static int session_length_minutes(const std::string& session);
-static int64_t floor_div_day(int64_t ms);
 
 /// Minutes from symbol-local midnight to the symbol's DAY STAMP: the instant its daily bar
 /// starts, which is where TradingView anchors the intraday HTF grid ("45", "240", ...) and
@@ -297,7 +297,7 @@ static int session_day_stamp_offset_minutes(const std::string& session) {
 /// runs on the same clock: the day rolls at the stamp, and the nominal session open is added
 /// back per day by session_day_open_nominal_ms.
 static int64_t intraday_clock_ms(int64_t ts, const std::string& tz, const std::string& session) {
-    return calendar_clock_ms(ts, tz) - static_cast<int64_t>(session_day_stamp_offset_minutes(session)) * 60000;
+    return calendar_sum(calendar_clock_ms(ts, tz), -int64_t{60000} * session_day_stamp_offset_minutes(session));
 }
 
 namespace {
@@ -350,10 +350,11 @@ IntradayBucket intraday_bucket(int64_t ms, int64_t bucket_sec, const std::string
     const int span = std::min(1440,
         session_open_offset_minutes(session) - stamp_minutes + session_length_minutes(session));
     const bool dated = !civil && !is_utc_tz(tz);  // aggregator keys in a named zone: the per-UTC-date clock
-    const int64_t clock = calendar_clock_ms(ms, tz, !dated) - static_cast<int64_t>(stamp_minutes) * 60000;
+    const int64_t clock = calendar_sum(calendar_clock_ms(ms, tz, !dated), -int64_t{60000} * stamp_minutes);
     const int64_t day = floor_div_day(clock), stamp = day * 1440 + stamp_minutes;
-    const int64_t day_start = dated ? ms - (clock - day * kMsPerDay) : session_wall_minute_ms(stamp, tz);
-    const int64_t day_end = dated ? day_start + span * int64_t{60000} : session_wall_minute_ms(stamp + span, tz);
+    const int64_t into = (clock % kMsPerDay + kMsPerDay) % kMsPerDay;  // elapsed since the day's stamp
+    const int64_t day_start = dated ? calendar_sum(ms, -into) : session_wall_minute_ms(stamp, tz);
+    const int64_t day_end = dated ? calendar_sum(day_start, span * int64_t{60000}) : session_wall_minute_ms(stamp + span, tz);
     int64_t origin = day_start - session_grid_lead_ms(session);  // a recorded lead, else 0
     if (late_opens != nullptr) {
         // Include the declared open even when the query precedes it: every
@@ -367,8 +368,7 @@ IntradayBucket intraday_bucket(int64_t ms, int64_t bucket_sec, const std::string
     // A query outside the retained observation's day/bucket has only its
     // own point context, just as a stamp-only caller does.
     const bool observed_prefix = ordinal == 0 && origin > day_start
-        && prefix_open_ms >= day_start && prefix_open_ms < origin
-        && prefix_open_ms <= ms;
+        && prefix_open_ms >= day_start && prefix_open_ms < origin && prefix_open_ms <= ms;
     const int64_t actual_open = observed_prefix ? prefix_open_ms : std::min(ms, grid_open);
     const int64_t capped_end = std::min(origin + (ordinal + 1) * bucket_ms, day_end);
     // The session-end cap applies to valid session members. An out-of-session
@@ -686,8 +686,8 @@ const std::vector<int64_t>* chart_late_day_opens(const std::string& tz,
 
 }  // namespace
 
-static int64_t session_day_close_real_ms(int64_t d, const std::string& tz,
-                                         const std::string& session);
+static int64_t session_day_close_real_ms(int64_t d, const std::string& tz, const std::string& session);
+static int64_t calendar_session_day(int64_t ms, const std::string& tz, const std::string& session);
 
 std::vector<int64_t> native_late_day_opens(const std::string& tz,
                                            const std::string& session,
@@ -801,7 +801,7 @@ int64_t session_period_open_ms(int64_t ms, const std::string& tz,
     }
     // The period's bar opens where its first session-day's D bar does: the
     // day stamp (the session open on every session but 1800-1700).
-    const int64_t d = session_day_index(ms, tz, session);
+    const int64_t d = calendar_session_day(ms, tz, session);
     return session_day_stamp_real_ms(session_period_first_day(d, session, period),
                                      tz, session);
 }
@@ -913,7 +913,7 @@ bool build_native_day_partition(NativeDayPartition& out,
 
 int64_t session_covered_instant_ms(int64_t ms, const std::string& tz,
                                    const std::string& session) {
-    const int64_t d = session_day_index(ms, tz, session);
+    const int64_t d = calendar_session_day(ms, tz, session);
     // Before the session-day's open -- the 17:00-18:00 ET hour between the
     // 1800-1700 day stamp and its session open, where OANDA stamps the daily
     // bar: the stamp covers the session about to open.
@@ -946,7 +946,7 @@ int64_t session_period_close_ms(int64_t ms, const std::string& tz,
             }
         }
     }
-    const int64_t d = session_day_index(ms, tz, session);
+    const int64_t d = calendar_session_day(ms, tz, session);
     if (period == CalendarPeriod::DAY) return session_day_close_real_ms(d, tz, session);
     // W/M close on the next period's first D bar open -- its day stamp.
     return session_day_stamp_real_ms(session_period_next_first_day(d, session, period),
@@ -991,7 +991,7 @@ int64_t session_period_last_traded_close_ms(int64_t ms, const std::string& tz,
             }
         }
     }
-    const int64_t d = session_day_index(ms, tz, session);
+    const int64_t d = calendar_session_day(ms, tz, session);
     if (period == CalendarPeriod::DAY) return session_day_close_real_ms(d, tz, session);
     const int shift = session_trading_date_shift_days(session);
     int64_t last = session_period_next_first_day(d, session, period) - 1;
@@ -1039,12 +1039,12 @@ static int64_t session_window_close_ms(int64_t ms, const std::string& tz,
 /// forex months at the session closing on the 1st, while equity/24x7 feeds —
 /// whose sessions open and close on one local date — resolve exactly as
 /// before (weeks stay Monday-partitioned over traded days; months unchanged).
-static long session_period_key(int64_t ms, const std::string& tz,
-                               const std::string& session,
+static long session_period_key(int64_t ms, const std::string& tz, const std::string& session,
                                CalendarPeriod period) {
-    const int64_t day_idx = session_day_index(ms, tz, session);
+    const int64_t day_idx = calendar_session_day(ms, tz, session);
     return static_cast<long>(session_period_first_day(day_idx, session, period));
 }
+static int64_t calendar_key_clock_ms(int64_t ms, const std::string& tz, const std::string& session);
 
 // The PF_SEC_TRACE diagnostic switch (stderr traces of the calendar
 // aggregator's boundary and completion decisions), read from the environment
@@ -1067,8 +1067,8 @@ bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period,
     // the session open, not at symbol-local midnight (equities coincide,
     // which is why an AAPL-only probe cannot discriminate this).
     struct tm prev_tm, curr_tm;
-    const int64_t pf_prev_clock = intraday_clock_ms(prev_ms, tz, session);
-    const int64_t pf_curr_clock = intraday_clock_ms(curr_ms, tz, session);
+    const int64_t pf_prev_clock = calendar_key_clock_ms(prev_ms, tz, session);
+    const int64_t pf_curr_clock = calendar_key_clock_ms(curr_ms, tz, session);
     if (security_trace_enabled() && curr_ms != prev_ms
         && (curr_ms < prev_ms || static_cast<uint64_t>(curr_ms) - static_cast<uint64_t>(prev_ms) <= 3600000)) {
         std::fprintf(stderr,
@@ -2275,5 +2275,56 @@ int64_t session_grid_lead_ms(const std::string& session) {
 }
 
 }  // namespace
+
+// ─── Calendar limits and clock-change dates ──────────────────────────────────
+
+/// a + b on the int64 millisecond line. ONE rule at both ends and in every zone: a date, a clock
+/// value or a day boundary that is not a millisecond timestamp is refused with the coded EOVERFLOW
+/// the first representable instant's midnight raises; nothing wraps.
+static int64_t calendar_sum(int64_t a, int64_t b) {
+    if (b < 0 ? a < std::numeric_limits<int64_t>::min() - b : a > std::numeric_limits<int64_t>::max() - b)
+        return calendar_day_open_local_ms(std::numeric_limits<int64_t>::min(), "UTC");
+    return a + b;
+}
+
+/// The session-day whose hours hold `ms`, given its ordinal `d` on the per-UTC-date clock. The two
+/// agree except on a clock-change date, where that clock and a day's civil stamp and close are up
+/// to the change apart: an instant before `d`'s civil stamp and inside the day before, or past
+/// `d`'s civil close and inside the day after, belongs to that neighbour (New York 2025-03-09
+/// 04:30Z is 23:30 EST on Saturday; the ordinal already reads Sunday). An instant in no day's
+/// hours, a gap, keeps `d`.
+static int64_t civil_session_day(int64_t ms, int64_t d, const std::string& tz,
+                                 const std::string& session) {
+    if (is_utc_tz(tz)) return d;
+    if (ms < session_day_stamp_real_ms(d, tz, session))
+        return ms < session_day_close_real_ms(d - 1, tz, session) ? d - 1 : d;
+    if (ms < session_day_close_real_ms(d, tz, session)
+        || ms < session_day_stamp_real_ms(d + 1, tz, session)) return d;
+    return ms < session_day_close_real_ms(d + 1, tz, session) ? d + 1 : d;
+}
+
+/// The session-day the D/W/M readers and the D/W/M keys attribute `ms` to, so that a period's
+/// open, close and covered instant hold the instant asked about: session_day_index under the
+/// chart's native daily partition, civil_session_day of the nominal ordinal otherwise.
+static int64_t calendar_session_day(int64_t ms, const std::string& tz, const std::string& session) {
+    if (const NativeDayPartition* p = matching_day_partition(tz, session)) {
+        const int k = native_day_partition_index(*p, ms);
+        if (k >= 0) return p->trade_day[static_cast<std::size_t>(k)];
+    }
+    return civil_session_day(ms, session_day_index_nominal(ms, tz, session), tz, session);
+}
+
+/// The session clock moved by whole days onto civil_session_day: the clock crosses_boundary's D and
+/// session-less W keys decompose, so they split where session_period_open_ms opens.
+static int64_t calendar_key_clock_ms(int64_t ms, const std::string& tz, const std::string& session) {
+    const int64_t clock = intraday_clock_ms(ms, tz, session), d = floor_div_day(clock);
+    return calendar_sum(clock, (civil_session_day(ms, d, tz, session) - d) * kMsPerDay);
+}
+
+/// The stamp-only bucket open on the clock the aggregator keys on (intraday_bucket without `civil`).
+int64_t internal::aggregate_bucket_open_ms(int64_t ms, int64_t bucket_sec, const std::string& tz,
+                                           const std::string& session) {
+    return intraday_bucket_open_ms(ms, bucket_sec, tz, session, chart_late_day_opens(tz, session), ms);
+}
 
 } // namespace pineforge
