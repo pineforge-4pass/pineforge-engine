@@ -8,12 +8,21 @@
 //   Invalid value of the 'ADX Smoothing' argument (0) in the 'dmi' function.
 //   It must be greater than 0.
 //
-// A simple length of the same value reads the same. A valid pair computes the
-// values of source::PineDmiReference, the Pine type a ta.dmi call is built
-// with: ta::DMI's values, except that both indices keep their last values on
-// a bar whose averaged true range is zero. PineDmiReference itself takes the
-// two lengths and computes, as ta::DMI does: with ta.dmi(1, 0) it answers
-// both directional indices beside an na ADX, with ta.dmi(0, 1) three na.
+// A simple length of the same value raises the same coded failure and keeps
+// the released text, which names the two arguments as the call does and words
+// both with "> 0":
+//
+//   Invalid value of the 'diLength' argument (0) in the 'dmi' function. It
+//   must be > 0.
+//   Invalid value of the 'adxSmoothing' argument (0) in the 'dmi' function.
+//   It must be > 0.
+//
+// A valid pair computes the values of source::PineDmiReference, the Pine type
+// a ta.dmi call is built with: ta::DMI's values, except that both indices
+// keep their last values on a bar whose averaged true range is zero.
+// PineDmiReference itself takes the two lengths and computes, as ta::DMI
+// does: with ta.dmi(1, 0) it answers both directional indices beside an na
+// ADX, with ta.dmi(0, 1) three na.
 //
 // The helpers and the order of the rows are those of
 // tests/checked_fixed_length_rows.hpp: the stop rows run first, are counted
@@ -166,15 +175,22 @@ void invalid_lengths_stop() {
                "must_not_be_na");
 }
 
-// The stop is the one a simple length of the same value raises.
-void same_stop_as_a_simple_length() {
+// The stop is the coded failure a simple length of the same value raises: the
+// same code and arguments. The two texts differ for both arguments (the
+// adapter's is TradingView's, the simple length's the released one), and
+// invalid_lengths_stop and simple_length_row hold each to its own.
+void same_failure_as_a_simple_length() {
     for (const Zero& zero : kZeros) {
         Fixed fixed(zero.di_length, zero.adx_smoothing);
         const Outcome got = outcome([&] { compute(fixed, kBars[0]); });
         const Outcome simple = outcome([&] {
             pineforge::source::simple_ta_length(0, zero.site->function, zero.site->argument);
         });
-        expect_same_stop(got, simple, zero.row, "against a simple length");
+        if (plain_wording(*zero.site)) {
+            expect_same_stop(got, simple, zero.row, "against a simple length");
+        } else {
+            expect_same_failure(got, simple, zero.row, "against a simple length");
+        }
     }
 }
 
@@ -401,7 +417,7 @@ void pine_type_values() {
 
 int main() {
     zero_rows();
-    // The same 0 as a simple length words each argument the same way.
+    // The same arguments as simple lengths keep the released text.
     simple_length_row(kDi);
     simple_length_row(kAdx);
     if (failures() != 0) {
@@ -409,7 +425,7 @@ int main() {
         return 1;
     }
     invalid_lengths_stop();
-    same_stop_as_a_simple_length();
+    same_failure_as_a_simple_length();
     valid_pair_is_the_wrapped_type();
     shapes();
     control_values();

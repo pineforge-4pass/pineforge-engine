@@ -23,6 +23,13 @@
 // that the type without the adapter stays inside its defined behaviour for a
 // length of 0. Every other row is reached only once the stop rows pass, and
 // so never builds a wrapped type from an invalid length.
+//
+// Only the adapters word a stop as TradingView does. A simple length, which
+// generated code checks with simple_ta_length, keeps the text of the released
+// engine byte for byte: the function and argument names of the Pine call and
+// "> 0" (simple_length_row). For most calls the two texts are the same one;
+// for ta.rsi, ta.atr, ta.vwma and both lengths of ta.dmi they differ, and
+// each path is held to its own.
 #include <pineforge/source/pine_ta_length.hpp>
 #include <pineforge/na.hpp>
 #include <pineforge/owned_storage.hpp>
@@ -129,6 +136,26 @@ inline std::string na_text(const Site& site) {
            site.shown_function + " function. It must not be na";
 }
 
+// The same two texts as simple_ta_length words them, without the bar prefix:
+// the argument and the function as the Pine call names them, each in one pair
+// of quotes, and "> 0". This is the text of the released engine.
+inline std::string released_positive_text(const Site& site, const std::string& shown) {
+    return std::string("Invalid value of the '") + site.argument + "' argument (" + shown +
+           ") in the '" + site.function + "' function. It must be > 0.";
+}
+inline std::string released_na_text(const Site& site) {
+    return std::string("Invalid value of the '") + site.argument + "' argument in the '" +
+           site.function + "' function. It must not be na";
+}
+
+// Whether TradingView words the call with its own two names and "> 0". Then
+// the adapter's text and the released text are one and the same.
+inline bool plain_wording(const Site& site) {
+    return std::string(site.shown_argument) == site.argument &&
+           std::string(site.shown_function) == std::string("'") + site.function + "'" &&
+           std::string(site.relation) == "> 0";
+}
+
 inline std::string call_name(const Site& site) { return std::string("ta.") + site.function; }
 
 inline int& failures() {
@@ -175,6 +202,18 @@ inline void expect_same_stop(const Outcome& got, const Outcome& other, const std
         fail(row, context,
              "the fixed call raised \"" + got.what + "\" " + got.args + ", the other path \"" +
                  other.what + "\" " + other.args);
+    }
+}
+
+// Two calls must have raised the same coded failure: the code and the
+// arguments. Their texts are not compared here; each has its own row.
+inline void expect_same_failure(const Outcome& got, const Outcome& other, const std::string& row,
+                                const std::string& context) {
+    if (!got.stopped || !other.stopped || !got.coded || !other.coded || got.code != other.code ||
+        got.args != other.args) {
+        fail(row, context,
+             "the fixed call raised " + got.args + " (\"" + got.what + "\"), the other path " +
+                 other.args + " (\"" + other.what + "\")");
     }
 }
 
@@ -249,17 +288,33 @@ void zero_length_rows(const Site& site, const Bar& bar) {
     }
 }
 
-// The same 0 as a simple length: one that is fixed for the run but is neither
-// a constant nor an input, which generated code checks with simple_ta_length
-// under the Pine function and argument names. It stops with the same wording,
-// so the text of a call does not depend on the qualifier of its length.
+// The same argument as a simple length: one that is fixed for the run but is
+// neither a constant nor an input, which generated code checks with
+// simple_ta_length under the Pine function and argument names. That path is
+// the released one and keeps its text byte for byte, whatever TradingView's
+// wording of the adapter's stop is: 0, a negative value and na, the last as a
+// NaN and as the integer sentinel.
+// expectation corrected: the adapter's wording -> the released text, because
+// only the checked fixed-length adapters word a stop as TradingView does. For
+// ta.rsi ('y'), ta.atr ('atr'->'rma'), ta.vwma ('vwma'->'sma') and the two
+// lengths of ta.dmi ('DI Length', and 'ADX Smoothing' with "greater than")
+// the two texts differ; for every other call they are the same text.
 inline void simple_length_row(const Site& site) {
-    const std::string row =
-        call_name(site) + " with a simple " + site.argument + " of 0";
-    const std::string text = "Error before the first bar: " + positive_text(site, "0");
-    const Outcome got = outcome(
-        [&] { pineforge::source::simple_ta_length(0, site.function, site.argument); });
-    expect_stop(got, row, "simple_ta_length", text, site, "must_be_positive");
+    using pineforge::source::simple_ta_length;
+    const std::string name = call_name(site) + " with a simple " + site.argument;
+    const std::string prefix = "Error before the first bar: ";
+    expect_stop(outcome([&] { simple_ta_length(0, site.function, site.argument); }),
+                name + " of 0", "simple_ta_length", prefix + released_positive_text(site, "0"),
+                site, "must_be_positive");
+    expect_stop(outcome([&] { simple_ta_length(-3, site.function, site.argument); }),
+                name + " of -3", "simple_ta_length", prefix + released_positive_text(site, "-3"),
+                site, "must_be_positive");
+    expect_stop(outcome([&] { simple_ta_length(na<double>(), site.function, site.argument); }),
+                name + " of na", "simple_ta_length", prefix + released_na_text(site), site,
+                "must_not_be_na");
+    expect_stop(outcome([&] { simple_ta_length(na<int>(), site.function, site.argument); }),
+                name + " of an int na", "simple_ta_length", prefix + released_na_text(site), site,
+                "must_not_be_na");
 }
 
 // --- the rows below run once every stop row passed ---
@@ -305,9 +360,13 @@ void invalid_lengths_stop(const Site& site, const Bar& bar) {
                             na_text(site), "must_not_be_na");
 }
 
-// The stop is the one a simple length of the same value raises
-// (simple_ta_length), and for a function with a series-length twin the one
-// that form raises for the same value.
+// The stop is the coded failure a simple length of the same value raises
+// (simple_ta_length): the same code and arguments, and the same text where
+// TradingView words the call with its own names. Where it does not, the
+// adapter's text is TradingView's and the simple length's the released one;
+// invalid_lengths_stop and simple_length_row hold each to its own. For a
+// function with a series-length twin the stop is the one that form raises for
+// the same value, text included.
 template <class Fixed, class Feed, class Twin>
 void same_stop_as_the_other_paths(const Site& site, const Bar& bar) {
     const std::string name = call_name(site);
@@ -318,7 +377,8 @@ void same_stop_as_the_other_paths(const Site& site, const Bar& bar) {
         const Outcome simple = outcome([&] {
             pineforge::source::simple_ta_length(length, site.function, site.argument);
         });
-        expect_same_stop(got, simple, row, "against a simple length");
+        if (plain_wording(site)) expect_same_stop(got, simple, row, "against a simple length");
+        else expect_same_failure(got, simple, row, "against a simple length");
         if constexpr (Twin::present) {
             const Outcome series =
                 outcome([&] { Twin::call(static_cast<double>(length), bar); });

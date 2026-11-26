@@ -580,42 +580,36 @@ bool ends_with(const std::string& text, const std::string& tail) {
            text.compare(text.size() - tail.size(), tail.size(), tail) == 0;
 }
 
-// SeriesSma's stop text with its function part, 'sma', replaced by `shown`,
-// the function part of another call, quotes included.
-std::string renamed(std::string text, const std::string& shown) {
+// SeriesSma's stop text with its function name replaced.
+std::string renamed(std::string text, const std::string& function) {
     const std::string from = "'sma'";
     const std::size_t at = text.find(from);
-    if (at != std::string::npos) text.replace(at, from.size(), shown);
+    if (at != std::string::npos) text.replace(at, from.size(), "'" + function + "'");
     return text;
 }
 
 struct Checked {
     const char* function;
-    // The function part of the stop text. A call is named by itself, except
-    // ta.vwma: TradingView raises the error of its length in the ta.sma that
-    // ta.vwma calls and names it 'vwma'->'sma' (PineLengthWording).
-    const char* shown;
     std::function<void(double length)> call;
 };
 
 std::vector<Checked> checked_calls() {
     return {
-        {"wma", "'wma'", [](double length) { SeriesWma().compute(10.0, length); }},
-        // expectation corrected: 'vwma' -> 'vwma'->'sma', because the length
-        // check now words the stop of a ta.vwma length as TradingView does.
-        {"vwma", "'vwma'->'sma'",
-         [](double length) { SeriesVwma().compute(10.0, 5.0, length); }},
-        {"alma", "'alma'",
-         [](double length) { SeriesAlma().compute(10.0, 0.85, 6.0, length); }},
-        {"linreg", "'linreg'",
-         [](double length) { SeriesLinreg().compute(10.0, 0.0, length); }},
-        {"bb", "'bb'", [](double length) { SeriesBb().compute(10.0, 2.0, length); }},
-        {"bbw", "'bbw'", [](double length) { SeriesBbw().compute(10.0, 2.0, length); }},
+        {"wma", [](double length) { SeriesWma().compute(10.0, length); }},
+        // expectation corrected: 'vwma'->'sma' -> 'vwma', because a series
+        // length is checked with simple_ta_length, which keeps the text of
+        // the released engine: every call is named by itself. Only the
+        // checked fixed-length adapters word a stop as TradingView does.
+        {"vwma", [](double length) { SeriesVwma().compute(10.0, 5.0, length); }},
+        {"alma", [](double length) { SeriesAlma().compute(10.0, 0.85, 6.0, length); }},
+        {"linreg", [](double length) { SeriesLinreg().compute(10.0, 0.0, length); }},
+        {"bb", [](double length) { SeriesBb().compute(10.0, 2.0, length); }},
+        {"bbw", [](double length) { SeriesBbw().compute(10.0, 2.0, length); }},
     };
 }
 
 // The length is checked as SeriesSma checks its own: the same stop, with the
-// call's function part.
+// call's function name.
 void length_stops() {
     const std::vector<Checked> calls = checked_calls();
     const double invalid[] = {0.0, -2.5, 0.75, na<double>(), HUGE_VAL, -HUGE_VAL};
@@ -624,7 +618,7 @@ void length_stops() {
         for (double length : invalid) {
             const Stop got = stop_of([&] { checked.call(length); });
             const Stop sma = stop_of([&] { SeriesSma().compute(10.0, length); });
-            const std::string expected = renamed(sma.text, checked.shown);
+            const std::string expected = renamed(sma.text, checked.function);
             if (!sma.stopped) {
                 std::printf("FAIL %s length=%g NOT COMPARED: SeriesSma did not stop\n",
                             checked.function, length);

@@ -2,9 +2,12 @@
 // length or an na length that is a constant or an input stops the call's
 // first execution with TradingView's error, which names the length 'y':
 // "Invalid value of the 'y' argument (0) in the 'rsi' function. It must be
-// > 0.". A simple length of the same value reads the same. A valid length
-// computes ta::RSI's values. ta::RSI itself takes a length of 0 and answers
-// na on every bar. Rows: tests/checked_fixed_length_rows.hpp.
+// > 0.". A simple length of the same value raises the same coded failure and
+// keeps the released text, which names the argument as the call does:
+// "Invalid value of the 'length' argument (0) in the 'rsi' function. It must
+// be > 0.". A valid length computes ta::RSI's values. ta::RSI itself takes a
+// length of 0 and answers na on every bar.
+// Rows: tests/checked_fixed_length_rows.hpp.
 #include "checked_fixed_length_rows.hpp"
 
 namespace {

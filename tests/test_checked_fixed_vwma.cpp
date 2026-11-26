@@ -3,8 +3,10 @@
 // first execution with TradingView's error, which is raised in the ta.sma
 // that ta.vwma calls: "Invalid value of the 'length' argument (0) in the
 // 'vwma'->'sma' function. It must be > 0.". A simple length of the same value
-// reads the same. A valid length computes the values of source::PineVwma, the
-// Pine type a ta.vwma call is built with: ta.sma(source * volume, length) /
+// raises the same coded failure and keeps the released text, which names the
+// call's own function: "... in the 'vwma' function. It must be > 0.". A valid
+// length computes the values of source::PineVwma, the Pine type a ta.vwma
+// call is built with: ta.sma(source * volume, length) /
 // ta.sma(volume, length), two windows that take their inputs separately.
 // PineVwma itself takes a length of 0: its two ta::SMA windows then assume a
 // positive length they do not have.

@@ -3,10 +3,12 @@
 // first execution with TradingView's error, which is raised in the ta.rma
 // that ta.atr calls: "Invalid value of the 'length' argument (0) in the
 // 'atr'->'rma' function. It must be > 0.". A simple length of the same value
-// reads the same. A valid length computes ta::ATR's values, in the
-// three-argument form and in the four-argument form a call site that does not
-// run on every bar uses (the previous chart close handed in). ta::ATR itself
-// takes a length of 0 and answers na on every bar.
+// raises the same coded failure and keeps the released text, which names the
+// call's own function: "... in the 'atr' function. It must be > 0.". A valid
+// length computes ta::ATR's values, in the three-argument form and in the
+// four-argument form a call site that does not run on every bar uses (the
+// previous chart close handed in). ta::ATR itself takes a length of 0 and
+// answers na on every bar.
 // Rows: tests/checked_fixed_length_rows.hpp.
 #include "checked_fixed_length_rows.hpp"
 
