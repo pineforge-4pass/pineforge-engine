@@ -59,7 +59,7 @@ namespace source {
 // of the '<argument>' argument (<value>) in the '<function>' function. It
 // must be > 0." (RE10001) -- pinned on ta.rsi / ta.ema with a simple length
 // of 0, -3 and na (tv/edge). A float value truncates toward zero, as Pine's
-// int() does. The text names the call as TradingView does: PineLengthWording.
+// int() does.
 int simple_ta_length(double value, const char* function, const char* argument);
 int simple_ta_length(int value, const char* function, const char* argument);
 int simple_ta_length(std::int64_t value, const char* function, const char* argument);
@@ -1000,7 +1000,8 @@ public:
     }
 };
 
-// How TradingView words the error of an invalid length for one Pine call:
+// How TradingView words the error of an invalid constant or input length for
+// one Pine call:
 //
 //   Invalid value of the '<argument>' argument (<value>) in the
 //   <caller>'<function>' function. It must be <relation> 0.
@@ -1031,15 +1032,21 @@ public:
 // pine_length_wording(function, argument) answers the wording for a Pine
 // function and argument as generated code spells them ("atr", "length"); a
 // pair that is not listed above answers the two names as given, with no
-// caller and the relation ">". simple_ta_length words its error through it,
-// and so does every check made with simple_ta_length, whatever the qualifier
-// of the length: a simple length, the checked adapters below, and the
-// series-length classes that check their length with it. Of the calls listed
-// above only ta.vwma has such a class (SeriesVwma, pine_ta_series_ma.hpp), so
-// a series length of ta.vwma reads 'vwma'->'sma' as well; TradingView's text
-// for a series length of that call was not observed. The coded failure keeps
-// naming the function and the argument as the compiled strategy spells them
-// (function "atr", argument "length").
+// caller and the relation ">". Only fixed_ta_length, the check of the checked
+// fixed-length adapters below, words its error through it.
+//
+// simple_ta_length does not. Its text carries the function and argument names
+// it is given and "> 0", byte for byte the text it gave before these adapters
+// existed, for every one of its callers: a simple length in generated code,
+// the checked EMA-family and supertrend adapters above, and the series-length
+// classes that check their length with it. Of the calls listed above only
+// ta.vwma has such a class (SeriesVwma, pine_ta_series_ma.hpp), so a series
+// length of ta.vwma reads 'length' in 'vwma'. The observation above covers a
+// constant and an input length only: TradingView's text for a simple or a
+// series length of those calls was not recorded with it, and the two paths
+// keep the text they had. On every path the coded failure names the function
+// and the argument as the compiled strategy spells them (function "atr",
+// argument "length").
 struct PineLengthWording {
     const char* caller;    // "'atr'->" where TradingView names a calling function, else ""
     const char* function;  // the function TradingView names, without quotes
@@ -1048,8 +1055,19 @@ struct PineLengthWording {
 };
 PineLengthWording pine_length_wording(const char* function, const char* argument) noexcept;
 
+// The integer a constant or input length argument carries, checked as
+// simple_ta_length checks a simple one: na, zero or a negative value stops
+// the run with the same coded failure (pine_invalid_argument, the function
+// and argument as given, the rule must_not_be_na or must_be_positive), and a
+// float value truncates toward zero. Only the text differs: it words the call
+// as TradingView does (pine_length_wording), so for most calls it is
+// simple_ta_length's text and for ta.rsi, ta.atr, ta.vwma and ta.dmi it is
+// not. The checked fixed-length adapters below are its callers.
+int fixed_ta_length(double value, const char* function, const char* argument);
+
 // Checked fixed-length adapters: a ta.* call whose length is a constant or an
-// input, with the length check of simple_ta_length.
+// input, with the length check of fixed_ta_length: simple_ta_length's rules
+// and coded failure, in TradingView's wording of the call.
 //
 // A constant or input length reaches the object a call is built with through
 // that object's constructor, and neither the fixed-length classes of
@@ -1066,9 +1084,12 @@ PineLengthWording pine_length_wording(const char* function, const char* argument
 // input length of 0 and stops the run on the bar where the call first
 // executes; no call computes (the observation above: every function below,
 // both lengths of ta.dmi). The adapters make the check a simple length of the
-// same value gets (simple_ta_length), so a negative length and an na length
-// stop the same way; those two were not observed with a constant or input
-// length. For 0 and a negative value the error is also, code and text, the
+// same value gets (fixed_ta_length keeps simple_ta_length's rules), so a
+// negative length and an na length stop the same way, with the same coded
+// failure; those two were not observed with a constant or input length. The
+// text is TradingView's for the call (PineLengthWording), which for ta.rsi,
+// ta.atr, ta.vwma and ta.dmi is not the text a simple length of that call
+// gives. For 0 and a negative value the error is also, code and text, the
 // one the series-length classes of this header raise for ta.highest,
 // ta.lowest, ta.highestbars, ta.lowestbars and ta.sma. Those classes also
 // enforce the lookback cap, which a fixed length is not held to here, and the
@@ -1151,7 +1172,7 @@ class PineFixedLength {
 
     Object& bound() {
         if (!object_)
-            object_.emplace(simple_ta_length(length_, PineLengthCall<Object>::function, "length"));
+            object_.emplace(fixed_ta_length(length_, PineLengthCall<Object>::function, "length"));
         return *object_;
     }
 
@@ -1188,8 +1209,8 @@ class PineFixedDmiLengths {
 
     Object& bound() {
         if (!object_) {
-            const int di_length = simple_ta_length(di_length_, "dmi", "diLength");
-            const int adx_smoothing = simple_ta_length(adx_smoothing_, "dmi", "adxSmoothing");
+            const int di_length = fixed_ta_length(di_length_, "dmi", "diLength");
+            const int adx_smoothing = fixed_ta_length(adx_smoothing_, "dmi", "adxSmoothing");
             object_.emplace(di_length, adx_smoothing);
         }
         return *object_;

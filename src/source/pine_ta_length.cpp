@@ -29,24 +29,24 @@ namespace {
 // an evaluation context exists.
 [[noreturn]] void length_not_positive(long long value, const char* function,
                                       const char* argument) {
-    const PineLengthWording tv = pine_length_wording(function, argument);
     throw coded<std::runtime_error>(
         RunFailureCode::pine_invalid_argument,
-        {{"function", function}, {"argument", argument},
+        {{"function", function},
+         {"argument", argument},
          {"rule", "must_be_positive"}},
-        run_error_bar_prefix() + "Invalid value of the '" + tv.argument +
-            "' argument (" + std::to_string(value) + ") in the " + tv.caller + "'" +
-            tv.function + "' function. It must be " + tv.relation + " 0.");
+        run_error_bar_prefix() + "Invalid value of the '" + argument +
+            "' argument (" + std::to_string(value) + ") in the '" +
+            function + "' function. It must be > 0.");
 }
 
 [[noreturn]] void length_na(const char* function, const char* argument) {
-    const PineLengthWording tv = pine_length_wording(function, argument);
     throw coded<std::runtime_error>(
         RunFailureCode::pine_invalid_argument,
-        {{"function", function}, {"argument", argument},
+        {{"function", function},
+         {"argument", argument},
          {"rule", "must_not_be_na"}},
-        run_error_bar_prefix() + "Invalid value of the '" + tv.argument +
-            "' argument in the " + tv.caller + "'" + tv.function +
+        run_error_bar_prefix() + "Invalid value of the '" + argument +
+            "' argument in the '" + function +
             "' function. It must not be na");
 }
 
@@ -788,6 +788,39 @@ PineLengthWording pine_length_wording(const char* function, const char* argument
         }
     }
     return PineLengthWording{"", function, argument, ">"};
+}
+
+// --- the length check of the checked fixed-length adapters ---
+
+// simple_ta_length's rules and coded failure for a double, with the text
+// worded as TradingView words it for the call (pine_length_wording). The
+// value is printed as length_not_positive prints it. simple_ta_length itself
+// does not come here: its text stays the one it always gave.
+int fixed_ta_length(double value, const char* function, const char* argument) {
+    long long length = 0;
+    const bool present = length_value(value, length);
+    if (present && length > 0) return length > INT_MAX ? INT_MAX : static_cast<int>(length);
+    const PineLengthWording tv = pine_length_wording(function, argument);
+    if (!present) {
+        throw coded<std::runtime_error>(
+            RunFailureCode::pine_invalid_argument,
+            {{"function", function},
+             {"argument", argument},
+             {"rule", "must_not_be_na"}},
+            run_error_bar_prefix() + "Invalid value of the '" + tv.argument +
+                "' argument in the " + tv.caller + "'" + tv.function +
+                "' function. It must not be na");
+    }
+    char shown[32];
+    std::snprintf(shown, sizeof shown, "%lld", length);
+    throw coded<std::runtime_error>(
+        RunFailureCode::pine_invalid_argument,
+        {{"function", function},
+         {"argument", argument},
+         {"rule", "must_be_positive"}},
+        run_error_bar_prefix() + "Invalid value of the '" + tv.argument +
+            "' argument (" + shown + ") in the " + tv.caller + "'" + tv.function +
+            "' function. It must be " + tv.relation + " 0.");
 }
 
 }  // namespace source
