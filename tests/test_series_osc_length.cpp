@@ -32,7 +32,9 @@
 // rounding. pine_type_rows counts those rows, so a tape without them is not
 // a pass.
 // Target 2 (changing_length): a length that changes from bar to bar gives the
-// function recomputed directly over the last `length` bars of the tape.
+// function recomputed directly over the last `length` bars of the tape. For
+// ta.stoch and ta.wpr on highs and lows that hold an na the window extremes
+// are written by hand (changing_length_na_extremes).
 // The remaining functions cover what the two targets rest on: the length
 // check, recompute(), a lookback cap and a checkpoint copy.
 
@@ -322,6 +324,95 @@ double direct_wpr(const Tapes& t, std::size_t i, std::size_t n) {
     return (hh - t.source[i]) / (hh - ll) * -100.0;
 }
 
+// --- the window extremes on highs and lows that hold an na, written by hand ---
+
+// The highest high and the lowest low ta.stoch and ta.wpr read on each bar of
+// na_tape() with kChangingLengths (n is the bar's length, fractions
+// truncated). No class computed these numbers: each was worked out on paper
+// from the rule documented at SeriesWindowExtreme (pine_ta_length.hpp). The
+// extremum is kept as a cached {value, bar}:
+//
+//   * a call answers na while fewer than n bars exist, and on an na source,
+//     which also drops the cache;
+//   * a call whose length is longer than the call before first reads the
+//     bars the longer window adds, oldest first, into the cache: a strictly
+//     better value takes it, an na drops it, and the next value read starts
+//     it again;
+//   * then the source: without a cache the call answers its own source and
+//     keeps nothing; a strictly better source takes the cache; a cache n or
+//     more bars old is replaced by a read of the whole window, oldest first,
+//     in which an na starts the extremum again;
+//   * a call whose length is not longer and that has no cache reads the whole
+//     window the same way.
+//
+// Where no na is in play the answer is the plain extremum of the last n bars.
+// The bars where it is not, with the high's na on bar 6 and the low's on
+// bar 8:
+//
+//   bar 6, highest, n 3   the high is na: na.
+//   bar 8, highest, n 4   after n 1. The added bars 5, 6, 7 are read: 23.75,
+//                         the na drops it, 24.5 starts again. Bar 8's own
+//                         24.5 is not strictly higher: 24.5, from bar 7.
+//   bar 8, lowest, n 4    the low is na: na.
+//   bar 9, lowest, n 2    no cache after the na: bars 8 and 9 are read, the
+//                         na first, then 22.5.
+//   bar 10, highest, n 6  after n 2. The added bars 5, 6, 7, 8: the na of
+//                         bar 6 drops the cache, 24.5 and 24.5 follow; bar
+//                         10's own 26.0 is higher: 26.0.
+//   bar 10, lowest, n 6   after n 2. The added bars 5, 6, 7, 8 are read:
+//                         22.5, 21.5, 23.5 and then the na of bar 8, which
+//                         drops the cache. Without one the call answers its
+//                         own low, 25.0: neither the 21.5 of bar 6, the plain
+//                         minimum of the six bars, nor the 22.5 of bar 9.
+//   bar 12, lowest, n 5   after n 3. The added bars 8 and 9: the na, then
+//                         22.5, which bar 12's own 26.0 does not beat: 22.5.
+struct HandExtremes {
+    double highest;
+    double lowest;
+};
+const HandExtremes kNaTapeExtremes[24] = {
+    /* bar  0, n 3 */ {NA, NA},  // fewer than three bars
+    /* bar  1, n 1 */ {21.75, 20.75},
+    /* bar  2, n 2 */ {21.75, 20.5},
+    /* bar  3, n 4 */ {23.0, 20.0},
+    /* bar  4, n 2 */ {24.0, 22.0},
+    /* bar  5, n 5 */ {24.0, 20.5},
+    /* bar  6, n 3 */ {NA, 21.5},
+    /* bar  7, n 1 */ {24.5, 23.5},
+    /* bar  8, n 4 */ {24.5, NA},
+    /* bar  9, n 2 */ {24.5, 22.5},
+    /* bar 10, n 6 */ {26.0, 25.0},
+    /* bar 11, n 3 */ {26.5, 22.5},
+    /* bar 12, n 5 */ {27.0, 22.5},
+    /* bar 13, n 2 */ {28.0, 26.0},
+    /* bar 14, n 4 */ {28.0, 25.5},
+    /* bar 15, n 1 */ {26.0, 25.0},
+    /* bar 16, n 3 */ {27.0, 24.5},
+    /* bar 17, n 7 */ {28.0, 24.0},
+    /* bar 18, n 2 */ {27.5, 24.0},
+    /* bar 19, n 5 */ {27.5, 24.0},
+    /* bar 20, n 3 */ {27.5, 26.25},
+    /* bar 21, n 4 */ {28.5, 26.25},
+    /* bar 22, n 2 */ {29.0, 27.5},
+    /* bar 23, n 6 */ {30.0, 26.25},
+};
+
+// The extremum of the values that are not na among the last n bars: what a
+// window that skipped its na members would answer. na while fewer than n
+// bars exist or when every member is na.
+double skipping_extreme(const std::vector<double>& values, std::size_t i, std::size_t n,
+                        bool want_max) {
+    if (i + 1 < n) return NA;
+    double best = NA;
+    for (std::size_t j = i + 1 - n; j <= i; ++j) {
+        if (std::isnan(values[j])) continue;
+        if (std::isnan(best) || (want_max ? values[j] > best : values[j] < best)) {
+            best = values[j];
+        }
+    }
+    return best;
+}
+
 // --- one description per function: its two classes, its inputs, its reference ---
 
 struct Stoch {
@@ -575,6 +666,51 @@ void changing_length(const Tapes& t, const char* target = "changing") {
     if (F::truth) assert(ones > 0);
 }
 
+// Target 2 for ta.stoch and ta.wpr on highs and lows that hold an na: a
+// length that changes per bar against the extremes written by hand
+// (kNaTapeExtremes), each function's own formula applied to them here.
+// `t` is na_tape(), the tape the table was worked out on.
+void changing_length_na_extremes(const Tapes& t) {
+    assert(kChangingLengths.size() == t.bars());
+    assert(sizeof kNaTapeExtremes / sizeof kNaTapeExtremes[0] == t.bars());
+    const std::size_t before = g_rows;
+    pineforge::source::SeriesStoch stoch;
+    pineforge::source::SeriesWpr wpr;
+    std::size_t values = 0;
+    std::size_t decided = 0;
+    for (std::size_t i = 0; i < t.bars(); ++i) {
+        const double length = kChangingLengths[i];
+        const double hi = kNaTapeExtremes[i].highest;
+        const double lo = kNaTapeExtremes[i].lowest;
+        const bool extremes = !std::isnan(hi) && !std::isnan(lo) && hi != lo;
+        // ta.stoch: 100 * (source - lowest) / (highest - lowest), na on an na
+        // source. ta.wpr: (highest - close) / (highest - lowest) * -100.
+        const double source = t.source[i];
+        const double expected_stoch =
+            extremes && !std::isnan(source) ? 100.0 * (source - lo) / (hi - lo) : NA;
+        const double expected_wpr = extremes ? (hi - source) / (hi - lo) * -100.0 : NA;
+        if (!std::isnan(expected_stoch)) ++values;
+        check("stoch", "changing-na-extremes", i, length,
+              stoch.compute(source, t.high[i], t.low[i], length), expected_stoch);
+        check("wpr", "changing-na-extremes", i, length,
+              wpr.compute(source, t.high[i], t.low[i], length), expected_wpr);
+        // A bar decides something when a window that skipped its na members
+        // would read another extreme than the one written by hand.
+        const std::size_t n = static_cast<std::size_t>(length);
+        if (!same_bits(hi, skipping_extreme(t.high, i, n, true))) ++decided;
+        if (!same_bits(lo, skipping_extreme(t.low, i, n, false))) ++decided;
+    }
+    assert(g_rows - before == 2 * t.bars());
+    assert(values > 0);
+    // Bar 6 for the highest, bars 8 and 10 for the lowest.
+    if (decided >= 3) return;
+    ++g_failures;
+    std::fprintf(stderr,
+                 "FAIL stoch/wpr changing-na-extremes NOT COMPARED: the hand-written extremes "
+                 "differ from the na-skipping extremum on %zu rows, at least 3 expected\n",
+                 decided);
+}
+
 // The length check is SeriesSma's, names this function, and records nothing.
 template <class F>
 void refused_length(const Tapes& t) {
@@ -780,6 +916,9 @@ int main() {
     // it is the plain extremum of the last `length` bars, the reference here.
     changing_length<Stoch>(clean_extremes);
     changing_length<Wpr>(clean_extremes);
+    // The same two functions on the highs and lows that hold an na, against
+    // extremes written by hand from that rule.
+    changing_length_na_extremes(with_na);
     changing_length<Cci>(with_na);
     changing_length<Cci>(flat_window, "changing-flat-window");
     changing_length<Mfi>(with_na);

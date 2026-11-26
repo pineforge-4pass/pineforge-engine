@@ -520,7 +520,8 @@ void check_classes() {
         mode_model, false);
 
     // The direct range is over a tape without na: with na in the window the
-    // series-length highest and lowest follow their own documented rule.
+    // series-length highest and lowest follow their own documented rule, which
+    // check_range_by_hand holds ta.range to on values written by hand.
     check<SeriesRange>(
         "ta.range", [](int length) { return pf::ta::Range(length); },
         [](SeriesRange& series, const Row& row, double length, bool again) {
@@ -629,6 +630,112 @@ void check_forms() {
     }
 }
 
+// ta.range with a length that changes on a source with na bars, against
+// values written by hand. No class computed the three columns below: each was
+// worked out on paper from the rule documented at SeriesWindowExtreme
+// (pine_ta_length.hpp), which ta.range reads its highest and its lowest
+// through. The extremum is kept as a cached {value, bar}:
+//
+//   * a call answers na while fewer than `length` bars exist, and on an na
+//     source, which also drops the cache;
+//   * a call whose length is longer than the call before first reads the
+//     bars the longer window adds, oldest first, into the cache: a strictly
+//     better value takes it, an na drops it, and the next value read starts
+//     it again;
+//   * then the source: without a cache the call answers its own source and
+//     keeps nothing; a strictly better source takes the cache; a cache
+//     `length` or more bars old is replaced by a read of the whole window,
+//     oldest first, in which an na starts the extremum again;
+//   * a call whose length is not longer and that has no cache reads the whole
+//     window the same way.
+//
+//   bar source length  highest lowest  range
+//    0   10.0    2       na      na     na    fewer than two bars
+//    1   12.0    2      12.0    10.0    2.0
+//    2   11.0    3      12.0    10.0    2.0   bar 0 is added: no better value
+//    3    na     2       na      na     na    an na source
+//    4    9.0    1       9.0     9.0    0.0   no cache: the window is bar 4
+//    5    9.5    4       9.5     9.0    0.5   bars 2, 3, 4 are added: 11.0, the
+//                                             na drops it, 9.0 starts again;
+//                                             9.5 is the higher. The 11.0 of
+//                                             bar 2, inside the window, does
+//                                             not outlive the na
+//    6   13.0    2      13.0     9.5    3.5   the lowest's 9.0 is two bars
+//                                             old: bars 5 and 6 are read
+//    7    na     3       na      na     na    an na source
+//    8    8.0    2       8.0     8.0    0.0   no cache: bars 7 and 8, the na
+//                                             first
+//    9    8.5    4       8.5     8.5    0.0   bars 6 and 7 are added: 13.0,
+//                                             then the na drops the cache, so
+//                                             both sides answer the source
+//   10    7.5    4       8.5     7.5    1.0   no cache: bars 7 to 10 are read,
+//                                             the na first
+//   11    9.0    5       9.0     9.0    0.0   bar 7 is added: the na drops
+//                                             the cache, both sides answer
+//                                             the source
+//   12    6.0    5       9.0     6.0    3.0   no cache: bars 8 to 12 are read
+//   13    7.0    3       9.0     6.0    3.0   bar 11's 9.0 and bar 12's 6.0
+//                                             are still inside three bars
+//
+// A window that skipped its na members would answer 0.0, 2.0, 3.5, 5.0 and
+// 1.5 on bars 3, 5, 7, 9 and 11.
+void check_range_by_hand() {
+    struct HandRow {
+        double source;
+        int length;
+        double highest;
+        double lowest;
+        double range;
+    };
+    const double none = missing();
+    const HandRow rows[] = {
+        {10.0, 2, none, none, none}, {12.0, 2, 12.0, 10.0, 2.0}, {11.0, 3, 12.0, 10.0, 2.0},
+        {none, 2, none, none, none}, {9.0, 1, 9.0, 9.0, 0.0},    {9.5, 4, 9.5, 9.0, 0.5},
+        {13.0, 2, 13.0, 9.5, 3.5},   {none, 3, none, none, none}, {8.0, 2, 8.0, 8.0, 0.0},
+        {8.5, 4, 8.5, 8.5, 0.0},     {7.5, 4, 8.5, 7.5, 1.0},    {9.0, 5, 9.0, 9.0, 0.0},
+        {6.0, 5, 9.0, 6.0, 3.0},     {7.0, 3, 9.0, 6.0, 3.0},
+    };
+    const int count = static_cast<int>(sizeof rows / sizeof rows[0]);
+    pf::source::SeriesRange range;
+    int decided = 0;
+    for (int bar = 0; bar != count; ++bar) {
+        const HandRow& row = rows[bar];
+        // The table agrees with itself: the range column is the highest
+        // minus the lowest, na where either is.
+        require_same("ta.range", "the hand-written columns", bar, row.length, row.range,
+                     is_missing(row.highest) || is_missing(row.lowest)
+                         ? missing()
+                         : row.highest - row.lowest);
+        require_same("ta.range", "written by hand", bar, row.length,
+                     range.compute(row.source, row.length), row.range);
+        // The range of the values that are not na among the last `length`
+        // bars: what a window that skipped its na members would answer.
+        double skipping = missing();
+        if (bar + 1 >= row.length) {
+            double high = missing();
+            double low = missing();
+            for (int i = bar + 1 - row.length; i <= bar; ++i) {
+                const double value = rows[i].source;
+                if (is_missing(value)) continue;
+                if (is_missing(high) || value > high) high = value;
+                if (is_missing(low) || value < low) low = value;
+            }
+            if (!is_missing(high)) skipping = high - low;
+        }
+        const bool same = is_missing(row.range) ? is_missing(skipping)
+                                                : (!is_missing(skipping) &&
+                                                   bits(skipping) == bits(row.range));
+        if (!same) ++decided;
+    }
+    if (decided < 5) {
+        std::fprintf(stderr,
+                     "FAIL: ta.range: written by hand NOT COMPARED: the rows differ from the "
+                     "na-skipping range on %d bars, at least 5 expected\n",
+                     decided);
+        std::exit(1);
+    }
+}
+
 // A site that has recorded more inputs than one storage page holds: the
 // retained inputs grow twice, the constant-length values stay the
 // fixed-length class's, and a long window reads back across the pages.
@@ -668,6 +775,7 @@ int main() {
     check_classes();
     check_lengths();
     check_forms();
+    check_range_by_hand();
     check_long_history();
     {
         // The same checks with a lookback cap of 4 bars: lengths up to 5 are
