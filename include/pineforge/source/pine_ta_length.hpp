@@ -836,6 +836,61 @@ private:
     State saved_state_;
 };
 
+// The relational comparisons inside PineSar. TradingView's built-in ta.sar
+// compares its internal values the way a Pine relational does: two finite
+// values at most 1e-10 apart are equal, whatever their size (the absolute band
+// of <pineforge/ta_compare_band.hpp>; an na operand makes every relational
+// false). On a synthetic script its output followed a banded copy of the
+// reference definition on every bar where a banded and a raw copy disagreed.
+// PineSar compares with float_band_gt / float_band_lt, so a projected SAR
+// 6e-11 beyond the bar's low is a touch and keeps the side it was on. ta::SAR
+// keeps the exact C++ comparisons: nothing here changes the kernel, and a call
+// site chooses this class to get TradingView's comparisons. (ta.supertrend's
+// built-in compares raw, as ta::Supertrend does, so it has no banded twin.)
+//
+// ta.sar(start, inc, max) with those comparisons. The recipe and its
+// arithmetic are ta::SAR's, statement for statement: na until the second bar
+// with values; the first trend bar is long when close is greater than
+// close[1], takes the bar's high as its extreme (the low when short) and
+// starts the line at the previous low (high); every bar projects the line
+// toward the extreme by the acceleration, reverses when the projection is
+// greater than the bar's low (long) or less than its high (short), steps the
+// acceleration when the bar sets a new extreme (never on a first trend bar),
+// and holds the line behind the previous two bars' lows (highs). The five
+// comparisons named in that sentence are the banded ones; min and max are
+// exact. While no compared pair lies inside the band the answers are
+// ta::SAR's, bit for bit. Same constructor and members as ta::SAR.
+class PineSar {
+public:
+    PineSar(double start, double increment, double maximum)
+        : start_(start), increment_(increment), maximum_(maximum) {}
+    double compute(double high, double low, double close);
+    double recompute(double high, double low, double close);
+    // All retained fields are inline scalars.
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
+
+private:
+    struct State {
+        double af = 0.0;
+        double ep = 0.0;
+        double sar = 0.0;
+        bool is_long = true;
+        bool initialized = false;
+        double prev_high = na<double>();
+        double prev_low = na<double>();
+        double prev_close = na<double>();
+        double prev_prev_high = na<double>();
+        double prev_prev_low = na<double>();
+    };
+    double step(double high, double low, double close);
+
+    double start_;
+    double increment_;
+    double maximum_;
+    State state_;
+    State saved_state_;  // the state before the current bar
+};
+
 }  // namespace source
 }  // namespace pineforge
 
@@ -847,3 +902,5 @@ private:
 #define PINEFORGE_HAS_PINE_FIXED_SUPERTREND 1
 // Feature macro: PineDmiReference exists.
 #define PINEFORGE_HAS_PINE_DMI_REFERENCE 1
+// Feature macro: PineSar exists.
+#define PINEFORGE_HAS_PINE_SAR 1

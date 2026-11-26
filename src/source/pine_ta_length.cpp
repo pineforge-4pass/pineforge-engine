@@ -668,5 +668,87 @@ ta::DMIResult PineDmiReference::recompute(double high, double low, double close)
     return compute(high, low, close);
 }
 
+// --- PineSar ---
+
+// ta::SAR::compute statement for statement; the five relational comparisons
+// are Pine's (float_band_gt / float_band_lt), everything else is unchanged.
+double PineSar::step(double high, double low, double close) {
+    if (is_na(high) || is_na(low) || is_na(close)) return na<double>();
+    State& s = state_;
+    if (is_na(s.prev_close)) {
+        s.prev_high = high;
+        s.prev_low = low;
+        s.prev_close = close;
+        return na<double>();
+    }
+
+    bool first_trend_bar = false;
+    if (!s.initialized) {
+        s.initialized = true;
+        s.is_long = float_band_gt(close, s.prev_close);
+        s.ep = s.is_long ? high : low;
+        s.sar = s.is_long ? s.prev_low : s.prev_high;
+        s.af = start_;
+        first_trend_bar = true;
+    }
+
+    double sar = s.sar + s.af * (s.ep - s.sar);
+
+    if (s.is_long) {
+        if (float_band_gt(sar, low)) {
+            first_trend_bar = true;
+            s.is_long = false;
+            sar = std::max(high, s.ep);
+            s.af = start_;
+            s.ep = low;
+        }
+    } else if (float_band_lt(sar, high)) {
+        first_trend_bar = true;
+        s.is_long = true;
+        sar = std::min(low, s.ep);
+        s.af = start_;
+        s.ep = high;
+    }
+
+    if (!first_trend_bar) {
+        if (s.is_long) {
+            if (float_band_gt(high, s.ep)) {
+                s.ep = high;
+                s.af = std::min(s.af + increment_, maximum_);
+            }
+        } else if (float_band_lt(low, s.ep)) {
+            s.ep = low;
+            s.af = std::min(s.af + increment_, maximum_);
+        }
+    }
+
+    // The line stays behind the previous two bars' lows (long) or highs (short).
+    if (s.is_long) {
+        if (!is_na(s.prev_low)) sar = std::min(sar, s.prev_low);
+        if (!is_na(s.prev_prev_low)) sar = std::min(sar, s.prev_prev_low);
+    } else {
+        if (!is_na(s.prev_high)) sar = std::max(sar, s.prev_high);
+        if (!is_na(s.prev_prev_high)) sar = std::max(sar, s.prev_prev_high);
+    }
+
+    s.sar = sar;
+    s.prev_prev_high = s.prev_high;
+    s.prev_prev_low = s.prev_low;
+    s.prev_high = high;
+    s.prev_low = low;
+    s.prev_close = close;
+    return sar;
+}
+
+double PineSar::compute(double high, double low, double close) {
+    saved_state_ = state_;
+    return step(high, low, close);
+}
+
+double PineSar::recompute(double high, double low, double close) {
+    state_ = saved_state_;
+    return step(high, low, close);
+}
+
 }  // namespace source
 }  // namespace pineforge
