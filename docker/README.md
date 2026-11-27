@@ -249,15 +249,15 @@ completed; 1 means a failed run, harness fault or report that could not be
 written whole; 2 means argparse refused the command line or explicit request
 validation failed. The module describes failures and incomplete publication
 at `docker/run_json.py:117` and `docker/run_json.py:136`; `main()` describes
-its status contract at `docker/run_json.py:5406` and propagates typed failure
-statuses at `docker/run_json.py:5424` and `docker/run_json.py:5433`.
-The argparse error exits 2 at `docker/run_json.py:4668`; explicit sink-option
-refusals also use 2 at `docker/run_json.py:6147`. The standalone `csv2bin`
-refusal returns 2 at `docker/run_json.py:5392`, but the entrypoint never
+its status contract at `docker/run_json.py:5407` and propagates typed failure
+statuses at `docker/run_json.py:5425` and `docker/run_json.py:5434`.
+The argparse error exits 2 at `docker/run_json.py:4669`; explicit sink-option
+refusals also use 2 at `docker/run_json.py:6148`. The standalone `csv2bin`
+refusal returns 2 at `docker/run_json.py:5393`, but the entrypoint never
 selects that subcommand. `_host_main()` returns 1 on report-channel setup
-failure at `docker/run_json.py:8825`, propagates the run status at
-`docker/run_json.py:8858`, and the process exits through
-`sys.exit(_host_main())` at `docker/run_json.py:9814`.
+failure at `docker/run_json.py:8826`, propagates the run status at
+`docker/run_json.py:8859`, and the process exits through
+`sys.exit(_host_main())` at `docker/run_json.py:9819`.
 
 Statuses 3 (compile or bind failure) and 5 (transpile failure) are
 build-phase-only; the engine step never returns them. Status 4 is only the
@@ -824,6 +824,9 @@ after the part written.
   parser rejects.
 - Exit status 1, or 2 for a command line argparse refuses (its usage still goes
   to stderr); the entrypoint maps both to 4.
+- If the image user cannot read the chart CSV, stderr names the mounted path
+  and the OS error. The failure on stdout is `chart_bars_unreadable` with
+  `reason: io`.
 
 The harness's own failures and their codes:
 
