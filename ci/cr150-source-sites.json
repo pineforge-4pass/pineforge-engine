@@ -12588,6 +12588,364 @@
    "ordinal": 1
   },
   {
+   "file": "include/pineforge/source/pine_ta_length.hpp",
+   "symbol": "object_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "template < class Object > class PineFixedLength #1",
+    "Object & bound ( ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "object_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_length.hpp",
+   "symbol": "object_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "template < class Object > class PineFixedDmiLengths #1",
+    "Object & bound ( ) #1",
+    "if ( ! object_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "object_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_ma.hpp",
+   "symbol": "values_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace series_ma_detail #1",
+    "class RecordedSamples #1",
+    "private : void ensure_room ( std :: size_t limit ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "values_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_ma.hpp",
+   "symbol": "samples_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace series_ma_detail #1",
+    "template < class Window > class Rewindowed #1",
+    "template < class Call > auto call ( double sample , std :: uint64_t length , const Arguments & arguments , bool again , Call && on_fixed ) -> decltype ( on_fixed ( std :: declval < Fixed & > ( ) , false ) ) #1",
+    "if ( ! replace && pending_recorded_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "samples_ . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_ma.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace series_ma_detail #1",
+    "struct WmaWindow #1",
+    "static void build ( std :: optional < Fixed > & out , int length , const Arguments & , WindowCacheCapacity cache ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "out . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_ma.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace series_ma_detail #1",
+    "struct SmaWindow #1",
+    "static void build ( std :: optional < Fixed > & out , int length , const Arguments & , WindowCacheCapacity ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "out . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_ma.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace series_ma_detail #1",
+    "struct AlmaWindow #1",
+    "static void build ( std :: optional < Fixed > & out , int length , const Arguments & arguments , WindowCacheCapacity ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "out . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_ma.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace series_ma_detail #1",
+    "struct LinregWindow #1",
+    "static void build ( std :: optional < Fixed > & out , int length , const Arguments & , WindowCacheCapacity ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "out . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_ma.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace series_ma_detail #1",
+    "struct BbWindow #1",
+    "static void build ( std :: optional < Fixed > & out , int length , const Arguments & arguments , WindowCacheCapacity ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "out . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_ma.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace series_ma_detail #1",
+    "struct BbwWindow #1",
+    "static void build ( std :: optional < Fixed > & out , int length , const Arguments & arguments , WindowCacheCapacity ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "out . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_osc.hpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace series_osc_detail #1",
+    "[ [ noreturn ] ] inline void lookback_exceeded ( std :: uint64_t offset , std :: int64_t maximum , bool beyond_uint64 ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_osc.hpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace series_osc_detail #1",
+    "[ [ noreturn ] ] inline void lookback_exceeded ( std :: uint64_t offset , std :: int64_t maximum , bool beyond_uint64 ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_osc.hpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace series_osc_detail #1",
+    "inline std :: uint64_t checked_length ( double length , const char * function , std :: int64_t maximum ) #1",
+    "if ( ! ( length > = 1 . 0 ) ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_osc.hpp",
+   "symbol": "values_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace series_osc_detail #1",
+    "class History #1",
+    "private : void grow ( std :: size_t minimum ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "values_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_stats.hpp",
+   "symbol": "text",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace series_stats_detail #1",
+    "[ [ noreturn ] ] inline void stop_for_lookback ( std :: uint64_t offset , std :: int64_t maximum , bool beyond_uint64 ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_stats.hpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace series_stats_detail #1",
+    "[ [ noreturn ] ] inline void stop_for_lookback ( std :: uint64_t offset , std :: int64_t maximum , bool beyond_uint64 ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_stats.hpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace series_stats_detail #1",
+    "[ [ noreturn ] ] inline void stop_for_lookback ( std :: uint64_t offset , std :: int64_t maximum , bool beyond_uint64 ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_stats.hpp",
+   "symbol": "values_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace series_stats_detail #1",
+    "class Inputs #1",
+    "void grow ( ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "values_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_stats.hpp",
+   "symbol": "window",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace series_stats_detail #1",
+    "template < class Window > void build_window ( std :: optional < Window > & window , int length , bool option ) #1",
+    "if constexpr ( std :: is_constructible_v < Window , int , bool > ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "window . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_stats.hpp",
+   "symbol": "window",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace series_stats_detail #1",
+    "template < class Window > void build_window ( std :: optional < Window > & window , int length , bool option ) #1",
+    "else #1"
+   ],
+   "cls": "grow",
+   "spelling": "window . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_stats.hpp",
+   "symbol": "history_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace series_stats_detail #1",
+    "template < class Window > class ValidSources #1",
+    "double update ( const char * function , double source , double length , bool option , bool replace ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "history_ . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_stats.hpp",
+   "symbol": "history_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace series_stats_detail #1",
+    "template < class Window > class EveryCall #1",
+    "template < class Step > double update ( const char * function , double source , double length , std :: size_t extra , bool replace , Step step ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "history_ . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_stats.hpp",
+   "symbol": "window_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace series_stats_detail #1",
+    "template < class Window > class EveryCall #1",
+    "template < class Step > double update ( const char * function , double source , double length , std :: size_t extra , bool replace , Step step ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "window_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_stats.hpp",
+   "symbol": "first_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "class SeriesCorrelation #1",
+    "private : double update ( double source1 , double source2 , double length , bool replace ) #1",
+    "else #1"
+   ],
+   "cls": "grow",
+   "spelling": "first_ . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_stats.hpp",
+   "symbol": "second_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "class SeriesCorrelation #1",
+    "private : double update ( double source1 , double source2 , double length , bool replace ) #1",
+    "else #1"
+   ],
+   "cls": "grow",
+   "spelling": "second_ . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_ta_series_stats.hpp",
+   "symbol": "window_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "class SeriesCorrelation #1",
+    "private : double update ( double source1 , double source2 , double length , bool replace ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "window_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
    "file": "include/pineforge/str_utils.hpp",
    "symbol": "text",
    "scope": [
@@ -29959,7 +30317,7 @@
    "symbol": "windows",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "struct ArgCache #1",
     "struct Day #1"
    ],
@@ -29972,7 +30330,7 @@
    "symbol": "occurrences",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "struct ArgCache #1",
     "struct Day #1"
    ],
@@ -29985,7 +30343,7 @@
    "symbol": "session",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "struct ArgCache #1"
    ],
    "cls": "decl",
@@ -29997,7 +30355,7 @@
    "symbol": "tz",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "struct ArgCache #1"
    ],
    "cls": "decl",
@@ -30009,7 +30367,7 @@
    "symbol": "entries",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgCache & arg_cache ( const std :: string & session , const std :: string & tz ) #1"
    ],
    "cls": "decl",
@@ -30021,7 +30379,7 @@
    "symbol": "entries",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgCache & arg_cache ( const std :: string & session , const std :: string & tz ) #1",
     "if ( entries . size ( ) < kEntries ) #1"
    ],
@@ -30034,7 +30392,7 @@
    "symbol": "push_back",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgCache & arg_cache ( const std :: string & session , const std :: string & tz ) #1",
     "if ( entries . size ( ) < kEntries ) #1"
    ],
@@ -30047,7 +30405,7 @@
    "symbol": "make_unique",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgCache & arg_cache ( const std :: string & session , const std :: string & tz ) #1",
     "else #1"
    ],
@@ -30060,7 +30418,7 @@
    "symbol": "session",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgCache & arg_cache ( const std :: string & session , const std :: string & tz ) #1"
    ],
    "cls": "assign",
@@ -30072,7 +30430,7 @@
    "symbol": "tz",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgCache & arg_cache ( const std :: string & session , const std :: string & tz ) #1"
    ],
    "cls": "assign",
@@ -30084,7 +30442,7 @@
    "symbol": "s",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgDayBar arg_day_bar ( ArgCache & cache , int64_t day , bool daily_chart ) #1"
    ],
    "cls": "assign",
@@ -30096,7 +30454,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgDayBar arg_day_bar ( ArgCache & cache , int64_t day , bool daily_chart ) #1",
     "if ( s . days . empty ( ) || s . days . count ( weekday ) ! = 0 ) #1"
    ],
@@ -30109,7 +30467,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgDayBar arg_day_bar ( ArgCache & cache , int64_t day , bool daily_chart ) #1",
     "if ( s . days . empty ( ) || s . days . count ( weekday ) ! = 0 ) #1",
     "+ + k ) #1"
@@ -30123,7 +30481,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgDayBar arg_day_bar ( ArgCache & cache , int64_t day , bool daily_chart ) #1",
     "if ( s . days . empty ( ) || s . days . count ( weekday ) ! = 0 ) #1",
     "+ + k ) #1"
@@ -30137,7 +30495,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgDayBar arg_day_bar ( ArgCache & cache , int64_t day , bool daily_chart ) #1",
     "if ( s . days . empty ( ) || s . days . count ( weekday ) ! = 0 ) #1",
     "+ + k ) #1"
@@ -30151,7 +30509,7 @@
    "symbol": "s",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "const std :: vector < std :: pair < int64_t , int64_t > > & arg_day_windows ( ArgCache & cache , int64_t day ) #1"
    ],
    "cls": "assign",
@@ -30163,7 +30521,7 @@
    "symbol": "windows",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "const std :: vector < std :: pair < int64_t , int64_t > > & arg_day_windows ( ArgCache & cache , int64_t day ) #1",
     "for ( const ArgWindow & w : s . windows ) #1"
    ],
@@ -30176,7 +30534,7 @@
    "symbol": "s",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "const std :: vector < WallOccurrence > & arg_day_occurrences ( ArgCache & cache , int64_t day ) #1"
    ],
    "cls": "assign",
@@ -30188,7 +30546,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "const std :: vector < WallOccurrence > & arg_day_occurrences ( ArgCache & cache , int64_t day ) #1"
    ],
    "cls": "decl",
@@ -30200,7 +30558,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "const std :: vector < WallOccurrence > & arg_day_occurrences ( ArgCache & cache , int64_t day ) #1",
     "+ + k ) #1"
    ],
@@ -30213,7 +30571,7 @@
    "symbol": "occurrences",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "const std :: vector < WallOccurrence > & arg_day_occurrences ( ArgCache & cache , int64_t day ) #1"
    ],
    "cls": "assign",
@@ -30225,7 +30583,7 @@
    "symbol": "occurrences",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "bool clock_intraday_bar ( int64_t bar_ms , ArgCache & cache , int64_t tf_ms , int64_t & open_ms , int64_t & close_ms ) #1"
    ],
    "cls": "assign",
@@ -30237,7 +30595,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "bool clock_intraday_bar ( int64_t bar_ms , ArgCache & cache , int64_t tf_ms , int64_t & open_ms , int64_t & close_ms ) #1",
     "+ + k ) #1"
    ],
@@ -30250,7 +30608,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "bool clock_intraday_bar ( int64_t bar_ms , ArgCache & cache , int64_t tf_ms , int64_t & open_ms , int64_t & close_ms ) #1",
     "+ + k ) #1",
     "if ( ! occurrences ( today ) [ k ] . clock ) #1",
@@ -30266,7 +30624,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "bool clock_intraday_bar ( int64_t bar_ms , ArgCache & cache , int64_t tf_ms , int64_t & open_ms , int64_t & close_ms ) #1",
     "+ + k ) #1",
     "else #1",
@@ -30282,7 +30640,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "bool clock_intraday_bar ( int64_t bar_ms , ArgCache & cache , int64_t tf_ms , int64_t & open_ms , int64_t & close_ms ) #1",
     "+ + k ) #1",
     "else #1",
@@ -30298,7 +30656,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "bool session_argument_intraday_bar ( int64_t bar_ms , const std :: string & session , const std :: string & tz , int64_t tf_ms , int64_t & open_ms , int64_t & close_ms , bool transition_clock ) #1",
     "- - d ) #1"
    ],
@@ -30311,7 +30669,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "bool session_argument_intraday_bar ( int64_t bar_ms , const std :: string & session , const std :: string & tz , int64_t tf_ms , int64_t & open_ms , int64_t & close_ms , bool transition_clock ) #1",
     "- - d ) #1",
     "for ( const auto & window : arg_day_windows ( cache , d ) ) #1",
@@ -30756,17 +31114,6 @@
    ],
    "cls": "decl",
    "spelling": "std :: unordered_set < int >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/session_time.cpp",
-   "symbol": "eff_tz",
-   "scope": [
-    "namespace pineforge #1",
-    "int64_t session_trading_day_open_ms ( int64_t bar_ms , const std :: string & session , const std :: string & tz ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
    "ordinal": 1
   },
   {
@@ -50047,7 +50394,7 @@
    "symbol": "tz",
    "scope": [
     "namespace pineforge #1",
-    "static int64_t tz_offset_ms ( int64_t ms , const std :: string & tz ) #1",
+    "static int64_t session_wall_minute_ms ( int64_t minute , const std :: string & tz ) #1",
     "struct Slot #1"
    ],
    "cls": "decl",
@@ -50059,7 +50406,7 @@
    "symbol": "tz",
    "scope": [
     "namespace pineforge #1",
-    "static int64_t tz_offset_ms ( int64_t ms , const std :: string & tz ) #1"
+    "static int64_t session_wall_minute_ms ( int64_t minute , const std :: string & tz ) #1"
    ],
    "cls": "assign",
    "spelling": "tz = . . .",

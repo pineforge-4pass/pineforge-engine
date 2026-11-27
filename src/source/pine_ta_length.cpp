@@ -750,5 +750,78 @@ double PineSar::recompute(double high, double low, double close) {
     return step(high, low, close);
 }
 
+// --- TradingView's wording of a length error ---
+
+namespace {
+
+bool same_name(const char* a, const char* b) noexcept {
+    while (*a && *a == *b) {
+        ++a;
+        ++b;
+    }
+    return *a == *b;
+}
+
+// The calls whose error TradingView does not word with the signature's
+// argument name, the call's own function name and ">": the observation
+// documented at PineLengthWording. A function and argument are matched as
+// generated code spells them.
+struct LengthWordingRow {
+    const char* function;
+    const char* argument;
+    PineLengthWording shown;
+};
+constexpr LengthWordingRow kLengthWording[] = {
+    {"rsi", "length", {"", "rsi", "y", ">"}},
+    {"atr", "length", {"'atr'->", "rma", "length", ">"}},
+    {"vwma", "length", {"'vwma'->", "sma", "length", ">"}},
+    {"dmi", "diLength", {"", "dmi", "DI Length", ">"}},
+    {"dmi", "adxSmoothing", {"", "dmi", "ADX Smoothing", "greater than"}},
+};
+
+}  // namespace
+
+PineLengthWording pine_length_wording(const char* function, const char* argument) noexcept {
+    for (const LengthWordingRow& row : kLengthWording) {
+        if (same_name(function, row.function) && same_name(argument, row.argument)) {
+            return row.shown;
+        }
+    }
+    return PineLengthWording{"", function, argument, ">"};
+}
+
+// --- the length check of the checked fixed-length adapters ---
+
+// simple_ta_length's rules and coded failure for a double, with the text
+// worded as TradingView words it for the call (pine_length_wording). The
+// value is printed as length_not_positive prints it. simple_ta_length itself
+// does not come here: its text stays the one it always gave.
+int fixed_ta_length(double value, const char* function, const char* argument) {
+    long long length = 0;
+    const bool present = length_value(value, length);
+    if (present && length > 0) return length > INT_MAX ? INT_MAX : static_cast<int>(length);
+    const PineLengthWording tv = pine_length_wording(function, argument);
+    if (!present) {
+        throw coded<std::runtime_error>(
+            RunFailureCode::pine_invalid_argument,
+            {{"function", function},
+             {"argument", argument},
+             {"rule", "must_not_be_na"}},
+            run_error_bar_prefix() + "Invalid value of the '" + tv.argument +
+                "' argument in the " + tv.caller + "'" + tv.function +
+                "' function. It must not be na");
+    }
+    char shown[32];
+    std::snprintf(shown, sizeof shown, "%lld", length);
+    throw coded<std::runtime_error>(
+        RunFailureCode::pine_invalid_argument,
+        {{"function", function},
+         {"argument", argument},
+         {"rule", "must_be_positive"}},
+        run_error_bar_prefix() + "Invalid value of the '" + tv.argument +
+            "' argument (" + shown + ") in the " + tv.caller + "'" + tv.function +
+            "' function. It must be " + tv.relation + " 0.");
+}
+
 }  // namespace source
 }  // namespace pineforge
