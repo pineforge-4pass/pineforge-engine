@@ -740,6 +740,102 @@ class KernelPythonSweepControls(unittest.TestCase):
                       result.stdout)
 
 
+class RowArgvControls(unittest.TestCase):
+    """row_argv: the arguments a row's ctest registration passes its script.
+
+    A registration may pass CMake values that only a build tree knows. The
+    trace can reproduce such a row only with the values of the build tree it
+    runs in, and takes them for exactly five names: CMAKE_COMMAND,
+    CMAKE_CTEST_COMMAND, CMAKE_GENERATOR, CMAKE_MAKE_PROGRAM and
+    CMAKE_CURRENT_BINARY_DIR. Every registration and value below is invented;
+    no row of the tree is read.
+    """
+
+    ROW = 'test_invented_row'
+    VALUES = {
+        'CMAKE_COMMAND': '/opt/invented/bin/cmake',
+        'CMAKE_CTEST_COMMAND': '/opt/invented/bin/ctest',
+        'CMAKE_GENERATOR': 'Invented',
+        'CMAKE_MAKE_PROGRAM': '/opt/invented/bin/build-tool',
+        'CMAKE_CURRENT_BINARY_DIR': '/srv/invented-build/tests',
+    }
+
+    @staticmethod
+    def registration(*arguments: str) -> str:
+        """An add_test() statement in the shape the registrations take: the
+        script on the second line, then the arguments it passes."""
+        return ('add_test(NAME test_invented_row COMMAND ${Python3_EXECUTABLE} -B\n'
+                '    ${PROJECT_SOURCE_DIR}/tests/test_invented_row.py '
+                + ' '.join(arguments) + ')')
+
+    # an argument that names one of the five carries the build tree's value,
+    # wherever the name sits in it and however many of them it holds
+    def test_an_argument_naming_a_build_tree_value_is_expanded(self):
+        statement = self.registration(
+            '--plain',
+            '"--tool=${CMAKE_COMMAND}"',
+            '"--runner=${CMAKE_CTEST_COMMAND}"',
+            '"--kind=${CMAKE_GENERATOR}"',
+            '"--builder=${CMAKE_MAKE_PROGRAM}"',
+            '"--scratch=${CMAKE_CURRENT_BINARY_DIR}/invented-work"',
+            '"--pair=${CMAKE_COMMAND}:${CMAKE_CTEST_COMMAND}"')
+        self.assertEqual(
+            ('--plain',
+             '--tool=/opt/invented/bin/cmake',
+             '--runner=/opt/invented/bin/ctest',
+             '--kind=Invented',
+             '--builder=/opt/invented/bin/build-tool',
+             '--scratch=/srv/invented-build/tests/invented-work',
+             '--pair=/opt/invented/bin/cmake:/opt/invented/bin/ctest'),
+            row_argv(statement, self.ROW, self.VALUES))
+
+    # any other ${...} is still refused, and the refusal names the argument,
+    # not the expanded one before it: a name close to one of the five, a
+    # nested reference and a name whose value the caller offers all stay
+    # outside the five
+    def test_any_other_reference_is_still_refused(self):
+        offered = dict(self.VALUES, CMAKE_BINARY_DIR='/srv/invented-build',
+                       INVENTED_VALUE='invented')
+        for reference in ('${CMAKE_BINARY_DIR}', '${INVENTED_VALUE}',
+                          '${CMAKE_COMMAND_LINE}', '${MY_CMAKE_COMMAND}',
+                          '${INVENTED_${CMAKE_GENERATOR}}'):
+            with self.subTest(reference=reference):
+                refused = '--other=' + reference
+                statement = self.registration(
+                    '"--tool=${CMAKE_COMMAND}"', '"' + refused + '"')
+                with self.assertRaises(AssertionError) as caught:
+                    row_argv(statement, self.ROW, offered)
+                self.assertIn(
+                    f'{self.ROW}: unexpanded registration argument {refused!r}',
+                    str(caught.exception))
+
+    # the registration is split into arguments first and each argument is
+    # expanded on its own, so a value with a space -- a generator such as
+    # "Unix Makefiles", a build directory -- stays inside its one argument
+    def test_a_value_with_a_space_stays_one_argument(self):
+        spaced = dict(self.VALUES, CMAKE_GENERATOR='Invented Makefiles',
+                      CMAKE_CURRENT_BINARY_DIR='/srv/invented build/tests')
+        statement = self.registration(
+            '"--kind=${CMAKE_GENERATOR}"',
+            '"--scratch=${CMAKE_CURRENT_BINARY_DIR}/invented-work"')
+        self.assertEqual(
+            ('--kind=Invented Makefiles',
+             '--scratch=/srv/invented build/tests/invented-work'),
+            row_argv(statement, self.ROW, spaced))
+
+    # run by hand, the script has no build tree to ask: one of the five
+    # without its value is refused -- a failure, never a skip -- and the
+    # refusal names the row, the argument and the option that passes the value
+    def test_a_name_without_its_value_is_refused_with_the_option_to_pass(self):
+        statement = self.registration('"--kind=${CMAKE_GENERATOR}"')
+        with self.assertRaises(AssertionError) as caught:
+            row_argv(statement, self.ROW)
+        message = str(caught.exception)
+        self.assertIn(self.ROW, message)
+        self.assertIn("'--kind=${CMAKE_GENERATOR}'", message)
+        self.assertIn('--cmake-generator=', message)
+
+
 TAMPER_READ = (
     'import pathlib\n'
     'try:\n'
@@ -917,6 +1013,34 @@ class ExemptRowTraceControls(unittest.TestCase):
         self.assertEqual(0, green.returncode, green.stdout + green.stderr)
         self.assertIn('trace: opens under the real private trees: 0',
                       green.stdout)
+
+    # control 16: a row registered with CMake values is traced with them.
+    # tests/lanes.d/private-marker-rows-registration.cmake passes its script
+    # five values of the build tree (cmake, ctest, the generator, the make
+    # program and a work directory), so that row's exemption holds only while
+    # the trace can run it the way the registration does: the row is on the
+    # trace's list, its registration does name build-tree values, row_argv
+    # fills in this build tree's, and the script then runs to its own end
+    # with exit 0 and no open under the real tests/fixtures/ or tests/oracle/.
+    # The trace sees the script's own process; cmake and ctest, its only
+    # children, are native programs no audit hook follows.
+    def test_a_row_registered_with_build_tree_values_is_traced_with_them(self):
+        row = 'test_private_marker_rows_registration'
+        scripts = self._exempt_scripts()
+        self.assertIn(row, sorted(scripts),
+                      f'{row} is not an exempt row, so no control traces it')
+        script, statement = scripts[row]
+        self.assertTrue(BUILD_TREE_REFERENCE.search(statement),
+                        f'{row}: the registration names no build-tree value, '
+                        'so this control has lost its subject')
+        result = run_under_trace(REPO, self.tmp, script,
+                                 row_argv(statement, row, BUILD_TREE_VALUES))
+        self.assertTraceCompleted(result, row)
+        self.assertIn('trace: the traced script exited 0',
+                      result.stdout, result.stdout + result.stderr)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn('trace: opens under the real private trees: 0',
+                      result.stdout)
 
 
 if __name__ == '__main__':
