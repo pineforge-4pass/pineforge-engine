@@ -1319,7 +1319,17 @@ class RealTree(unittest.TestCase):
         # of the state that keeps the N-day partitions of timeframe.change for
         # one run (TimeframeChangeState) and that state's rows, one for each
         # N-day timeframe the script names. Both remain OPEN.
-        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3 + 1 + 1 + 1 + 2 + 3 + 2 + 1 + 6 + 1 + 2 + 2
+        # expectation corrected: 1658 -> 1671, because U1970-U1982 add thirteen
+        # unreviewed groups for the series-length classes of the Pine source
+        # layer: three in include/pineforge/source/pine_ta_series_ma.hpp, two in
+        # pine_ta_series_osc.hpp and eight in pine_ta_series_stats.hpp (the
+        # fixed-length objects a call builds, the appends to what a site records
+        # and the larger storage moved in for it, and the texts of the length
+        # refusals). PineRci adds no group: its two counters are no longer named
+        # values_ and saved_values_, the names of two container members of
+        # include/pineforge/ta.hpp, so the index lists none of their four
+        # integer statements. All remain OPEN.
+        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3 + 1 + 1 + 1 + 2 + 3 + 2 + 1 + 6 + 1 + 2 + 2 + 13
         self.assertEqual(c['OPEN'], expected_open)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
