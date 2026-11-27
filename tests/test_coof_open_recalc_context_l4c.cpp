@@ -78,6 +78,7 @@
 #include <pineforge/engine.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
+#include "csv_sizing_equity.hpp"
 #include "test_coof_open_recalc_context_data.hpp"
 
 using namespace pineforge;
@@ -457,19 +458,37 @@ void test_sizing_tape_sizes_recalc_born_at_fill() {
     std::printf("test_sizing_tape_sizes_recalc_born_at_fill\n");
     const auto bars = btc_1d_autumn_bars();
     const auto tape = size_tape();
+    if (tape.size() != 32) {
+        std::printf("NOT COMPARED m1d-coof-size: tape rows=%zu expected=32\n", tape.size());
+    }
     CHECK(tape.size() == 32);
+    if (tape.size() != 32) return;
     double cum = 0.0;
+    csv_sizing_equity::PnlError pnl_error;
     int recalc_born = 0, ordinary = 0;
     int recalc_born_discriminating = 0, ordinary_discriminating = 0;
     for (const TapeRow& r : tape) {
         const double equity = 1e9 + cum;
+        const auto prior_error = pnl_error;
         cum += r.net_pnl;
+        pnl_error.add(r.net_pnl);
         if (std::strcmp(r.id, "C") == 0) continue;
         const int k = index_of_day(bars, r.entry_ts);
+        if (k <= 0) {
+            std::printf("NOT COMPARED m1d-coof-size trade=%d: entry bar index=%d expected>0\n",
+                        r.trade, k);
+        }
         CHECK(k > 0);
-        if (k <= 0) continue;
+        if (k <= 0) return;
+        const double signal_close = tick2(bars[k - 1].close);
+        const bool fill_decidable = csv_sizing_equity::lot_floor_decidable(
+            "m1d-coof-size", r.trade, "fill", equity, prior_error, 0.1, r.entry_price, 1e-5L, 1e-6L);
+        const bool signal_decidable = csv_sizing_equity::lot_floor_decidable(
+            "m1d-coof-size", r.trade, "signal-close", equity, prior_error, 0.1, signal_close, 1e-5L, 1e-6L);
+        CHECK(fill_decidable && signal_decidable);
+        if (!fill_decidable || !signal_decidable) return;
         const double at_fill = floor5(0.1 * equity / r.entry_price);
-        const double at_signal_close = floor5(0.1 * equity / tick2(bars[k - 1].close));
+        const double at_signal_close = floor5(0.1 * equity / signal_close);
         const bool is_first_a = std::strcmp(r.id, "A") == 0 && r.trade == 1;
         const bool born_in_recalc = std::strcmp(r.id, "B") == 0
             || (std::strcmp(r.id, "A") == 0 && !is_first_a);
