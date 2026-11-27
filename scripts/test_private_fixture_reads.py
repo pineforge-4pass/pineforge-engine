@@ -845,16 +845,20 @@ class RowArgvControls(unittest.TestCase):
              '--pair=/opt/invented/bin/cmake:/opt/invented/bin/ctest'),
             row_argv(statement, self.ROW, self.VALUES))
 
-    # any other ${...} is still refused, and the refusal names the argument,
-    # not the expanded one before it: a name close to one of the five, a
-    # nested reference and a name whose value the caller offers all stay
-    # outside the five
+    # any other reference is still refused, and the refusal names the
+    # argument, not the expanded one before it: a name close to one of the
+    # five, a nested reference and a name whose value the caller offers all
+    # stay outside the five, and so do the references that are no ${NAME} at
+    # all -- an environment variable, a cache entry and a generator
+    # expression, alone or right behind one of the five
     def test_any_other_reference_is_still_refused(self):
         offered = dict(self.VALUES, CMAKE_BINARY_DIR='/srv/invented-build',
                        INVENTED_VALUE='invented')
         for reference in ('${CMAKE_BINARY_DIR}', '${INVENTED_VALUE}',
                           '${CMAKE_COMMAND_LINE}', '${MY_CMAKE_COMMAND}',
-                          '${INVENTED_${CMAKE_GENERATOR}}'):
+                          '${INVENTED_${CMAKE_GENERATOR}}',
+                          '$ENV{INVENTED}', '$CACHE{INVENTED}', '$<CONFIG>',
+                          '${CMAKE_COMMAND}$ENV{INVENTED}'):
             with self.subTest(reference=reference):
                 refused = '--other=' + reference
                 statement = self.registration(
@@ -863,6 +867,54 @@ class RowArgvControls(unittest.TestCase):
                     row_argv(statement, self.ROW, offered)
                 self.assertIn(
                     f'{self.ROW}: unexpanded registration argument {refused!r}',
+                    str(caught.exception))
+
+    # a reference outside the five is refused wherever it sits in an
+    # argument that also names one of the five: the argument's own text is
+    # read on every side of a filled-in name -- before the first, behind the
+    # last and between two -- not only up to the first one
+    def test_a_foreign_reference_beside_a_build_tree_name_is_refused(self):
+        for refused in ('--pair=${INVENTED_OTHER}:${CMAKE_COMMAND}',
+                        '--pair=${CMAKE_COMMAND}:${INVENTED_OTHER}',
+                        '--trio=${CMAKE_COMMAND}:${INVENTED_OTHER}:${CMAKE_CTEST_COMMAND}'):
+            with self.subTest(argument=refused):
+                statement = self.registration('"' + refused + '"')
+                with self.assertRaises(AssertionError) as caught:
+                    row_argv(statement, self.ROW, self.VALUES)
+                self.assertIn(
+                    f'{self.ROW}: unexpanded registration argument {refused!r}',
+                    str(caught.exception))
+
+    # a reference whose name is itself a reference is refused, also when the
+    # inner name is one of the five: what is left around that name is an
+    # opened ${ with no name of its own, and it is the opening that is
+    # refused, not only a whole ${NAME}
+    def test_a_nested_reference_is_refused(self):
+        for refused in ('--other=${${INVENTED}}', '--other=${${CMAKE_COMMAND}}'):
+            with self.subTest(argument=refused):
+                statement = self.registration('"' + refused + '"')
+                with self.assertRaises(AssertionError) as caught:
+                    row_argv(statement, self.ROW, self.VALUES)
+                self.assertIn(
+                    f'{self.ROW}: unexpanded registration argument {refused!r}',
+                    str(caught.exception))
+
+    # CMake reads no reference where the registration escapes one, \${NAME}
+    # or $\{NAME}, and none inside a bracket argument. An argument that holds
+    # a "$" and is spelled in one of those ways is refused, under the
+    # registration's own spelling where it has one (a bracket argument is
+    # named by its text): it is never filled in behind the backslash or
+    # between the brackets, and never passed on as it stands
+    def test_an_escaped_or_bracketed_reference_is_refused(self):
+        for spelled, named in (
+                (r'"--tool=\${CMAKE_COMMAND}"', r'"--tool=\${CMAKE_COMMAND}"'),
+                (r'"--tool=$\{CMAKE_COMMAND}"', r'"--tool=$\{CMAKE_COMMAND}"'),
+                ('[[--tool=${CMAKE_COMMAND}]]', '--tool=${CMAKE_COMMAND}')):
+            with self.subTest(spelled=spelled):
+                with self.assertRaises(AssertionError) as caught:
+                    row_argv(self.registration(spelled), self.ROW, self.VALUES)
+                self.assertIn(
+                    f'{self.ROW}: unexpanded registration argument {named!r}',
                     str(caught.exception))
 
     # the registration is split into arguments first and each argument is
@@ -879,6 +931,42 @@ class RowArgvControls(unittest.TestCase):
              '--scratch=/srv/invented build/tests/invented-work'),
             row_argv(statement, self.ROW, spaced))
 
+    # an argument is what CMake reads as one: a quoted argument stays whole,
+    # the spaces of its own text included, with or without a name to fill in
+    def test_a_quoted_argument_with_a_space_stays_one_argument(self):
+        statement = self.registration(
+            '"--name=two words"', '"--label=made with ${CMAKE_GENERATOR}"')
+        self.assertEqual(
+            ('--name=two words', '--label=made with Invented'),
+            row_argv(statement, self.ROW, self.VALUES))
+
+    # an empty value is a value: its name is filled in with nothing, and the
+    # argument is not refused as one whose value was not given
+    def test_an_empty_value_fills_its_name_with_nothing(self):
+        emptied = dict(self.VALUES, CMAKE_MAKE_PROGRAM='')
+        statement = self.registration(
+            '"--builder=${CMAKE_MAKE_PROGRAM}"', '"--kind=${CMAKE_GENERATOR}"')
+        self.assertEqual(('--builder=', '--kind=Invented'),
+                         row_argv(statement, self.ROW, emptied))
+
+    # a value is used as it is and never read again: a backslash in it is no
+    # escape, a quote in it stays, and a ${...} in it is neither filled in,
+    # though it spells one of the five, nor refused, though it spells
+    # another name
+    def test_a_value_is_used_as_it_is(self):
+        odd = dict(self.VALUES,
+                   CMAKE_COMMAND=r'C:\invented\cmake.exe',
+                   CMAKE_GENERATOR='Invented "Quoted" Kind',
+                   CMAKE_MAKE_PROGRAM='/opt/${CMAKE_COMMAND}/${INVENTED_OTHER}')
+        statement = self.registration(
+            '"--tool=${CMAKE_COMMAND}"', '"--kind=${CMAKE_GENERATOR}"',
+            '"--builder=${CMAKE_MAKE_PROGRAM}"')
+        self.assertEqual(
+            (r'--tool=C:\invented\cmake.exe',
+             '--kind=Invented "Quoted" Kind',
+             '--builder=/opt/${CMAKE_COMMAND}/${INVENTED_OTHER}'),
+            row_argv(statement, self.ROW, odd))
+
     # run by hand, the script has no build tree to ask: one of the five
     # without its value is refused -- a failure, never a skip -- and the
     # refusal names the row, the argument and the option that passes the value
@@ -890,6 +978,26 @@ class RowArgvControls(unittest.TestCase):
         self.assertIn(self.ROW, message)
         self.assertIn("'--kind=${CMAKE_GENERATOR}'", message)
         self.assertIn('--cmake-generator=', message)
+
+    # the values are taken name by name, not all or none: with some of the
+    # five given, a registration that names only those is filled in, and one
+    # that also names another is refused for that name and that argument
+    def test_some_values_fill_their_names_and_a_missing_one_is_refused(self):
+        some = {name: self.VALUES[name]
+                for name in ('CMAKE_COMMAND', 'CMAKE_CTEST_COMMAND')}
+        given = self.registration(
+            '"--tool=${CMAKE_COMMAND}"', '"--runner=${CMAKE_CTEST_COMMAND}"')
+        self.assertEqual(
+            ('--tool=/opt/invented/bin/cmake', '--runner=/opt/invented/bin/ctest'),
+            row_argv(given, self.ROW, some))
+        missing = self.registration(
+            '"--tool=${CMAKE_COMMAND}"', '"--kind=${CMAKE_GENERATOR}"')
+        with self.assertRaises(AssertionError) as caught:
+            row_argv(missing, self.ROW, some)
+        self.assertIn(
+            self.ROW + ": the registration argument '--kind=${CMAKE_GENERATOR}' "
+            "needs the build tree's CMAKE_GENERATOR",
+            str(caught.exception))
 
 
 TAMPER_READ = (
