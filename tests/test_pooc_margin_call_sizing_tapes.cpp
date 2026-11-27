@@ -37,6 +37,8 @@
 #include <tuple>
 #include <vector>
 
+#include "csv_sizing_equity.hpp"
+
 using namespace pineforge;
 
 static int tests_passed = 0;
@@ -100,6 +102,7 @@ std::int64_t tape_ms(const std::string& stamp) {
 
 struct TapeTrade {
     Row row;
+    int number = 0;
     std::string entry_signal, exit_signal;
     double net_pnl = 0.0;
 };
@@ -120,6 +123,7 @@ std::vector<TapeTrade> tape_trades(const std::string& tape, std::int64_t end_ms)
         if (cell.size() < 8) continue;
         const int number = std::stoi(cell[0]);
         TapeTrade& t = by_number[number];
+        t.number = number;
         const double price = std::stod(cell[4]);
         if (cell[1].rfind("Entry", 0) == 0) {
             std::get<0>(t.row) = tape_ms(cell[2]);
@@ -212,15 +216,30 @@ std::map<std::string, std::vector<TapeTrade>> tapes;
 void replay(const Case& c) {
     std::printf("-- %s\n", c.tape);
     const std::vector<Bar> bars = feed();
+    if (bars.empty()) {
+        std::printf("NOT COMPARED %s: feed bars=0 expected>0\n", c.tape);
+        CHECK(!bars.empty());
+        return;
+    }
     const std::int64_t end_ms = bars.back().timestamp;
     const auto tape = tape_trades(c.tape, end_ms);
+    if (tape.empty()) {
+        std::printf("NOT COMPARED %s: closed tape rows=0 expected>0 (%s/tv_trades.csv)\n",
+                    c.tape, c.tape);
+        CHECK(!tape.empty());
+        return;
+    }
     tapes[c.tape] = tape;
-    CHECK(!tape.empty());
 
     ProbeHost host(c);
     host.set_trade_start_time(bars.front().timestamp);
     host.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false);
-    CHECK(host.last_error().empty());
+    if (!host.last_error().empty()) {
+        std::printf("NOT COMPARED %s: run error='%s' expected empty\n",
+                    c.tape, host.last_error().c_str());
+        CHECK(host.last_error().empty());
+        return;
+    }
     std::vector<Row> expected, engine;
     for (const TapeTrade& t : tape) expected.push_back(t.row);
     for (int i = 0; i < host.trade_count(); ++i) {
@@ -228,6 +247,12 @@ void replay(const Case& c) {
         if (t.exit_time >= end_ms) continue;
         engine.emplace_back(t.entry_time, t.is_long, ticks(t.entry_price), t.exit_time,
                             ticks(t.exit_price), lots(t.qty));
+    }
+    if (engine.size() != expected.size()) {
+        std::printf("NOT COMPARED %s: engine rows=%zu tape rows=%zu\n",
+                    c.tape, engine.size(), expected.size());
+        CHECK(engine.size() == expected.size());
+        return;
     }
     CHECK(engine == expected);
     if (engine != expected) {
@@ -256,24 +281,49 @@ int main() {
         const auto& t = tapes["w4-mcs-pooc"];
         const std::int64_t flip = at(18, 45);
         double equity = 100000.0;
+        csv_sizing_equity::PnlError pnl_error;
         long long long_lots = -1, call_lots = 0;
         long long call_ticks = 0;
+        int long_count = 0, call_count = 0, long_trade = 0;
         for (const TapeTrade& r : t) {
-            if (std::get<3>(r.row) <= flip) equity += r.net_pnl;
-            if (r.entry_signal == "C long") long_lots = std::get<5>(r.row);
+            if (std::get<3>(r.row) <= flip) {
+                equity += r.net_pnl;
+                pnl_error.add(r.net_pnl);
+            }
+            if (r.entry_signal == "C long") {
+                ++long_count;
+                long_lots = std::get<5>(r.row);
+                long_trade = r.number;
+            }
             if (r.exit_signal == "Margin call" && std::get<3>(r.row) == flip) {
+                ++call_count;
                 call_lots = std::get<5>(r.row);
                 call_ticks = std::get<4>(r.row);
             }
         }
         const double close = 1787.58;
-        CHECK(call_lots > 0 && call_ticks == ticks(1798.57));
-        CHECK(long_lots == static_cast<long long>(std::floor(equity / close / kLot + 1e-9)));
-        // Marked at the close instead, the called slice's equity is larger
-        // by its lots times the gap between the call and the close: a larger
-        // long than TradingView's.
-        const double before_call = equity + call_lots * kLot * (1798.57 - close);
-        CHECK(static_cast<long long>(std::floor(before_call / close / kLot)) > long_lots);
+        const bool aligned = long_count == 1 && call_count == 1 && long_lots > 0
+            && call_lots > 0 && call_ticks == ticks(1798.57);
+        if (!aligned) {
+            std::printf("NOT COMPARED w4-mcs-pooc: long rows=%d expected=1, call rows=%d expected=1, "
+                        "long/call lots=%lld/%lld expected positive, call ticks=%lld expected=%lld\n",
+                        long_count, call_count, long_lots, call_lots, call_ticks, ticks(1798.57));
+        }
+        CHECK(aligned);
+        if (aligned) {
+            // Marked at the close instead, the called slice's equity is larger
+            // by its lots times the gap between the call and the close.
+            const double before_call = equity + call_lots * kLot * (1798.57 - close);
+            const bool after_decidable = csv_sizing_equity::lot_floor_decidable(
+                "w4-mcs-pooc", long_trade, "after-call", equity, pnl_error, 1.0, close, kLot, 1e-9L);
+            const bool before_decidable = csv_sizing_equity::lot_floor_decidable(
+                "w4-mcs-pooc", long_trade, "before-call", before_call, pnl_error, 1.0, close, kLot, 0.0L);
+            CHECK(after_decidable && before_decidable);
+            if (after_decidable && before_decidable) {
+                CHECK(long_lots == static_cast<long long>(std::floor(equity / close / kLot + 1e-9)));
+                CHECK(static_cast<long long>(std::floor(before_call / close / kLot)) > long_lots);
+            }
+        }
     }
 
     std::printf("\n%s margin-call sizing tapes: %d checks, %d failures\n",
