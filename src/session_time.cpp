@@ -253,9 +253,9 @@ int64_t reach(const ZoneInterval& slot, int64_t from, int64_t direction) {
 // them, so a run pays neither the process lock nor a tzset per call: each
 // changed-TZ tzset() on macOS is a notifyd Mach-IPC round trip (~173us; ~888k/run
 // over the full feed -> minutes of apparent "hang"). DST stays exact:
-// every interval edge is a localtime_r answer. External linkage only so
-// tests/test_local_time_fields.cpp can compare it with libc field by field; not
-// part of the installed API.
+// every interval edge is a localtime_r answer. Aggregation uses this same
+// clock, and tests/test_local_time_fields.cpp compares it with libc field by
+// field. Not part of the installed API.
 void decompose_ms_local(int64_t bar_ms, const std::string& tz, struct tm& out) {
     const time_t secs = static_cast<time_t>(floor_div(bar_ms, 1000));
     if (plain_utc_spelling(tz)) {
@@ -383,14 +383,16 @@ static int64_t calendar_boundary_ms_from_seconds(int64_t seconds) {
     return seconds * 1000;
 }
 
-// Under the caller's ScopedTimezone. Preserve libc's normalization and the
-// input DST hint. Only a conversion error calls for a later hour.
-static int64_t zoned_calendar_boundary_ms(const std::tm& date, int retry_hours = 0) {
+// Under the caller's ScopedTimezone. Resolve the offset at the boundary;
+// the bar (or preceding period) may be on the other side of a clock change.
+static int64_t zoned_calendar_boundary_ms(const std::tm& date, int retry_hours = 0,
+                                          int minute_of_day = 0) {
     for (int hour = 0; ; ++hour) {
         std::tm fields = date;
-        fields.tm_hour = hour;
-        fields.tm_min = 0;
+        fields.tm_hour = minute_of_day / 60 + hour;
+        fields.tm_min = minute_of_day % 60;
         fields.tm_sec = 0;
+        fields.tm_isdst = -1;
         // A successful conversion can return Unix second -1.
         errno = 0;
         const time_t seconds = std::mktime(&fields);
@@ -869,6 +871,8 @@ bool read_arg_session(const std::string& session, ArgSession& out) {
     return !out.windows.empty();
 }
 
+} // namespace
+
 // The epoch instant of a wall-clock minute in `tz` (days since 1970-01-01 *
 // 1440 + minutes), read through the offsets decompose_ms_local holds (no
 // zone switch per call): the offsets in force a day before and a day after
@@ -877,9 +881,22 @@ bool read_arg_session(const std::string& session, ArgSession& out) {
 // reads the first instant after it (native_calendar::resolve_civil, as the
 // kernel calendar resolves one).
 int64_t wall_minute_ms(int64_t minute, const std::string& tz) {
-    const int64_t naive = minute * 60000;
     if (utc_zone(tz))
-        return naive;
+        return calendar_boundary_ms_from_seconds(minute * 60);
+    // The native civil resolver covers years 1..9999. Outside that range
+    // use libc, checking the epoch in seconds before multiplying by 1000.
+    if (minute < native_calendar::native_civil_days(1, 1, 1) * 1440
+        || minute >= native_calendar::native_civil_days(10000, 1, 1) * 1440) {
+        const int64_t day = floor_div(minute, 1440);
+        const auto date = native_calendar::native_civil_date(day);
+        std::tm fields{};
+        fields.tm_year = static_cast<int>(date.year - 1900);
+        fields.tm_mon = date.month - 1;
+        fields.tm_mday = date.day;
+        tz_util::ScopedTimezone guard(tz);
+        return zoned_calendar_boundary_ms(fields, 0, static_cast<int>(minute - day * 1440));
+    }
+    const int64_t naive = minute * 60000;
     bool found = false;
     int64_t best = 0;
     for (const int64_t probe : {naive - kMsPerDay, naive + kMsPerDay}) {
@@ -898,15 +915,17 @@ int64_t wall_minute_ms(int64_t minute, const std::string& tz) {
     }
     if (found)
         return best;
-    const int64_t day = floor_div(minute, 24 * 60);
-    const int of_day = static_cast<int>(minute - day * 24 * 60);
-    const native_calendar::NativeCivilDate date = native_calendar::native_civil_date(day);
+    const int64_t day = floor_div(minute, 1440);
+    const int of_day = static_cast<int>(minute - day * 1440);
+    const auto date = native_calendar::native_civil_date(day);
     if (const auto r = native_calendar::resolve_civil(tz, static_cast<int>(date.year), date.month,
                                                       date.day, of_day / 60, of_day % 60)) {
         return r->epoch_ms;
     }
     return naive;
 }
+
+namespace {
 
 struct ArgDayBar {
     bool traded = false;
@@ -2185,32 +2204,12 @@ int64_t session_trading_day_open_ms(int64_t bar_ms,
         return utc_day_open_ms(bar_ms);
     }
 
-    // Obtain bar's local time in the given timezone.
-    std::string eff_tz = tz.empty() ? "UTC" : tz;
-    int bar_local_min;
-    {
-        struct tm local_tm {};
-        decompose_ms_local(bar_ms, eff_tz, local_tm);  // gmtime_r for UTC (no TZ flip)
-        bar_local_min = local_tm.tm_hour * 60 + local_tm.tm_min;
-    }
-
-    // Determine whether the bar belongs to today's or yesterday's trading day.
-    // If bar's local time >= session_start: today's session.
-    // Else: yesterday's session.
-    int64_t day_open_ms = calendar_day_open_local_ms(bar_ms, eff_tz);
-
-    if (bar_local_min < session_start_min) {
-        // Bar is before today's session open → belongs to yesterday's trading day.
-        // Go back one day: subtract 24 h and recompute the day open.
-        int64_t yesterday_ms = bar_ms - kMsPerDay;
-        day_open_ms = calendar_day_open_local_ms(yesterday_ms, eff_tz);
-    }
-
-    // Add session start offset.
-    int64_t trading_day_open_ms = day_open_ms
-        + static_cast<int64_t>(session_start_min) * 60LL * 1000LL;
-
-    return trading_day_open_ms;
+    std::tm local{};
+    decompose_ms_local(bar_ms, tz, local);
+    const int64_t day = days_from_civil(local.tm_year + 1900, local.tm_mon + 1, local.tm_mday);
+    const int64_t minute = day * 1440 + session_start_min;
+    const int64_t open = wall_minute_ms(minute, tz);
+    return bar_ms >= open ? open : wall_minute_ms(minute - 1440, tz);
 }
 
 } // namespace pineforge
