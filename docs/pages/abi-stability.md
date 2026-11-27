@@ -480,9 +480,11 @@ layout of `CacheDefaults` changes under an unchanged epoch.
 In 1.14.0, `PF_STREAM_ENGINE_LAYOUT_VERSION` moved from 4 to 5. Before
 creating a strategy, the 1.14.0 `pineforge-live` rejects a module that
 declares stamp 4. Rebuild such modules against the matching 1.14.0 headers.
-Version 1.13.0 changed the internal layout but kept stamp 4, so its runner
-did not catch the layout mismatch when loading a 1.12.x module. Use matching
-headers and runtime for those releases too. The C ABI remains at version 5.
+Versions 1.12.0 and 1.13.0 each changed the internal layout but kept stamp 4,
+so a 1.12.x runner did not catch the layout mismatch when loading a 1.11.x
+module, nor a 1.13.x runner when loading a 1.11.x or 1.12.x module. Use
+matching headers and runtime for those releases too. The C ABI remains at
+version 5.
 
 After 1.14.0, the live layout stamp advances from 5 to 6 because the consumer
 stores each strategy's series-length TA lookback setting. Rebuild modules that

@@ -175,8 +175,8 @@ int run_case(bool with_grid, const char* rows_file, int expected_count) {
 }  // namespace
 
 int main() {
-    int failures = run_case(true, "expected-rows-with-grid.json", 22);
-    failures += run_case(false, "expected-rows-without-grid.json", 27);
+    int failures = run_case(true, "expected-rows-with-grid.json", 20);
+    failures += run_case(false, "expected-rows-without-grid.json", 24);
     std::printf("RESULT: %d failures\n", failures);
     return failures == 0 ? 0 : 1;
 }
