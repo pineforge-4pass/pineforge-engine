@@ -277,7 +277,8 @@ def test_cli_option_accepts_the_edge_and_default_remains_unlimited(tmp_path, ser
     status, document = _series_cli(tmp_path, series_library, 65, "--limit-output-series", "-1")
     assert status == 2, document
     assert document["code"] == "run_request_invalid"
-    assert document["args"] == {"option": "arguments"}
+    # expectation corrected: arguments -> limit_output_series, because the parser names this flag.
+    assert document["args"] == {"option": "limit_output_series"}
 
 
 @pytest.mark.parametrize("legacy", (False, True), ids=("fused", "legacy"))
