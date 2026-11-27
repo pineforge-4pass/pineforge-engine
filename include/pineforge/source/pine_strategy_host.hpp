@@ -1161,8 +1161,8 @@ private:
         const std::string* timeframe = nullptr;
     };
 
-    void push_request_delivery(int sec_id, const PineRequestDelivery&,
-                               std::int64_t body_open_ms);
+    void set_static_request_delivery(RequestDeliveryFrame&, int sec_id, const PineRequestDelivery&,
+                                     std::int64_t body_open_ms);
     void push_request_delivery(const PineRuntimeSecurityCursor&,
                                const PineRequestDelivery&, std::int64_t body_open_ms);
     void pop_request_delivery() noexcept;
@@ -1591,12 +1591,12 @@ protected:
     void apply_realtime_tail_horizon(const Bar* bars, int n, bool script_bar_geometry);
 
     // series_origin_ms sets both warmup contexts below; later raw keys win.
-    // Opt-in chart warmup parity (see set_syminfo_metadata,
-    // "chart_ema_na_warmup"). When enabled, chart-timeframe ta.ema instances
-    // first used by on_bar na-warm per TV built-in semantics. This selector is
-    // scoped independently from request.security so the two execution contexts
-    // cannot leak their warmup mode into each other. Default OFF.
-    bool chart_ema_na_warmup_ = false;
+    // Chart warmup parity (see set_syminfo_metadata, "chart_ema_na_warmup").
+    // While it is on, chart-timeframe ta.ema instances first used by on_bar,
+    // or by the preparation of a batch run, na-warm per TV built-in semantics.
+    // Scoped independently from request.security, so neither context leaks its
+    // warmup mode into the other. Default ON; the key's value 0 switches it off.
+    bool chart_ema_na_warmup_ = true;
     // Independent opt-in HTF warmup parity. When enabled,
     // request.security series aggregate from security_range_start_ms_ instead
     // of the feed start and their embedded ta.ema na-warm per TV built-in

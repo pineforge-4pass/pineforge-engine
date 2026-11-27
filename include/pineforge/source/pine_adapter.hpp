@@ -3540,6 +3540,13 @@ private:
     void finish_retirement_phases();
     bool another_child_fills_on_leg(const PlacementSnapshot&, const native_order::ExecutionAppliedEvent&,
                                     const NativeDecisionContext&, bool closing_long) const;
+    // Whether a default percent-of-equity long stop entry that fills at the
+    // level it was sized at passes the price-scale fill check
+    // (unified_fill_admits), though its cost exceeds the binary equity by the
+    // rounding of its ten-digit sizing money: validate_precommit's true-flat
+    // gap check then does not refuse it (engine issue 1031). Appended like
+    // the declarations above; no state.
+    bool level_sized_stop_fill_admits(const PlacementSnapshot&, const NativePrecommitView&) const;
 #ifndef NDEBUG
     std::array<std::uint64_t, 3> retirement_validation_state() const;
 #endif

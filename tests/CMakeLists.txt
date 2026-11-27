@@ -7902,6 +7902,19 @@ foreach(lane_file IN LISTS LANE_CMAKE)
     include("${lane_file}")
 endforeach()
 
+# --- lane lower-tf-request-callers begin ---
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            # Count completed scopes in the compiled evaluator (Itanium C++ ABI, D1 destructor).
+            target_link_options(test_lower_tf_caller_work PRIVATE
+                "-Wl,--wrap=_ZN9pineforge6source24PineRequestDeliveryScopeD1Ev")
+            target_compile_definitions(test_lower_tf_caller_work PRIVATE PF_COUNT_DELIVERY_SCOPES)
+        endif()
+    endif()
+endif()
+# --- lane lower-tf-request-callers end ---
+
 # --- lane issue-920 begin ---
 if(TARGET test_issue_920_bool_input)
     target_compile_definitions(test_issue_920_bool_input PRIVATE

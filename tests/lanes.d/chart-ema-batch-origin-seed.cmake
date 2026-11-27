@@ -1,0 +1,6 @@
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_chart_ema_batch_origin_seed)
+    pineforge_add_unit_test(test_chart_ema_batch_origin_seed)
+    list(APPEND TEST_SOURCES test_chart_ema_batch_seed_invariants)
+    pineforge_add_unit_test(test_chart_ema_batch_seed_invariants)
+endif()
