@@ -16,13 +16,22 @@
 // callback). One fact derived from the spec -- whether the chart aggregates
 // its input bars -- is taken once per run and kept with the consumer for the
 // host (run_aggregates_input_bars, the host cache of the host bookkeeping index cache).
+// The N-day partitions timeframe.change reads are the one thing here the host
+// cannot answer again per call: they are parked in the consumer's host-state
+// slot, which has no switch (TimeframeChangeState).
 // Not installed API.
 
 #include "../native_execution_consumer.hpp"
 #include "pine_intent_state.hpp"
 
+#include <pineforge/timeframe.hpp>
+
+#include <algorithm>
 #include <cstdint>
+#include <memory>
 #include <optional>
+#include <utility>
+#include <vector>
 
 namespace pineforge::source {
 
@@ -80,6 +89,94 @@ inline const NativeCurrentPointView* live_callback_point(const NativeStrategyHos
 inline const NativeCurrentPointView* callback_point(const NativeStrategyHost& host) {
     if (const NativeCurrentPointView* replayed = selected_replay_point(host)) return replayed;
     return live_callback_point(host);
+}
+
+// One N-day timeframe's partition of a run: `days` is N; a null `periods` is a
+// timeframe TradingView's rule yields no partition for, kept so that no later
+// call asks for it again.
+struct TimeframeChangePeriods {
+    int days = 0;
+    std::shared_ptr<TimeframeAggregator::PeriodSource> periods;
+};
+
+// The state's kind tag (identity only, never read for its value).
+inline const char kTimeframeChangeStateKind = 0;
+
+// timeframe.change's N-day partitions of the run `run` served by `owner`
+// (PineStrategyHost::tf_change), ascending in `days`. Each is planned on the
+// first call naming its timeframe and read, as it reads the run's bars, until
+// the consumer drops this state at the next run's begin.
+//
+// It is the consumer's mandatory NativeHostState, never the optional
+// NativeHostCache: planning walks the run's feeds, so a partition is state the
+// host keeps for the run, not a scan it repeats where no cache is held. The
+// slot has no switch, and the rows are one per N-day timeframe the script
+// names, however many: a ninth timeframe is kept like the first. Each
+// partition is of bounded memory (multi_day_periods.hpp), so what is held
+// follows the timeframes named and never the bars of the run. The consumer has
+// one such slot. In a selected run the capture state holds it
+// (PineIntentState, pine_intent_state.hpp) and this state is parked inside
+// that one (PineIntentState::timeframe_change); in every other run it is the
+// slot's own. Nothing here is hashed: a partition is derived from the run's
+// bars and the symbol's facts alone.
+struct TimeframeChangeState : NativeHostState {
+    TimeframeChangeState(const NativeStrategyHost* owner_host, std::uint64_t native_run) noexcept
+        : NativeHostState(&kTimeframeChangeStateKind), owner(owner_host), run(native_run) {}
+
+    const NativeStrategyHost* owner = nullptr;
+    std::uint64_t run = 0;
+    std::vector<TimeframeChangePeriods> partitions;
+};
+
+// The timeframe.change state of the run `host` is running, parked for it on
+// the first call: null only when no run is running, where there is no run to
+// keep a partition for. A state of another kind, owner or native run is never
+// read. This run's capture state keeps the slot and takes the new state
+// inside it; anything else the slot holds is replaced, as the capture state
+// replaces whatever the slot held at a selected run's begin. The state is
+// allocated before it is parked (parking cannot fail), so an allocation
+// failure propagates to the caller and nothing is dropped silently.
+inline TimeframeChangeState* timeframe_change_state(const NativeStrategyHost& host) {
+    NativeExecutionConsumer& consumer = run_consumer(host);
+    const NativeRunSpec* const spec = consumer.running() ? consumer.state_spec() : nullptr;
+    if (spec == nullptr) return nullptr;
+    const std::uint64_t run = spec->identity.run_number;
+    NativeHostState* const parked = consumer.host_state();
+    // This run's capture state, when it holds the slot.
+    PineIntentState* intents = nullptr;
+    if (parked != nullptr && parked->kind() == &kPineIntentStateKind) {
+        intents = static_cast<PineIntentState*>(parked);
+        if (intents->owner != &host || intents->run != run) intents = nullptr;
+    }
+    NativeHostState* const held = intents != nullptr ? intents->timeframe_change.get() : parked;
+    if (held != nullptr && held->kind() == &kTimeframeChangeStateKind) {
+        TimeframeChangeState* const state = static_cast<TimeframeChangeState*>(held);
+        if (state->owner == &host && state->run == run) return state;
+    }
+    auto fresh = std::make_unique<TimeframeChangeState>(&host, run);
+    TimeframeChangeState* const state = fresh.get();
+    if (intents != nullptr) {
+        intents->timeframe_change = std::move(fresh);
+    } else {
+        consumer.adopt_host_state(std::move(fresh));
+    }
+    return state;
+}
+
+// The partition `state` keeps for the N-day timeframe of `days` days, null
+// where the rule yields none. The first call naming the timeframe plans it
+// with `plan` and keeps the answer, a null one included; every later call of
+// the run reads the kept row, so no call plans a partition the run already
+// asked for. It is planned before its row exists: a planning that throws
+// keeps nothing.
+template <class Plan>
+TimeframeAggregator::PeriodSource* timeframe_change_periods(TimeframeChangeState& state, int days,
+                                                            Plan&& plan) {
+    const auto at = std::lower_bound(
+        state.partitions.begin(), state.partitions.end(), days,
+        [](const TimeframeChangePeriods& kept, int wanted) { return kept.days < wanted; });
+    if (at != state.partitions.end() && at->days == days) return at->periods.get();
+    return state.partitions.insert(at, TimeframeChangePeriods{days, plan()})->periods.get();
 }
 
 // The source layer's state parked with the consumer for one run (the

@@ -6,7 +6,19 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
+
+#ifdef PF_COUNT_DELIVERY_SCOPES
+static std::uint64_t completed_scopes;
+extern "C" void __real__ZN9pineforge6source24PineRequestDeliveryScopeD1Ev(
+    pineforge::source::PineRequestDeliveryScope*) noexcept;
+extern "C" void __wrap__ZN9pineforge6source24PineRequestDeliveryScopeD1Ev(
+        pineforge::source::PineRequestDeliveryScope* scope) noexcept {
+    ++completed_scopes;
+    __real__ZN9pineforge6source24PineRequestDeliveryScopeD1Ev(scope);
+}
+#endif
 
 namespace {
 
@@ -46,6 +58,80 @@ struct Work {
     std::uint64_t lookups;
     std::uint64_t insertions;
 };
+
+// A delivery callback may run another host on the same thread. Its caller
+// catalog has a different lifetime; it must not evict this site's position.
+struct InterleavedHost final : source::PineStrategyHost {
+    static constexpr int slots = 12;
+    static constexpr int charts = 7;
+    static constexpr int site = 19;
+
+    void configure_security_evaluators() override {
+        security_eval_states_.clear();
+        register_security_lower_tf_eval(site, "3", input_tf_);
+    }
+    void on_source_bar(const Bar&) override { ++bodies; }
+    void evaluate_security(int id, const Bar& bar, bool publish) override {
+        const auto delivery = current_request_delivery(id);
+        const int index = security_lower_tf_sub_bar_index(id);
+        const double expected_close = 37.5 + calls / slots;
+        if (id != site || !publish || !delivery.caller_valid || !delivery.actual_complete
+            || delivery.requested_slot != calls || index != calls % slots || bar.close != expected_close) {
+            std::fprintf(stderr, "NOT COMPARED: site %d/%d, publish %d/1, caller valid %d/1,"
+                         " complete %d/1, slot %lld/%d, index %d/%d, close %a/%a\n",
+                         id, site, publish, delivery.caller_valid, delivery.actual_complete,
+                         static_cast<long long>(delivery.requested_slot), calls,
+                         index, calls % slots, bar.close, expected_close);
+            std::abort();
+        }
+        if (index != 0) searches += source::detail::request_caller_lookups_for_test - before;
+        // An independent catalog starts a new hint generation on the base.
+        // Its constructor inserts no rows and does no ordered search.
+        { decltype(request_caller_ids_) other; }
+        before = source::detail::request_caller_lookups_for_test;
+        ++calls;
+    }
+    int calls = 0, bodies = 0;
+    std::uint64_t searches = 0, before = 0;
+};
+
+void interleaved_catalog_work() {
+    InterleavedHost host;
+    host.set_syminfo_timezone("UTC");
+    host.set_syminfo_session("24x7");
+    host.set_syminfo_type("crypto");
+    std::vector<Bar> bars;
+    for (int i = 0; i < host.charts; ++i) {
+        const double flat = 37.5 + i;
+        bars.push_back({flat, flat, flat, flat, 84., (1440LL + 36 * i) * minute_ms});
+    }
+#ifdef PF_COUNT_DELIVERY_SCOPES
+    completed_scopes = 0;
+#endif
+    host.run(bars.data(), host.charts, "36", "36");
+    if (!host.last_error().empty() || host.calls != host.charts * host.slots
+        || host.bodies != host.charts) {
+        std::fprintf(stderr, "NOT COMPARED: calls %d/%d, chart bars %d/%d, error '%s'\n",
+                     host.calls, host.charts * host.slots, host.bodies, host.charts,
+                     host.last_error().c_str());
+        std::abort();
+    }
+    bool ok = host.searches == 0;
+    if (!ok)
+        std::fprintf(stderr, "FAIL: later slots searched the caller catalog %llu times, expected 0\n",
+                     static_cast<unsigned long long>(host.searches));
+#ifdef PF_COUNT_DELIVERY_SCOPES
+    std::fprintf(stderr, "intrabar work: %d chart bars, %d callbacks, %llu later-slot searches, %llu scopes\n",
+                 host.bodies, host.calls, static_cast<unsigned long long>(host.searches),
+                 static_cast<unsigned long long>(completed_scopes));
+    if (completed_scopes != host.charts) {
+        std::fprintf(stderr, "FAIL: completed delivery scopes %llu, expected %d for %d callbacks\n",
+                     static_cast<unsigned long long>(completed_scopes), host.charts, host.calls);
+        ok = false;
+    }
+#endif
+    assert(ok);
+}
 
 // One run of `charts` chart bars of 240 minutes, fed as input bars of
 // `input_minutes`, with one array request on `requested_tf`.
@@ -116,4 +202,5 @@ void lower_tf_caller_work_controls() {
 
 int main() {
     lower_tf_caller_work_controls();
+    interleaved_catalog_work();
 }

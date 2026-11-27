@@ -21,9 +21,13 @@ int main() {
     average.compute(1, 1);
     average.compute(1, 1);
     average.compute(0x1p54, 1);
-    // 2 + 2^54 rounds to 2^54; subtracting 1 rounds to 2^54 again.
-    // The established finite replacement therefore gives (2^54 - 2^54 + 3)/2.
-    expect("vwma", "value->value", "replacement", average.recompute(3, 1), 1.5);
+    // 2 + 2^54 rounds to 2^54; subtracting 1 rounds to 2^54 again, so the
+    // running numerator is one short of the window {1, 2^54}. The finite
+    // replacement keeps its order and leaves 2^54 - 2^54 + 3 = 3 for {1, 3}.
+    // expectation corrected: 1.5 -> 2, because a running sum that is short
+    // by more than 2^-26 of its window's size is now rebuilt from the window:
+    // (1 + 3)/2.
+    expect("vwma", "value->value", "replacement", average.recompute(3, 1), 2);
     average.recompute(missing, 1);
     // Replaying from the two earlier ones instead gives (2 + 3 - 1)/2.
     expect("vwma", "value->na->value", "replacement", average.recompute(3, 1), 2);
