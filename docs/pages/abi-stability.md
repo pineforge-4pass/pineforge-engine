@@ -37,15 +37,26 @@ were appended between v0.13.1 and v1.0.0. Each growth bumped `PF_ABI_VERSION`, s
 
 ## What this means in practice
 
-A strategy `.so` links the runtime statically (`libpineforge.a`), so the two
-parties are the program that loads it and the library it loads:
+A strategy `.so` contains its own statically linked runtime (`libpineforge.a`).
+A C consumer passes the opaque strategy handle back to the module; it does not
+need to know the script host's layout.
 
 | Scenario | Outcome |
 | --- | --- |
-| A consumer loads a strategy library with the same `PF_ABI_VERSION`. | Works for every function that release has; probe a newer one with `dlsym` first. |
+| A consumer uses only the C ABI of a strategy library, including one built with older headers. | If `pf_abi_version()` matches the consumer's `PF_ABI_VERSION`, use the functions the library provides. The C loader checks the version before binding those functions (`docker/run_json.py:2968`); probe a newer symbol with `dlsym` first. |
 | A 1.8.0 consumer loads a strategy library stamped 4. | Refused at the ABI mismatch check; rebuild the library against matching headers and archive. |
 | Consumer and library from different majors, or from different 0.x minors. | **No guarantee.** Check `pf_abi_version()` and rebuild. |
-| A C++ object (a generated strategy, a native host) built against another release's headers. | **Not supported.** Rebuild against the headers and archive it links. |
+| A generated strategy or native host is compiled with headers from one release and linked with the archive from another. | **Not supported.** The host's private layout can change between releases. Rebuild the C++ object with the headers that match the archive. |
+
+`pineforge-live` opens the module (`runner/main.cpp:581`), checks the C ABI,
+and requires `strategy_stream_api_version()` to return 1 (`runner/main.cpp:585-590`).
+Before creating a strategy, it compares the module's optional layout stamp
+with `PF_STREAM_ENGINE_LAYOUT_VERSION` (`runner/main.cpp:591-601`).
+A different nonzero stamp is refused. If the stamp is absent or zero, the
+runner uses the module's C report function (`runner/main.cpp:948`).
+A matching stamp lets the runner read the engine base and its execution
+consumer directly. Build the module and runner from the same release for
+that path: the runner trusts the module's declaration of its layout.
 
 ## How it's enforced
 
