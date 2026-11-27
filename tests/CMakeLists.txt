@@ -4787,7 +4787,7 @@ add_test(NAME test_private_fixture_reads COMMAND ${Python3_EXECUTABLE} -B
 # instead of letting the rows write into the host's /tmp.
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tmp")
 add_test(NAME test_private_fixture_reads_controls COMMAND ${Python3_EXECUTABLE} -B
-    ${PROJECT_SOURCE_DIR}/scripts/test_private_fixture_reads.py)
+    ${PROJECT_SOURCE_DIR}/scripts/test_private_fixture_reads.py "--cmake-command=${CMAKE_COMMAND}" "--cmake-ctest-command=${CMAKE_CTEST_COMMAND}" "--cmake-generator=${CMAKE_GENERATOR}" "--cmake-make-program=${CMAKE_MAKE_PROGRAM}" "--cmake-current-binary-dir=${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties(test_private_fixture_reads_controls PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
 add_test(NAME test_kernel_python_private_reads COMMAND ${Python3_EXECUTABLE} -B
