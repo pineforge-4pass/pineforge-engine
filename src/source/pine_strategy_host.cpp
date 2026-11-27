@@ -1949,6 +1949,9 @@ source::PineRequestDeliveryScope::~PineRequestDeliveryScope() {
 // Declared in pine_host_reads.hpp for the control that reads them.
 thread_local std::uint64_t source::detail::request_caller_lookups_for_test = 0;
 thread_local std::uint64_t source::detail::request_caller_insertions_for_test = 0;
+thread_local std::uint64_t source::detail::static_delivery_sets_for_test = 0;
+thread_local std::uint64_t source::detail::static_caller_appends_for_test = 0;
+thread_local bool source::detail::force_static_delivery_setter_for_test = false;
 #endif
 
 bool source::PineStrategyHost::RequestCallerIds::same_series(
@@ -1967,7 +1970,7 @@ std::uint64_t source::PineStrategyHost::RequestCallerIds::caller_at(
 // Counts the catalogs built and cleared on any thread. A hint taken under an
 // earlier count may name released rows, so it is never read again.
 // (<atomic> comes with pineforge/engine.hpp.)
-static std::atomic<std::uint64_t> request_caller_generation{1};
+std::atomic<std::uint64_t> source::PineStrategyHost::RequestCallerIds::generation_{1};
 
 // Per entry: the row at or before the last key this thread placed (`at`), the
 // row after it (`next`), and the row count at which the two were neighbours.
@@ -1996,7 +1999,7 @@ source::PineStrategyHost::RequestCallerIds::hint() noexcept {
 }
 
 void source::PineStrategyHost::RequestCallerIds::retire() noexcept {
-    request_caller_generation.fetch_add(1, std::memory_order_relaxed);
+    generation_.fetch_add(1, std::memory_order_relaxed);
 }
 
 // This thread's hint when its two rows are neighbours with `key` between
@@ -2008,7 +2011,7 @@ source::PineStrategyHost::RequestCallerIds::bracket(
     Hint& mine = hint();
     const std::size_t index = Hint::entry(key.kind, key.first);
     if (mine.owner != this || !mine.known[index]
-        || mine.generation != request_caller_generation.load(std::memory_order_relaxed))
+        || mine.generation != generation_.load(std::memory_order_relaxed))
         return nullptr;
     if (mine.rows[index] != runs_.size()) {
         // A row was added since: read the row after `at` again.
@@ -2043,6 +2046,9 @@ std::optional<std::uint64_t> source::PineStrategyHost::RequestCallerIds::find(
 bool source::PineStrategyHost::RequestCallerIds::append_static_next(
         int sec_id, std::int64_t slot, std::int64_t phase,
         std::uint64_t caller) noexcept {
+#ifndef NDEBUG
+    ++detail::static_caller_appends_for_test;
+#endif
     // The rightmost run needs no hint: no later key can overlap it.
     if (runs_.empty()) return false;
     auto row = std::prev(runs_.end());
@@ -2051,7 +2057,7 @@ bool source::PineStrategyHost::RequestCallerIds::append_static_next(
         Hint& mine = hint();
         const auto index = Hint::entry(kind, sec_id);
         if (mine.owner != this || !mine.known[index] || mine.rows[index] != runs_.size()
-            || mine.generation != request_caller_generation.load(std::memory_order_relaxed))
+            || mine.generation != generation_.load(std::memory_order_relaxed))
             return false;
         const auto next = mine.next[index];
         if (next != runs_.end() && next->first.kind == kind && next->first.first == sec_id)
@@ -2070,6 +2076,29 @@ bool source::PineStrategyHost::RequestCallerIds::append_static_next(
     return true;
 }
 
+source::PineStrategyHost::RequestCallerIds::StaticTail
+source::PineStrategyHost::RequestCallerIds::static_run_tail(
+        int site, std::int64_t slot, std::int64_t phase, std::uint64_t caller) noexcept {
+    if (runs_.empty()) return {};
+    auto row = std::prev(runs_.end());
+    if (row->first.kind != 5 || row->first.first != site) {
+        const auto* placed = bracket({5, site, slot, phase, 0, {}});
+        if (!placed) return {};
+        const auto index = Hint::entry(5, site);
+        const auto next = placed->next[index];
+        if (next != runs_.end() && next->first.kind == 5 && next->first.first == site)
+            return {};
+        row = placed->at[index];
+    }
+    const auto& first = row->first;
+    auto& run = row->second;
+    if (first.kind != 5 || first.first != site || first.third != phase ||
+        first.occurrence != 0 || !first.text.empty() || run.last != slot ||
+        (run.stride != 1 && first.second != slot) || caller_at(first, run, slot) != caller)
+        return {};
+    return {&run.last, &run.stride, generation_.load(std::memory_order_relaxed)};
+}
+
 void source::PineStrategyHost::RequestCallerIds::emplace(
         const RequestCallerKey& key, std::uint64_t caller) {
 #ifndef NDEBUG
@@ -2085,7 +2114,7 @@ void source::PineStrategyHost::RequestCallerIds::emplace(
     const auto remember = [&](decltype(next) at) {
         Hint& mine = hint();
         const auto generation =
-            request_caller_generation.load(std::memory_order_relaxed);
+            generation_.load(std::memory_order_relaxed);
         if (mine.owner != this || mine.generation != generation) {
             mine = Hint{};
             mine.owner = this;
@@ -2375,6 +2404,9 @@ void source::PineStrategyHost::set_request_caller_scope(
 
 void source::PineStrategyHost::set_static_request_delivery(RequestDeliveryFrame& frame,
         int sec_id, const PineRequestDelivery& delivery, std::int64_t body_open_ms) {
+#ifndef NDEBUG
+    ++detail::static_delivery_sets_for_test;
+#endif
     std::uint64_t body_caller = 0;
     if (const auto slot = delivery.requested_slot; delivery.caller_valid && slot >= 0) {
         const auto phase = static_cast<std::int64_t>(detail::run_phase(*this));

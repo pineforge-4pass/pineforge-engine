@@ -7,6 +7,7 @@
 #include <pineforge/source/pine_adapter.hpp>
 #include <pineforge/source/pine_scheduler.hpp>
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -1096,6 +1097,23 @@ private:
         // by one. Otherwise it changes nothing and returns false.
         bool append_static_next(int sec_id, std::int64_t slot, std::int64_t phase,
                                 std::uint64_t caller) noexcept;
+        // Bind the current site's last run once. A callback may clear this
+        // catalog; validate the borrow's generation before reading it.
+        // Changing stride is part of extending, never part of binding.
+        struct StaticTail {
+            std::int64_t* last = nullptr;
+            std::uint64_t* stride = nullptr;
+            std::uint64_t generation = 0;
+        };
+        StaticTail static_run_tail(int site, std::int64_t slot, std::int64_t phase,
+                                   std::uint64_t caller) noexcept;
+        static bool extend_static_tail(const StaticTail& tail, std::int64_t slot) noexcept {
+            if (tail.generation != generation_.load(std::memory_order_relaxed) || !tail.last ||
+                slot <= 0 || *tail.last != slot - 1) return false;
+            *tail.last = slot;
+            *tail.stride = 1;
+            return true;
+        }
 
         bool empty() const noexcept { return runs_.empty(); }
         std::size_t size() const noexcept {
@@ -1136,6 +1154,7 @@ private:
         // every use is checked against the live rows, so it cannot change a
         // caller or a row. It is not state of the run and is never hashed.
         struct Hint;
+        static std::atomic<std::uint64_t> generation_;
         static Hint& hint() noexcept;
         static void retire() noexcept;
         Hint* bracket(const RequestCallerKey&) const noexcept;

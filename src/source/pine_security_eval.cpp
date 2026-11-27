@@ -14,6 +14,7 @@
 
 #include "../engine_internal.hpp"
 #include "../native_execution_consumer.hpp"
+#include "pine_host_reads.hpp"
 #include "pine_run_failure.hpp"
 
 #include <pineforge/ta.hpp>
@@ -993,9 +994,19 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         // each per-sub-bar value. The counter is incremented after every
         // dispatch so callers see 0, 1, ..., ratio-1 in sequence.
         pine.lower_tf_sub_bar_index = 0;
-        // Reuse the frame, but bind the current slot before every callback.
+        // A synthesized batch stays in this input's run phase. Bind the first
+        // slot normally, then advance its catalog row in place while no
+        // callback has allocated an intervening ID. Never reserve future IDs:
+        // a nested request or a state hash can observe every delivered prefix.
         std::optional<PineRequestDeliveryScope> scope;
         const int sec_id = state.sec_id;
+        const auto phase = static_cast<std::int64_t>(detail::run_phase(*this));
+        RequestCallerIds::StaticTail tail;
+#ifndef NDEBUG
+        const bool use_tail = !detail::force_static_delivery_setter_for_test;
+#else
+        constexpr bool use_tail = true;
+#endif
         PineRequestDelivery delivery;
         delivery.publication = delivery.publication_present = delivery.actual_complete = true;
         for (const auto& synthetic_bar : synthetic_bars) {
@@ -1007,14 +1018,30 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
             if (security_history_publication_replay_ || pine.request_selection_enabled
                 || state.sec_id != sec_id) {
                 scope.reset();
+                tail = {};
                 dispatch_pine_request(state, synthetic_bar, true, slot, true);
             } else {
                 delivery.requested_slot = slot;
                 delivery.caller = request_active_caller_;
                 delivery.caller_valid = delivery.caller != 0;
-                if (scope) set_static_request_delivery(request_delivery_stack_.back(),
-                                                       sec_id, delivery, synthetic_bar.timestamp);
-                else scope.emplace(*this, sec_id, delivery, synthetic_bar.timestamp);
+                if (!scope) {
+                    scope.emplace(*this, sec_id, delivery, synthetic_bar.timestamp);
+                } else {
+                    // A nested callback may grow the stack or change the catalog.
+                    auto& frame = request_delivery_stack_.back();
+                    if (use_tail && delivery.caller_valid && frame.body_caller + 1 == request_next_caller_
+                        && request_caller_ids_.extend_static_tail(tail, slot)) {
+                        frame.body_caller = request_next_caller_++;
+                        frame.delivery = delivery;
+                        frame.body_open_ms = synthetic_bar.timestamp;
+                    } else {
+                        set_static_request_delivery(frame, sec_id, delivery, synthetic_bar.timestamp);
+                        tail = {};
+                    }
+                }
+                if (use_tail && !tail.last && delivery.caller_valid && slot >= 0)
+                    tail = request_caller_ids_.static_run_tail(
+                        sec_id, slot, phase, request_delivery_stack_.back().body_caller);
                 dispatch_security_eval(state, synthetic_bar, true, slot);
                 pine.last_request_delivery = delivery;
             }

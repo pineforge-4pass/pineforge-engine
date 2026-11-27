@@ -275,6 +275,7 @@ set(TEST_SOURCES
     test_ta_rma_warmup
     test_ta_sma_exact_order
     test_ta_sma_window_residual
+    test_sma_window_sum_lands_like_tradingview
     test_ta_na_source_rules
     test_matrix
     test_matrix_identity
@@ -5384,10 +5385,10 @@ elseif(NOT test_engine_trade_accessors IN_LIST _pf_kernel_absent_rows)
     set_tests_properties(test_engine_trade_accessors PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
-if(NOT test_exit_binding_tapes IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cross_side_exit/README.md")
+if(NOT test_exit_binding_tapes IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_binding/schedules.inc")
     pineforge_add_unit_test(test_exit_binding_tapes)
 elseif(NOT test_exit_binding_tapes IN_LIST _pf_kernel_absent_rows)
-    add_test(NAME test_exit_binding_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/cross_side_exit/README.md")
+    add_test(NAME test_exit_binding_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/exit_binding/schedules.inc")
     set_tests_properties(test_exit_binding_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 

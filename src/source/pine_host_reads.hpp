@@ -233,6 +233,10 @@ void take_run_facts(NativeExecutionConsumer& consumer, const PineExecutionAdapte
 // and read by tests/test_lower_tf_caller_work.cpp. Nothing else reads them.
 extern thread_local std::uint64_t request_caller_lookups_for_test;
 extern thread_local std::uint64_t request_caller_insertions_for_test;
+// Function entries (including unsuccessful appends), not map searches.
+extern thread_local std::uint64_t static_delivery_sets_for_test;
+extern thread_local std::uint64_t static_caller_appends_for_test;
+extern thread_local bool force_static_delivery_setter_for_test;
 #endif
 
 }  // namespace detail
