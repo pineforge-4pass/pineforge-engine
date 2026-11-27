@@ -141,6 +141,78 @@ private:
     bool placed_ = false;
 };
 
+class FillBornStopHost final : public source::PineStrategyHost {
+public:
+    FillBornStopHost() {
+        attach_pine_execution_adapter();
+        source::PineStrategyConfig config{};
+        config.calc_on_order_fills = true;
+        config.process_orders_on_close = false;
+        config.initial_capital = 25000.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        config.pyramiding = 2;
+        configure_pine_strategy(config);
+        set_syminfo_mintick(0.01);
+    }
+
+    void on_source_bar(const Bar&) override {
+        const int index = pine_bar_index();
+        if (index == 0) strategy_entry("P", true, kNaN, 69.25);
+        if (index == 1 && signed_position_size() == 1.0 && !market_placed) {
+            market_placed = true;
+            strategy_entry("W2", true);
+        }
+        if (index == 1 && signed_position_size() == 2.0 && !stop_placed) {
+            stop_placed = true;
+            forcing_entry_bar = open_trade_entry_bar_index(1);
+            forcing_entry_price = open_trade_entry_price(1);
+            forcing_entry_is_w2 = open_trade_entry_id(1) == "W2";
+            strategy_entry("S", false, kNaN, 68.44);
+        }
+        if (signed_position_size() < 0.0 && open_trade_entry_id(0) == "S") {
+            short_entry_bar = open_trade_entry_bar_index(0);
+            short_entry_price = open_trade_entry_price(0);
+        }
+    }
+
+    bool market_placed = false;
+    bool stop_placed = false;
+    bool forcing_entry_is_w2 = false;
+    int forcing_entry_bar = -1;
+    double forcing_entry_price = kNaN;
+    int short_entry_bar = -1;
+    double short_entry_price = kNaN;
+};
+
+void check_fill_born_stop(double low, bool reaches_raw_stop) {
+    std::printf("fill-born stop: low %.17g\n", low);
+    const std::vector<Bar> bars = {
+        minute_bar(0, 69.00, 69.10, 68.90, 69.00),
+        minute_bar(1, 69.00, 70.00, 68.70, 69.40),
+        minute_bar(2, 69.40, 69.80, 68.55, 69.00),
+        minute_bar(3, 69.00, 69.30, low, 68.65),
+        minute_bar(4, 68.65, 68.90, 68.51, 68.75),
+    };
+    FillBornStopHost host;
+    host.run(bars.data(), static_cast<int>(bars.size()), "1", "1", false);
+    CHECK(host.last_error().empty());
+    CHECK(host.market_placed);
+    CHECK(host.stop_placed);
+    CHECK(host.forcing_entry_is_w2);
+    CHECK(host.forcing_entry_bar == 1);
+    CHECK(close_to(host.forcing_entry_price, bars[1].high));
+    std::printf("  forced W2 entry on bar %d at %.17g; S entry on bar %d at %.17g\n",
+                host.forcing_entry_bar, host.forcing_entry_price,
+                host.short_entry_bar, host.short_entry_price);
+    if (reaches_raw_stop) {
+        CHECK(host.short_entry_bar == 3);
+        CHECK(close_to(host.short_entry_price, 68.44));
+    } else {
+        CHECK(host.short_entry_bar == -1);
+    }
+}
+
 struct Row {
     const char* name;
     bool calc_on_fills;
@@ -222,6 +294,8 @@ int run_rows() {
                true, false, 68.41, short_feed(68.63, 68.415), false, kNaN, kNaN});
     check_row({"5. no-recalculation control: row 1 with calc_on_order_fills off",
                false, false, 68.44, short_feed(68.63, 68.445), true, 68.44, 68.67});
+    check_fill_born_stop(68.445, false);
+    check_fill_born_stop(68.43, true);
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }
