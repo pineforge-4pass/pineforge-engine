@@ -1677,7 +1677,9 @@
       "verify_bin",
       "report_sink",
       "run_id",
-      "spill_dir"
+      "spill_dir",
+      "limit_output_series",
+      "limit_map_pairs"
      ]
     }
    },
@@ -2132,7 +2134,14 @@
       "strategy_set_syminfo_mintick",
       "strategy_set_syminfo_pointvalue",
       "strategy_set_syminfo_timezone",
-      "strategy_set_syminfo_session"
+      "strategy_set_syminfo_session",
+      "pf_output_series_limit_set_checked",
+      "pf_output_series_limit_failure",
+      "pf_map_pairs_limit_set_checked",
+      "strategy_net_profit_sum",
+      "strategy_report_pointvalue",
+      "strategy_initial_capital",
+      "strategy_set_report_replay_v1"
      ]
     },
     "reason": {
