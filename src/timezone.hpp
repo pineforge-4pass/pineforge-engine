@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+#include <ctime>
 #include <exception>
 #include <mutex>
 #include <optional>
@@ -7,6 +9,10 @@
 #include <string_view>
 
 namespace pineforge {
+
+// Internal exchange clock shared by the calendar readers and aggregation.
+void decompose_ms_local(int64_t ms, const std::string& tz, std::tm& out);
+int64_t wall_minute_ms(int64_t civil_minute, const std::string& tz);
 
 namespace native_calendar {
 inline namespace native_calendar_v2 {

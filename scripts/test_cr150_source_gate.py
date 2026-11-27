@@ -32,8 +32,9 @@ from cr150_source_gate import Scanner, SITE_INVENTORY_REL, SITE_SCHEMA  # noqa: 
 
 PIN = '52101f9b7b540fece4493ddc7495451b6d85fc07'
 MANIFEST_REL = 'ci/cr150-source-bounds.yaml'
-# What the gate scans on the real tree, plus the files that bind it.
-REAL_TREE_DIRS = ('src', 'include', 'tutorial', 'ci')
+# What the gate scans on the real tree, plus the files that bind it. The notes
+# of the manifest also cite lines under runner/, which the gate reads.
+REAL_TREE_DIRS = ('src', 'include', 'tutorial', 'ci', 'runner')
 REAL_TREE_FILES = ('scripts/regen_corpus_cpp.sh',)
 
 LOOP_CPP = '''\
@@ -95,7 +96,7 @@ def entry(eid='E1', file='src/loop.cpp', symbol='slots_', ops=('decl', 'grow'),
 
 
 def manifest(entries, *, files=('src/**/*.cpp', 'include/pineforge/**/*.hpp'), generated=(), ceilings=(5, 5),
-             pin=PIN, fixed=True, templates=True, extra_fixed='') -> str:
+             pin=PIN, fixed=True, templates=True, extra_fixed='', cited_unchecked=None) -> str:
     lines = ['schema: cr150-source-bounds/v1', 'codegen:', f'  pin: {q(pin)}',
              '  pin_source: scripts/regen_corpus_cpp.sh', '  tree: absent',
              '  emitter_templates:']
@@ -104,8 +105,11 @@ def manifest(entries, *, files=('src/**/*.cpp', 'include/pineforge/**/*.hpp'), g
     lines += ['scan:', '  files:'] + [f'    - {q(g)}' for g in files]
     lines += ['  generated_files:'] + ([f'    - {q(g)}' for g in generated] or ['    []'])
     lines += ['ceilings:', f'  unreviewed: {ceilings[0]}',
-              f'  pending-flat-memory: {ceilings[1]}',
-              'owners:', flow(name='engine-core', globs=['src/**', 'include/**']),
+              f'  pending-flat-memory: {ceilings[1]}']
+    if cited_unchecked is not None:
+        # The ceiling of UNCHECKED note citations; a manifest without it allows none.
+        lines.append(f'  cited_unchecked: {cited_unchecked}')
+    lines += ['owners:', flow(name='engine-core', globs=['src/**', 'include/**']),
               flow(name='generated', globs=['tutorial/**'])]
     lines.append('fixed_inputs:')
     if fixed:
@@ -1018,6 +1022,326 @@ class GuardedBounds(Tree):
                 self.assertNotIn('stale', proc.stdout)
 
 
+class NoteCitations(Tree):
+    """Every line a note cites is read and compared with what the note names.
+
+    src/loop.cpp (LOOP_CPP): 3 opens on_bar, 4 declares slots_ (a site of E1),
+    5 guards and pushes (a site of E1), 6 closes the function.
+    include/pineforge/fixed.hpp: 1 defines kRingSlots.
+    docs/ring.md (RING_MD, written by the tests that cite it): 1 and 3 spell
+    kRingSlots, 2 spells slots_ only, 4 spells neither.
+    """
+
+    RING_MD = ('kRingSlots caps the ring\n'
+               'slots_ is the ring of the loop\n'
+               'the guard compares its size with kRingSlots\n'
+               'nothing about it here\n')
+
+    def cite(self, note: str, ceiling=None, **files):
+        """``ceiling`` is the manifest's cap of UNCHECKED citations; None pins none."""
+        self.build([entry('E1', note=note)], cited_unchecked=ceiling)
+        write_tree(self.root, files)
+        return self.gate()
+
+    def held(self, note: str, citations: int, **files):
+        proc = self.cite(note, **files)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        c = counts(proc)
+        self.assertEqual((c.get('citations'), c.get('cited_holds'), c.get('cited_fails'),
+                          c.get('cited_unchecked')), (citations, citations, 0, 0), proc.stdout)
+        self.assertNotIn('UNCHECKED entry', proc.stdout)
+        return proc
+
+    def tampered(self, old: str, new: str, finding: str, *, fails: int = 1):
+        """Change one citation of the manifest the control just passed with."""
+        path = self.root / MANIFEST_REL
+        text = path.read_text()
+        self.assertEqual(text.count(old), 1, f'{old!r} must occur once in the manifest')
+        path.write_text(text.replace(old, new))
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn(f'FINDING {finding}', proc.stdout)
+        self.assertEqual(counts(proc).get('cited_fails'), fails, proc.stdout)
+        self.assertIn('result: FINDINGS', proc.stdout)
+        path.write_text(text)
+        return proc
+
+    def test_bare_citation_holds_on_the_entrys_site_and_fails_on_a_wrong_line(self):
+        self.held('The guarded push_back is at :5.', 1)
+        proc = self.tampered('is at :5.', 'is at :6.',
+                             'src/loop.cpp:6: entry E1: note cites :6: src/loop.cpp:6 holds "}": '
+                             "not a site of the entry ('slots_') and none of the constructs the "
+                             'note names in that sentence (push_back)')
+        self.assertEqual(counts(proc).get('cited_holds'), 0)
+        self.assertEqual(counts(proc)['findings'], 1)
+
+    def test_parenthesized_citation_is_the_same_bare_form(self):
+        self.held('One guarded push_back (:5) and nothing else.', 1)
+        self.tampered('(:5)', '(:3)', 'src/loop.cpp:3: entry E1: note cites :3: src/loop.cpp:3 '
+                      'holds "void on_bar(double x) {"')
+
+    def test_path_citation_resolves_in_that_path_not_in_the_entrys_file(self):
+        self.held('The cap kRingSlots is defined at include/pineforge/fixed.hpp:1.', 1)
+        self.tampered('include/pineforge/fixed.hpp:1.', 'src/loop.cpp:1.',
+                      'src/loop.cpp:1: entry E1: note cites src/loop.cpp:1: src/loop.cpp:1 holds '
+                      '"#include <vector>"')
+        self.tampered('include/pineforge/fixed.hpp:1.', 'include/pineforge/fixed.hpp:2.',
+                      'include/pineforge/fixed.hpp:2: entry E1: note cites '
+                      'include/pineforge/fixed.hpp:2: include/pineforge/fixed.hpp has 1 line(s)')
+        self.tampered('include/pineforge/fixed.hpp:1.', 'fixed.hpp:1.',
+                      "fixed.hpp:1: entry E1: note cites fixed.hpp:1: 'fixed.hpp' is not a file "
+                      'under the scanned root')
+
+    def test_range_citation_holds_only_when_its_first_and_its_last_line_do(self):
+        self.held('The declaration and its guarded push_back are at :4-5.', 1)
+        self.tampered(':4-5.', ':1-3.', 'src/loop.cpp:1: entry E1: note cites :1-3: '
+                      'src/loop.cpp:1-3 begins "#include <vector>"')
+        # A site inside the range, or at one end of it, says nothing about
+        # where the range begins or ends: each end is read.
+        push = 'if (slots_.size() < kRingSlots) slots_.push_back(1.0);'
+        rule = 'a range holds only when its first and its last line both do, and '
+        tail = ("not a site of the entry ('slots_') and none of the constructs the note "
+                'names in that sentence (push_back)')
+        self.tampered(':4-5.', ':5-6.', 'src/loop.cpp:5: entry E1: note cites :5-6: '
+                      f'src/loop.cpp:5-6 begins "{push}" and ends "}}": {rule}'
+                      f'line 6 does not: {tail}')
+        self.tampered(':4-5.', ':3-5.', 'src/loop.cpp:3: entry E1: note cites :3-5: '
+                      f'src/loop.cpp:3-5 begins "void on_bar(double x) {{" and ends "{push}": '
+                      f'{rule}line 3 does not: {tail}')
+        proc = self.tampered(':4-5.', ':1-6.', 'src/loop.cpp:1: entry E1: note cites :1-6: '
+                             'src/loop.cpp:1-6 begins "#include <vector>" and ends "}": '
+                             f'{rule}neither line does: {tail}')
+        self.assertEqual(counts(proc).get('cited_holds'), 0)
+
+    def test_path_range_citation_is_judged_at_both_ends_in_that_path(self):
+        self.held('The cap kRingSlots is described at docs/ring.md:1-3.', 1,
+                  **{'docs/ring.md': self.RING_MD})
+        self.tampered('docs/ring.md:1-3.', 'docs/ring.md:1-2.',
+                      'docs/ring.md:1: entry E1: note cites docs/ring.md:1-2: docs/ring.md:1-2 '
+                      'begins "kRingSlots caps the ring" and ends "slots_ is the ring of the '
+                      'loop": a range holds only when its first and its last line both do, and '
+                      "line 2 does not: not in the entry's own file and none of the constructs "
+                      'the note names in that sentence (kRingSlots)')
+        self.tampered('docs/ring.md:1-3.', 'docs/ring.md:3-5.',
+                      'docs/ring.md:3: entry E1: note cites docs/ring.md:3-5: docs/ring.md has '
+                      '4 line(s)')
+
+    def test_comma_list_checks_each_line_it_names(self):
+        self.held('The declaration and the push_back are at :4,5.', 2)
+        proc = self.tampered(':4,5.', ':4,6.', 'src/loop.cpp:6: entry E1: note cites :6: '
+                             'src/loop.cpp:6 holds "}"')
+        self.assertEqual(counts(proc).get('cited_holds'), 1)
+        self.assertEqual(counts(proc).get('citations'), 2)
+
+    def test_path_comma_list_checks_each_line_in_that_path(self):
+        self.held('The cap kRingSlots is described at docs/ring.md:1,3.', 2,
+                  **{'docs/ring.md': self.RING_MD})
+        proc = self.tampered('docs/ring.md:1,3.', 'docs/ring.md:1,4.',
+                             'docs/ring.md:4: entry E1: note cites docs/ring.md:4: '
+                             'docs/ring.md:4 holds "nothing about it here"')
+        self.assertEqual(counts(proc).get('cited_holds'), 1)
+        self.assertEqual(counts(proc).get('citations'), 2)
+
+    def test_spaced_list_reads_every_line_it_names(self):
+        for join in (', ', ' and ', ' or ', ', and '):
+            with self.subTest(join=join):
+                self.held(f'The declaration and the push_back are at :4{join}5.', 2)
+                proc = self.tampered(f':4{join}5.', f':4{join}6.',
+                                     'src/loop.cpp:6: entry E1: note cites :6: '
+                                     'src/loop.cpp:6 holds "}"')
+                self.assertEqual(counts(proc).get('cited_holds'), 1)
+                self.assertEqual(counts(proc).get('citations'), 2)
+
+    def test_bare_citation_joined_to_a_path_is_a_line_of_that_path(self):
+        for join in (' and ', ', ', ' or ', ', and '):
+            with self.subTest(join=join):
+                self.held(f'The cap kRingSlots is described at docs/ring.md:1{join}:3.', 2,
+                          **{'docs/ring.md': self.RING_MD})
+                # Line 5 of the entry's own file is a site of E1; docs/ring.md
+                # has four lines. The joined form is read in the path it continues.
+                proc = self.tampered(f'docs/ring.md:1{join}:3.', f'docs/ring.md:1{join}:5.',
+                                     'docs/ring.md:5: entry E1: note cites :5: docs/ring.md '
+                                     'has 4 line(s)')
+                self.assertEqual(counts(proc).get('cited_holds'), 1)
+        # After any other words a bare form is a line of the entry's own file.
+        self.held('The cap kRingSlots is described at docs/ring.md:1 and slots_ is pushed '
+                  'at :5.', 2, **{'docs/ring.md': self.RING_MD})
+
+    def test_line_word_citation_is_a_line_of_the_entrys_file(self):
+        self.held('Line 5 is the guarded push_back and lines 4-5 hold the declaration too.', 2)
+        self.tampered('Line 5 is', 'Line 6 is', 'src/loop.cpp:6: entry E1: note cites Line 6: '
+                      'src/loop.cpp:6 holds "}"')
+
+    def test_construct_the_note_spells_holds_on_a_line_that_is_not_a_site(self):
+        self.held('The scope of on_bar opens at :3.', 1)
+        self.tampered('opens at :3.', 'opens at :2.',
+                      'src/loop.cpp:2: entry E1: note cites :2: src/loop.cpp:2 holds '
+                      '"#include "pineforge/fixed.hpp"": not a site of the entry (\'slots_\') '
+                      'and none of the constructs the note names in that sentence (on_bar)')
+        # Backticked text is spelled as code even when its words are plain.
+        self.held('The include of `vector` is at :1.', 1)
+        self.tampered('is at :1.', 'is at :6.', 'src/loop.cpp:6: entry E1: note cites :6: '
+                      'src/loop.cpp:6 holds "}": not a site of the entry (\'slots_\') and none '
+                      'of the constructs the note names in that sentence (vector)')
+
+    def test_member_call_the_note_spells_is_a_construct_to_look_for(self):
+        ring = self.RING_MD + 'the reader takes ring.back() once\n'
+        self.held('The last value is read through ring.back() at docs/ring.md:5.', 1,
+                  **{'docs/ring.md': ring})
+        self.tampered('docs/ring.md:5.', 'docs/ring.md:4.',
+                      'docs/ring.md:4: entry E1: note cites docs/ring.md:4: docs/ring.md:4 holds '
+                      '"nothing about it here": not in the entry\'s own file and none of the '
+                      'constructs the note names in that sentence (back, ring)')
+
+    def test_parenthesized_clause_stays_in_the_sentence_that_names_the_construct(self):
+        # The semicolon inside the parenthesis does not end the sentence, so
+        # the second citation is read against on_bar too, not left as prose.
+        self.held('The scope of on_bar is one function (:3; nothing else opens at :3).', 2)
+        self.tampered('opens at :3).', 'opens at :6).',
+                      'src/loop.cpp:6: entry E1: note cites :6: src/loop.cpp:6 holds "}": '
+                      "not a site of the entry ('slots_') and none of the constructs the note "
+                      'names in that sentence (on_bar)')
+
+    def test_citation_the_note_calls_a_site_must_be_a_site(self):
+        self.held('Site :5 pushes one value.', 1)
+        self.tampered('Site :5', 'Site :6', 'src/loop.cpp:6: entry E1: note cites :6: '
+                      'src/loop.cpp:6 holds "}": not a site of the entry (\'slots_\'), and the '
+                      'note calls it a site')
+
+    def test_every_citation_the_word_sites_introduces_must_be_a_site(self):
+        called = ('src/loop.cpp:6: entry E1: note cites :6: src/loop.cpp:6 holds "}": not a '
+                  "site of the entry ('slots_'), and the note calls it a site")
+        # A list joined to the first citation.
+        self.held('Sites :4 and :5 declare the ring and fill it.', 2)
+        proc = self.tampered('and :5 declare', 'and :6 declare', called)
+        self.assertEqual(counts(proc).get('cited_holds'), 1)
+        self.held('The two sites (:4, :5) declare the ring and fill it.', 2)
+        self.tampered(':4, :5)', ':4, :6)', called)
+        # A later citation of the same sentence, after other words.
+        self.held('Sites :4 for the ring and :5 for its one value.', 2)
+        self.tampered('and :5 for', 'and :6 for', called)
+
+    def test_another_file_holds_only_a_construct_the_sentence_names(self):
+        self.held('The ring slots_ is described at docs/ring.md:2.', 1,
+                  **{'docs/ring.md': self.RING_MD})
+        self.tampered('docs/ring.md:2.', 'docs/ring.md:4.',
+                      'docs/ring.md:4: entry E1: note cites docs/ring.md:4: docs/ring.md:4 holds '
+                      '"nothing about it here": not in the entry\'s own file and none of the '
+                      'constructs the note names in that sentence (slots_)')
+        # The same spelling as the entry's symbol on a line of another file is
+        # not a site of the entry: a sentence of prose that cites it names
+        # nothing a text check can look for. The gate says so with the entry,
+        # the citation and the line, and holds nothing.
+        proc = self.cite('The ring is described at docs/ring.md:2.', ceiling=1,
+                         **{'docs/ring.md': self.RING_MD})
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        c = counts(proc)
+        self.assertEqual((c.get('citations'), c.get('cited_holds'), c.get('cited_fails'),
+                          c.get('cited_unchecked')), (1, 0, 0, 1), proc.stdout)
+        self.assertIn('UNCHECKED entry E1: note cites docs/ring.md:2: docs/ring.md:2 holds '
+                      '"slots_ is the ring of the loop": not in the entry\'s own file, and the '
+                      'sentence spells no construct to look for', proc.stdout)
+
+    def test_prose_citation_in_the_entrys_file_is_unchecked_never_holding(self):
+        proc = self.cite('The function ends at :6.', ceiling=1)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        c = counts(proc)
+        self.assertEqual((c.get('citations'), c.get('cited_holds'), c.get('cited_fails'),
+                          c.get('cited_unchecked')), (1, 0, 0, 1), proc.stdout)
+        self.assertIn('UNCHECKED entry E1: note cites :6: src/loop.cpp:6 holds "}"', proc.stdout)
+        self.assertEqual(sum(line.startswith('cr150_source_gate: UNCHECKED ')
+                             for line in proc.stdout.splitlines()), 1)
+
+    def test_clock_time_is_not_a_citation_and_an_unread_form_is_reported(self):
+        proc = self.cite('Reviewed at 17:20 and nothing is cited.')
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(counts(proc).get('citations'), 0, proc.stdout)
+        proc = self.cite('The push is at -:5 of the file.', ceiling=1)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(counts(proc).get('cited_unchecked'), 1, proc.stdout)
+        self.assertIn("UNCHECKED entry E1: note has ':5' in a form no citation rule reads",
+                      proc.stdout)
+
+    def test_a_note_without_a_citation_adds_nothing(self):
+        proc = self.cite('One ring of fixed size. No line is named.')
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        c = counts(proc)
+        self.assertEqual((c.get('citations'), c.get('cited_fails'), c.get('cited_unchecked')),
+                         (0, 0, 0), proc.stdout)
+
+    # Two sentences of prose, each citing a line that is not a site of E1:
+    # two UNCHECKED citations, whatever the ceiling.
+    TWO_UNCHECKED = 'The function ends at :6. The includes end at :2.'
+    OVER_CEILING = (f'FINDING {MANIFEST_REL}:0: UNCHECKED note citations 2 exceed the manifest '
+                    'ceiling ')
+
+    def unchecked_run(self, ceiling):
+        proc = self.cite(self.TWO_UNCHECKED, ceiling=ceiling)
+        c = counts(proc)
+        self.assertEqual((c.get('citations'), c.get('cited_holds'), c.get('cited_fails'),
+                          c.get('cited_unchecked')), (2, 0, 0, 2), proc.stdout)
+        self.assertEqual(sum(line.startswith('cr150_source_gate: UNCHECKED ')
+                             for line in proc.stdout.splitlines()), 2)
+        return proc, c
+
+    def test_unchecked_citations_at_the_manifest_ceiling_pass(self):
+        proc, c = self.unchecked_run(2)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(c.get('cited_unchecked_ceiling'), 2, proc.stdout)
+        self.assertEqual(c.get('findings'), 0, proc.stdout)
+        self.assertNotIn('cited_unchecked_slack', proc.stdout)
+
+    def test_unchecked_citations_above_the_manifest_ceiling_fail(self):
+        proc, c = self.unchecked_run(1)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertEqual(c.get('cited_unchecked_ceiling'), 1, proc.stdout)
+        self.assertIn(self.OVER_CEILING + '1: ', proc.stdout)
+        self.assertNotIn('pins no ceilings.cited_unchecked', proc.stdout)
+        # The excess is one finding of the manifest, not a failed citation.
+        self.assertEqual(c.get('findings'), 1, proc.stdout)
+        self.assertIn('result: FINDINGS', proc.stdout)
+
+    def test_unchecked_citations_below_the_manifest_ceiling_pass_and_print_the_slack(self):
+        proc, c = self.unchecked_run(5)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual((c.get('cited_unchecked_ceiling'), c.get('cited_unchecked_slack')),
+                         (5, 3), proc.stdout)
+        self.assertIn('lower ceilings.cited_unchecked to 2', proc.stdout)
+        self.assertEqual(c.get('findings'), 0, proc.stdout)
+
+    def test_manifest_without_an_unchecked_ceiling_allows_no_unchecked_citation(self):
+        # The control: the citation holds, and no ceiling is needed for it.
+        self.held('The guarded push_back is at :5.', 1)
+        # Moving it to a wrong line fails (the test of the bare form). Taking
+        # the name out of the sentence as well would make it prose, UNCHECKED
+        # and unseen: without ceiling room that is a finding too.
+        path = self.root / MANIFEST_REL
+        text = path.read_text()
+        self.assertEqual(text.count('The guarded push_back is at :5.'), 1)
+        path.write_text(text.replace('The guarded push_back is at :5.',
+                                     'The guarded push is at :6.'))
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        c = counts(proc)
+        self.assertEqual((c.get('citations'), c.get('cited_holds'), c.get('cited_fails'),
+                          c.get('cited_unchecked'), c.get('cited_unchecked_ceiling')),
+                         (1, 0, 0, 1, 0), proc.stdout)
+        self.assertIn(f'FINDING {MANIFEST_REL}:0: UNCHECKED note citations 1 exceed the manifest '
+                      'ceiling 0 (the manifest pins no ceilings.cited_unchecked, so none is '
+                      'allowed): ', proc.stdout)
+        self.assertIn('UNCHECKED entry E1: note cites :6: src/loop.cpp:6 holds "}"', proc.stdout)
+        self.assertEqual(c.get('findings'), 1, proc.stdout)
+
+    def test_unchecked_ceiling_must_be_a_non_negative_integer(self):
+        for value in ('-1', '"many"', 'true'):
+            with self.subTest(value=value):
+                self.build([entry('E1', note=self.TWO_UNCHECKED)], cited_unchecked=value)
+                proc = self.gate()
+                self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+                self.assertIn('ERROR: ceilings.cited_unchecked must be a non-negative integer',
+                              proc.stdout)
+
+
 class FailClosed(Tree):
     def test_blank_inventory_scope_members_are_malformed(self):
         self.build(self.clean_entries())
@@ -1306,12 +1630,115 @@ class RealTree(unittest.TestCase):
         # shadowed-opening set (U0268, U0811); a named tick exit stores its texts in
         # one string (U1957, U1958); three lists of one call (U1960, U1961, U1963)
         # and one list of a state fold (U1964) are new. All remain OPEN.
-        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3 + 1 + 1 + 1 + 2 + 3 + 2 + 1 + 6
+        # expectation corrected: 1653 -> 1654, because U1965 adds one OPEN group (1653 + 1).
+        # expectation corrected: 1654 -> 1656, because U1966 and U1967 add two
+        # unreviewed groups in include/pineforge/source/pine_ta_length.hpp: the
+        # ring of the positional history of the Pine ta.mom / ta.roc objects
+        # (PositionalLag's lag_slots_) and the larger vector one growth step
+        # builds (grown). Two site identities also enter the existing OPEN group
+        # U1108 without adding a group: the whole-state restores of
+        # PineDmiReference::recompute and PineSar::recompute. All remain OPEN.
+        # expectation corrected: 1656 -> 1658, because U1968 and U1969 add two
+        # unreviewed groups in src/source/pine_host_reads.hpp: the allocation
+        # of the state that keeps the N-day partitions of timeframe.change for
+        # one run (TimeframeChangeState) and that state's rows, one for each
+        # N-day timeframe the script names. Both remain OPEN.
+        # expectation corrected: 1658 -> 1671, because U1970-U1982 add thirteen
+        # unreviewed groups for the series-length classes of the Pine source
+        # layer: three in include/pineforge/source/pine_ta_series_ma.hpp, two in
+        # pine_ta_series_osc.hpp and eight in pine_ta_series_stats.hpp (the
+        # fixed-length objects a call builds, the appends to what a site records
+        # and the larger storage moved in for it, and the texts of the length
+        # refusals). PineRci adds no group: its two counters are no longer named
+        # values_ and saved_values_, the names of two container members of
+        # include/pineforge/ta.hpp, so the index lists none of their four
+        # integer statements. All remain OPEN.
+        # expectation corrected: 1671 -> 1670, because the trading-day helper
+        # no longer owns eff_tz (U0759). The wall-minute cache keeps its tz
+        # group (U1184); moving session sites adds no group.
+        expected_open = 1356 + 76 + 184 + 2 - 6 + 4 + 2 + 8 - 1 + 4 + 4 + 3 + 1 + 1 + 1 + 2 + 3 + 2 + 1 + 6 + 1 + 2 + 2 + 13 - 1
         self.assertEqual(c['OPEN'], expected_open)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
         strict = run_gate(ROOT, '--strict')
         self.assertEqual(strict.returncode, 1 if c['OPEN'] else 0, strict.stdout)
+
+    def test_real_tree_note_citations_hold_or_are_listed_unchecked(self):
+        proc = run_gate(ROOT)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        c = counts(proc)
+        self.assertEqual(c.get('cited_fails'), 0, proc.stdout)
+        self.assertGreater(c.get('citations', 0), 0, proc.stdout)
+        self.assertGreater(c.get('cited_holds', 0), 0, proc.stdout)
+        # Every citation is exactly one of holding, failing or UNCHECKED, and
+        # each UNCHECKED one is printed with the entry that cites it.
+        self.assertEqual(c['cited_holds'] + c['cited_fails'] + c['cited_unchecked'],
+                         c['citations'])
+        listed = [line for line in proc.stdout.splitlines()
+                  if line.startswith('cr150_source_gate: UNCHECKED ')]
+        self.assertEqual(len(listed), c['cited_unchecked'])
+        for line in listed:
+            self.assertRegex(line, r'UNCHECKED entry U\d{4}: note (cites|has) ')
+        # The manifest pins how many may be UNCHECKED, and the gate prints the
+        # ceiling it read beside the count.
+        self.assertIn('cited_unchecked_ceiling', c, proc.stdout)
+        self.assertLessEqual(c['cited_unchecked'], c['cited_unchecked_ceiling'])
+
+    def test_real_tree_new_unchecked_citation_is_refused_by_the_ceiling(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = self.copy_tree(Path(tmp))
+            control = run_gate(tree)
+            self.assertEqual(control.returncode, 0, control.stdout + control.stderr)
+            c = counts(control)
+            self.assertIn('cited_unchecked_ceiling', c, control.stdout)
+            room = c['cited_unchecked_ceiling'] - c['cited_unchecked']
+            self.assertGreaterEqual(room, 0, control.stdout)
+            manifest_path = tree / MANIFEST_REL
+            lines = manifest_path.read_text().splitlines()
+            index = next(i for i, l in enumerate(lines) if l.startswith('  - {id: "U0439",'))
+            # A sentence of prose citing line 1 of that header, which holds no
+            # site of the entry: one more UNCHECKED citation for each copy.
+            # One more than the ceiling leaves room for is refused.
+            old = 'one-object optional bound. OPEN.'
+            self.assertEqual(lines[index].count(old), 1)
+            lines[index] = lines[index].replace(old, old + ' See :1.' * (room + 1))
+            manifest_path.write_text('\n'.join(lines) + '\n')
+            proc = run_gate(tree)
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            after = counts(proc)
+            self.assertEqual(after['cited_unchecked'], c['cited_unchecked'] + room + 1)
+            self.assertEqual(after['cited_unchecked'], c['cited_unchecked_ceiling'] + 1)
+            self.assertEqual(after.get('cited_fails'), 0, proc.stdout)
+            self.assertIn(f'FINDING {MANIFEST_REL}:0: UNCHECKED note citations '
+                          f'{after["cited_unchecked"]} exceed the manifest ceiling '
+                          f'{c["cited_unchecked_ceiling"]}: ', proc.stdout)
+            self.assertEqual(after['findings'], 1, proc.stdout)
+
+    def test_real_tree_note_citing_a_wrong_line_is_caught(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = self.copy_tree(Path(tmp))
+            control = run_gate(tree)
+            self.assertEqual(control.returncode, 0, control.stdout + control.stderr)
+            self.assertEqual(counts(control).get('cited_fails'), 0, control.stdout)
+            manifest_path = tree / MANIFEST_REL
+            lines = manifest_path.read_text().splitlines()
+            index = next(i for i, l in enumerate(lines) if l.startswith('  - {id: "U0439",'))
+            # The note names FirstCallBound and cites the line of its one
+            # emplace. Line 1 of that header holds neither.
+            self.assertEqual(lines[index].count('in an optional at :102.'), 1)
+            lines[index] = lines[index].replace('in an optional at :102.',
+                                                'in an optional at :1.')
+            manifest_path.write_text('\n'.join(lines) + '\n')
+            proc = run_gate(tree)
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertRegex(proc.stdout,
+                             r'FINDING include/pineforge/source/pine_ta_length\.hpp:1: '
+                             r'entry U0439: note cites :1: '
+                             r'include/pineforge/source/pine_ta_length\.hpp:1 holds ".*": '
+                             r"not a site of the entry \('object_'\) and none of the constructs "
+                             r'the note names in that sentence \(FirstCallBound\)')
+            self.assertEqual(counts(proc).get('cited_fails'), 1, proc.stdout)
+            self.assertEqual(counts(proc)['cited_holds'], counts(control)['cited_holds'] - 1)
 
     def test_real_tree_mutations_are_caught(self):
         with tempfile.TemporaryDirectory() as tmp:

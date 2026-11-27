@@ -709,7 +709,10 @@
     "stoi",
     "{bar_prefix}Invalid value of the 'factor' argument ({factor}) in the 'supertrend' function. It must be > 0.",
     "{bar_prefix}Invalid value of the '{argument}' argument ({value}) in the '{function}' function. It must be > 0.",
-    "{bar_prefix}Invalid value of the '{argument}' argument in the '{function}' function. It must not be na"
+    "{bar_prefix}Invalid value of the '{argument}' argument in the '{function}' function. It must not be na",
+    "{bar_prefix}Invalid value of the '{argument}' argument ({value}) in the '{caller}'->'{function}' function. It must be > 0.",
+    "{bar_prefix}Invalid value of the '{argument}' argument ({value}) in the '{function}' function. It must be greater than 0.",
+    "{bar_prefix}Invalid value of the '{argument}' argument in the '{caller}'->'{function}' function. It must not be na"
    ],
    "retryable": false,
    "since": "1.4.0"

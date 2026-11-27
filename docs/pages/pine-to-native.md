@@ -540,9 +540,9 @@ positions still open at the end of the run do not enter these averages.
 | --- | --- | --- | --- | --- |
 | `strategy.account_currency` | No separate native account code | No separate native account code | `hello_kernel.cpp` / `native_fx_roll_strategy.cpp` | The instrument's quote code is `currency` native_run_spec.hpp:639 (`currency` pineforge.h:504). Pine uses the declared account code, or the quote code for `currency.NONE` or an omitted currency. A native host supplies the conversion directly: `account_fx` native_run_spec.hpp:650 is the positive scalar and `configure_native_fx_curve` native_host.hpp:1228 stages a timestamped curve. The FX-roll example runs a JPY account on a USD-quoted stock through such a curve, and a step of it is a margin check point of its own. |
 | `strategy.initial_capital` | `initial_capital` native_run_spec.hpp:648 | `initial_capital` pineforge.h:506 | `hello_kernel.cpp` | The value you declared, unchanged by the run. |
-| `strategy.equity` | `native_marked_equity(mark)` native_host.hpp:1337; on the Pine host `current_equity() + open_profit(mark)` pine_strategy_host.hpp:867 | `strategy_native_marked_equity_v1` native_c_api.h:3112 | `native_open_lots_strategy.cpp` | Pine marks at the current `close`. The native marked call takes the mark explicitly and returns balance plus open lots' **net** `unrealized_pnl` native_host.hpp:341, which is Pine's equity: TradingView charges the open lots' paid entry fees. |
-| `strategy.netprofit` | on the Pine host `net_profit` pine_strategy_host.hpp:866; `net_profit` engine.hpp:1275 is the closed trades' figure | `net_profit` pineforge.h:377, less open lots' `entry_commission` | `native_open_lots_strategy.cpp` | The closed trades' net profit less the entry fees the open lots have paid. The report's figure is the closed trades'. |
-| `strategy.netprofit_percent` | derive: `net_profit` pine_strategy_host.hpp:866 over `initial_capital` native_run_spec.hpp:648 | `pf_metrics_t` pineforge.h:320 | `native_sized_report_strategy.cpp` | The kernel keeps the facts, not the ratio. |
+| `strategy.equity` | `native_marked_equity(mark)` native_host.hpp:1337; on the Pine host `current_equity() + open_profit(mark)` pine_strategy_host.hpp:868 | `strategy_native_marked_equity_v1` native_c_api.h:3112 | `native_open_lots_strategy.cpp` | Pine marks at the current `close`. The native marked call takes the mark explicitly and returns balance plus open lots' **net** `unrealized_pnl` native_host.hpp:341, which is Pine's equity: TradingView charges the open lots' paid entry fees. |
+| `strategy.netprofit` | on the Pine host `net_profit` pine_strategy_host.hpp:867; `net_profit` engine.hpp:1275 is the closed trades' figure | `net_profit` pineforge.h:377, less open lots' `entry_commission` | `native_open_lots_strategy.cpp` | The closed trades' net profit less the entry fees the open lots have paid. The report's figure is the closed trades'. |
+| `strategy.netprofit_percent` | derive: `net_profit` pine_strategy_host.hpp:867 over `initial_capital` native_run_spec.hpp:648 | `pf_metrics_t` pineforge.h:320 | `native_sized_report_strategy.cpp` | The kernel keeps the facts, not the ratio. |
 | `strategy.grossprofit` | `gross_profit` engine.hpp:1276 | `pf_trade_stats_t` pineforge.h:269 | `native_open_lots_strategy.cpp` | |
 | `strategy.grossprofit_percent` | `grossprofit_percent` engine.hpp:1283 | `pf_metrics_t` pineforge.h:320 | `native_sized_report_strategy.cpp` | Of initial capital. |
 | `strategy.grossloss` | `gross_loss` engine.hpp:1277 | `pf_trade_stats_t::gross_loss` pineforge.h:224 | `native_open_lots_strategy.cpp` | For booked closed trades the protected C++ accessor is signed (negative for losses), while the C report stores a positive loss magnitude. With range-end reporting off, `-C.gross_loss == gross_loss()` and `netprofit == grossprofit - C.gross_loss`. With it on, C trade statistics include the report-only range-end rows; filter `open_at_end == 0` before comparing to Pine's closed-trade statistics. |
@@ -737,7 +737,7 @@ Transport numeric Pine operands through the existing `ta_number` overloads
 for `double`, `int` and `std::int64_t`, so integer `na` sentinels reach the
 adapter as a double NaN.
 
-`compute` (src/source/pine_ta_length.cpp:578) makes one logical update per call,
+`compute` (src/source/pine_ta_length.cpp:579) makes one logical update per call,
 starting at the site's first execution. A non-`na` source appends one retained
 observation; an `na` source contributes no sample. Each call uses its current
 length to select the last N non-`na` observations and returns `na` while fewer
@@ -748,7 +748,7 @@ most recent L + 1 non-`na` samples regardless of the current length. Length
 changes keep the same instance and ring; equal source values on successive
 calls remain distinct observations.
 
-`checked_length` (src/source/pine_ta_length.cpp:501) validates before either
+`checked_length` (src/source/pine_ta_length.cpp:502) validates before either
 entry point records or replaces an update. Finite fractional lengths truncate
 toward zero. A nonpositive truncated length throws the family's
 `length_not_positive` error for `sma`; `na` and other nonfinite lengths throw
@@ -759,7 +759,7 @@ selects 15,000 unless a cap was supplied; `--limit-ta-lookback 0` selects
 unlimited. Invalid calls leave the logical checkpoint unchanged.
 For a valid length, warm-up returns `na` until N non-`na` samples are retained.
 
-`recompute` (src/source/pine_ta_length.cpp:582) replaces the most recent logical
+`recompute` (src/source/pine_ta_length.cpp:583) replaces the most recent logical
 update from its pre-update ring head/count, including the oldest value evicted
 by a full-ring push. Replacing a value with `na` restores that evicted value;
 replacing `na` with a value inserts one observation, evicting the oldest if
@@ -770,7 +770,7 @@ On an unused instance it creates the first logical update. Copy construction
 and assignment preserve the ring, head/count, saved eviction and replacement
 state, with storage detached before mutation.
 
-The order in `update` (src/source/pine_ta_length.cpp:517) was
+The order in `update` (src/source/pine_ta_length.cpp:518) was
 recorded on TradingView in November 2026.
 Across 400 bars the source repeated `1e16, 1, 1e-16, -1e16, -1`; the
 length held at 5, alternated between 5 and 3, or held at 7 in successive
@@ -803,7 +803,7 @@ at N=20 reports difference counts and maximum ULP distance against fixed
 with the largest ULP distance, with timestamps and hexadecimal values. The
 comparison calls the two C++ implementations directly and requires zero differences.
 
-`ensure_capacity` (src/source/pine_ta_length.cpp:506) grows the ring as
+`ensure_capacity` (src/source/pine_ta_length.cpp:507) grows the ring as
 non-`na` samples arrive, up to L + 1 when capped. Rollback needs only a
 scalar checkpoint. The cache policy controls residency. On ordinary finite
 inputs the arithmetic cost is constant for a constant length. A length change

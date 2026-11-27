@@ -201,6 +201,12 @@ double Change::compute(double src, int length) {
     // Keep only enough history: we need at most max_length_ + 1 entries
     const auto keep = static_cast<std::size_t>(std::max(max_length_, length)) + 1;
     ensure_room(keep); // No state changes if allocation fails.
+    // When the larger of the two lengths is -1 the history is asked to keep
+    // no entries, and an object that holds none then has no slot for this
+    // value: the answer is na.
+    if (history_.empty()) {
+        return na<double>();
+    }
     head_ = head_ ? head_ - 1 : history_.size() - 1;
     history_[head_] = src;
     size_ = std::min(size_ + 1, keep);
