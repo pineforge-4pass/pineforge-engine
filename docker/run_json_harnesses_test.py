@@ -363,6 +363,73 @@ def test_run_strategy_hands_both_runners_the_same_valid_lot(tmp_path, tape, monk
     assert [json.loads(text) for text in docker.documents] == ([lot] if lot else [])
 
 
+def test_runner_projects_each_symbol_key_to_its_ctypes_setter(tmp_path, tape, monkeypatch):
+    # Capture both the mounted document and the setter arguments it produces.
+    # Raw numeric names are open-ended and can even coincide with a catalog field.
+    numbers = {
+        "account_currency_fx": "1.25", "chart_ema_na_warmup": 0,
+        "series_origin_ms": "1744032600000", "security_range_start_na_warmup": False,
+        "bar_index_offset": -2, "historical_security_lookahead_projection": 1,
+        "margin_long": 25, "margin_short": 30,
+        "flat_retained_child_fresh_parent_order": 0, "intraday_cap_skip_noop_market_fills": 0,
+        "intraday_cap_defer_pooc_close": 1, "intraday_cap_count_pooc_full_close_fills": 0,
+        "symbol_calendar_days": 1, "symbol_calendar_open:0": 1744032600000,
+        "symbol_calendar_close:0": 1744036200000,
+        "report_terminal_quote_time_ms": 1744036200000, "report_terminal_quote_close": 10,
+        "shares_outstanding_total": 47, "target_price_high": "inf", "new_member": -0.75,
+        "mintick": 42,
+    }
+    strings = {"ticker": "TEST", "tickerid": "X:TEST", "currency": "USD",
+               "basecurrency": "BTC", "description": "Tést", "volumetype": "base"}
+    overrides = {"qty_step": 0.25, "mincontract": 0.01, "mintick": 0.5, "pointvalue": 2,
+                 "timezone": "UTC", "session": "24x7", "type": "forex", **strings,
+                 "syminfo_metadata": {**numbers, "absent": None, "bad": "no number"}}
+    _, kwargs = run_strategy.inputs_run_kwargs({"runtime_overrides": overrides},
+                                              tmp_path, tape, env={})
+
+    def observer():
+        lib, calls = FakeLib(**CASES["clean"]), []
+        for field in ("metadata", "timezone", "session", "type", "string", "mintick", "pointvalue"):
+            def record(state, *args, field=field):
+                assert state == ST
+                calls.append((field, *args))
+            setattr(lib, "strategy_set_syminfo_" + field, record)
+        return lib, calls
+
+    host, host_calls = observer()
+    _strategy(host).run(tape, **kwargs)
+    (tmp_path / "generated.cpp").write_text("// generated\n")
+    docker = FakeDocker()
+    monkeypatch.setattr(pf_release_run, "subprocess", docker)
+    run_strategy._run_via_docker(tmp_path, tape, {}, kwargs, None, None)
+    document, = docker.documents
+    symbol = json.loads(document)
+    raw = [(key, float(value)) for key, value in numbers.items()]
+    wire = [(key, "inf" if key == "target_price_high" else value) for key, value in raw]
+    assert list(symbol.get("syminfo_metadata", {}).items()) == wire
+    assert {k: v for k, v in symbol.items() if k != "syminfo_metadata"} == {
+        k: v for k, v in overrides.items() if k != "syminfo_metadata"}
+    assert "PINEFORGE_SYMINFO=/in/syminfo.json" in docker.argv
+
+    path = tmp_path / "received.json"
+    path.write_text(document)
+    image, image_calls = observer()
+    applied = run_json.apply_syminfo(image, ST, path)
+    # Lot setup historically runs first in the image. The relative order
+    # of the other raw settings matters (origin and warm-ups are last-writer wins).
+    by_name = [(call[1].decode(), call[2]) for call in image_calls if call[0] == "metadata"]
+    assert [(k, v) for k, v in by_name if k not in ("qty_step", "mincontract")] == raw
+    assert sorted(image_calls) == sorted(host_calls)
+    assert applied["syminfo_metadata"] == [list(pair) for pair in wire]
+
+
+def test_new_symbol_fields_remain_optional_for_old_libraries(tmp_path):
+    path = tmp_path / "symbol.json"
+    path.write_text(json.dumps({"syminfo_metadata": {"account_currency_fx": 1.25},
+                                "type": "forex", "currency": "USD"}))
+    assert run_json.apply_syminfo(FakeLib(), ST, path) == {}
+
+
 MALFORMED_LOTS = {
     "true": True, "false": False, "numeric-string": "0.01", "word": "abc",
     "zero": 0, "zero-float": 0.0, "negative": -1, "negative-float": -0.01,
