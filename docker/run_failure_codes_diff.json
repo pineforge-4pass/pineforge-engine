@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "666f1c43816a10a5e346f76a7726b86dc6085f008539b76c2c09782c9eee0308"
+    "catalogSha256": "34a909367f8acba69a293b573818da706c281ee0d04f8ab6b2060811440c6ee5"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -441,6 +441,38 @@
             "vector::_M_range_check: __n (which is {n}) >= this->size() (which is {size})",
             "{any}",
             "{entrypoint}: {message}"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "pine_invalid_argument",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "english",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "line.get_price requires xloc.bar_index",
+            "pivot point levels: the Woodie type has no developing levels (a Woodie period's levels need the open of the period after it)",
+            "pivot point levels: unknown type '{name}'",
+            "stoi",
+            "{bar_prefix}Invalid value of the 'factor' argument ({factor}) in the 'supertrend' function. It must be > 0.",
+            "{bar_prefix}Invalid value of the '{argument}' argument ({value}) in the '{function}' function. It must be > 0.",
+            "{bar_prefix}Invalid value of the '{argument}' argument in the '{function}' function. It must not be na"
+          ],
+          "after": [
+            "line.get_price requires xloc.bar_index",
+            "pivot point levels: the Woodie type has no developing levels (a Woodie period's levels need the open of the period after it)",
+            "pivot point levels: unknown type '{name}'",
+            "stoi",
+            "{bar_prefix}Invalid value of the 'factor' argument ({factor}) in the 'supertrend' function. It must be > 0.",
+            "{bar_prefix}Invalid value of the '{argument}' argument ({value}) in the '{function}' function. It must be > 0.",
+            "{bar_prefix}Invalid value of the '{argument}' argument in the '{function}' function. It must not be na",
+            "{bar_prefix}Invalid value of the '{argument}' argument ({value}) in the '{caller}'->'{function}' function. It must be > 0.",
+            "{bar_prefix}Invalid value of the '{argument}' argument ({value}) in the '{function}' function. It must be greater than 0.",
+            "{bar_prefix}Invalid value of the '{argument}' argument in the '{caller}'->'{function}' function. It must not be na"
           ]
         }
       ]

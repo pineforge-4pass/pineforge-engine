@@ -791,6 +791,10 @@ class VWMA {
     double sv_sum_, v_sum_;
     double saved_sv_sum_ = 0.0, saved_v_sum_ = 0.0;
     double evicted_sv_ = 0.0, evicted_v_ = 0.0;
+    // What the steps of each running sum have rounded away since that sum
+    // was last rebuilt from its window, and the same before the current bar.
+    double sv_lost_ = 0.0, v_lost_ = 0.0;
+    double saved_sv_lost_ = 0.0, saved_v_lost_ = 0.0;
 
 public:
     explicit VWMA(int length);
