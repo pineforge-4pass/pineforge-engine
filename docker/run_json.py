@@ -3456,7 +3456,9 @@ def apply_syminfo(lib, strat, syminfo_path):
     syminfo_unreadable{reason: value_type}.
     The runner's syminfo_metadata object carries other numeric members in
     setter order, separate from the flat catalog fields. Only overrides in
-    _pineforge_runner_syminfo use the optional type and string setters.
+    _pineforge_runner_syminfo use the optional type and string setters. A
+    runner marker acknowledges reader protocol runner-syminfo/v1; missing
+    optional exports warn or refuse under PINEFORGE_STRICT_METADATA.
     Returns the applied lot/origin and ordered raw metadata for
     applied_runtime["syminfo"], or {} when none was applied."""
     def unreadable(text, reason):
@@ -3521,19 +3523,31 @@ def apply_syminfo(lib, strat, syminfo_path):
         applied["series_origin_ms"] = origin
     # Unmarked catalog strings remain descriptive. Only named overrides use setters.
     runner = si.get("_pineforge_runner_syminfo")
+    optional_missing = []
+    optional_missing_exports = []
     if isinstance(runner, dict):
+        sys.stderr.write("pineforge: runner syminfo protocol=1\n")
+        sys.stderr.flush()
         member = runner.get("type")
-        if member and hasattr(lib, "strategy_set_syminfo_type"):
-            with suppress(UnicodeEncodeError):
-                calls.append((lib.strategy_set_syminfo_type, str(member).encode()))
+        if member:
+            if hasattr(lib, "strategy_set_syminfo_type"):
+                with suppress(UnicodeEncodeError):
+                    calls.append((lib.strategy_set_syminfo_type, str(member).encode()))
+            else:
+                optional_missing.append("type")
+                optional_missing_exports.append("strategy_set_syminfo_type")
         strings = runner.get("strings")
-        if isinstance(strings, dict) and hasattr(lib, "strategy_set_syminfo_string"):
+        if isinstance(strings, dict):
             for key, member in strings.items():
                 if member is None or str(member) == "":
                     continue
-                with suppress(UnicodeEncodeError):
-                    calls.append((lib.strategy_set_syminfo_string,
-                                  key.encode(), str(member).encode()))
+                if hasattr(lib, "strategy_set_syminfo_string"):
+                    with suppress(UnicodeEncodeError):
+                        calls.append((lib.strategy_set_syminfo_string,
+                                      key.encode(), str(member).encode()))
+                else:
+                    optional_missing.append(str(key))
+                    optional_missing_exports.append("strategy_set_syminfo_string")
 
     # Even raw numbers named "type" or "currency" go to the numeric setter.
     raw = si.get("syminfo_metadata")
@@ -3575,6 +3589,19 @@ def apply_syminfo(lib, strat, syminfo_path):
                                    {"reason": "syminfo_mintick_invalid"})
             raise SyminfoError(message, "symbol_metadata_rejected", {"field": "point_value"})
         calls.append((setter(name, key), value))
+    if optional_missing:
+        names = ", ".join(dict.fromkeys(optional_missing))
+        exports = ", ".join(dict.fromkeys(optional_missing_exports))
+        if os.environ.get("PINEFORGE_STRICT_METADATA") in ("1", "true", "yes", "on"):
+            raise SyminfoError(
+                "syminfo key(s) the image cannot apply: "
+                f"{names}; missing optional export(s): {exports}; "
+                "use --runner ctypes",
+                "strategy_library_incompatible", {"reason": "setter_missing"})
+        sys.stderr.write(
+            "warning: --runner docker does not apply syminfo key(s): "
+            f"{names}; the results do not apply them.\n")
+        sys.stderr.flush()
     for call in calls:
         call[0](strat, *call[1:])
     return applied

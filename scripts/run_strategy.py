@@ -4787,7 +4787,9 @@ def _declared_magnifier_plan(params: dict, chart_ohlcv: Path, run_kwargs: dict,
 # --- docker runner (pineforge-release image) ---------------------------
 
 def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
-                    run_kwargs: dict, trade_start_ms, image) -> dict:
+                    run_kwargs: dict, trade_start_ms, image, *,
+                    strict_metadata: bool = False,
+                    metadata_warning_state: dict | None = None) -> dict:
     """Run the COMMITTED generated.cpp through the pineforge-release container and
     return a report dict shaped like Strategy.run / _report_to_dict, so the
     host-side emit-window filter + write_engine_trades_csv work UNCHANGED.
@@ -4890,6 +4892,10 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
         kw["inputs"] = corpus_input_values(params)
     if image:
         kw["image"] = image
+    if strict_metadata:
+        kw["strict_metadata"] = True
+    if metadata_warning_state is not None:
+        kw["metadata_warning_state"] = metadata_warning_state
     try:
         raw = _rel.run_release(generated_cpp, ohlcv_for_image, **kw)
     finally:
@@ -5032,6 +5038,10 @@ def main() -> int:
                          "generated.cpp through the pineforge-release image (no host "
                          "C++ toolchain) — same engine_trades.csv, verified by "
                          "verify_corpus.py tolerance tiers.")
+    ap.add_argument("--strict-metadata", action="store_true",
+                    help="With --runner docker, refuse requested type/string "
+                         "syminfo metadata when the image lacks its optional "
+                         "setter export or reader protocol; default: warn and run.")
     ap.add_argument("--image", default=None,
                     help="pineforge-release image for --runner docker (default: "
                          "$PINEFORGE_RELEASE_IMAGE or ghcr .../pineforge-release:latest).")
@@ -5221,6 +5231,7 @@ def _main_run(args, resources) -> int:
                 "error: --runner docker does not support --dump-book; "
                 "use --runner ctypes with a freshly built strategy library.")
         strat = None
+        metadata_warning_state = {}
         # Retire the origin/calendar notices once a published image carries
         # the new reader. A declared magnifier still needs the ctypes runner.
         if os.environ.get(MAGNIFIER_FEED_ENV) or os.environ.get(SESSION_CALENDAR_ENV):
@@ -5233,7 +5244,9 @@ def _main_run(args, resources) -> int:
 
         def run_engine(start_ms):
             return _run_via_docker(strategy_dir, ohlcv_path, params, run_kwargs,
-                                   start_ms, args.image)
+                                   start_ms, args.image,
+                                   strict_metadata=getattr(args, "strict_metadata", False),
+                                   metadata_warning_state=metadata_warning_state)
     else:
         so_path = find_strategy_lib(strategy_dir, args.so_name)
         strat = Strategy(so_path)

@@ -249,15 +249,15 @@ completed; 1 means a failed run, harness fault or report that could not be
 written whole; 2 means argparse refused the command line or explicit request
 validation failed. The module describes failures and incomplete publication
 at `docker/run_json.py:117` and `docker/run_json.py:136`; `main()` describes
-its status contract at `docker/run_json.py:5449` and propagates typed failure
-statuses at `docker/run_json.py:5467` and `docker/run_json.py:5476`.
-The argparse error exits 2 at `docker/run_json.py:4711`; explicit sink-option
-refusals also use 2 at `docker/run_json.py:6190`. The standalone `csv2bin`
-refusal returns 2 at `docker/run_json.py:5435`, but the entrypoint never
+its status contract at `docker/run_json.py:5476` and propagates typed failure
+statuses at `docker/run_json.py:5494` and `docker/run_json.py:5503`.
+The argparse error exits 2 at `docker/run_json.py:4738`; explicit sink-option
+refusals also use 2 at `docker/run_json.py:6217`. The standalone `csv2bin`
+refusal returns 2 at `docker/run_json.py:5462`, but the entrypoint never
 selects that subcommand. `_host_main()` returns 1 on report-channel setup
-failure at `docker/run_json.py:8868`, propagates the run status at
-`docker/run_json.py:8901`, and the process exits through
-`sys.exit(_host_main())` at `docker/run_json.py:9857`.
+failure at `docker/run_json.py:8895`, propagates the run status at
+`docker/run_json.py:8928`, and the process exits through
+`sys.exit(_host_main())` at `docker/run_json.py:9884`.
 
 Statuses 3 (compile or bind failure) and 5 (transpile failure) are
 build-phase-only; the engine step never returns them. Status 4 is only the
@@ -539,9 +539,16 @@ settings. Null and nonnumeric values are skipped; zero is a setting.
 The runner puts explicitly requested type and string overrides inside
 `_pineforge_runner_syminfo` (`type` and `strings`, respectively).
 They use `strategy_set_syminfo_type` and `strategy_set_syminfo_string`.
-Libraries without these optional exports continue without those fields.
-Earlier published image readers ignore the new objects;
-use an image built with the matching harness for both runners to agree.
+The current reader acknowledges this object with `runner-syminfo/v1`.
+Libraries without these optional exports continue without those fields and
+print one stderr warning naming the skipped keys. If that acknowledgment is
+absent, the host treats the image reader as too old and prints one warning
+naming the forwarded keys; this is how the host detects a reader that
+predates the marker. `scripts/run_strategy.py --strict-metadata` refuses
+missing optional exports or an old reader, naming the keys and pointing to
+`--runner ctypes`; the default remains warn and run. Earlier published image
+readers ignore the new objects; use an image built with the matching harness
+for both runners to agree.
 
 - `qty_step` declares the quantity grid, so order quantities are floored to
   that step. `mincontract` is the instrument's lot size (TradingView's

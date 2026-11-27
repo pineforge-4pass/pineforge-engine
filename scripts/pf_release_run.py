@@ -44,6 +44,23 @@ class ReleaseRunError(RuntimeError):
         self.report = report
 
 
+def _runner_syminfo_keys(syminfo: dict | None) -> tuple[str, ...]:
+    if not isinstance(syminfo, dict):
+        return ()
+    runner = syminfo.get("_pineforge_runner_syminfo")
+    if not isinstance(runner, dict):
+        return ()
+    keys = []
+    if runner.get("type"):
+        keys.append("type")
+    strings = runner.get("strings")
+    if isinstance(strings, dict):
+        keys.extend(
+            str(key) for key, value in strings.items()
+            if value is not None and str(value) != "")
+    return tuple(dict.fromkeys(keys))
+
+
 def _module_input_names(shared_object: Path) -> frozenset[str]:
     """Query this compiled module's v1 receipt without settings or bar execution."""
     from run_strategy import declared_pine_input_names
@@ -237,6 +254,8 @@ def run_release(
     trade_start_ms: int | None = None,
     chart_tz: str = "",
     syminfo: dict | None = None,
+    strict_metadata: bool = False,
+    metadata_warning_state: dict | None = None,
     bench: bool = False,
     warmup: int = 3,
     repeats: int = 20,
@@ -252,6 +271,8 @@ def run_release(
     ``corpus_params`` requests metadata/input classification using the actual
     compiled module's pre-execution settings receipt. It is exclusive with
     already-resolved ``inputs``. Both phases use one container and one module.
+    ``strict_metadata`` asks the image to refuse requested type/string metadata
+    when its optional setter export is absent or its reader is too old.
     """
     if corpus_params is not None and (inputs is not None or not isinstance(corpus_params, dict)):
         raise ReleaseRunError("corpus_params must be an object, exclusive with resolved inputs")
@@ -301,6 +322,8 @@ def run_release(
             json.dump(syminfo, f)
         cmd += ["-v", f"{tmp_syminfo}:/in/syminfo.json:ro"]
         env["PINEFORGE_SYMINFO"] = "/in/syminfo.json"
+    if strict_metadata:
+        env["PINEFORGE_STRICT_METADATA"] = "1"
 
     for k, v in env.items():
         cmd += ["-e", f"{k}={v}"]
@@ -328,7 +351,48 @@ def run_release(
             if tmp_syminfo is not None:
                 tmp_syminfo.unlink(missing_ok=True)
 
+    requested_keys = _runner_syminfo_keys(syminfo)
+    reader_protocol = "pineforge: runner syminfo protocol=1"
+    forwarded_warning = False
+    for line in proc.stderr.splitlines():
+        if line == reader_protocol:
+            reader_protocol = ""
+        elif (line.startswith("warning: --runner docker does not apply syminfo key(s):")
+              and not forwarded_warning
+              and (metadata_warning_state is None
+                   or not metadata_warning_state.get("emitted"))):
+            sys.stderr.write(line + "\n")
+            sys.stderr.flush()
+            forwarded_warning = True
+            if metadata_warning_state is not None:
+                metadata_warning_state["emitted"] = True
+
+    if (proc.returncode == 0 and requested_keys and reader_protocol
+            and not forwarded_warning):
+        names = ", ".join(requested_keys)
+        text = (
+            "warning: --runner docker image reader does not apply syminfo key(s): "
+            f"{names}; the results do not apply them "
+            "(reader protocol runner-syminfo/v1 unavailable).")
+        if strict_metadata:
+            raise ReleaseRunError(
+                "error: " + text + "; use --runner ctypes")
+        if (metadata_warning_state is None
+                or not metadata_warning_state.get("emitted")):
+            sys.stderr.write(text + "\n")
+            sys.stderr.flush()
+            if metadata_warning_state is not None:
+                metadata_warning_state["emitted"] = True
+
     if proc.returncode != 0:
+        if strict_metadata and proc.stdout.strip():
+            try:
+                failure = json.loads(proc.stdout.strip().splitlines()[-1])
+            except (TypeError, ValueError):
+                failure = None
+            if isinstance(failure, dict) and failure.get("error"):
+                raise ReleaseRunError(
+                    f"engine error: {failure['error']}", report=failure)
         if corpus_params is not None and proc.stdout.strip():
             try:
                 failure = json.loads(proc.stdout.strip().splitlines()[-1])
