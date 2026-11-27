@@ -9,8 +9,8 @@ the index with ``ci/cr150-source-bounds.yaml``.
 
 Exit 0: no finding. Exit 1: a finding (an unlisted site, a stale entry, a
 bounded entry without supported size-guard enforcement, a ceiling or pin drift,
-a note citing a line that does not hold what the note names, more UNCHECKED
-note citations than the manifest ceiling allows) or,
+a note citing a line that does not hold what the note names, a number of
+UNCHECKED note citations other than the one the manifest pins) or,
 with ``--strict``, any OPEN entry left. Exit 2: the gate cannot judge (missing
 or malformed manifest/site inventory, an invalid fixed input or bound syntax,
 zero files, zero sites, a broken pattern set). A bound naming a growth axis is
@@ -485,8 +485,8 @@ class Manifest:
         ceilings = data['ceilings']
         if not isinstance(ceilings, dict):
             raise GateError('ceilings must be a mapping')
-        # cited_unchecked caps the UNCHECKED note citations. A manifest that
-        # does not pin it allows none.
+        # cited_unchecked pins the number of UNCHECKED note citations: the
+        # count must equal it. A manifest that does not pin it allows none.
         _need(ceilings, ('unreviewed', 'pending-flat-memory'), 'ceilings', ('cited_unchecked',))
         for key, value in ceilings.items():
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
@@ -1201,13 +1201,19 @@ def note_sentences(note: str) -> list[str]:
     """The note cut after each period or semicolon that ends a clause: one that
     whitespace follows, outside parentheses. A parenthesis belongs to the
     sentence it stands in, so the citations of ``(:3; outer :6)`` stay with
-    the words before it. An unclosed parenthesis runs to the end of the note."""
-    sentences, start, depth = [], 0, 0
+    the words before it. Only a parenthesis that closes holds a sentence
+    together: an opening one that never closes is plain text, so the sentences
+    after it are still cut and none lends its names to a citation before it."""
+    paired, opened = set(), []
     for index, ch in enumerate(note):
         if ch == '(':
-            depth += 1
-        elif ch == ')':
-            depth = max(depth - 1, 0)
+            opened.append(index)
+        elif ch == ')' and opened:
+            paired.update((opened.pop(), index))
+    sentences, start, depth = [], 0, 0
+    for index, ch in enumerate(note):
+        if index in paired:
+            depth += 1 if ch == '(' else -1
         elif ch in '.;' and not depth and note[index + 1:index + 2].isspace():
             sentences.append(note[start:index + 1])
             start = index + 1
@@ -1281,6 +1287,42 @@ def note_constructs(sentence: str) -> set[str]:
     return names - NOTE_PROSE
 
 
+def construct_end(code: list[str], first: int) -> int | None:
+    """The line on which the block or statement that begins on line ``first``
+    ends, read on lexed rows (comments and literals removed): the ``}`` that
+    brings the brackets opened since that line back to none, or the first
+    ``;`` outside every bracket. A function ends on its closing brace, a call
+    written on two lines on the line of its ``;``.
+
+    None when line ``first`` begins nothing (it is blank or a preprocessor
+    directive, or it closes a bracket it did not open) and when the file ends
+    first. Bracket matching, not C++ parsing: it finds where the text that
+    starts on that line closes, and says nothing about what that text is.
+    """
+    if not 1 <= first <= len(code):
+        return None
+    head = code[first - 1].strip()
+    if not head or head.startswith('#'):
+        return None
+    depth = 0
+    for number in range(first, len(code) + 1):
+        row = code[number - 1]
+        if row.lstrip().startswith('#'):
+            continue
+        for ch in row:
+            if ch in '([{':
+                depth += 1
+            elif ch in ')]}':
+                depth -= 1
+                if depth < 0:
+                    return None
+                if depth == 0 and ch == '}':
+                    return number
+            elif ch == ';' and depth == 0:
+                return number
+    return None
+
+
 def check_citations(manifest: 'Manifest', by_key: dict, texts: dict[str, str], root: Path):
     """Check every line an entry note cites.
 
@@ -1294,13 +1336,20 @@ def check_citations(manifest: 'Manifest', by_key: dict, texts: dict[str, str], r
 
     In another file the entry's symbol counts only as such an identifier: the
     entry records no site there, and the same spelling may be another object.
-    A range ``N-M`` holds only when its first line and its last line each do;
-    a line inside it says nothing about where the range begins or ends.
+    A citation the note calls a site holds only on a site of the entry: a
+    spelled construct does not stand in for that claim.
+
+    A range ``N-M`` is judged at its two ends; a line inside it says nothing
+    about where the range begins or ends. Its first line must hold. Its last
+    line must hold too, or be the line on which the block or statement that
+    begins on the first line ends (``construct_end``, C and C++ sources only):
+    the closing brace of a function, the last line of a call written on
+    several. A range whose first line does not hold never holds.
 
     A citation that does not hold is a finding when the note names something
     to look for there (a spelled construct, or the word "site"). A sentence of
     prose only names nothing a text check can look for: that citation is
-    UNCHECKED, listed and counted, never taken as holding; the caller caps
+    UNCHECKED, listed and counted, never taken as holding; the caller pins
     their number with the manifest ceiling. A cited path that is not a file
     under the root, or a line past its end, is a finding. Read-only: no file,
     count, id or bound changes.
@@ -1308,6 +1357,19 @@ def check_citations(manifest: 'Manifest', by_key: dict, texts: dict[str, str], r
     Returns (findings, entry ids with a finding, unchecked lines, cited, held).
     """
     cache: dict[str, list[str] | None] = {}
+    code_cache: dict[str, list[str] | None] = {}
+
+    def code_of(rel: str) -> list[str] | None:
+        """The lexed rows of a C or C++ source that ``rows_of`` has read, or
+        None for any other file: only code has blocks and statements."""
+        if rel not in code_cache:
+            code_cache[rel] = None
+            if Path(rel).suffix in SOURCE_SUFFIXES:
+                text = texts.get(rel)
+                if text is None:
+                    text = (root / rel).read_text(errors='replace')
+                code_cache[rel] = [part[0] for part in cxxlex.lex_lines(text)]
+        return code_cache[rel]
 
     def rows_of(rel: str) -> list[str] | None:
         if rel not in cache:
@@ -1359,10 +1421,19 @@ def check_citations(manifest: 'Manifest', by_key: dict, texts: dict[str, str], r
                 failed.add(eid)
                 continue
             named = note_constructs(sentence)
+            # A claimed site must be a site of the entry: a construct the
+            # sentence spells does not stand in for it.
+            spelled = set() if as_site else named
             # A range is judged at its two ends, a single line at itself.
             missing = [line for line in ((first,) if first == last else (first, last))
                        if not (rel == own and line in site_lines)
-                       and not named & set(IDENT_RE.findall(rows[line - 1]))]
+                       and not spelled & set(IDENT_RE.findall(rows[line - 1]))]
+            if missing == [last] and first != last:
+                # The first line holds. The last one need not when it is where
+                # the block or statement that begins on the first line ends.
+                code = code_of(rel)
+                if code is not None and construct_end(code, first) == last:
+                    missing = []
             if not missing:
                 held += 1
                 continue
@@ -1374,16 +1445,17 @@ def check_citations(manifest: 'Manifest', by_key: dict, texts: dict[str, str], r
                 which = (f'line {missing[0]} does not' if len(missing) == 1
                          else 'neither line does')
                 holds = (f'{rel}:{first}-{last} begins "{shown(rows[first - 1])}" and ends '
-                         f'"{shown(rows[last - 1])}": a range holds only when its first and '
-                         f'its last line both do, and {which}: {expected}')
-            if named:
+                         f'"{shown(rows[last - 1])}": a range holds only when its first line '
+                         'does and its last line either does or ends the block or statement '
+                         f'that begins on the first, and {which}: {expected}')
+            if as_site:
+                findings.append((rel, first, f'entry {eid}: note cites {label}: {holds}, '
+                                 'and the note calls it a site'))
+                failed.add(eid)
+            elif named:
                 findings.append((rel, first, f'entry {eid}: note cites {label}: {holds} '
                                  f'and none of the constructs the note names in '
                                  f'that sentence ({", ".join(sorted(named))})'))
-                failed.add(eid)
-            elif as_site:
-                findings.append((rel, first, f'entry {eid}: note cites {label}: {holds}, '
-                                 'and the note calls it a site'))
                 failed.add(eid)
             else:
                 unchecked.append(f'entry {eid}: note cites {label}: {holds}, and '
@@ -1497,7 +1569,9 @@ def run(root: Path, manifest_path: Path, strict: bool, json_out: Path | None):
     manifest_rel = (str(manifest_path.relative_to(root)) if manifest_path.is_relative_to(root)
                     else str(manifest_path))
     # An UNCHECKED citation is not a finding, so a reworded sentence could turn
-    # a failing citation into one. The reviewed ceiling refuses any new one.
+    # a failing citation into one. The reviewed number is pinned exactly: one
+    # more is refused, and so is one fewer until the pin follows it down, or
+    # the room left under it would take a later UNCHECKED citation unseen.
     unchecked_ceiling = manifest.ceilings.get('cited_unchecked', 0)
     if len(unchecked) > unchecked_ceiling:
         unpinned = ('' if 'cited_unchecked' in manifest.ceilings else
@@ -1507,6 +1581,13 @@ def run(root: Path, manifest_path: Path, strict: bool, json_out: Path | None):
                          f'ceiling {unchecked_ceiling}{unpinned}: name what the cited line '
                          'holds so the citation is checked, or raise ceilings.cited_unchecked '
                          'in a reviewed change'))
+    elif len(unchecked) < unchecked_ceiling:
+        findings.append((manifest_rel, 0,
+                         f'UNCHECKED note citations {len(unchecked)} are below the manifest '
+                         f'ceiling {unchecked_ceiling}: lower ceilings.cited_unchecked to '
+                         f'{len(unchecked)} in the same change; the number is pinned exactly, '
+                         'so that the room under it cannot take a later UNCHECKED citation '
+                         'unseen'))
     pin_text = (root / manifest.pin_source).read_text(errors='replace')
     pin_match = re.search(r'CODEGEN_COMMIT="?([0-9a-f]{40})', pin_text)
     if not pin_match or pin_match.group(1) != manifest.pin:
@@ -1548,10 +1629,6 @@ def run(root: Path, manifest_path: Path, strict: bool, json_out: Path | None):
         f'cited_fails={len(cite_findings)} cited_unchecked={len(unchecked)} '
         f'cited_unchecked_ceiling={unchecked_ceiling}: '
         'an UNCHECKED citation is listed, never counted as holding')
-    if len(unchecked) < unchecked_ceiling:
-        out(f'{PREFIX} note citations cited_unchecked_slack={unchecked_ceiling - len(unchecked)}: '
-            f'fewer UNCHECKED citations than the manifest ceiling allows; lower '
-            f'ceilings.cited_unchecked to {len(unchecked)}')
     total_open = len(opened) + len(open_templates)
     if findings:
         verdict, code = 'FINDINGS', 1
