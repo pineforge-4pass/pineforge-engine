@@ -587,10 +587,10 @@ public:
     // chart's next day -- for session.islastbar / islastbar_regular and for
     // time() / time_close() reading a later bar, as TradingView reads them;
     // everywhere else (a W, M or multi-day chart's own bars among them), and
-    // with no calendar (the default), the feed's own bars answer. False, and
-    // nothing installed, for sessions out of order; an empty list removes the
-    // calendar. The C ABI carries it as syminfo metadata ("symbol_calendar_*",
-    // set_syminfo_metadata), installed when the run begins.
+    // with no calendar (the default), the feed's own bars answer, with one slot more for time() /
+    // time_close(): a session slot between two feed bars of one session day. False, and nothing
+    // installed, for sessions out of order; an empty list removes the calendar. The C ABI carries
+    // it as syminfo metadata ("symbol_calendar_*", set_syminfo_metadata), installed at run begin.
     bool set_symbol_calendar(std::vector<std::pair<std::int64_t, std::int64_t>> sessions);
     const std::vector<std::pair<std::int64_t, std::int64_t>>& symbol_calendar() const noexcept {
         return symbol_calendar_;
@@ -1161,8 +1161,8 @@ private:
         const std::string* timeframe = nullptr;
     };
 
-    void push_request_delivery(int sec_id, const PineRequestDelivery&,
-                               std::int64_t body_open_ms);
+    void set_static_request_delivery(RequestDeliveryFrame&, int sec_id, const PineRequestDelivery&,
+                                     std::int64_t body_open_ms);
     void push_request_delivery(const PineRuntimeSecurityCursor&,
                                const PineRequestDelivery&, std::int64_t body_open_ms);
     void pop_request_delivery() noexcept;
@@ -1674,6 +1674,28 @@ protected:
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     void release_aux_security_chart_ranges();
 #endif
+    // Pine's timeframe.change(tf), as the generated class-scope call spells
+    // it: tf_change(prev_bar_timestamp_, current_bar_.timestamp, tf,
+    // syminfo_.timezone, syminfo_.session). True when the chart bar opening at
+    // `curr_ms` begins a new `tf` period, `prev_ms` being the bar before it
+    // (zero, no bar before it: false). The namespace-level tf_change reads a
+    // calendar timeframe's unit alone, so it answers "2D" as it answers "D".
+    // An N-day timeframe ("2D", "3D", ...) is compared here by the period of
+    // TradingView's N-day partition holding each bar (N trading dates counted
+    // from the year's first, src/source/multi_day_periods.hpp), the partition
+    // an N-day request.security reads. Every other timeframe, another
+    // symbol's requested context, and an N-day timeframe whose partition this
+    // run cannot build keep the namespace-level answer (pine_strategy_host.cpp).
+    // The run's partitions are no member of this class, whose layout is the
+    // generated script's ABI: they are parked with the consumer that serves
+    // the run (TimeframeChangeState, src/source/pine_host_reads.hpp).
+    bool tf_change(std::int64_t prev_ms, std::int64_t curr_ms, const std::string& tf,
+                   const std::string& tz, const std::string& session) const;
+    // A class-scope name hides every namespace-level overload: the UTC form
+    // stays the namespace's.
+    bool tf_change(std::int64_t prev_ms, std::int64_t curr_ms, const std::string& tf) const {
+        return pineforge::tf_change(prev_ms, curr_ms, tf);
+    }
 
 public:
     // During a source calculation, query the configured default entry units

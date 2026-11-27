@@ -164,6 +164,10 @@ double StdDev::held_stdev() const {
 
 double StdDev::compute(double src) {
     if (biased_) {
+        // A length of zero or less has no window: nothing enters either sum
+        // (the window sum takes a positive length only) and the value is na
+        // on every bar, as on the sample path below.
+        if (length_ <= 0) return na<double>();
         if (is_na(src)) {
             // na never enters; the seeded value is held (see below).
             sum_x_.note_no_push();

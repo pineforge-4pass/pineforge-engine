@@ -557,8 +557,352 @@ private:
     std::int64_t max_lookback_ = ::pineforge::detail::ta_lookback_limit();
 };
 
+// ta.mom(source, length) and ta.roc(source, length) on a source that has
+// missing (na) bars.
+//
+// TradingView's reference defines ta.mom as `source - source[length]` and
+// ta.roc as `100 * ta.change(source, length) / source[length]`. A history
+// subscript counts bars, so a bar whose source is na still holds a position:
+// the call reads the bar `length` positions back whatever lies between, and
+// answers na when that bar or the current one is na. This is the rule of the
+// reference text; no TradingView tape pins it yet for a source with an na
+// bar. ta.change already follows it: ta::Change keeps one slot per call, na
+// included. ta::Mom and ta::ROC keep a window of non-missing samples
+// instead, so after an na bar they read the length-th previous PRESENT
+// sample, which is older than `source[length]`, until the na bar is more
+// than `length` bars back. That window is those two classes' own contract
+// and stays as it is; PineMom and PineRoc are the Pine call's objects.
+//
+// PositionalLag is the history the two share: one slot per compute(), na
+// included, the last `length + 1` of them. recompute() rewrites the newest
+// slot, so a recalculation of the same bar adds no position; a recompute()
+// before the first compute() is that first compute().
+//
+// For a source with no na after its first value (leading na bars included)
+// PineMom and PineRoc answer what ta::Mom and ta::ROC answer, bit for bit,
+// for every length: na until `length` earlier values exist, then the same
+// subtraction and the same `(source - previous) / previous * 100` with na
+// for a previous value of zero. A length of 0 reads the current value
+// (ta.mom 0, ta.roc 0 or na for a zero source) and a negative length answers
+// na on every call, as the two classes do. The length is taken as the int
+// the classes take; no length stops the run here.
+class PositionalLag {
+    // Newest first from head_, as ta::Change keeps its history. The ring
+    // grows as calls arrive, so a large length costs nothing before that
+    // many calls have been made.
+    std::vector<double> lag_slots_;
+    std::size_t head_ = 0;
+    std::size_t size_ = 0;
+    int length_;
+
+    std::size_t index(std::size_t offset) const noexcept {
+        const std::size_t position = head_ + offset;
+        return position < lag_slots_.size() ? position : position - lag_slots_.size();
+    }
+    // Room for one more slot while fewer than `keep` are held. Nothing
+    // changes if the allocation fails.
+    void ensure_room(std::size_t keep) {
+        if (size_ < lag_slots_.size() || size_ >= keep) return;
+        const std::size_t capacity = lag_slots_.size();
+        const std::size_t initial = keep < 8 ? keep : std::size_t{8};
+        const std::size_t missing = keep - capacity;
+        const std::size_t next =
+            capacity == 0 ? initial : capacity + (capacity < missing ? capacity : missing);
+        std::vector<double> grown(next);
+        for (std::size_t i = 0; i < size_; ++i) grown[i] = lag_slots_[index(i)];
+        lag_slots_.swap(grown);
+        head_ = 0;
+    }
+
+public:
+    explicit PositionalLag(int length) : length_(length) {}
+
+    // One call of the site. `advance` records `src` at a new position;
+    // otherwise `src` replaces the newest position. Returns false while
+    // fewer than `length` earlier positions exist, and for a negative
+    // length; otherwise `previous` is the value `length` positions back,
+    // na if that position holds na.
+    bool step(double src, bool advance, double& previous) {
+        if (length_ < 0) return false;
+        const std::size_t keep = static_cast<std::size_t>(length_) + 1;
+        if (advance || size_ == 0) {
+            ensure_room(keep);
+            head_ = head_ ? head_ - 1 : lag_slots_.size() - 1;
+            lag_slots_[head_] = src;
+            if (size_ < keep) ++size_;
+        } else {
+            lag_slots_[head_] = src;
+        }
+        if (size_ < keep) return false;
+        previous = lag_slots_[index(keep - 1)];
+        return true;
+    }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        ::pineforge::observe_owned_members(out, lag_slots_);
+    }
+};
+
+// ta.mom(source, length): `source - source[length]`, positions counted as
+// PositionalLag counts them. A drop-in for ta::Mom in generated code: the
+// same constructor argument, compute, recompute and observe_owned_storage.
+class PineMom {
+    PositionalLag lag_;
+
+    double answer(double src, bool advance) {
+        double previous = na<double>();
+        if (!lag_.step(src, advance, previous) || is_na(src) || is_na(previous)) {
+            return na<double>();
+        }
+        return src - previous;
+    }
+
+public:
+    explicit PineMom(int length) : lag_(length) {}
+    double compute(double src) { return answer(src, true); }
+    double recompute(double src) { return answer(src, false); }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        lag_.observe_owned_storage(out);
+    }
+};
+
+// ta.roc(source, length): `100 * (source - source[length]) / source[length]`
+// in ta::ROC's operation order, na for a zero `source[length]`, positions
+// counted as PositionalLag counts them. A drop-in for ta::ROC in generated
+// code, as PineMom is for ta::Mom.
+class PineRoc {
+    PositionalLag lag_;
+
+    double answer(double src, bool advance) {
+        double previous = na<double>();
+        if (!lag_.step(src, advance, previous) || is_na(src) || is_na(previous) ||
+            previous == 0.0) {
+            return na<double>();
+        }
+        return (src - previous) / previous * 100.0;
+    }
+
+public:
+    explicit PineRoc(int length) : lag_(length) {}
+    double compute(double src) { return answer(src, true); }
+    double recompute(double src) { return answer(src, false); }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        lag_.observe_owned_storage(out);
+    }
+};
+
+// The check ta.supertrend's two arguments get on the first execution of a
+// call site, whatever their qualifier: PineSupertrend::compute makes it for a
+// factor that is not a constant, PineFixedSupertrend below for a constant or
+// input one. atrPeriod first, through simple_ta_length ("supertrend",
+// "atrPeriod": na, zero or a negative period stops the run), then the factor:
+// zero or a negative factor stops the run with "Invalid value of the 'factor'
+// argument (<value>) in the 'supertrend' function. It must be > 0."; an na
+// factor is accepted. Returns the checked atrPeriod.
+int supertrend_first_execution_period(double factor, double atr_period);
+
+// ta.supertrend(factor, atrPeriod) with a constant or input factor and
+// atrPeriod: the checked form of ta::Supertrend, as PineEma is of ta::EMA.
+// The constructor stores the two arguments and never throws, so an invalid
+// one cannot stop a run before its first bar. The first compute() or
+// recompute() makes the check above, the one a factor that is not a constant
+// gets, and then builds ta::Supertrend from the checked arguments. A failed
+// check builds nothing, so the next call checks again. After a passed check
+// every call delegates to that class, so the line and direction for a valid
+// pair are the class's own. The factor is taken as an int, int64 or double
+// (ta_number keeps an integer na as na) and atrPeriod as a length
+// (ta_length_number). Covered: the two-argument constructor, compute,
+// recompute and observe_owned_storage.
+class PineFixedSupertrend {
+    double factor_;
+    double atr_period_;
+    std::optional<ta::Supertrend> object_;
+
+    ta::Supertrend& bound() {
+        if (!object_)
+            object_.emplace(factor_, supertrend_first_execution_period(factor_, atr_period_));
+        return *object_;
+    }
+
+public:
+    template <class Factor, class Period>
+    PineFixedSupertrend(Factor factor, Period atr_period)
+        : factor_(ta_number(factor)), atr_period_(ta_length_number(atr_period)) {}
+    ta::SupertrendResult compute(double high, double low, double close) {
+        return bound().compute(high, low, close);
+    }
+    ta::SupertrendResult recompute(double high, double low, double close) {
+        return bound().recompute(high, low, close);
+    }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        ::pineforge::observe_owned_storage(out, object_);
+    }
+};
+
+// ta.vwma(source, length) as the Pine reference manual defines it:
+//     ta.sma(source * volume, length) / ta.sma(volume, length)
+// with two ta::SMA windows that take their inputs separately. ta::VWMA keeps
+// complete pairs instead: a bar whose source or volume is na enters neither
+// of its windows and answers na. Here a bar whose source is na and whose
+// volume is not still enters the volume window, and the product window holds
+// its last mean, as ta::SMA does for an na input. So the answer on such a bar
+// is the held product mean over the new volume mean, and the two windows
+// cover different bars until `length` further complete pairs have arrived.
+// An na volume is missing in both windows. On bars without na the values are
+// those of the two ta::SMA calls, not ta::VWMA's running sums, and can differ
+// from ta::VWMA in the last place. A zero volume mean answers na, as a zero
+// total weight does in ta::VWMA. The definition is the manual's; no
+// TradingView recording of a bar with an na source backs it yet.
+// Members: the length constructor, compute, recompute (each window replays
+// its own bar) and observe_owned_storage, the ones ta::VWMA has.
+class PineVwma {
+    ta::SMA product_;
+    ta::SMA volume_;
+
+    static double quotient(double product_mean, double volume_mean) {
+        if (volume_mean == 0.0) return na<double>();
+        return product_mean / volume_mean;
+    }
+
+public:
+    explicit PineVwma(int length) : product_(length), volume_(length) {}
+    double compute(double source, double volume) {
+        const double product_mean = product_.compute(source * volume);
+        return quotient(product_mean, volume_.compute(volume));
+    }
+    double recompute(double source, double volume) {
+        const double product_mean = product_.recompute(source * volume);
+        return quotient(product_mean, volume_.recompute(volume));
+    }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        ::pineforge::observe_owned_members(out, product_, volume_);
+    }
+};
+
+// ta.dmi(diLength, adxSmoothing) by the Pine reference definition:
+//
+//   plus  = fixnan(100 * ta.rma(plusDM, diLength) / ta.rma(ta.tr, diLength))
+//   minus = fixnan(100 * ta.rma(minusDM, diLength) / ta.rma(ta.tr, diLength))
+//   sum   = plus + minus
+//   adx   = 100 * ta.rma(math.abs(plus - minus) / (sum == 0 ? 1 : sum), adxSmoothing)
+//
+// The directional movements, the true range and the four averages are
+// ta::DMI's, and so is every value on a bar the two rules below do not
+// decide, bit for bit:
+//
+// * fixnan: a quotient that is na keeps the last value it had. The quotient
+//   is na while the averages are, and on a zero averaged true range (0 / 0:
+//   the averaged range is zero only while every directional movement is
+//   zero too). On such a bar both indices read their last values and ADX
+//   takes one more step from them, where ta::DMI answers three na and leaves
+//   ADX where it was. Nothing is held before the first valid quotient, so
+//   flat bars at the start of the series stay na and give ADX no input. With
+//   diLength 1 the averaged range is the bar's own, so every bar whose high
+//   and low equal the previous close is such a bar; with a longer diLength
+//   the averaged range stays positive, short of underflow, once one bar has
+//   had a range.
+// The directional movements compare with the tolerant relational of
+// <pineforge/ta_compare_band.hpp>, exactly as ta::DMI does, and the index sum
+// is tested against zero exactly, as ta::DMI tests it.
+//
+// A TradingView capture of a synthetic script found the built-in's indices
+// finite on bars whose own true range is zero. The scaling keeps ta::DMI's order
+// (100 * |plus - minus| / divisor, then the average), which is what keeps
+// the other bars' bits. An na high, low or close answers three na and
+// changes nothing, as in ta::DMI. The lengths are the two ints ta::DMI
+// takes and are not checked here, as they are not checked there.
+// recompute() replaces the bar computed last: the held indices, the
+// previous bar and the four averages return to what that bar found.
+class PineDmiReference {
+public:
+    PineDmiReference(int di_length, int adx_smoothing);
+    ta::DMIResult compute(double high, double low, double close);
+    ta::DMIResult recompute(double high, double low, double close);
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        ::pineforge::observe_owned_members(out, rma_plus_, rma_minus_, rma_tr_, rma_adx_);
+    }
+
+private:
+    struct State {
+        double prev_high = na<double>();
+        double prev_low = na<double>();
+        double prev_close = na<double>();
+        bool first_bar = true;
+        double held_plus = na<double>();    // fixnan: the last non-na +DI
+        double held_minus = na<double>();   // fixnan: the last non-na -DI
+    };
+
+    ta::RMA rma_plus_, rma_minus_, rma_tr_, rma_adx_;
+    State state_;
+    State saved_state_;
+};
+
+// The relational comparisons inside PineSar. TradingView's built-in ta.sar
+// compares its internal values the way a Pine relational does: two finite
+// values at most 1e-10 apart are equal, whatever their size (the absolute band
+// of <pineforge/ta_compare_band.hpp>; an na operand makes every relational
+// false). On a synthetic script its output followed a banded copy of the
+// reference definition on every bar where a banded and a raw copy disagreed.
+// PineSar compares with float_band_gt / float_band_lt, so a projected SAR
+// 6e-11 beyond the bar's low is a touch and keeps the side it was on. ta::SAR
+// keeps the exact C++ comparisons: nothing here changes the kernel, and a call
+// site chooses this class to get TradingView's comparisons. (ta.supertrend's
+// built-in compares raw, as ta::Supertrend does, so it has no banded twin.)
+//
+// ta.sar(start, inc, max) with those comparisons. The recipe and its
+// arithmetic are ta::SAR's, statement for statement: na until the second bar
+// with values; the first trend bar is long when close is greater than
+// close[1], takes the bar's high as its extreme (the low when short) and
+// starts the line at the previous low (high); every bar projects the line
+// toward the extreme by the acceleration, reverses when the projection is
+// greater than the bar's low (long) or less than its high (short), steps the
+// acceleration when the bar sets a new extreme (never on a first trend bar),
+// and holds the line behind the previous two bars' lows (highs). The five
+// comparisons named in that sentence are the banded ones; min and max are
+// exact. While no compared pair lies inside the band the answers are
+// ta::SAR's, bit for bit. Same constructor and members as ta::SAR.
+class PineSar {
+public:
+    PineSar(double start, double increment, double maximum)
+        : start_(start), increment_(increment), maximum_(maximum) {}
+    double compute(double high, double low, double close);
+    double recompute(double high, double low, double close);
+    // All retained fields are inline scalars.
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
+
+private:
+    struct State {
+        double af = 0.0;
+        double ep = 0.0;
+        double sar = 0.0;
+        bool is_long = true;
+        bool initialized = false;
+        double prev_high = na<double>();
+        double prev_low = na<double>();
+        double prev_close = na<double>();
+        double prev_prev_high = na<double>();
+        double prev_prev_low = na<double>();
+    };
+    double step(double high, double low, double close);
+
+    double start_;
+    double increment_;
+    double maximum_;
+    State state_;
+    State saved_state_;  // the state before the current bar
+};
+
 }  // namespace source
 }  // namespace pineforge
 
 // Feature macro: the classes above exist.
 #define PINEFORGE_HAS_TA_SERIES_LENGTH 1
+// Feature macro: PineMom and PineRoc exist.
+#define PINEFORGE_HAS_PINE_POSITIONAL_LAG 1
+// Feature macro: PineFixedSupertrend exists.
+#define PINEFORGE_HAS_PINE_FIXED_SUPERTREND 1
+// Feature macro: PineVwma exists.
+#define PINEFORGE_HAS_PINE_VWMA 1
+// Feature macro: PineDmiReference exists.
+#define PINEFORGE_HAS_PINE_DMI_REFERENCE 1
+// Feature macro: PineSar exists.
+#define PINEFORGE_HAS_PINE_SAR 1

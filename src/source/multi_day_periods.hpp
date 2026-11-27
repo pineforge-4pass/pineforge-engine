@@ -794,6 +794,13 @@ inline std::shared_ptr<TimeframeAggregator::PeriodSource> make_rescanned_source(
 
 }  // namespace multi_day_detail
 
+/// How many partitions this thread was asked to plan: the calls of
+/// make_multi_day_period_source for two or more days. A witness for
+/// tests/test_timeframe_change_partition_plans.cpp, which holds
+/// timeframe.change to one planning per N-day timeframe per run; nothing in
+/// the engine reads it.
+inline thread_local std::uint64_t multi_day_plans_for_test = 0;
+
 /// The N-day partition of `feeds`, or null where TradingView's rule yields
 /// none: fewer than two days, a session that does not parse, no held session
 /// day, no period opening at or before the first held day, an open that does
@@ -806,6 +813,7 @@ inline std::shared_ptr<TimeframeAggregator::PeriodSource> make_multi_day_period_
         const MultiDayFeeds& feeds) {
     namespace detail = multi_day_detail;
     if (feeds.days < 2) return nullptr;
+    ++multi_day_plans_for_test;
     NativeDayPartitionScope nominal(nullptr);
     auto calendar = native_calendar::parse_session(feeds.session, feeds.tz);
     if (!calendar) return nullptr;

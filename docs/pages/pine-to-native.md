@@ -737,7 +737,7 @@ Transport numeric Pine operands through the existing `ta_number` overloads
 for `double`, `int` and `std::int64_t`, so integer `na` sentinels reach the
 adapter as a double NaN.
 
-`compute` (src/source/pine_ta_length.cpp:578) makes one logical update per call,
+`compute` (src/source/pine_ta_length.cpp:579) makes one logical update per call,
 starting at the site's first execution. A non-`na` source appends one retained
 observation; an `na` source contributes no sample. Each call uses its current
 length to select the last N non-`na` observations and returns `na` while fewer
@@ -748,7 +748,7 @@ most recent L + 1 non-`na` samples regardless of the current length. Length
 changes keep the same instance and ring; equal source values on successive
 calls remain distinct observations.
 
-`checked_length` (src/source/pine_ta_length.cpp:501) validates before either
+`checked_length` (src/source/pine_ta_length.cpp:502) validates before either
 entry point records or replaces an update. Finite fractional lengths truncate
 toward zero. A nonpositive truncated length throws the family's
 `length_not_positive` error for `sma`; `na` and other nonfinite lengths throw
@@ -759,7 +759,7 @@ selects 15,000 unless a cap was supplied; `--limit-ta-lookback 0` selects
 unlimited. Invalid calls leave the logical checkpoint unchanged.
 For a valid length, warm-up returns `na` until N non-`na` samples are retained.
 
-`recompute` (src/source/pine_ta_length.cpp:582) replaces the most recent logical
+`recompute` (src/source/pine_ta_length.cpp:583) replaces the most recent logical
 update from its pre-update ring head/count, including the oldest value evicted
 by a full-ring push. Replacing a value with `na` restores that evicted value;
 replacing `na` with a value inserts one observation, evicting the oldest if
@@ -770,7 +770,7 @@ On an unused instance it creates the first logical update. Copy construction
 and assignment preserve the ring, head/count, saved eviction and replacement
 state, with storage detached before mutation.
 
-The order in `update` (src/source/pine_ta_length.cpp:517) was
+The order in `update` (src/source/pine_ta_length.cpp:518) was
 recorded on TradingView in November 2026.
 Across 400 bars the source repeated `1e16, 1, 1e-16, -1e16, -1`; the
 length held at 5, alternated between 5 and 3, or held at 7 in successive
@@ -803,7 +803,7 @@ at N=20 reports difference counts and maximum ULP distance against fixed
 with the largest ULP distance, with timestamps and hexadecimal values. The
 comparison calls the two C++ implementations directly and requires zero differences.
 
-`ensure_capacity` (src/source/pine_ta_length.cpp:506) grows the ring as
+`ensure_capacity` (src/source/pine_ta_length.cpp:507) grows the ring as
 non-`na` samples arrive, up to L + 1 when capped. Rollback needs only a
 scalar checkpoint. The cache policy controls residency. On ordinary finite
 inputs the arithmetic cost is constant for a constant length. A length change
