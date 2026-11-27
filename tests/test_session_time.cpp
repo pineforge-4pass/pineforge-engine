@@ -323,6 +323,14 @@ static void test_calendar_boundary_mktime_failure_is_coded() {
 }
 #endif
 
+static void test_named_zone_dst_day_open() {
+    std::printf("test_named_zone_dst_day_open\n");
+    // 2025-03-09 16:00 UTC = 12:00 EDT.  That day's New York midnight
+    // was 00:00 EST, or 05:00 UTC.
+    const int64_t bar = 1741536000000LL;
+    CHECK(calendar_day_open_local_ms(bar, "America/New_York") == 1741496400000LL);
+}
+
 int main() {
     test_time_hourly_bucket_utc();
     test_time_session_ny_inside();
@@ -339,6 +347,7 @@ int main() {
     test_time_syminfo_tz_does_not_move_calendar_open();
     test_calendar_preserves_minus_one_second();
     test_zoned_calendar_period_boundaries();
+    test_named_zone_dst_day_open();
 #if defined(__linux__)
     test_calendar_boundary_mktime_failure_is_coded();
 #endif
