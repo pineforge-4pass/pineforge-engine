@@ -533,6 +533,30 @@ class DrawOrderTest(unittest.TestCase):
         }
         """)
 
+    def test_parenthesized_product_is_an_initializer(self):
+        self.assert_rows(GENERATOR + """
+        void take(int, int);
+        int a = 2;
+        int b = 3;
+        Random rng(a * b);
+        void visit() { take(rng(), rng()); }  // @ARG
+        """)
+
+    def test_variadic_and_function_pointer_prototypes_remain_prototypes(self):
+        self.assert_rows("""
+        #include <random>
+        void take(int, int);
+        std::mt19937 engine{7};
+        int variadic(int, ...);
+        int callback(int (*cb)(int));
+        int variadic(int, ...) { return engine(); }
+        int callback(int (*cb)(int)) { return engine(); }
+        void visit() {
+            take(variadic(1, 2), engine());  // @ARG
+            take(callback(nullptr), engine());  // @ARG
+        }
+        """)
+
 
 if __name__ == '__main__':
     unittest.main()
