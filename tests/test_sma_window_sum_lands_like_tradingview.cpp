@@ -1,11 +1,9 @@
 // Regression pin: the exact window sum lands where TradingView's does.
 //
 // On NYSE:F 15m at 2025-05-16 14:15 UTC, the 20 closes below sum to 214.8 in
-// decimal, and the bar's close is 10.74. A TradingView reading of
-// ta.sma(close, 20) on that bar (2026-11-27, issue #1017's probe; gate record
-// sha256 ee27acad484d62995fe59a62b5ce1de9311ea69503708127f074e8693cce5d6d)
-// put the average ONE binary64 step under 10.74, the same value the engine
-// computes. So this pins the binary64 results, not the decimal ones: a change
+// decimal, and the bar's close is 10.74. TradingView's ta.sma(close, 20) on
+// that bar (checked 2026-11-27, issue #1017) puts the average ONE binary64
+// step under 10.74, the same value the engine computes. So this pins the binary64 results, not the decimal ones: a change
 // to the summation (order, compensation, contraction) that moved them would
 // move the engine away from TradingView on ties like this one.
 #include <pineforge/math.hpp>
