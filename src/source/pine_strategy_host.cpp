@@ -1878,13 +1878,13 @@ void source::PineStrategyHost::scheduler_prepare_script_run(
         script_tf_ = state.spec->timeframe_undetected ? "" : state.spec->script_tf;
         script_tf_seconds_ = tf_to_seconds(script_tf_);
     }
-    prepare_script_run(bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()),
-                       static_eligible);
-    last_bar_index_ = expected_script_bars - 1;
-    last_bar_time_ = bars.empty() ? 0 : bars.back().timestamp;
-    apply_realtime_tail_horizon(
-        bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()),
-        script_bar_geometry);
+    const Bar* const data = bars.empty() ? nullptr : bars.data();
+    // A batch preparation fills the script's static TA cache: it seeds as the bar callback does.
+    const bool seeding = static_eligible ? chart_ema_na_warmup_ : ta::ema_na_warmup_flag();
+    internal::AmbientEmaSeedingScope preparation_seeding(nullptr, seeding);
+    prepare_script_run(data, static_cast<int>(bars.size()), static_eligible);
+    last_bar_index_ = expected_script_bars - 1; last_bar_time_ = bars.empty() ? 0 : bars.back().timestamp;
+    apply_realtime_tail_horizon(data, static_cast<int>(bars.size()), script_bar_geometry);
     source_last_bar_index_ = last_bar_index_;
 }
 

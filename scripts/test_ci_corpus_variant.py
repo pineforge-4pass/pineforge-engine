@@ -96,6 +96,7 @@ COMMAND_CENSUS_EXEMPTIONS = (
     ('scripts/test_run_strategy_native_feed.py', 'unnamed before this change'),
     ('scripts/test_run_strategy_range_end.py', 'unnamed before this change'),
     ('scripts/test_run_strategy_requests.py', 'unnamed before this change'),
+    ('scripts/test_run_strategy_series_origin.py', 'runs as the CTest row test_run_strategy_series_origin'),
     ('scripts/test_runtime_budget.py', 'unnamed before this change'),
     ('scripts/test_script_cpp_abi.py', 'unnamed before this change'),
     ('scripts/test_settlement_cpp_abi.py', 'unnamed before this change'),
