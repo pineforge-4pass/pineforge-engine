@@ -719,8 +719,8 @@ bool source::PineStrategyHost::security_input_precedes_range_start(
     const int64_t nominal_open = period != CalendarPeriod::NONE
         ? session_period_open_ms(input_ts, syminfo_.timezone, syminfo_.session,
                                  period)
-        : session_intraday_bucket_open_ms(input_ts, requested_seconds,
-                                          syminfo_.timezone, syminfo_.session);
+        : internal::aggregate_bucket_open_ms(input_ts, requested_seconds,
+                                             syminfo_.timezone, syminfo_.session);
     if (nominal_open >= security_first_chart_bar_ms_) {
         return false;
     }

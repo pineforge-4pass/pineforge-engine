@@ -30317,7 +30317,7 @@
    "symbol": "windows",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "struct ArgCache #1",
     "struct Day #1"
    ],
@@ -30330,7 +30330,7 @@
    "symbol": "occurrences",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "struct ArgCache #1",
     "struct Day #1"
    ],
@@ -30343,7 +30343,7 @@
    "symbol": "session",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "struct ArgCache #1"
    ],
    "cls": "decl",
@@ -30355,7 +30355,7 @@
    "symbol": "tz",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "struct ArgCache #1"
    ],
    "cls": "decl",
@@ -30367,7 +30367,7 @@
    "symbol": "entries",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgCache & arg_cache ( const std :: string & session , const std :: string & tz ) #1"
    ],
    "cls": "decl",
@@ -30379,7 +30379,7 @@
    "symbol": "entries",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgCache & arg_cache ( const std :: string & session , const std :: string & tz ) #1",
     "if ( entries . size ( ) < kEntries ) #1"
    ],
@@ -30392,7 +30392,7 @@
    "symbol": "push_back",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgCache & arg_cache ( const std :: string & session , const std :: string & tz ) #1",
     "if ( entries . size ( ) < kEntries ) #1"
    ],
@@ -30405,7 +30405,7 @@
    "symbol": "make_unique",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgCache & arg_cache ( const std :: string & session , const std :: string & tz ) #1",
     "else #1"
    ],
@@ -30418,7 +30418,7 @@
    "symbol": "session",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgCache & arg_cache ( const std :: string & session , const std :: string & tz ) #1"
    ],
    "cls": "assign",
@@ -30430,7 +30430,7 @@
    "symbol": "tz",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgCache & arg_cache ( const std :: string & session , const std :: string & tz ) #1"
    ],
    "cls": "assign",
@@ -30442,7 +30442,7 @@
    "symbol": "s",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgDayBar arg_day_bar ( ArgCache & cache , int64_t day , bool daily_chart ) #1"
    ],
    "cls": "assign",
@@ -30454,7 +30454,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgDayBar arg_day_bar ( ArgCache & cache , int64_t day , bool daily_chart ) #1",
     "if ( s . days . empty ( ) || s . days . count ( weekday ) ! = 0 ) #1"
    ],
@@ -30467,7 +30467,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgDayBar arg_day_bar ( ArgCache & cache , int64_t day , bool daily_chart ) #1",
     "if ( s . days . empty ( ) || s . days . count ( weekday ) ! = 0 ) #1",
     "+ + k ) #1"
@@ -30481,7 +30481,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgDayBar arg_day_bar ( ArgCache & cache , int64_t day , bool daily_chart ) #1",
     "if ( s . days . empty ( ) || s . days . count ( weekday ) ! = 0 ) #1",
     "+ + k ) #1"
@@ -30495,7 +30495,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "ArgDayBar arg_day_bar ( ArgCache & cache , int64_t day , bool daily_chart ) #1",
     "if ( s . days . empty ( ) || s . days . count ( weekday ) ! = 0 ) #1",
     "+ + k ) #1"
@@ -30509,7 +30509,7 @@
    "symbol": "s",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "const std :: vector < std :: pair < int64_t , int64_t > > & arg_day_windows ( ArgCache & cache , int64_t day ) #1"
    ],
    "cls": "assign",
@@ -30521,7 +30521,7 @@
    "symbol": "windows",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "const std :: vector < std :: pair < int64_t , int64_t > > & arg_day_windows ( ArgCache & cache , int64_t day ) #1",
     "for ( const ArgWindow & w : s . windows ) #1"
    ],
@@ -30534,7 +30534,7 @@
    "symbol": "s",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "const std :: vector < WallOccurrence > & arg_day_occurrences ( ArgCache & cache , int64_t day ) #1"
    ],
    "cls": "assign",
@@ -30546,7 +30546,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "const std :: vector < WallOccurrence > & arg_day_occurrences ( ArgCache & cache , int64_t day ) #1"
    ],
    "cls": "decl",
@@ -30558,7 +30558,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "const std :: vector < WallOccurrence > & arg_day_occurrences ( ArgCache & cache , int64_t day ) #1",
     "+ + k ) #1"
    ],
@@ -30571,7 +30571,7 @@
    "symbol": "occurrences",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "const std :: vector < WallOccurrence > & arg_day_occurrences ( ArgCache & cache , int64_t day ) #1"
    ],
    "cls": "assign",
@@ -30583,7 +30583,7 @@
    "symbol": "occurrences",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "bool clock_intraday_bar ( int64_t bar_ms , ArgCache & cache , int64_t tf_ms , int64_t & open_ms , int64_t & close_ms ) #1"
    ],
    "cls": "assign",
@@ -30595,7 +30595,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "bool clock_intraday_bar ( int64_t bar_ms , ArgCache & cache , int64_t tf_ms , int64_t & open_ms , int64_t & close_ms ) #1",
     "+ + k ) #1"
    ],
@@ -30608,7 +30608,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "bool clock_intraday_bar ( int64_t bar_ms , ArgCache & cache , int64_t tf_ms , int64_t & open_ms , int64_t & close_ms ) #1",
     "+ + k ) #1",
     "if ( ! occurrences ( today ) [ k ] . clock ) #1",
@@ -30624,7 +30624,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "bool clock_intraday_bar ( int64_t bar_ms , ArgCache & cache , int64_t tf_ms , int64_t & open_ms , int64_t & close_ms ) #1",
     "+ + k ) #1",
     "else #1",
@@ -30640,7 +30640,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "bool clock_intraday_bar ( int64_t bar_ms , ArgCache & cache , int64_t tf_ms , int64_t & open_ms , int64_t & close_ms ) #1",
     "+ + k ) #1",
     "else #1",
@@ -30656,7 +30656,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "bool session_argument_intraday_bar ( int64_t bar_ms , const std :: string & session , const std :: string & tz , int64_t tf_ms , int64_t & open_ms , int64_t & close_ms , bool transition_clock ) #1",
     "- - d ) #1"
    ],
@@ -30669,7 +30669,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge #1",
-    "namespace #2",
+    "namespace #3",
     "bool session_argument_intraday_bar ( int64_t bar_ms , const std :: string & session , const std :: string & tz , int64_t tf_ms , int64_t & open_ms , int64_t & close_ms , bool transition_clock ) #1",
     "- - d ) #1",
     "for ( const auto & window : arg_day_windows ( cache , d ) ) #1",
@@ -31114,17 +31114,6 @@
    ],
    "cls": "decl",
    "spelling": "std :: unordered_set < int >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/session_time.cpp",
-   "symbol": "eff_tz",
-   "scope": [
-    "namespace pineforge #1",
-    "int64_t session_trading_day_open_ms ( int64_t bar_ms , const std :: string & session , const std :: string & tz ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
    "ordinal": 1
   },
   {
@@ -50405,7 +50394,7 @@
    "symbol": "tz",
    "scope": [
     "namespace pineforge #1",
-    "static int64_t tz_offset_ms ( int64_t ms , const std :: string & tz ) #1",
+    "static int64_t session_wall_minute_ms ( int64_t minute , const std :: string & tz ) #1",
     "struct Slot #1"
    ],
    "cls": "decl",
@@ -50417,7 +50406,7 @@
    "symbol": "tz",
    "scope": [
     "namespace pineforge #1",
-    "static int64_t tz_offset_ms ( int64_t ms , const std :: string & tz ) #1"
+    "static int64_t session_wall_minute_ms ( int64_t minute , const std :: string & tz ) #1"
    ],
    "cls": "assign",
    "spelling": "tz = . . .",
