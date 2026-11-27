@@ -26,10 +26,22 @@ def test_image_and_ctypes_symbol_metadata_trades_and_summary(tmp_path):
     image = os.environ.get("PINEFORGE_METADATA_TEST_IMAGE")
     if not image:
         pytest.skip("NOT COMPARED: expected PINEFORGE_METADATA_TEST_IMAGE=sha256:<image ID>, got unset")
+    if shutil.which("docker") is None:
+        pytest.skip("NOT COMPARED: docker executable is unavailable")
     assert re.fullmatch(r"sha256:[0-9a-f]{64}", image), (
-        f"NOT COMPARED: expected an immutable local image ID, got {image!r}")
+        f"FAIL: expected an immutable local image ID, got {image!r}")
 
-    docker = ["docker", "run", "--rm", "--network=none", "--user",
+    local = subprocess.run(["docker", "image", "inspect", "--format", "{{.Id}}", image],
+                           text=True, capture_output=True)
+    if local.returncode:
+        error = local.stderr.strip()
+        if "no such image" in error.lower() or "no such object" in error.lower():
+            pytest.skip(f"NOT COMPARED: local image {image} is missing: {error}")
+        if "cannot connect to the docker daemon" in error.lower():
+            pytest.skip(f"NOT COMPARED: Docker daemon unavailable: {error}")
+        pytest.fail(f"FAIL: cannot inspect {image}: {error}")
+    assert local.stdout.strip() == image, f"FAIL: expected image {image}, got {local.stdout!r}"
+    docker = ["docker", "run", "--rm", "--pull=never", "--network=none", "--user",
               f"{os.getuid()}:{os.getgid()}"]
     # Corpus admission already checks the installed entrypoint. Also bind
     # the vendored reader, or an old image could look like a forwarding RED.
@@ -37,10 +49,10 @@ def test_image_and_ctypes_symbol_metadata_trades_and_summary(tmp_path):
     expected_digest = hashlib.sha256((ROOT / "docker/run_json.py").read_bytes()).hexdigest()
     result = subprocess.run([*docker, "--entrypoint", "sha256sum", image, installed],
                             text=True, capture_output=True)
-    assert result.returncode == 0, f"NOT COMPARED: expected {installed}, got {result.stderr}"
+    assert result.returncode == 0, f"FAIL: expected {installed}, got {result.stderr}"
     actual_digest = result.stdout.split(maxsplit=1)[0] if result.stdout.strip() else "missing"
     assert actual_digest == expected_digest, (
-        f"NOT COMPARED: run_json.py image {actual_digest}, checkout {expected_digest}")
+        f"FAIL: run_json.py image {actual_digest}, checkout {expected_digest}")
 
     pine = tmp_path / "strategy.pine"
     pine.write_text('''//@version=6
@@ -65,7 +77,7 @@ if bar_index == 2
                              "-v", f"{chart}:/in/ohlcv.csv:ro", image],
                             text=True, capture_output=True)
     assert result.returncode == 0, (
-        f"NOT COMPARED: expected fixture build exit 0, got {result.returncode}: {result.stderr}")
+        f"FAIL: expected fixture build exit 0, got {result.returncode}: {result.stderr}")
     shutil.copyfile(build / "strategy.cpp", tmp_path / "generated.cpp")
     params = {"input_tf": "1", "script_tf": "1", "runtime_overrides": {
         "currency": "USD", "qty_step": 0.25, "syminfo_metadata": {
@@ -85,7 +97,7 @@ if bar_index == 2
     # The bar-zero EMA must be ready, quantity floors to 1.25, and the four
     # quote units per contract become five in the EUR account.
     expected = [(start + 60000, start + 180000, 1.25, 6.25)]
-    assert witness == expected, f"NOT COMPARED: ctypes fixture {witness}, expected {expected}"
+    assert witness == expected, f"FAIL: ctypes fixture {witness}, expected {expected}"
 
     raw = {}
     run_release = pf_release_run.run_release
@@ -99,13 +111,16 @@ if bar_index == 2
     # Compare all fields the image exports, including the raw summary (the
     # corpus driver retains only net_profit and the processed bar count).
     assert container["input_bars_processed"] == native["input_bars_processed"], (
-        f"NOT COMPARED: input bars docker={container['input_bars_processed']}, "
+        f"FAIL: input bars docker={container['input_bars_processed']}, "
         f"ctypes={native['input_bars_processed']}")
     assert len(container["trades"]) == len(native["trades"]), (
-        "NOT COMPARED: trade details need matching counts; "
+        "FAIL: trade details need matching counts; "
         f"docker={len(container['trades'])}, ctypes={len(native['trades'])}; "
         f"summaries: docker={raw['summary']}, ctypes={host_summary}")
-    assert raw["summary"] == host_summary
-    for actual, host in zip(container["trades"], native["trades"]):
-        assert actual == {k: v for k, v in host.items()
+    assert raw["summary"] == host_summary, (
+        f"FAIL: summaries differ; docker={raw['summary']}, ctypes={host_summary}")
+    for index, (actual, host) in enumerate(zip(container["trades"], native["trades"])):
+        expected_trade = {k: v for k, v in host.items()
                           if k not in ("entry_id", "exit_id", "exit_comment", "close_cause")}
+        assert actual == expected_trade, (
+            f"FAIL: trade {index} differs; docker={actual}, ctypes={expected_trade}")

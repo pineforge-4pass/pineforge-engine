@@ -407,8 +407,13 @@ def test_runner_projects_each_symbol_key_to_its_ctypes_setter(tmp_path, tape, mo
     raw = [(key, float(value)) for key, value in numbers.items()]
     wire = [(key, "inf" if key == "target_price_high" else value) for key, value in raw]
     assert list(symbol.get("syminfo_metadata", {}).items()) == wire
-    assert {k: v for k, v in symbol.items() if k != "syminfo_metadata"} == {
-        k: v for k, v in overrides.items() if k != "syminfo_metadata"}
+    expected_symbol = {
+        k: v for k, v in overrides.items()
+        if k not in ("syminfo_metadata", "type", *strings)
+    }
+    expected_symbol["_pineforge_runner_syminfo"] = {
+        "type": "forex", "strings": strings}
+    assert {k: v for k, v in symbol.items() if k != "syminfo_metadata"} == expected_symbol
     assert "PINEFORGE_SYMINFO=/in/syminfo.json" in docker.argv
 
     path = tmp_path / "received.json"
@@ -426,7 +431,8 @@ def test_runner_projects_each_symbol_key_to_its_ctypes_setter(tmp_path, tape, mo
 def test_new_symbol_fields_remain_optional_for_old_libraries(tmp_path):
     path = tmp_path / "symbol.json"
     path.write_text(json.dumps({"syminfo_metadata": {"account_currency_fx": 1.25},
-                                "type": "forex", "currency": "USD"}))
+                                "_pineforge_runner_syminfo": {
+                                    "type": "forex", "strings": {"currency": "USD"}}}))
     assert run_json.apply_syminfo(FakeLib(), ST, path) == {}
 
 

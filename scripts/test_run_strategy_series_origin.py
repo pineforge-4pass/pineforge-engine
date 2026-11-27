@@ -281,13 +281,22 @@ class DeclaredOriginTests(unittest.TestCase):
             d = Path(tmp)
             feed, out = _probe(d, _feed(ORIGIN))
             (d / "generated.cpp").write_text("// generated\n")
-            with mock.patch.object(pf_release_run, "run_release", return_value={}) as launch:
+            calendar = d / "calendar.json"
+            calendar.write_text(json.dumps({"schema": run_strategy.SESSION_CALENDAR_SCHEMA,
+                                            "sessions": [[ORIGIN, ORIGIN + MIN15]]}))
+            with mock.patch.dict(run_strategy.os.environ, {
+                    run_strategy.SESSION_CALENDAR_ENV: str(calendar),
+                    run_strategy.SESSION_CALENDAR_SHA256_ENV: "",
+                    run_strategy.MAGNIFIER_FEED_ENV: ""}), \
+                    mock.patch.object(pf_release_run, "run_release", return_value={}) as launch:
                 printed = _run_main(d, feed, out, "--runner", "docker")
         launch.assert_called_once()
         metadata = launch.call_args.kwargs["syminfo"] or {}
-        self.assertEqual(list(metadata.get("syminfo_metadata", {}).items()),
+        self.assertEqual(list(metadata["syminfo_metadata"].items())[:2],
                          [(ORIGIN_KEY, ORIGIN), (SECURITY_KEY, 0)])
-        self.assertNotIn("--runner docker does not apply the declared series origin", printed)
+        self.assertEqual(metadata["syminfo_metadata"]["symbol_calendar_days"], 1)
+        self.assertIn("--runner docker does not apply a declared bar magnifier or session calendar", printed)
+        self.assertIn("--runner docker does not apply the declared series origin", printed)
 
 
 class UndeclaredOriginTests(unittest.TestCase):
