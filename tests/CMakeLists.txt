@@ -275,6 +275,7 @@ set(TEST_SOURCES
     test_ta_rma_warmup
     test_ta_sma_exact_order
     test_ta_sma_window_residual
+    test_sma_window_sum_lands_like_tradingview
     test_ta_na_source_rules
     test_matrix
     test_matrix_identity

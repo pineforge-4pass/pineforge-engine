@@ -159,6 +159,9 @@ bool supports_lower_tf_emulation(const std::string& input_tf,
                                         int* out_requested_seconds);
 
 
+#ifndef NDEBUG
+extern thread_local std::uint64_t lower_tf_syntheses_for_test;
+#endif
 std::vector<Bar> synthesize_lower_tf_bars(const Bar& input_bar,
                                                  int ratio,
                                                  int requested_seconds);
