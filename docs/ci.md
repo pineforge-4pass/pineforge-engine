@@ -1743,21 +1743,21 @@ Both runner-group mirrors are empty for the hosted workflows. The helper require
 host UID 1001, records the actual host UID/GID and Docker version bytes, and keeps
 the container user at `1001:123`. Docker command failures remain failures.
 
-The x86 auth contract permits only `release.yml` on `workflow_dispatch` from main
-(tag refs are refused), with provider `projects/76767776102/locations/global/workloadIdentityPools/pineforge-github/providers/github-oidc`,
-dedicated reader `engine-release-toolchainreader@gen-lang-client-0864094636.iam.gserviceaccount.com`,
-and `google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093`.
-It sets `create_credentials_file: false`, `export_environment_variables: false`
-and `token_format: access_token`. Only the registry login step receives the token
-in its environment and pipes it to `docker login us-central1-docker.pkg.dev`
-with `--username oauth2accesstoken --password-stdin`. Only x86 receives `id-token: write`; both
-builds have read-only contents permission. Each build emits the SHA-256 of its
-actual tarball and uploads a named workflow artifact. The later `upload` job needs
-both builds, has `contents: write` without OIDC, and re-hashes both downloads
-against those job outputs before any release upload. Missing or mismatched hashes
-refuse the job. Notify follows upload; dry runs retain the artifacts and publish
-nothing. Both builds retain the v1.10.0 archive comparison, fixed GLIBC 2.35 ceiling,
-`__isoc23_*` refusal, and every-library inventory; x86 also consumes its packed archive.
+The x86 auth contract permits only `release.yml` on `workflow_dispatch` from main (tag refs are refused).
+Only `prebuilt-x86` uses the `release-prebuilt-x86` environment; configure it for the selected branch `main` only, with no required reviewer.
+The environment checks the dispatch ref, not the tag calculated by `release`, so the release click and pre-tag dry run still start from `main`.
+The dedicated reader uses the environment-bound OIDC subject `repo:pineforge-4pass/pineforge-engine:environment:release-prebuilt-x86`
+in addition to the repository, event, ref and workflow restrictions, with provider `projects/76767776102/locations/global/workloadIdentityPools/pineforge-github/providers/github-oidc`,
+dedicated reader `engine-release-toolchainreader@gen-lang-client-0864094636.iam.gserviceaccount.com`, and `google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093`.
+It sets `create_credentials_file: false`, `export_environment_variables: false` and `token_format: access_token`.
+Only the registry login step receives the token in its environment and pipes it to `docker login us-central1-docker.pkg.dev` with `--username oauth2accesstoken --password-stdin`.
+Only x86 receives `id-token: write`; both builds have read-only contents permission. Each build emits the SHA-256 of its actual tarball and uploads a named workflow artifact.
+The later `upload` job needs both builds, has `contents: write` without OIDC, and re-hashes both downloads against those job outputs before any release upload. Missing or mismatched hashes refuse the job.
+Notify follows upload; dry runs retain the artifacts and publish nothing. Both builds retain the v1.10.0 archive comparison, fixed GLIBC 2.35 ceiling, `__isoc23_*` refusal, and every-library inventory; x86 also consumes its packed archive.
+
+For the environment rollout, create and read back the environment and add the new reader admission alongside the existing one before merging the workflow.
+On `main`, dispatch `release.yml` with `dry_run: true`. Verify the new subject without logging credentials, require a successful x86 registry pull and both verified tarballs, and confirm that nothing was published.
+A skipped x86 job is not evidence. Retire the old admission only after that dry run succeeds, then repeat the dry run before the next tag.
 
 The PR diagnostic checks out only the exact same-repository head without persisted
 credentials and prints actual id, Docker client/server versions and storage driver.

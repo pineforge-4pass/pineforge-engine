@@ -743,6 +743,7 @@ class AppTokenEnvironments(unittest.TestCase):
         expected = {
             ('release.yml', 'release'): ['release'],
             ('release.yml', 'notify-hub'): ['release'],
+            ('release.yml', 'prebuilt-x86'): ['release-prebuilt-x86'],
             ('release-ruleset-probe.yml', 'probe'): ['release'],
             ('promote-baseline.yml', 'promote'): ['release-bot'],
         }
@@ -13147,7 +13148,10 @@ class SplitHostedReleaseAdmission(unittest.TestCase):
         gke_bytes = gke_fixture.read_bytes()
         self.assertEqual(hashlib.sha256(gke_bytes).hexdigest(),
                          '21025075090a0a40bfd7360e54a36a0c9bbac9bb8109fbbaa86edce347c27b87')
-        self.split = split_bytes.decode('utf-8')
+        self.split = in_job(split_bytes.decode('utf-8'), 'prebuilt-x86',
+                            '    runs-on: ubuntu-24.04\n',
+                            '    runs-on: ubuntu-24.04\n'
+                            '    environment: release-prebuilt-x86\n')
         self.legacy = legacy_bytes.decode('utf-8')
         self.shipped = release.read_text(encoding='utf-8')
         self.gke = legacy_gke_arm_smoke(gke_bytes.decode('utf-8'))
@@ -13373,6 +13377,25 @@ class SplitHostedReleaseAdmission(unittest.TestCase):
                 mutant_findings = unchecked({'release.yml': changed})
                 self.assertNotIn(finding, mutant_findings)
                 self.assertIn(self.CREDENTIAL.format(job), mutant_findings)
+
+    def test_x86_reader_requires_its_exact_environment(self):
+        job = 'prebuilt-x86'
+        binding = '    environment: release-prebuilt-x86\n'
+        self.assertIn(binding, _jobs(self.shipped)[job])
+        self.assertEqual(ci_preflight.release_credential_findings(self.shipped), [])
+        for replacement in ('', '    environment: release\n',
+                            '    environment: ${{ github.ref }}\n', binding + binding):
+            with self.subTest(replacement=replacement):
+                changed = in_job(self.split, job, binding, replacement)
+                self.assert_refused(changed, self.HEADER.format(job))
+                self.assertIn(self.CREDENTIAL.format(job),
+                              ci_preflight.release_credential_findings(changed))
+        for neighbor in ('prebuilt-arm', 'upload'):
+            with self.subTest(neighbor=neighbor):
+                changed = in_job(self.split, neighbor, '    steps:\n', binding + '    steps:\n')
+                self.assert_refused(changed, self.HEADER.format(neighbor))
+                self.assertIn(self.CREDENTIAL.format(neighbor),
+                              ci_preflight.release_credential_findings(changed))
 
     def test_x86_oidc_caller_guards_admit_only_main_dispatch_from_this_workflow(self):
         job = 'prebuilt-x86'
