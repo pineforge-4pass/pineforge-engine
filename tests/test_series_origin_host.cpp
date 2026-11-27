@@ -177,14 +177,21 @@ void security_row(bool disable_chart) {
 }  // namespace
 
 int main() {
-    chart_row("a undeclared first-value definition", {}, false);
+    // expectation corrected: an undeclared chart EMA read 8 11 18.5 18.25 30.125
+    // 30.0625 (first value) -> na na 16 17 29.5 29.75 (SMA seed), because the
+    // chart ta.ema default is now the SMA seed with nothing declared; the
+    // first-value series is the row that sets chart_ema_na_warmup = 0.
+    chart_row("a undeclared SMA-seed definition", {}, true);
+    chart_row("a explicit zero first-value definition", {{"chart_ema_na_warmup", 0.0}}, false);
     chart_row("b declared SMA-seed definition", {{"series_origin_ms", kHour}}, true);
     // Earlier origins are accepted; they do not invent missing chart inputs.
     chart_row("b earlier declared origin", {{"series_origin_ms", kHour - 1}}, true);
     for (double invalid : {0.0, -1.0, std::numeric_limits<double>::quiet_NaN(),
                            std::numeric_limits<double>::infinity(),
                            -std::numeric_limits<double>::infinity()}) {
-        chart_row("c invalid origin leaves default", {{"series_origin_ms", invalid}}, false);
+        chart_row("c invalid origin leaves default", {{"series_origin_ms", invalid}}, true);
+        chart_row("c invalid origin leaves explicit zero",
+                  {{"chart_ema_na_warmup", 0.0}, {"series_origin_ms", invalid}}, false);
         chart_row("c invalid origin leaves declaration",
                   {{"series_origin_ms", kHour}, {"series_origin_ms", invalid}}, true);
     }

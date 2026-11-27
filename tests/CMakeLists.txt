@@ -275,6 +275,7 @@ set(TEST_SOURCES
     test_ta_rma_warmup
     test_ta_sma_exact_order
     test_ta_sma_window_residual
+    test_sma_window_sum_lands_like_tradingview
     test_ta_na_source_rules
     test_matrix
     test_matrix_identity
@@ -872,6 +873,17 @@ list(APPEND TEST_SOURCES test_native_sizing_price_rule)
 # PineKcw; codegen #291): legacy values for a valid length, the coded
 # invalid-length stop at the first call.
 list(APPEND TEST_SOURCES test_checked_ema_family)
+
+# Checked fixed-argument supertrend source adapter (PineFixedSupertrend): the
+# stop a constant or input factor or atrPeriod of zero or less raises at the
+# first call, the same one PineSupertrend raises, and ta::Supertrend's values
+# for a valid pair.
+list(APPEND TEST_SOURCES test_checked_supertrend)
+
+# Pine ta.dmi by the reference definition (source::PineDmiReference): a bar
+# with a zero averaged true range holds both directional indices and steps
+# ADX, where the kernel class answers three na.
+list(APPEND TEST_SOURCES test_pine_dmi_zero_range)
 
 # R5 R2 re-lowering of the Pine adapter's default quantity onto the core's
 # Sized intent: the classification, the neutrality of the re-lowering and the
@@ -5373,10 +5385,10 @@ elseif(NOT test_engine_trade_accessors IN_LIST _pf_kernel_absent_rows)
     set_tests_properties(test_engine_trade_accessors PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
-if(NOT test_exit_binding_tapes IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cross_side_exit/README.md")
+if(NOT test_exit_binding_tapes IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_binding/schedules.inc")
     pineforge_add_unit_test(test_exit_binding_tapes)
 elseif(NOT test_exit_binding_tapes IN_LIST _pf_kernel_absent_rows)
-    add_test(NAME test_exit_binding_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/cross_side_exit/README.md")
+    add_test(NAME test_exit_binding_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/exit_binding/schedules.inc")
     set_tests_properties(test_exit_binding_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
@@ -7890,6 +7902,19 @@ list(SORT LANE_CMAKE)
 foreach(lane_file IN LISTS LANE_CMAKE)
     include("${lane_file}")
 endforeach()
+
+# --- lane lower-tf-request-callers begin ---
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            # Count completed scopes in the compiled evaluator (Itanium C++ ABI, D1 destructor).
+            target_link_options(test_lower_tf_caller_work PRIVATE
+                "-Wl,--wrap=_ZN9pineforge6source24PineRequestDeliveryScopeD1Ev")
+            target_compile_definitions(test_lower_tf_caller_work PRIVATE PF_COUNT_DELIVERY_SCOPES)
+        endif()
+    endif()
+endif()
+# --- lane lower-tf-request-callers end ---
 
 # --- lane issue-920 begin ---
 if(TARGET test_issue_920_bool_input)

@@ -776,9 +776,9 @@ exceed `int` return `-1` to flag calendar mode. This flag is not a feed key:
 `tf_multiplier`, `tf_is_intraday / _daily / _weekly / _monthly / _seconds`
 are inline string predicates.
 
-`tf_change(prev_ms, curr_ms, tf)` and
-`crosses_boundary(prev_ms, curr_ms, period)` provide TF / calendar
-boundary detection.
+`tf_change(prev_ms, curr_ms, tf)` and `crosses_boundary(prev_ms, curr_ms, period)` detect a timeframe or calendar boundary; they read a calendar count by its unit alone (`"2D"` as `"D"`).
+Pine's `timeframe.change(tf)` is answered by the Pine host (`PineStrategyHost::tf_change`): an N-day timeframe (`"2D"`, `"3D"`, …) is compared by TradingView's N-day periods, N trading dates
+counted from the year's first (`tests/test_n_day_chart_timeframe.cpp`); every other timeframe goes through `tf_change` on the symbol's timezone and session.
 
 `tf_ratio(input_tf, target_tf)` returns:
 

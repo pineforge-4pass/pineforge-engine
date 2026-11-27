@@ -160,6 +160,12 @@ double RMA::compute(double src) {
     if (is_na(src)) {
         return na<double>();
     }
+    // A length of zero or less has no seed window and no recursion: the
+    // value is na on every bar. Answering here keeps `length - 1` below from
+    // being evaluated at the smallest int, where the subtraction overflows.
+    if (length <= 0) {
+        return na<double>();
+    }
 
     detail::advance_observation_count(bar_count);
 
@@ -195,6 +201,12 @@ double RMA::compute(double src) {
 SMA::SMA(int length) : window_(length) {}
 
 double SMA::compute(double src) {
+    // A length of zero or less has no window: no source enters it (the
+    // window sum takes a positive length only) and the value is na on every
+    // bar.
+    if (window_.length() <= 0) {
+        return na<double>();
+    }
     if (is_na(src)) {
         // A missing bar holds the seeded mean and consumes no slot.
         window_.note_no_push();
@@ -389,35 +401,97 @@ double HMA::compute(double src) {
 }
 
 // --- VWMA (Volume-Weighted Moving Average) ---
+// Each running sum adds the incoming value and then subtracts the evicted
+// one. A step can round away part of a value that is still in the window:
+// beside 2^55 a 2 is lost whole, and the sum is short by it for as long as
+// that 2 stays, also after the 2^55 has left. Every step therefore adds what
+// it rounded away to a tally. The tally is measured against the size of the
+// window: the larger of the sum and the newest value, which is always in the
+// window. While the tally stays within 2^-26 of that size (half of a double's
+// 53 bits), the sum is used as it is, so its steps, their order and every
+// result are unchanged; a sum that is small only because its own values
+// cancel stays on that path. Past that share, or when a step was not finite,
+// the sum is rebuilt from the window.
+
+namespace {
+
+constexpr double kVwmaLostShare = 0x1p-26;
+
+// One step of a running sum. The tally receives (sum + addend) - next, which
+// two-sum gives exactly for finite operands and as NaN once a step overflows.
+void vwma_step(double& sum, double& lost, double addend) noexcept {
+    const double next = sum + addend;
+    const double bb = next - sum;
+    lost += (sum - (next - bb)) + (addend - bb);
+    sum = next;
+}
+
+bool vwma_lost_too_much(double sum, double lost, double newest) noexcept {
+    const double size = std::fmax(std::fabs(sum), std::fabs(newest));
+    return !(std::fabs(lost) <= kVwmaLostShare * size);
+}
+
+// Rebuild a running sum that has lost too much: add the window oldest first,
+// as an instance that has seen only these values does. If that pass loses
+// too much itself (large values that cancel inside the window), its loss is
+// taken back in once.
+void vwma_settle(const OwnedDeque<double>& window, double& sum, double& lost) noexcept {
+    const double newest = window.empty() ? 0.0 : window.back();
+    if (!vwma_lost_too_much(sum, lost, newest)) return;
+    sum = 0.0;
+    lost = 0.0;
+    for (const double value : window) vwma_step(sum, lost, value);
+    if (!vwma_lost_too_much(sum, lost, newest) || !std::isfinite(lost)) return;
+    const double partial = sum;
+    const double correction = lost;
+    lost = 0.0;
+    vwma_step(sum, lost, correction);
+    if (!std::isfinite(sum)) {
+        sum = partial;
+        lost = correction;
+    }
+}
+
+} // namespace
 
 VWMA::VWMA(int length) : length_(length), sv_sum_(0.0), v_sum_(0.0) {}
 
 double VWMA::compute(double src, double vol) {
     saved_sv_sum_ = sv_sum_;
     saved_v_sum_ = v_sum_;
+    saved_sv_lost_ = sv_lost_;
+    saved_v_lost_ = v_lost_;
     pushed_ = false;
     evicted_ = false;
     saw_na_ = is_na(src) || is_na(vol);
     if (saw_na_) {
         return na<double>();
     }
+    // A negative length has no window: no pair enters it, so the eviction
+    // loop below has nothing to take out and recompute() nothing to undo.
+    // (A length of 0 needs no branch: its one pair leaves as it enters.)
+    if (length_ < 0) {
+        return na<double>();
+    }
 
     double sv = src * vol;
     sv_buffer_.push_back(sv);
     v_buffer_.push_back(vol);
-    sv_sum_ += sv;
-    v_sum_ += vol;
+    vwma_step(sv_sum_, sv_lost_, sv);
+    vwma_step(v_sum_, v_lost_, vol);
 
     while ((int)sv_buffer_.size() > length_) {
         evicted_ = true;
         evicted_sv_ = sv_buffer_.front();
         evicted_v_ = v_buffer_.front();
-        sv_sum_ -= evicted_sv_;
+        vwma_step(sv_sum_, sv_lost_, -evicted_sv_);
         sv_buffer_.pop_front();
-        v_sum_ -= evicted_v_;
+        vwma_step(v_sum_, v_lost_, -evicted_v_);
         v_buffer_.pop_front();
     }
     pushed_ = !sv_buffer_.empty();
+    vwma_settle(sv_buffer_, sv_sum_, sv_lost_);
+    vwma_settle(v_buffer_, v_sum_, v_lost_);
 
     if ((int)sv_buffer_.size() < length_) {
         return na<double>();
@@ -572,6 +646,8 @@ double VWMA::recompute(double src, double vol) {
             v_buffer_.pop_back();
             sv_sum_ = saved_sv_sum_;
             v_sum_ = saved_v_sum_;
+            sv_lost_ = saved_sv_lost_;
+            v_lost_ = saved_v_lost_;
         }
         const double result = compute(src, vol);
         saw_na_ = replay;
@@ -586,8 +662,12 @@ double VWMA::recompute(double src, double vol) {
 
     sv_buffer_.back() = new_sv;
     v_buffer_.back() = vol;
-    sv_sum_ = sv_sum_ - old_sv + new_sv;
-    v_sum_ = v_sum_ - old_v + vol;
+    vwma_step(sv_sum_, sv_lost_, -old_sv);
+    vwma_step(sv_sum_, sv_lost_, new_sv);
+    vwma_step(v_sum_, v_lost_, -old_v);
+    vwma_step(v_sum_, v_lost_, vol);
+    vwma_settle(sv_buffer_, sv_sum_, sv_lost_);
+    vwma_settle(v_buffer_, v_sum_, v_lost_);
 
     if ((int)sv_buffer_.size() < length_) return na<double>();
     if (v_sum_ == 0.0) return na<double>();

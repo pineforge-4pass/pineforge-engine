@@ -365,6 +365,7 @@ static void test_intraday_mid_bucket_range_start_drops_whole_bucket() {
 class SplitGateHarness : public pineforge::source::PineStrategyHost {
 public:
     std::vector<int64_t> completed[3];
+    std::vector<double> volumes[3];  // per completed HTF bar: the sum of its inputs' volumes
     std::string tfs[3];
     SplitGateHarness(const char* tf0, const char* tf1, const char* tf2) {
         tfs[0] = tf0; tfs[1] = tf1; tfs[2] = tf2;
@@ -376,6 +377,7 @@ public:
     void evaluate_security(int sec_id, const Bar& bar, bool is_complete) override {
         if (!is_complete || sec_id < 0 || sec_id > 2) return;
         completed[sec_id].push_back(bar.timestamp);
+        volumes[sec_id].push_back(bar.volume);
     }
     void on_source_bar(const Bar&) override {}
 };
@@ -482,6 +484,37 @@ static void test_default_cut_cme_15m_range_start() {
                         "W: the week that opened Sun 03-30 is absent; bar 0 opens Sun 04-06 17:00 CDT");
     }
     std::printf("test_default_cut_cme_15m_range_start: %s\n", (failures > before) ? "FAIL" : "ok");
+}
+
+// EXPECTATION: engine behaviour, not a TradingView measurement.
+// The cut reads the clock the aggregator keys on, also on a clock-change date. A New York 24x7
+// symbol, 60-minute chart from Sun 2025-03-09 04:00Z (23:00 EST, three hours before the spring
+// change) with the 1m feed from Sat 03-08 00:00Z. The aggregator keys "240" on one zone offset per
+// UTC date, so on 03-09 its buckets open 00:00Z / 04:00Z / 08:00Z: the 04:00Z bucket opens on the
+// first chart bar and is kept whole, all 240 one-minute inputs of 04:00Z-07:59Z. The civil grid
+// reads the same instant in the bucket that opened at 01:00Z; a cut keyed on it drops the
+// 04:00Z-04:59Z inputs as a bucket in progress, and the first "240" bar holds 180 inputs.
+static void test_default_cut_reads_the_aggregator_clock_on_a_clock_change_date() {
+    int before = failures;
+    const auto every_minute = [](int, int) { return true; };
+    const int64_t first_chart_bar = utc_ms(2025, 3, 9, 4, 0);
+    const auto chart = session_bars(first_chart_bar, utc_ms(2025, 3, 10, 0, 0), 3'600'000, 0,
+                                    every_minute);
+    const auto aux = session_bars(utc_ms(2025, 3, 8, 0, 0), utc_ms(2025, 3, 10, 0, 0), 60'000, 0,
+                                  every_minute);
+    SplitGateHarness h("240", "240", "240");
+    run_split(h, chart, aux, "60", "America/New_York", "24x7", "crypto");
+    CHECK_EQ_MS(TimeframeAggregator("240", "60", NY, "24x7").bucket_open_ms(first_chart_bar),
+                first_chart_bar, "240: the aggregator's bucket of the first chart bar opens on it");
+    CHECK(!h.completed[0].empty(), "240 completed across the clock change");
+    if (!h.completed[0].empty()) {
+        CHECK_EQ_MS(h.completed[0].front(), first_chart_bar,
+                    "240: the bucket that opens on the first chart bar is bar 0");
+        CHECK_EQ_MS(static_cast<int64_t>(h.volumes[0].front()), 240,
+                    "240: bar 0 holds every one-minute input from 04:00Z; none is cut as pre-range");
+    }
+    std::printf("test_default_cut_reads_the_aggregator_clock_on_a_clock_change_date: %s\n",
+                (failures > before) ? "FAIL" : "ok");
 }
 
 // NSE:NIFTY 15m from Tue 2025-04-01 09:15 IST: Monday 03-31 was a holiday,
@@ -768,6 +801,7 @@ int main() {
     test_intraday_mid_bucket_range_start_drops_whole_bucket();
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     test_default_cut_cme_15m_range_start();
+    test_default_cut_reads_the_aggregator_clock_on_a_clock_change_date();
     test_default_cut_nse_holiday_monday_keeps_the_week();
     test_default_cut_oanda_1d_weekly();
     test_flag_epoch_1d_chart_weekly_from_chart_dailies();

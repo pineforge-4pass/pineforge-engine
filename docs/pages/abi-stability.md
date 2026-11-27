@@ -76,6 +76,29 @@ Four layers:
    plus acceptance of the current header stamp. Dynamic-loader resolution
    and initializers precede this function-based stamp check.
 
+A further check holds the stamps themselves to those layouts before a change
+merges. The preflight stage `abi-pin-guard` (`scripts/check_abi_pin_guard.py`)
+compares the commits of a pull request. It fails a change that adds, removes or
+alters one of the first layer's size, offset or alignment assertions on a
+`pf_*` type, or the members of a `pf_*` struct or union in
+`include/pineforge/pineforge.h`, without strictly raising `PF_ABI_VERSION`. It
+also fails a change that alters the layout of `BacktestEngine`, of
+`NativeExecutionConsumer` or of a kernel type either class reaches, without
+strictly raising `PF_STREAM_ENGINE_LAYOUT_VERSION`. Each stamp is judged alone,
+and neither may fall. The stage reads declarations, not sizes: a member that is
+added, removed, renamed, retyped or reordered counts even where the size of its
+type stays the same.
+
+The live layout stamp is also tied to a measurement. The CTest row
+`test_stream_engine_layout` measures the size of both classes and the offset
+and size of each member that `pineforge-live` reads through a stamped module's
+handle, and compares them with `tests/stream_engine_layout_pins.inc`, the
+numbers measured for the header's stamp on Linux x86_64 with GNU libstdc++. A
+layout that moved under an unchanged stamp fails the row, and the stage refuses
+a change of those pins that does not raise the stamp. The section "Stamp guard
+for the C ABI and the engine layout" of `docs/ci.md` describes the range the
+stage reads, the row and what both leave to review.
+
 ### Report replay accessors
 
 The append-only nonvirtual function
@@ -135,7 +158,7 @@ the mark and returns -1, as do a NULL handle and a call made once
 
 The source host's `strategy_convert_to_account`, `strategy_convert_to_symbol`
 and `request_currency_rate` share the `currency_conversion` lookup
-(`src/source/pine_strategy_host.cpp:4583`). For a supported pair of different
+(`src/source/pine_strategy_host.cpp:4666`). For a supported pair of different
 currencies, they use the supplied scalar or the curve point in effect at the
 evaluated time. The lookup never substitutes the ledger's 1.0 fallback for a
 missing rate. If the lookup fails, the direct conversion helpers stop the run
@@ -480,9 +503,11 @@ layout of `CacheDefaults` changes under an unchanged epoch.
 In 1.14.0, `PF_STREAM_ENGINE_LAYOUT_VERSION` moved from 4 to 5. Before
 creating a strategy, the 1.14.0 `pineforge-live` rejects a module that
 declares stamp 4. Rebuild such modules against the matching 1.14.0 headers.
-Version 1.13.0 changed the internal layout but kept stamp 4, so its runner
-did not catch the layout mismatch when loading a 1.12.x module. Use matching
-headers and runtime for those releases too. The C ABI remains at version 5.
+Versions 1.12.0 and 1.13.0 each changed the internal layout but kept stamp 4,
+so a 1.12.x runner did not catch the layout mismatch when loading a 1.11.x
+module, nor a 1.13.x runner when loading a 1.11.x or 1.12.x module. Use
+matching headers and runtime for those releases too. The C ABI remains at
+version 5.
 
 After 1.14.0, the live layout stamp advances from 5 to 6 because the consumer
 stores each strategy's series-length TA lookback setting. Rebuild modules that
