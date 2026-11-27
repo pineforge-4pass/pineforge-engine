@@ -29,6 +29,9 @@ version number follows semantic versioning over the surfaces the
 - A requested EMA first evaluated when a sparse chart bar is published now uses the same seed as during the original requested evaluation. (#994)
 - With a declared series origin, a runtime-selected `request.security` timeframe now uses the requested context's EMA seed. On intraday timeframes such as two minutes, or a single day, week or month, it skips a bucket that opened before the origin. This cutoff does not cover counted months: a `3M` request can use the month's open and admit part of a quarter that started before the origin. (#994)
 - An EMA evaluated on another symbol's installed bars now uses the requested context's seed when a series origin is declared. (#994)
+- A chart `ta.ema` is now `na` until `length` inputs exist and then starts from their simple average, as on TradingView, with no metadata. It used to start from its first input unless the run declared a series origin or the raw `chart_ema_na_warmup` key. The EMAs inside `ta.macd`, `ta.kc` and `ta.tsi` follow. The rule depends neither on the series origin nor on the `request.security` warm-up, which is unchanged. `chart_ema_na_warmup` set to `0` keeps the first-input seed on purpose, for example for a feed that starts later than the series the reference ran on. Results change for a strategy that reads a chart EMA within its first `length` bars or before the two seeds have converged. (#1014)
+- A chart `ta.ema` that a generated strategy computes before the first bar of a batch run (a top-level call with a constant length, in a run with no named timeframe, no bar magnifier and no stream) now takes the same seed as the same call computed bar by bar. It used to start from its first input whatever the run declared, so the two paths disagreed. (#1014)
+- `scripts/run_strategy.py` declares the first bar TradingView computed, when a tape's `metrics.json` records it (`rangeProvenance.returnedRange.from`), as the run's series origin: that bar and not the trading window's start, the feed's first bar or `ohlcv_start_ms`. The loaded feed is not trimmed, the `request.security` warm-up is not switched on with it, and a probe's own `chart_ema_na_warmup`, `security_range_start_na_warmup` or `series_origin_ms` wins. A tape without that record, and a run without a tape window, declare nothing. (#1014)
 - With fixed market entries and margins off, a buy called after a sell at the pyramiding limit now keeps its reversal quantity at the next open. Dropping the buy could leave the position short or larger than intended.
 - A `request.security` site can publish the completed higher-timeframe value on each historical chart bar while its helpers still receive every developing bar and commit history at the real close. (#694, case 5)
 - `ta.rci` now correlates average ranks when some prices tie in a nonconstant window. A zero correlation no longer produces a spurious upward cross.
@@ -256,6 +259,13 @@ version number follows semantic versioning over the surfaces the
   retains the strategy's lookback setting. Rebuild live strategy modules
   against the matching engine headers. Public C structures and ABI 5 are
   unchanged.
+- Disclosed: 1.12.0, like 1.13.0, changed the internal layout that
+  `pineforge-live` reads while keeping `PF_STREAM_ENGINE_LAYOUT_VERSION` at 4.
+  A 1.12.x `pineforge-live` therefore did not refuse a module built against
+  1.11.x headers, and a 1.13.x one did not refuse a 1.11.x or 1.12.x module.
+  The ABI stability page now names both releases. Build each strategy module
+  against the headers and archive of the release whose `pineforge-live` loads
+  it. (#1042)
 ### State hashes
 - A positive series-length TA lookback cap is included in the continuation
   hash. The unlimited setting adds no field to the hash.

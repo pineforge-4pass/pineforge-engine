@@ -11,14 +11,14 @@
 #define coof_fill_recalc_active_ l4d_coof_fill_recalc_active()
 #define coof_cursor_is_bar_close_ l4d_coof_cursor_is_bar_close()
 
-// test_chart_ema_na_warmup — pins the opt-in chart-EMA warmup flag.
+// test_chart_ema_na_warmup — pins the chart-EMA warmup flag.
 //
-// ``chart_ema_na_warmup`` is an independent, default-off run flag carried
-// through the syminfo-metadata channel.  While chart strategy code executes,
-// it makes newly used ta::EMA instances latch TradingView's built-in warmup
-// shape (na for length-1 values, then an SMA seed).  request.security keeps
-// its own ``security_range_start_na_warmup`` scope and must not inherit this
-// chart choice.
+// ``chart_ema_na_warmup`` is an independent run flag carried through the
+// syminfo-metadata channel, on unless a run sets it to 0.  While chart strategy
+// code executes, it makes newly used ta::EMA instances latch TradingView's
+// built-in warmup shape (na for length-1 values, then an SMA seed).
+// request.security keeps its own ``security_range_start_na_warmup`` scope and
+// must not inherit this chart choice.
 
 // This fixture covers every engine-owned chart on_bar dispatch path: normal,
 // calc_on_order_fills (ordinary + fill recalc), magnifier, and streaming.  It
@@ -82,7 +82,27 @@ void test_default_off_on_and_disable_zero() {
     const auto bars = flat_bars(3);
 
     ta::ema_na_warmup_flag() = false;
+    // Nothing declared: the chart seeding is on by default.
+    EmaValueHarness plain;
+    plain.run(bars.data(), static_cast<int>(bars.size()));
+    const double expected_plain[] = {na<double>(), na<double>(), 20.0};
+    CHECK(plain.flags.size() == 3 && plain.values.size() == 3,
+          "nothing declared: one chart dispatch per bar");
+    CHECK(std::all_of(plain.flags.begin(), plain.flags.end(),
+                      [](bool value) { return value; }),
+          "nothing declared: chart scope exposes true");
+    for (std::size_t i = 0; i < plain.values.size() && i < 3; ++i) {
+        CHECK(exact_or_both_na(plain.values[i], expected_plain[i]),
+              "nothing declared: EMA na-warms then SMA-seeds");
+    }
+    CHECK(!ta::ema_na_warmup_flag(),
+          "nothing declared: chart dispatch restores ambient false");
+
+    // The rows named "default-off" are the first-value seed. It was the
+    // default when they were written; chart_ema_na_warmup = 0 selects it now.
+    // Their texts stay as they are: the twin-parity manifest holds them.
     EmaValueHarness off;
+    off.set_syminfo_metadata("chart_ema_na_warmup", 0.0);
     off.run(bars.data(), static_cast<int>(bars.size()));
     const double expected_off[] = {10.0, 15.0, 22.5};
     CHECK(off.flags.size() == 3, "default-off: one chart dispatch per bar");
@@ -244,7 +264,24 @@ void test_chart_and_security_flags_are_independent() {
                              [](bool value) { return !value; }),
           "independence: chart flag does not leak into security evaluator");
 
+    // The security flag alone: the chart keeps its own default, which is on.
+    IndependenceHarness security_default;
+    security_default.set_syminfo_metadata("security_range_start_na_warmup", 1.0);
+    security_default.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    CHECK(!security_default.chart_flags.empty()
+              && std::all_of(security_default.chart_flags.begin(),
+                             security_default.chart_flags.end(),
+                             [](bool value) { return value; }),
+          "independence: the chart default holds under the security flag");
+    CHECK(!security_default.security_flags.empty()
+              && std::all_of(security_default.security_flags.begin(),
+                             security_default.security_flags.end(),
+                             [](bool value) { return value; }),
+          "independence: the security flag holds under the chart default");
+
+    // With the chart seeding switched off, the security flag does not bring it back.
     IndependenceHarness security_only;
+    security_only.set_syminfo_metadata("chart_ema_na_warmup", 0.0);
     security_only.set_syminfo_metadata("security_range_start_na_warmup", 1.0);
     security_only.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
     CHECK(!security_only.chart_flags.empty()
@@ -284,6 +321,7 @@ void test_thread_local_restored_after_exception() {
 
     ta::ema_na_warmup_flag() = true;
     ThrowingHarness disabled;
+    disabled.set_syminfo_metadata("chart_ema_na_warmup", 0.0);
     disabled.run(bars.data(), static_cast<int>(bars.size()));
     CHECK(!disabled.observed,
           "exception: disabled chart scope masks ambient true inside on_bar");
