@@ -46011,7 +46011,8 @@
     "void source :: PineStrategyHost :: pine_feed_security_eval_state ( SecurityEvalState & state , const Bar & input_bar , bool calling_bar_complete ) #1",
     "if ( pine . lower_tf_emulation ) #1",
     "for ( const auto & synthetic_bar : synthetic_bars ) #1",
-    "else #1"
+    "else #1",
+    "if ( ! scope ) #1"
    ],
    "cls": "grow",
    "spelling": "scope . emplace ( . . . )",

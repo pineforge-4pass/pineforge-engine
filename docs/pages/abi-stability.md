@@ -135,7 +135,7 @@ the mark and returns -1, as do a NULL handle and a call made once
 
 The source host's `strategy_convert_to_account`, `strategy_convert_to_symbol`
 and `request_currency_rate` share the `currency_conversion` lookup
-(`src/source/pine_strategy_host.cpp:4634`). For a supported pair of different
+(`src/source/pine_strategy_host.cpp:4666`). For a supported pair of different
 currencies, they use the supplied scalar or the curve point in effect at the
 evaluated time. The lookup never substitutes the ledger's 1.0 fallback for a
 missing rate. If the lookup fails, the direct conversion helpers stop the run
