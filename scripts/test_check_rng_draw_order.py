@@ -463,6 +463,76 @@ class DrawOrderTest(unittest.TestCase):
                      'tests'], capture_output=True, text=True)
                 self.assertEqual(proc.returncode, code, proc.stdout + proc.stderr)
 
+    def test_prototypes_do_not_hide_free_or_member_drawers(self):
+        header = """
+        #include <cstddef>
+        void take(int, int);
+        int pick(std::size_t n);
+        int pick(std::size_t);
+        struct Host { int step(std::size_t) const; };
+        """
+        unit = """
+        #include "api.hpp"
+        #include <random>
+        std::mt19937 engine{7};
+        void visit(Host& h) { take(pick(3), h.step(4)); }  // @ARG
+        int pick(std::size_t n) { return engine() % n; }
+        int Host::step(std::size_t n) const { return engine() % n; }
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'api.hpp').write_text(textwrap.dedent(header), encoding='utf-8')
+            (root / 'unit.cpp').write_text(textwrap.dedent(unit), encoding='utf-8')
+            self.assertEqual({(f.line, f.kind) for f in lint.scan(root, ['unit.cpp'])},
+                             expected(unit))
+
+    def test_external_receiver_can_dispatch_to_a_drawing_method(self):
+        self.assert_rows(GENERATOR + """
+        #include <memory>
+        struct Host {
+            Random engine{7};
+            int first() { return engine.below(3); }
+            int second() { return engine.below(4); }
+        };
+        void take(int, int);
+        void visit(std::unique_ptr<Host>& h) { take(h->first(), h->second()); }  // @ARG
+        """)
+
+    def test_explicit_callable_type_keeps_its_lambda_draw(self):
+        self.assert_rows("""
+        #include <functional>
+        #include <random>
+        void take(int, int);
+        void visit(std::mt19937& engine) {
+            std::function<unsigned long()> next = [&engine] { return engine(); };
+            take(next(), next());  // @ARG
+        }
+        """)
+
+    def test_anonymous_namespace_engine_visible_in_enclosing_namespace(self):
+        self.assert_rows("""
+        #include <random>
+        void take(int, int);
+        namespace { std::mt19937 file_engine{7}; }
+        void visit() { take(file_engine(), file_engine()); }  // @ARG
+        namespace session {
+            namespace { std::mt19937 session_engine{9}; }
+            void visit() { take(session_engine(), session_engine()); }  // @ARG
+        }
+        """)
+
+    def test_generator_through_template_parameter_and_reference_alias(self):
+        self.assert_rows("""
+        #include <random>
+        void take(int, int);
+        template<typename G> void roll(G& rng) { take(rng(), rng()); }  // @ARG
+        void run() { std::mt19937 rng(7); roll(rng); }
+        void aliased(std::mt19937& source) {
+            auto& rng = source;
+            take(rng(), rng());  // @ARG
+        }
+        """)
+
 
 if __name__ == '__main__':
     unittest.main()
