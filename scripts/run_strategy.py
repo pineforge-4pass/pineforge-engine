@@ -1440,7 +1440,8 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
     raises ``ValueError``; given both ways, the flat step and the nested
     minimum are used. ``env`` (default ``os.environ``) supplies the one lane
     fact the case runner hands every run, the lane template's quantity step
-    (``LANE_QTY_STEP_ENV``): ``syminfo.mincontract`` when none is declared.
+    (``LANE_QTY_STEP_ENV``): a positive finite decimal, optionally with an
+    exponent, used for ``syminfo.mincontract`` when none is declared.
     """
     if not isinstance(params, dict):
         params = {}
@@ -1575,7 +1576,13 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
     # none (the two ETH 15m templates), runtime_overrides.qty_step's 0.0001 is
     # a default, not lane evidence. Generated code reads the fact through
     # get_syminfo_metadata("mincontract") once codegen lowers it so.
-    lane_step = _num((os.environ if env is None else env).get(LANE_QTY_STEP_ENV))
+    lane_text = (os.environ if env is None else env).get(LANE_QTY_STEP_ENV)
+    # A lane hint is plain ASCII decimal text, not Python's float syntax.
+    lane_step = None
+    if isinstance(lane_text, str) and re.fullmatch(
+        r"\+?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", lane_text
+    ):
+        lane_step = float(lane_text)
     # Precedence: flat step, then nested; nested minimum, then flat, then lane.
     qty_step = nested_step if flat_step is None else flat_step
     minimum = flat_minimum if nested_minimum is None else nested_minimum

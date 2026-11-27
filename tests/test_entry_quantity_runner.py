@@ -49,6 +49,7 @@ def test_runner_lot_declarations(tmp_path):
         ({"mincontract": 0.01}, template, {"mincontract": 0.01}),
         ({"syminfo_metadata": {"mincontract": None}}, template, {"mincontract": 1.0}),
         ({"syminfo_metadata": {"mincontract": None}}, {}, {}),
+        ({}, {run_strategy.LANE_QTY_STEP_ENV: "1e-05"}, {"mincontract": 0.00001}),
     ):
         for symbol in runner_symbols(tmp_path, source, chart, overrides, env):
             actual = {k: symbol[k] for k in ("qty_step", "mincontract") if symbol.get(k) is not None}
@@ -82,6 +83,20 @@ def test_runner_cli_prints_the_lot_refusal(tmp_path, runner, key, nested):
     name = ("syminfo_metadata." if nested else "") + key
     assert f"runtime_overrides.{name} must be a positive finite number" in result.stderr
     assert not (tmp_path / "engine_trades.csv").exists()
+
+
+def test_invalid_lane_step_leaves_mincontract_undeclared(tmp_path):
+    source = TESTS / "entry_quantity_strategy.cpp"
+    chart = FIXTURES / "qty_step_mincontract/btc60/feed/bars.csv"
+    # A malformed lane hint has the same result as no hint. In both cases an
+    # explicit step still reaches both runners, with no invented minimum.
+    overrides = {"qty_step": 0.25}
+    absent = runner_symbols(tmp_path, source, chart, overrides, {})
+    assert absent == (overrides, overrides)
+    for value in ("1_0", " 0.01 ", "\uff11"):
+        actual = runner_symbols(tmp_path, source, chart, overrides,
+                                {run_strategy.LANE_QTY_STEP_ENV: value})
+        assert actual == absent, (value, actual, absent)
 
 
 def replay(program, option, tape):
