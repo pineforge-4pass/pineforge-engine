@@ -144,6 +144,7 @@ UNSEQUENCED_BINARY = frozenset((
     '+', '-', '*', '/', '%', '&', '|', '^', '<', '>', '<=', '>=', '==', '!=', '<=>'))
 DECL_TRAILERS = frozenset(('const', 'volatile', 'override', 'final', 'mutable', 'constexpr',
                            '&', '&&', 'noexcept', 'throw', 'try'))
+ANONYMOUS_NS = '(anonymous)'
 HEAD_WORDS = frozenset(('struct', 'class', 'union', 'enum', 'namespace', 'extern', 'concept'))
 
 TOKEN_RE = re.compile(r'''
@@ -404,6 +405,19 @@ class Structure:
         """Last identifier of a possibly specialized name ending before end."""
         return self.template_close.get(end - 1, end) - 1
 
+    def split_args(self, o: int) -> list[tuple[int, int]]:
+        c = self.close[o]
+        args = []
+        start = k = o + 1
+        while k < c:
+            if self.toks[k].text == ',':
+                args.append((start, k))
+                start = k + 1
+            k = self.close.get(k, self.template_open.get(k, k)) + 1
+        if start < c or args:
+            args.append((start, c))
+        return args
+
     def _qualified_id_end(self, k: int) -> int:
         toks = self.toks
         if k < len(toks) and toks[k].text == '::':
@@ -622,6 +636,7 @@ class Function:
     mixes: set[str] = field(default_factory=set)    # non-locals updated from an input
     returns_value: bool = False
     qualifier: str | None = None    # Class of an out-of-line Class::name definition
+    deduced: dict[int, Binding] = field(default_factory=dict)  # argument slot -> type parameter's object
 
     @property
     def stepper(self) -> bool:
@@ -662,6 +677,9 @@ class FileFacts:
     fields: dict[tuple[str, str], Binding]            # class, field
     globals: dict[tuple[tuple[str, ...], str], Binding]  # namespace, object
     namespaces: dict[int, tuple[str, ...]]            # opening brace -> qualified namespace
+    references: dict[Binding, tuple[int, int]] = field(default_factory=dict)
+    parameter_types: set[str] = field(default_factory=set)
+    direct_globals: dict[Binding, int] = field(default_factory=dict)  # candidate initializer '('
 
     def namespace_at(self, pos: int) -> tuple[str, ...]:
         scope = self.st.parent[pos]
@@ -860,7 +878,7 @@ def collect_facts(path: Path, rel: str, raw: str) -> FileFacts:
             j = st._qualified_id_end(i + 1)
             if j in st.close and toks[j].text == '{':
                 parts = tuple(t.text for t in toks[i + 1:j] if t.kind == 'id')
-                ff.namespaces[j] = ff.namespace_at(i) + (parts or ('(anonymous)',))
+                ff.namespaces[j] = ff.namespace_at(i) + (parts or (ANONYMOUS_NS,))
         elif t.text == 'extern' and i + 2 in st.close and toks[i + 1].kind == 'str' \
                 and toks[i + 2].text == '{':
             ff.namespaces[i + 2] = ff.namespace_at(i)  # linkage does not create a scope
@@ -874,15 +892,78 @@ DECL_SPECIFIERS = frozenset(('const', 'volatile', 'constexpr', 'extern', 'inline
                              'static', 'thread_local', 'typename'))
 
 
+def parameter_type(st: Structure, a: int, b: int) -> tuple[int, int]:
+    """The type-specifier in a parameter declaration, before its declarator."""
+    toks = st.toks
+    while a < b and toks[a].text in ('const', 'volatile', 'typename', 'class', 'struct', 'enum'):
+        a += 1
+    k = a
+    while k < b and toks[k].text in BUILTIN_TYPES:
+        k += 1
+    return a, k if k > a else st._qualified_id_end(a)
+
+
+def template_type_names(st: Structure, declarator: int) -> set[str]:
+    """Type parameters of this function's template head, if it has one."""
+    toks = st.toks
+    k = st.name_before(declarator) - 1
+    while k >= 0:
+        if k in st.template_close:
+            o = st.template_close[k]
+            if o and toks[o - 1].text == 'template':
+                return {toks[i + 1].text for i in range(o + 1, k - 1)
+                        if toks[i].text in ('class', 'typename') and toks[i + 1].kind == 'id'}
+            k = o - 1
+        elif toks[k].kind == 'id' or toks[k].text in ('::', '*', '&', '&&'):
+            k -= 1
+        else:
+            break
+    return set()
+
+
+def prototype(st: Structure, o: int, types: set[str]) -> bool:
+    """Check parameter declarators, not just the first word inside the parens.
+    In particular a qualified type followed by a parameter name is unambiguous.
+    A lone identifier could instead be a value used to initialize an object."""
+    toks = st.toks
+    if st.parent[o] in st.class_heads:
+        return True  # a nonstatic data member cannot have a parenthesized initializer here
+    for a, b in st.split_args(o):
+        start, k = parameter_type(st, a, b)
+        if k <= start or k > b:
+            return False
+        known = toks[st.name_before(k)].text in types or start != a
+        while k < b and toks[k].text in ('const', 'volatile', '&', '&&', '*', '...'):
+            k += 1
+        if k < b and toks[k].kind == 'id' and toks[k].text not in KEYWORDS:
+            known = True
+            k += 1
+        while k < b and k in st.close and toks[k].text == '[':
+            k = st.close[k] + 1
+        if not known or (k != b and toks[k].text != '='):
+            return False
+    return True
+
+
 def collect_bindings(ff: FileFacts) -> None:
     """Record declarators at their point of declaration. Parameters extend
     through their definition (including constructor initializers); prototype
     parameters end at the closing parenthesis."""
     toks, st = ff.toks, ff.st
     param_ends = {fn.declarator: fn.body[1] for fn in ff.functions}
-    type_names = BUILTIN_TYPES | STD_ENGINES | {c.name for c in ff.classes}
+    deduced = {}
+    # Definitions supply type evidence for prototypes with unnamed parameters.
+    for fn in ff.functions:
+        if toks[fn.declarator].text == '(':
+            generic = template_type_names(st, fn.declarator)
+            for slot, (a, b) in enumerate(st.split_args(fn.declarator)):
+                start, end = parameter_type(st, a, b)
+                if start < end <= b:
+                    ff.parameter_types.add(toks[st.name_before(end)].text)
+                    if end == start + 1 and toks[start].text in generic:
+                        deduced[start] = (fn, slot)
+    type_names = ff.parameter_types | BUILTIN_TYPES | STD_ENGINES | {c.name for c in ff.classes}
     specifiers = DECL_SPECIFIERS | BUILTIN_TYPES
-    param_types = type_names | DECL_SPECIFIERS
     for k in range(len(toks) - 1):
         t = toks[k]
         if t.kind != 'id' or (t.text in KEYWORDS and t.text not in BUILTIN_TYPES):
@@ -902,10 +983,8 @@ def collect_bindings(ff: FileFacts) -> None:
         after = toks[j + 1].text
         if after not in ('(', '{', '=', ';', ',', ')', '[', ':') or st.kind.get(j + 1) == PARAMS:
             continue
-        if after == '(' and j + 1 in st.close:
-            c = st.close[j + 1]
-            if c == j + 2 or toks[j + 2].text in param_types:
-                continue  # function declaration, not an object of its return type
+        if after == '(' and j + 1 in st.close and prototype(st, j + 1, type_names):
+            continue
         start = k
         while start >= 2 and toks[start - 1].text == '::':
             start = st.name_before(start - 1)
@@ -936,10 +1015,21 @@ def collect_bindings(ff: FileFacts) -> None:
         auto = not indirect and not any(t.text in ('static', 'thread_local', 'extern')
                                          for t in toks[start:k])
         decl = Binding(type_name, ff.path, j, end, auto)
+        if k in deduced:
+            fn, slot = deduced[k]
+            fn.deduced[slot] = decl
+        if t.text == 'auto' and after == '=' and any(
+                tok.text in ('&', '&&') for tok in toks[k + 1:j]):
+            stop = j + 2
+            while stop < len(toks) and toks[stop].text not in (';', ',', ')', '}'):
+                stop = st.template_open.get(stop, st.close.get(stop, stop)) + 1
+            ff.references[decl] = (j + 2, stop)
         if scope in st.class_heads:
             ff.fields[st.class_heads[scope][1], name] = decl
         elif scope == -1 or scope in ff.namespaces:
             ff.globals[ff.namespaces.get(scope, ()), name] = decl
+            if after == '(' and j + 1 in st.close:
+                ff.direct_globals[decl] = j + 1
         else:
             ff.locals.setdefault(name, []).append(decl)
 
@@ -965,6 +1055,12 @@ class Vocabulary:
     bases: dict[str, set[str]] = field(default_factory=dict)
     fields: dict[tuple[str, str], Binding] = field(default_factory=dict)
     globals: dict[tuple[tuple[str, ...], str], Binding] = field(default_factory=dict)
+    references: dict[Binding, Binding] = field(default_factory=dict)
+    generator_params: set[Binding] = field(default_factory=set)
+
+    def is_generator(self, binding: Binding | None) -> bool:
+        return binding is not None and (
+            binding.type_name in self.gen_types or binding in self.generator_params)
 
     def lineage(self, cls: str | None) -> set[str]:
         if cls is None:
@@ -990,6 +1086,62 @@ def resolved_owner(fn: Function, classes: set[str]) -> str | None:
     return fn.owner
 
 
+def infer_generator_bindings(unit: list[FileFacts], v: Vocabulary,
+                            checkers: dict[int, Checker]) -> None:
+    """Resolve references and propagate generator arguments to the particular
+    template declarations they instantiate, including calls through another template."""
+    templates = {}
+    for ff in unit:
+        checker = checkers[id(ff)]
+        for ref, expr in ff.references.items():
+            pos = checker.bare_object(*expr)
+            if pos is not None:
+                source = checker.binding(pos)
+                if source is not None and source != ref:
+                    v.references[ref] = source
+        for fn in ff.functions:
+            if fn.deduced:
+                scope = resolved_owner(fn, v.classes) or ff.namespace_at(fn.declarator)
+                arity = len(ff.st.split_args(fn.declarator))
+                signatures = templates.setdefault(fn.name, {})
+                signatures.setdefault((scope, arity), []).extend(fn.deduced.items())
+
+    # An edge describes storage passed as a bare argument, not an arbitrary
+    # identifier with the same spelling. Known non-generator arguments seed no edges.
+    edges: dict[Binding, set[Binding]] = {}
+    for ff in unit:
+        checker = checkers[id(ff)]
+        checker._bindings.clear()  # receivers may now resolve through a reference
+        if not templates:
+            continue
+        for o, kind in ff.st.kind.items():
+            if kind != CALL:
+                continue
+            p = ff.st.name_before(o)
+            signatures = templates.get(ff.toks[p].text) if p >= 0 else None
+            if not signatures or checker.binding(p) is not None:
+                continue
+            args = ff.st.split_args(o)
+            for scope in checker.call_scopes(p):
+                matches = signatures.get((scope, len(args)))
+                if matches:
+                    for slot, formal in matches:
+                        pos = checker.bare_object(*args[slot])
+                        actual = checker.binding(pos) if pos is not None else None
+                        if actual is not None:
+                            edges.setdefault(actual, set()).add(formal)
+                    break
+    pending = [source for source in edges if v.is_generator(source)]
+    while pending:
+        for formal in edges.get(pending.pop(), ()):
+            if formal not in v.generator_params:
+                v.generator_params.add(formal)
+                pending.append(formal)
+    files = {ff.path: ff for ff in unit}
+    for binding in v.generator_params | {r for r, d in v.references.items() if v.is_generator(d)}:
+        v.gen_objects.add(files[binding.path].toks[binding.pos].text)
+
+
 def build_vocabulary(unit: list[FileFacts]) -> Vocabulary:
     v = Vocabulary()
     v.gen_types |= STD_ENGINES
@@ -1007,13 +1159,28 @@ def build_vocabulary(unit: list[FileFacts]) -> Vocabulary:
         for cd in ff.classes:
             v.classes.add(cd.name)
             v.bases.setdefault(cd.name, set()).update(cd.bases)
+    types = v.classes | v.gen_types | BUILTIN_TYPES
+    for ff in unit:
+        types.update(ff.parameter_types)
     for ff in unit:
         v.fields.update(ff.fields)
-        v.globals.update(ff.globals)
+        for key, decl in ff.globals.items():
+            # A header alone may not distinguish an unknown type-id from a
+            # value in parentheses. Revisit it with this unit's definitions.
+            o = ff.direct_globals.get(decl)
+            if o is None or not prototype(ff.st, o, types):
+                v.globals[key] = decl
         v.gen_objects.update(name for name, decls in ff.locals.items()
                              if any(d.type_name in v.gen_types for d in decls))
         for scope in (ff.fields, ff.globals):
             v.gen_objects.update(name for (_, name), d in scope.items() if d.type_name in v.gen_types)
+    # C++ implicitly imports an unnamed namespace into its enclosing namespace.
+    # Keep the declaring scope and binding as well (including its source position).
+    for (ns, name), obj in list(v.globals.items()):
+        for i in reversed(range(len(ns))):
+            if ns[i] == ANONYMOUS_NS:
+                ns = ns[:i] + ns[i + 1:]
+                v.globals.setdefault((ns, name), obj)
     # drawers: free functions, lambdas and non-generator methods whose body
     # draws, or which are steppers themselves; to a fixpoint.
     candidates = []
@@ -1032,6 +1199,7 @@ def build_vocabulary(unit: list[FileFacts]) -> Vocabulary:
             if fn.stepper:
                 v.drawers.setdefault(key, set()).add(None)
     checkers = {id(ff): Checker(ff, v) for ff in unit}
+    infer_generator_bindings(unit, v, checkers)
     changed = True
     while changed:
         changed = False
@@ -1076,25 +1244,7 @@ class Checker:
 
     # -- what is a draw ------------------------------------------------------
     def split_args(self, o: int) -> list[tuple[int, int]]:
-        c = self.st.close[o]
-        args = []
-        start = o + 1
-        k = o + 1
-        while k < c:
-            x = self.toks[k].text
-            if x in ('(', '[', '{') and k in self.st.close:
-                k = self.st.close[k] + 1
-                continue
-            if x == '<' and k in self.st.template_open:
-                k = self.st.template_open[k] + 1
-                continue
-            if x == ',':
-                args.append((start, k))
-                start = k + 1
-            k += 1
-        if start < c or args:
-            args.append((start, c))
-        return args
+        return self.st.split_args(o)
 
     def field(self, owner: str | None, name: str) -> Binding | None:
         if (owner, name) in self.v.fields:
@@ -1104,10 +1254,44 @@ class Checker:
                 return self.v.fields[base, name]
         return None
 
+    def call_scopes(self, pos: int) -> Iterable[str | tuple[str, ...]]:
+        """Candidate class or namespace scopes for a named template call."""
+        toks = self.toks
+        if pos >= 2 and toks[pos - 1].text in ('.', '->'):
+            obj = self.binding(pos - 2)
+            owner = self.owner_at(pos) if toks[pos - 2].text == 'this' else (
+                obj.type_name if obj else None)
+            yield from self.v.lineage(owner)
+            return
+        suffix = []
+        k = pos
+        while k >= 2 and toks[k - 1].text == '::':
+            ident = self.st.name_before(k - 1)
+            if ident < 0 or toks[ident].kind != 'id' or toks[ident].text in KEYWORDS:
+                break
+            suffix.append(toks[ident].text)
+            k = ident
+        if suffix and suffix[0] in self.v.classes:
+            yield from self.v.lineage(suffix[0])
+            return
+        ns = self.ff.namespace_at(pos)
+        if k and toks[k - 1].text == '::':
+            ns = ()  # leading ::
+        elif not suffix:
+            yield from self.v.lineage(self.owner_at(pos))
+        for n in range(len(ns), -1, -1):
+            yield ns[:n] + tuple(reversed(suffix))
+
     def binding(self, pos: int) -> Binding | None:
         if pos not in self._bindings:
             self._bindings[pos] = self._binding(pos)
-        return self._bindings[pos]
+        d = self._bindings[pos]
+        if d in self.v.references:
+            seen = set()
+            while d in self.v.references and d not in seen:
+                seen.add(d)
+                d = self.v.references[d]
+        return d
 
     def _binding(self, pos: int) -> Binding | None:
         toks = self.toks
@@ -1155,13 +1339,13 @@ class Checker:
             # arguments. Do not export the callee's formal in their place.
             if storage and storage.path == self.ff.path and not storage.automatic \
                     and fn.declarator < storage.pos < self.st.close[fn.declarator] \
-                    and storage.type_name in self.v.gen_types:
+                    and self.v.is_generator(storage):
                 return False
             self.effects.add(storage)
         return True
 
     def generator(self, d: Binding | None, pos: int) -> bool:
-        if d is None or d.type_name not in self.v.gen_types:
+        if not self.v.is_generator(d):
             return False
         root = pos
         while root >= 2 and self.toks[root - 1].text in ('.', '->'):
@@ -1244,9 +1428,9 @@ class Checker:
                     name in v.gen_methods.get(here, ()) and self.record(None))
             receiver = self.binding(p - 2)
             if receiver is not None:
-                if receiver.type_name in v.gen_types:
+                if v.is_generator(receiver):
                     return self.generator(receiver, p - 2)
-                if receiver.type_name != 'auto':
+                if receiver.type_name in v.classes:
                     return self.drawer(name, v.lineage(receiver.type_name))
             return self.drawer(name, None)
         if q is not None and q.text == '::':
@@ -1273,10 +1457,11 @@ class Checker:
             name in v.gen_methods.get(here, ()) and self.record(None))
 
     def object_draws(self, obj: Binding, pos: int) -> bool:
-        if obj.type_name in self.v.gen_types:
+        if self.v.is_generator(obj):
             return self.generator(obj, pos)
-        if obj.type_name == 'auto':
-            return self.applies((obj.path, obj.pos))
+        key = (obj.path, obj.pos)
+        if key in self.v.lambda_names:
+            return self.applies(key)
         return self.drawer('operator()', self.v.lineage(obj.type_name))
 
     def owner_at(self, idx: int) -> str | None:
