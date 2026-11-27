@@ -33792,6 +33792,7 @@ static void rest_stop_entries_at_tick_reach(
     // for every other row and bar.
     const auto tick_reach = [&](const PlacementSnapshot& row) {
         if (row.family != PineOrderFamily::Entry || row.projection_created_during_coof
+            || row.birth.from_fill()
             || !finite_positive(row.exit_levels.stop) || finite_positive(row.exit_levels.limit)) {
             return kNaN;
         }
