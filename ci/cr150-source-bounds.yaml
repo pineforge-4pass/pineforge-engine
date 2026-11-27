@@ -38,7 +38,21 @@
 # none fails, as does a path that is no file or a line past its end. A sentence
 # of prose only is listed UNCHECKED: it is counted and printed, never taken as
 # holding, and `ceilings.cited_unchecked` pins how many there are.
-# Citations in these comments are not read.
+# A citation in a comment of this file is read by the same rules, as one in a
+# note of no entry. A comment has no file of its own, so every line it cites
+# is written with its path (`path:N`, or a bare `:M` joined to one); a bare
+# `:N` or `line N` that continues no path fails. A comment records no site, so
+# the cited line must hold a construct its sentence spells, and a comment that
+# calls a cited line a site fails. Consecutive comment lines are one text, in
+# which a sentence may run over several lines; a comment line with no words
+# ends it. A comment citation in a sentence of prose only is listed UNCHECKED
+# as well, and `ceilings.comment_unchecked` pins how many of those there are.
+#
+# An entry's `line:` field is the line of its first site in the scanned tree,
+# the number `--emit-seed` writes. The gate compares every field with the
+# scan: another number fails, and the finding names the entry and both
+# numbers. The field of an entry with no site left is not compared; that
+# entry fails as stale.
 #
 # States
 #   bounded              bound = expression over declared fixed_inputs only (no bars,
@@ -66,6 +80,8 @@
 # therefore changes that number. This covers the citation forms listed above
 # and no other: a line number written another way and without `:N` (`LINE 6`)
 # is not a citation, and the gate neither checks nor counts it.
+# `ceilings.comment_unchecked` pins the number of UNCHECKED comment citations
+# in the same way, apart from the number of the notes.
 # `owner` is the code area that must supply the bound (see `owners`); it is not a
 # person or lane roster.
 #
@@ -215,8 +231,8 @@ ceilings:
   # U1930 (src/ta_volatility_trend.cpp:562) is one copy of at most 64
   # formatted bytes, local to one refusal and not retained. The two empty
   # prefix alternatives it also had when it was added are gone: the prefix
-  # of each message (:546 and :560) is the string run_error_bar_prefix()
-  # returns. The gate cannot express this bound.
+  # of each message (src/ta_volatility_trend.cpp:546 and :560) is the string
+  # run_error_bar_prefix() returns. The gate cannot express this bound.
   # expectation corrected: 1457 -> 1458, because one more unreviewed group
   # (1457 + 1) in include/pineforge/engine.hpp, for the fixed-period request
   # clock (#718). It is not bounded in the gate's sense: no fixed input is
@@ -236,10 +252,12 @@ ceilings:
   # input is declared for it. It says what limits it:
   # U1931 unranked: the positions, in the adapter's list of exit legs that wait
   # for the end of the calculation, of the legs one strategy.exit call gives a
-  # queue slot (src/source/pine_adapter.cpp:13620, filled at :13629). A local
-  # list of one call, built only for a full exit of a named entry placed at
-  # once (:13604-13611) and freed when that call's helper returns (:13662). It
-  # holds at most one position for each leg waiting at that call (:13621), a
+  # queue slot (src/source/pine_adapter.cpp:13620, filled at
+  # src/source/pine_adapter.cpp:13629). A local list of one call, built only
+  # for a full exit of a named entry placed at once
+  # (src/source/pine_adapter.cpp:13604-13611) and freed when that call's helper
+  # returns (src/source/pine_adapter.cpp:13662). It holds at most one position
+  # for each leg waiting at that call (src/source/pine_adapter.cpp:13621), a
   # number the calculation's own strategy.exit calls set and no fixed input
   # bounds; it does not follow the length of the run.
   # expectation corrected: 1460 -> 1462, because the timezone guard adds two
@@ -272,8 +290,10 @@ ceilings:
   # expectation corrected: 1475 -> 1477, because the positional history of the
   # Pine ta.mom / ta.roc objects (PositionalLag in
   # include/pineforge/source/pine_ta_length.hpp) adds two OPEN groups: its ring
-  # (U1967, the member lag_slots_ at :593) and the larger vector one growth step
-  # builds and swaps in (U1966, the local grown at :611). The ring holds at most
+  # (U1967, the member lag_slots_ at
+  # include/pineforge/source/pine_ta_length.hpp:593) and the larger vector one
+  # growth step builds and swaps in (U1966, the local `grown` at
+  # include/pineforge/source/pine_ta_length.hpp:611). The ring holds at most
   # length + 1 values and the length is the call's argument, so neither is
   # bounded in the gate's sense: no fixed input is declared for them. The member
   # is not called slots_: the index resolves no types, and a container member of
@@ -282,7 +302,7 @@ ceilings:
   # as container assignments. Two site identities also enter the existing OPEN
   # group U1108 without adding a group: the whole-state restores of
   # PineDmiReference::recompute and PineSar::recompute
-  # (src/source/pine_ta_length.cpp:663 and :749).
+  # (`state_ = saved_state_`, src/source/pine_ta_length.cpp:663 and :749).
   # expectation corrected: 1477 -> 1479, because the state that keeps the N-day
   # partitions of timeframe.change for one run (TimeframeChangeState in
   # src/source/pine_host_reads.hpp) adds two OPEN groups: its rows (U1969, the
@@ -311,13 +331,15 @@ ceilings:
   # its two counters of the values taken are named value_count_ and
   # saved_value_count_, not values_ and saved_values_. The index resolves no
   # types, and include/pineforge/ta.hpp declares container members of those two
-  # names (U0467, U0463), so it listed the four integer statements of the
-  # counters (:980, :981, :991, :995) as container assignments.
+  # names (U0467, U0463), so it listed the four integer statements of
+  # value_count_ and saved_value_count_
+  # (include/pineforge/source/pine_ta_length.hpp:980, :981, :991, :995) as
+  # container assignments.
   # expectation corrected: 1492 -> 1491, because session_trading_day_open_ms
   # no longer copies eff_tz (U0759 is retired). The wall-minute cache keeps
   # its slot member named tz, so U1184 stays one group: its two cache sites
   # move from tz_offset_ms to session_wall_minute_ms, and the partition's
-  # p.tz assignment (src/timeframe.cpp:857) stays indexed. No group is added.
+  # `p.tz` assignment (src/timeframe.cpp:857) stays indexed. No group is added.
   unreviewed: 1491
   pending-flat-memory: 179
   # cited_unchecked pins the number of note citations the gate lists
@@ -347,6 +369,11 @@ ceilings:
   # entry, or a range that neither holds at both ends nor runs from a site to
   # the end of what begins there.
   cited_unchecked: 88
+  # comment_unchecked pins, in the same way, the number of citations in the
+  # comments of this file that the gate lists UNCHECKED: a comment sentence of
+  # prose only that cites a line and names nothing the gate can look for
+  # there. A manifest without this key allows none.
+  comment_unchecked: 22
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
   - {name: "c-abi", globs: ["src/c_abi.cpp", "src/native_c_host.cpp", "src/selected_window_plan_c.cpp", "include/pineforge/*.h"]}
@@ -356,11 +383,11 @@ owners:
   - {name: "ta-series", globs: ["src/ta_*", "include/pineforge/ta*.hpp", "include/pineforge/series.hpp", "include/pineforge/window_sum.hpp", "include/pineforge/math.hpp", "src/math.cpp"]}
   - {name: "script-state", globs: ["src/matrix.cpp", "include/pineforge/matrix.hpp", "include/pineforge/generic_matrix.hpp", "include/pineforge/map.hpp", "include/pineforge/drawing.hpp", "src/str_utils.cpp", "include/pineforge/str_utils.hpp", "include/pineforge/color.hpp", "include/pineforge/na.hpp"]}
   # The shared capacity primitive, CSV reader and driver are one source area.
-  # CR150 owns their inventory integration; this does not assign WIN product edits.
-  # reserve() constructs failure arguments (src/selected_capacity_core.cpp:17).
-  # CsvReader retains an uncapped field string (src/selected_capacity_csv_reader.hpp:65);
-  # read_field() grows it before record observation (src/selected_capacity_csv_reader.cpp:239).
-  # DriverResult owns diagnostic strings (src/selected_capacity_driver.hpp:126 and :136).
+  # The source census owns their inventory integration; this does not assign product edits.
+  # reserve() constructs failure arguments (`RunFailureArgs`, src/selected_capacity_core.cpp:17).
+  # CsvReader retains an uncapped field string (`field_`, src/selected_capacity_csv_reader.hpp:65);
+  # read_field() grows it with push_back before record observation (src/selected_capacity_csv_reader.cpp:239).
+  # DriverResult owns diagnostic strings (`option` and `message`, src/selected_capacity_driver.hpp:126 and :136).
   # Capacity counters do not establish a fixed byte bound for those allocations.
   # Missing groups must come from --emit-seed and remain unreviewed/unclassified.
   # Concrete identities await off-master --emit-site-inventory and source review.
@@ -1670,9 +1697,10 @@ entries:
   # U1325 retired: both former cache keys are preserved here as history.
   # The grow/shared-control alternative has no surviving emplacement.
   # The alloc/make_unique directory alternative became a nothrow cache.reset
-  # allocation under U1621, which is retired too: the directory is now
+  # allocation under U1621, which is retired too. The directory is now
   # storage from the one nothrow allocation function at
-  # src/engine_orders.cpp:729 (U1691), built in place at :743 (U1690).
+  # src/engine_orders.cpp:729 (U1691), built in place at
+  # src/engine_orders.cpp:743 (U1690).
   - {id: "U1326", file: "src/engine_orders.cpp", symbol: "directory", ops: ["assign", "decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 545}
   - {id: "U1327", file: "src/engine_orders.cpp", symbol: "get_string", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 1051}
   - {id: "U1328", file: "src/engine_orders.cpp", symbol: "materialized", ops: ["decl", "grow"], container: "std::map<size_type, Trade>", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 546}
@@ -1680,7 +1708,7 @@ entries:
   # U1642 retired as a separate key: the former page/make_unique allocation
   # became page.reset under reset/U1621, which is retired too. A page is now
   # storage from the same allocation function (src/engine_orders.cpp:729,
-  # U1691), built in place at :758 (U1690).
+  # U1691), built in place at src/engine_orders.cpp:758 (U1690).
   - {id: "U1330", file: "src/engine_orders.cpp", symbol: "result", ops: ["assign", "decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 447}
   - {id: "U1331", file: "src/engine_orders.cpp", symbol: "state_", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "The existing State allocation includes three fixed percentage folds and one replacement ordinal. Repair reads numeric descriptors, without building a container of trades. OPEN.", line: 1389}
   - {id: "U1332", file: "src/engine_orders.cpp", symbol: "string_field", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 871}

@@ -33,9 +33,10 @@ from cr150_source_gate import Scanner, SITE_INVENTORY_REL, SITE_SCHEMA  # noqa: 
 PIN = '52101f9b7b540fece4493ddc7495451b6d85fc07'
 MANIFEST_REL = 'ci/cr150-source-bounds.yaml'
 # What the gate scans on the real tree, plus the files that bind it. The notes
-# of the manifest also cite lines under runner/, which the gate reads.
+# of the manifest also cite lines under runner/, and one of its comments cites
+# docs/coverage.md, which the gate reads.
 REAL_TREE_DIRS = ('src', 'include', 'tutorial', 'ci', 'runner')
-REAL_TREE_FILES = ('scripts/regen_corpus_cpp.sh',)
+REAL_TREE_FILES = ('scripts/regen_corpus_cpp.sh', 'docs/coverage.md')
 
 LOOP_CPP = '''\
 #include <vector>
@@ -96,7 +97,8 @@ def entry(eid='E1', file='src/loop.cpp', symbol='slots_', ops=('decl', 'grow'),
 
 
 def manifest(entries, *, files=('src/**/*.cpp', 'include/pineforge/**/*.hpp'), generated=(), ceilings=(5, 5),
-             pin=PIN, fixed=True, templates=True, extra_fixed='', cited_unchecked=None) -> str:
+             pin=PIN, fixed=True, templates=True, extra_fixed='', cited_unchecked=None,
+             comment_unchecked=None) -> str:
     lines = ['schema: cr150-source-bounds/v1', 'codegen:', f'  pin: {q(pin)}',
              '  pin_source: scripts/regen_corpus_cpp.sh', '  tree: absent',
              '  emitter_templates:']
@@ -109,6 +111,9 @@ def manifest(entries, *, files=('src/**/*.cpp', 'include/pineforge/**/*.hpp'), g
     if cited_unchecked is not None:
         # The pinned number of UNCHECKED note citations; a manifest without it allows none.
         lines.append(f'  cited_unchecked: {cited_unchecked}')
+    if comment_unchecked is not None:
+        # The same pin for the UNCHECKED citations of the manifest's comments.
+        lines.append(f'  comment_unchecked: {comment_unchecked}')
     lines += ['owners:', flow(name='engine-core', globs=['src/**', 'include/**']),
               flow(name='generated', globs=['tutorial/**'])]
     lines.append('fixed_inputs:')
@@ -1595,6 +1600,225 @@ class NoteCitations(Tree):
                               proc.stdout)
 
 
+class LineFields(Tree):
+    """An entry's ``line:`` field is the line of its first live site.
+
+    src/loop.cpp (LOOP_CPP): slots_ is declared on line 4 and pushed on line
+    5, the two sites of an entry for slots_. Its first live site is line 4,
+    the number ``--emit-seed`` writes and ``--json`` reports first.
+    """
+
+    def line_counts(self, proc):
+        c = counts(proc)
+        return (c.get('line_fields'), c.get('line_holds'), c.get('line_differs'),
+                c.get('line_not_compared'))
+
+    def test_line_field_on_the_first_live_site_passes_and_another_number_is_a_finding(self):
+        self.build([entry('E1', line=4)])
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self.line_counts(proc), (1, 1, 0, 0), proc.stdout)
+        self.assertEqual(counts(proc)['findings'], 0, proc.stdout)
+        path = self.root / MANIFEST_REL
+        text = path.read_text()
+        self.assertEqual(text.count('line: 4}'), 1, 'the entry must carry its line field once')
+        # One off either way. Line 5 is a site of E1 too, and not its first;
+        # line 3 opens the function and is no site.
+        for wrong in (5, 3):
+            with self.subTest(line=wrong):
+                path.write_text(text.replace('line: 4}', f'line: {wrong}}}'))
+                proc = self.gate()
+                self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+                self.assertIn(f'FINDING src/loop.cpp:4: entry E1: line: {wrong} is not the first '
+                              "live site of the entry ('slots_'), which is line 4: write "
+                              'line: 4, the number --emit-seed gives', proc.stdout)
+                self.assertEqual(self.line_counts(proc), (1, 0, 1, 0), proc.stdout)
+                self.assertEqual(counts(proc)['findings'], 1, proc.stdout)
+                self.assertIn('result: FINDINGS', proc.stdout)
+
+    def test_entry_without_a_line_field_has_nothing_to_compare(self):
+        # The field is optional: an entry that carries none states no line,
+        # and the gate counts no field for it.
+        self.build([entry('E1')])
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self.line_counts(proc), (0, 0, 0, 0), proc.stdout)
+
+    def test_line_field_of_an_entry_with_no_live_site_is_not_compared_and_the_entry_is_stale(self):
+        # gone_ is nowhere in the tree: E2 has no live site, so there is no
+        # line to hold its field against. The entry fails as stale, the
+        # field is counted as not compared and never as holding.
+        self.build(self.clean_entries() + [entry('E2', symbol='gone_', ops=['grow'], line=5)])
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("FINDING src/loop.cpp:5: entry E2 ('gone_') matches no site: stale; remove "
+                      'or update it; its line: 5 is not compared, the entry has no live site',
+                      proc.stdout)
+        self.assertNotIn('is not the first live site', proc.stdout)
+        self.assertEqual(self.line_counts(proc), (1, 0, 0, 1), proc.stdout)
+        self.assertEqual(counts(proc)['findings'], 1, proc.stdout)
+
+    def test_line_field_that_emit_seed_writes_is_the_one_the_gate_accepts(self):
+        # A tree whose manifest has no entry yet: --emit-seed prints the one
+        # missing entry with its line field, and that row passes as written.
+        self.build([])
+        seed = self.gate('--emit-seed')
+        self.assertEqual(seed.returncode, 0, seed.stdout + seed.stderr)
+        rows = seed.stdout.splitlines()
+        self.assertEqual(len(rows), 1, seed.stdout)
+        self.assertRegex(rows[0], r'^  - \{id: "U0001", file: "src/loop\.cpp", symbol: "slots_", '
+                         r'.*, line: 4\}$')
+        self.build(rows)
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self.line_counts(proc), (1, 1, 0, 0), proc.stdout)
+        self.assertEqual(counts(proc)['findings'], 0, proc.stdout)
+
+
+class CommentCitations(Tree):
+    """A citation in a manifest comment is judged as one in a note of no entry.
+
+    src/loop.cpp (LOOP_CPP): 3 opens on_bar, 4 declares slots_, 5 guards and
+    pushes, 6 closes the function. A comment has no file of its own, so it
+    writes the path of every line it cites, and it records no site, so a
+    cited line holds only on a construct its sentence spells.
+    """
+
+    def comment(self, *rows, **kw):
+        """Build the tree, write ``rows`` as comment lines at the end of its
+        manifest and run the gate. Returns the result and the manifest line
+        of the first row."""
+        self.build([entry('E1')], **kw)
+        path = self.root / MANIFEST_REL
+        text = path.read_text()
+        path.write_text(text + ''.join(f'# {row}\n' for row in rows))
+        return self.gate(), text.count('\n') + 1
+
+    def comment_counts(self, proc):
+        c = counts(proc)
+        return (c.get('comment_citations'), c.get('comment_holds'), c.get('comment_fails'),
+                c.get('comment_unchecked'))
+
+    def test_comment_citation_holds_on_a_construct_it_names_and_fails_on_a_wrong_line(self):
+        proc, at = self.comment('The guarded push_back is at src/loop.cpp:5.')
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self.comment_counts(proc), (1, 1, 0, 0), proc.stdout)
+        # Counted apart from the note citations: this manifest has none.
+        c = counts(proc)
+        self.assertEqual((c.get('citations'), c.get('cited_holds')), (0, 0), proc.stdout)
+        proc, at = self.comment('The guarded push_back is at src/loop.cpp:6.')
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn(f'FINDING src/loop.cpp:6: manifest line {at}: comment cites '
+                      'src/loop.cpp:6: src/loop.cpp:6 holds "}": a comment records no site and '
+                      'none of the constructs the comment names in that sentence (push_back)',
+                      proc.stdout)
+        self.assertEqual(self.comment_counts(proc), (1, 0, 1, 0), proc.stdout)
+        self.assertEqual(counts(proc)['findings'], 1, proc.stdout)
+        self.assertIn('result: FINDINGS', proc.stdout)
+
+    def test_comment_sentence_runs_over_its_lines_until_a_line_with_no_words(self):
+        # The name is on the first comment line and the citation on the
+        # second: one sentence, and the finding names the line that cites.
+        first = 'The guarded push_back of the ring is'
+        proc, at = self.comment(first, 'at src/loop.cpp:5.')
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self.comment_counts(proc), (1, 1, 0, 0), proc.stdout)
+        proc, at = self.comment(first, 'at src/loop.cpp:6.')
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn(f'FINDING src/loop.cpp:6: manifest line {at + 1}: comment cites '
+                      'src/loop.cpp:6: src/loop.cpp:6 holds "}": a comment records no site and '
+                      'none of the constructs the comment names in that sentence (push_back)',
+                      proc.stdout)
+        # A comment line with no words ends the text before it: the citation
+        # after it stands in a sentence of prose, which names nothing.
+        proc, at = self.comment(first, '', 'at src/loop.cpp:6.', comment_unchecked=1)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self.comment_counts(proc), (1, 0, 0, 1), proc.stdout)
+        self.assertIn(f'UNCHECKED manifest line {at + 2}: comment cites src/loop.cpp:6: '
+                      'src/loop.cpp:6 holds "}": a comment records no site, and the sentence '
+                      'spells no construct to look for', proc.stdout)
+
+    def test_comment_after_data_on_its_line_is_read(self):
+        self.build([entry('E1')])
+        path = self.root / MANIFEST_REL
+        text = path.read_text()
+        self.assertEqual(text.count('\nentries:\n'), 1, 'the manifest must open entries once')
+        at = text[:text.index('\nentries:\n')].count('\n') + 2
+        path.write_text(text.replace(
+            '\nentries:\n', '\nentries:  # The guarded push_back is at src/loop.cpp:6.\n'))
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn(f'FINDING src/loop.cpp:6: manifest line {at}: comment cites '
+                      'src/loop.cpp:6: src/loop.cpp:6 holds "}"', proc.stdout)
+        self.assertEqual(self.comment_counts(proc), (1, 0, 1, 0), proc.stdout)
+
+    def test_comment_citation_without_a_path_is_a_finding(self):
+        # In a note these are lines of the entry's own file. A comment has
+        # no file of its own, although line 5 holds the push_back it names.
+        for form in (':5', 'line 5'):
+            with self.subTest(form=form):
+                proc, at = self.comment(f'The guarded push_back is at {form}.')
+                self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+                self.assertIn(f'FINDING {MANIFEST_REL}:{at}: manifest line {at}: comment cites '
+                              f'{form}: a comment has no file of its own, so a line it cites is '
+                              'written with its path (path:N)', proc.stdout)
+                self.assertEqual(self.comment_counts(proc), (1, 0, 1, 0), proc.stdout)
+                self.assertEqual(counts(proc)['findings'], 1, proc.stdout)
+        # A bare form joined to a path is a line of that path, as in a note.
+        proc, at = self.comment('The declaration of slots_ and its push_back are at '
+                                'src/loop.cpp:4 and :5.')
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self.comment_counts(proc), (2, 2, 0, 0), proc.stdout)
+
+    def test_comment_calling_a_cited_line_a_site_fails_on_a_site_of_an_entry(self):
+        # Line 5 is a site of E1. A comment records no site, so the claim
+        # does not hold there, and no construct stands in for it.
+        proc, at = self.comment('Site src/loop.cpp:5 pushes one value with push_back.')
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn(f'FINDING src/loop.cpp:5: manifest line {at}: comment cites '
+                      'src/loop.cpp:5: src/loop.cpp:5 holds "if (slots_.size() < kRingSlots) '
+                      'slots_.push_back(1.0);": a comment records no site, and the comment '
+                      'calls it a site', proc.stdout)
+        self.assertEqual(self.comment_counts(proc), (1, 0, 1, 0), proc.stdout)
+
+    PROSE = 'The function ends at src/loop.cpp:6.'
+
+    def test_prose_comment_citation_is_unchecked_and_counted_apart_from_the_notes(self):
+        proc, at = self.comment(self.PROSE, comment_unchecked=1)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self.comment_counts(proc), (1, 0, 0, 1), proc.stdout)
+        c = counts(proc)
+        self.assertEqual(c.get('comment_unchecked_ceiling'), 1, proc.stdout)
+        self.assertEqual((c.get('citations'), c.get('cited_unchecked')), (0, 0), proc.stdout)
+        self.assertEqual(c.get('findings'), 0, proc.stdout)
+        self.assertIn(f'UNCHECKED manifest line {at}: comment cites src/loop.cpp:6: '
+                      'src/loop.cpp:6 holds "}": a comment records no site, and the sentence '
+                      'spells no construct to look for', proc.stdout)
+        self.assertEqual(sum(line.startswith('cr150_source_gate: UNCHECKED ')
+                             for line in proc.stdout.splitlines()), 1)
+
+    def test_unchecked_comment_citations_are_pinned_exactly(self):
+        # No pin allows none, and the pin of the note citations is another
+        # number: it does not cover a comment.
+        for pins in ({}, {'cited_unchecked': 0}):
+            with self.subTest(pins=pins):
+                proc, at = self.comment(self.PROSE, **pins)
+                self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+                self.assertEqual(self.comment_counts(proc), (1, 0, 0, 1), proc.stdout)
+                self.assertIn(f'FINDING {MANIFEST_REL}:0: UNCHECKED comment citations 1 exceed '
+                              'the manifest ceiling 0 (the manifest pins no '
+                              'ceilings.comment_unchecked, so none is allowed): ', proc.stdout)
+                self.assertEqual(counts(proc)['findings'], 1, proc.stdout)
+        # Room under the pin fails too, until the pin follows the count down.
+        proc, at = self.comment(self.PROSE, comment_unchecked=2)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertEqual(counts(proc).get('comment_unchecked_ceiling'), 2, proc.stdout)
+        self.assertIn(f'FINDING {MANIFEST_REL}:0: UNCHECKED comment citations 1 are below the '
+                      'manifest ceiling 2: lower ceilings.comment_unchecked to 1 in the same '
+                      'change', proc.stdout)
+        self.assertEqual(counts(proc)['findings'], 1, proc.stdout)
+
+
 class FailClosed(Tree):
     def test_blank_inventory_scope_members_are_malformed(self):
         self.build(self.clean_entries())
@@ -1929,8 +2153,12 @@ class RealTree(unittest.TestCase):
                          c['citations'])
         listed = [line for line in proc.stdout.splitlines()
                   if line.startswith('cr150_source_gate: UNCHECKED ')]
-        self.assertEqual(len(listed), c['cited_unchecked'])
-        for line in listed:
+        # The comments of the manifest list theirs in the same way, with the
+        # manifest line in place of an entry, and count them apart.
+        of_notes = [line for line in listed if ' UNCHECKED entry ' in line]
+        self.assertEqual(len(of_notes), c['cited_unchecked'])
+        self.assertEqual(len(listed), c['cited_unchecked'] + c.get('comment_unchecked', 0))
+        for line in of_notes:
             self.assertRegex(line, r'UNCHECKED entry U\d{4}: note (cites|has) ')
         # The manifest pins how many are UNCHECKED, exactly, and the gate
         # prints the number it read beside the count.
@@ -2057,6 +2285,98 @@ class RealTree(unittest.TestCase):
                              r'the note names in that sentence \(FirstCallBound\)')
             self.assertEqual(counts(proc).get('cited_fails'), 1, proc.stdout)
             self.assertEqual(counts(proc)['cited_holds'], counts(control)['cited_holds'] - 1)
+
+    def test_real_tree_line_fields_are_each_entrys_first_live_site(self):
+        with tempfile.TemporaryDirectory() as out:
+            result = Path(out) / 'gate.json'
+            proc = run_gate(ROOT, '--json', str(result))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            c = counts(proc)
+            self.assertGreater(c.get('line_fields', 0), 0, proc.stdout)
+            # Every field the manifest carries is compared and holds.
+            self.assertEqual((c.get('line_holds'), c.get('line_differs'),
+                              c.get('line_not_compared')), (c['line_fields'], 0, 0), proc.stdout)
+            # The same statement read from the gate's own result file: a
+            # field is the first of the lines the scan found for its entry.
+            rows = [row for row in json.loads(result.read_text())['entries'] if 'line' in row]
+            self.assertEqual(len(rows), c['line_fields'])
+            self.assertEqual([row['id'] for row in rows
+                              if not row['live_lines'] or row['line'] != row['live_lines'][0]], [])
+
+    def test_real_tree_line_field_one_off_is_caught(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = self.copy_tree(Path(tmp))
+            control = run_gate(tree)
+            self.assertEqual(control.returncode, 0, control.stdout + control.stderr)
+            c = counts(control)
+            self.assertEqual(c.get('line_differs'), 0, control.stdout)
+            manifest_path = tree / MANIFEST_REL
+            lines = manifest_path.read_text().splitlines()
+            index = next(i for i, l in enumerate(lines) if l.startswith('  - {id: "U1930",'))
+            field = re.search(r', line: (\d+)\}$', lines[index])
+            self.assertIsNotNone(field, 'U1930 must end with its line field')
+            live = int(field.group(1))
+            # One line after the entry's first live site.
+            lines[index] = lines[index][:field.start()] + f', line: {live + 1}}}'
+            manifest_path.write_text('\n'.join(lines) + '\n')
+            proc = run_gate(tree)
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertIn(f'FINDING src/ta_volatility_trend.cpp:{live}: entry U1930: line: '
+                          f"{live + 1} is not the first live site of the entry ('<temp:string>'), "
+                          f'which is line {live}: ', proc.stdout)
+            after = counts(proc)
+            self.assertEqual((after['line_fields'], after['line_holds'], after['line_differs']),
+                             (c['line_fields'], c['line_holds'] - 1, 1), proc.stdout)
+            self.assertEqual(after['findings'], 1, proc.stdout)
+
+    def test_real_tree_comment_citations_hold_or_are_listed_unchecked(self):
+        proc = run_gate(ROOT)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        c = counts(proc)
+        self.assertEqual(c.get('comment_fails'), 0, proc.stdout)
+        self.assertGreater(c.get('comment_citations', 0), 0, proc.stdout)
+        self.assertGreater(c.get('comment_holds', 0), 0, proc.stdout)
+        # Every comment citation is exactly one of holding, failing or
+        # UNCHECKED, and each UNCHECKED one is printed with the manifest line
+        # that cites it.
+        self.assertEqual(c['comment_holds'] + c['comment_fails'] + c['comment_unchecked'],
+                         c['comment_citations'])
+        listed = [line for line in proc.stdout.splitlines()
+                  if line.startswith('cr150_source_gate: UNCHECKED manifest line ')]
+        self.assertEqual(len(listed), c['comment_unchecked'])
+        for line in listed:
+            self.assertRegex(line, r'UNCHECKED manifest line \d+: comment (cites|has) ')
+        # The manifest pins how many are UNCHECKED, exactly, apart from the
+        # pin of the note citations.
+        self.assertIn('comment_unchecked_ceiling', c, proc.stdout)
+        self.assertEqual(c['comment_unchecked'], c['comment_unchecked_ceiling'])
+
+    def test_real_tree_comment_citing_a_wrong_line_is_caught(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = self.copy_tree(Path(tmp))
+            control = run_gate(tree)
+            self.assertEqual(control.returncode, 0, control.stdout + control.stderr)
+            self.assertEqual(counts(control).get('comment_fails'), 0, control.stdout)
+            manifest_path = tree / MANIFEST_REL
+            # The comment names evaluator_input_tf and cites the line of that
+            # member in the engine header. Line 1 of the header does not hold it.
+            text, changed = re.subn(
+                r'evaluator keeps \(include/pineforge/engine\.hpp:\d+\)',
+                'evaluator keeps (include/pineforge/engine.hpp:1)', manifest_path.read_text())
+            self.assertEqual(changed, 1, 'the comment must cite the engine header once')
+            manifest_path.write_text(text)
+            proc = run_gate(tree)
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertRegex(proc.stdout,
+                             r'FINDING include/pineforge/engine\.hpp:1: manifest line \d+: '
+                             r'comment cites include/pineforge/engine\.hpp:1: '
+                             r'include/pineforge/engine\.hpp:1 holds ".*": a comment records no '
+                             r'site and none of the constructs the comment names in that '
+                             r'sentence \(evaluator_input_tf\)')
+            after = counts(proc)
+            self.assertEqual(after.get('comment_fails'), 1, proc.stdout)
+            self.assertEqual(after['comment_holds'], counts(control)['comment_holds'] - 1)
+            self.assertEqual(after['findings'], 1, proc.stdout)
 
     def test_real_tree_mutations_are_caught(self):
         with tempfile.TemporaryDirectory() as tmp:
