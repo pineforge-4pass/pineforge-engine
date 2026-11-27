@@ -325,9 +325,17 @@ void source::PineStrategyHost::dispatch_pine_request(
 }
 
 
+#ifndef NDEBUG
+thread_local std::uint64_t source::detail::lower_tf_index_lookups_for_test = 0;
+thread_local bool source::detail::force_lower_tf_index_lookup_for_test = false;
+#endif
+
 int source::PineStrategyHost::security_lower_tf_sub_bar_index(int sec_id) const {
     for (const auto& state : security_eval_states_) {
         if (state.sec_id == sec_id) {
+#ifndef NDEBUG
+            ++detail::lower_tf_index_lookups_for_test;
+#endif
             return pine_security_state(sec_id).lower_tf_sub_bar_index;
         }
     }
