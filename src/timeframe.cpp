@@ -2277,7 +2277,6 @@ int64_t session_grid_lead_ms(const std::string& session) {
 }  // namespace
 
 // ─── Calendar limits and clock-change dates ──────────────────────────────────
-
 /// a + b on the int64 millisecond line. ONE rule at both ends and in every zone: a date, a clock
 /// value or a day boundary that is not a millisecond timestamp is refused with the coded EOVERFLOW
 /// the first representable instant's midnight raises; nothing wraps.
