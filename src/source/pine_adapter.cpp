@@ -9024,9 +9024,9 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         native_limit = source_trigger_threshold(
             limit_price, staged_.syminfo.mintick, is_long, true, value_field::entry_limit_price);
     } else if (finite_positive(stop_price) && !finite_positive(limit_price)
-               && !config_.calc_on_order_fills) {
-        native_stop = source_trigger_threshold(
-            stop_price, staged_.syminfo.mintick, is_long, false, value_field::entry_stop_price);
+               // Under calc_on_order_fills: only the stop a bar's own calculation rests on the chart path (test_issue_1015_*, test_issue_1007_*).
+               && (!config_.calc_on_order_fills || (!coof_recalc_active_ && (!coof_native_state.spec || coof_native_state.spec->intrabar.is_none())))) {
+        native_stop = source_trigger_threshold(stop_price, staged_.syminfo.mintick, is_long, false, value_field::entry_stop_price);
     }
     const auto* pine_host = pine_view_of(&require_host());
     const bool nonpositive_priced = priced && pine_host
