@@ -9,7 +9,8 @@ the index with ``ci/cr150-source-bounds.yaml``.
 
 Exit 0: no finding. Exit 1: a finding (an unlisted site, a stale entry, a
 bounded entry without supported size-guard enforcement, a ceiling or pin drift,
-a note citing a line that does not hold what the note names) or,
+a note citing a line that does not hold what the note names, more UNCHECKED
+note citations than the manifest ceiling allows) or,
 with ``--strict``, any OPEN entry left. Exit 2: the gate cannot judge (missing
 or malformed manifest/site inventory, an invalid fixed input or bound syntax,
 zero files, zero sites, a broken pattern set). A bound naming a growth axis is
@@ -484,7 +485,9 @@ class Manifest:
         ceilings = data['ceilings']
         if not isinstance(ceilings, dict):
             raise GateError('ceilings must be a mapping')
-        _need(ceilings, ('unreviewed', 'pending-flat-memory'), 'ceilings')
+        # cited_unchecked caps the UNCHECKED note citations. A manifest that
+        # does not pin it allows none.
+        _need(ceilings, ('unreviewed', 'pending-flat-memory'), 'ceilings', ('cited_unchecked',))
         for key, value in ceilings.items():
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 raise GateError(f'ceilings.{key} must be a non-negative integer')
@@ -1168,17 +1171,24 @@ def bounded_issues(entry: dict, group: list[Site], sites: list[Site],
 # note citations
 # --------------------------------------------------------------------------
 
-_CITE_SPEC = r'\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*'
+_CITE_NUM = r'\d+(?:-\d+)?'
+# What joins the lines of one list: a comma, "and" or "or", with or without
+# spaces (":4,6", ":4, 6", ":4 and 6", ":4, 6 and 9").
+_CITE_JOIN = r'(?:\s*,\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+)'
+_CITE_SPEC = _CITE_NUM + r'(?:' + _CITE_JOIN + _CITE_NUM + r')*'
 # The three written forms: ``path:N``, a bare ``:N`` and ``line N``. N may be a
-# range N-M or a comma list of lines and ranges. A citation starts where no
-# path character precedes it, so the clock time in "17:20" (a number on both
-# sides of the colon) is not one.
+# range N-M or a list of lines and ranges; every element of a list is read. A
+# citation starts where no path character precedes it, so the clock time in
+# "17:20" (a number on both sides of the colon) is not one.
 CITE_RE = re.compile(
     r'(?<![\w./-])(?:'
     r'(?P<path>[A-Za-z_][\w./-]*):(?P<pspec>' + _CITE_SPEC + r')'
     r'|:(?P<bspec>' + _CITE_SPEC + r')'
-    r'|(?P<word>[Ll]ines?)\s+(?P<wspec>\d+(?:-\d+)?(?:(?:,\s*|\s+and\s+)\d+(?:-\d+)?)*)'
+    r'|(?P<word>[Ll]ines?)\s+(?P<wspec>' + _CITE_SPEC + r')'
     r')(?!\w)')
+CITE_JOIN_RE = re.compile(_CITE_JOIN)
+# The word that calls a cited line a site, written right before the citation.
+SITE_WORD_RE = re.compile(r'(?<![\w-])[Ss]ite(?P<plural>s?)\s*\(?\s*$')
 # Words that are never the construct a note names: C++ keywords and builtin
 # type words (they sit on almost any line) and the unit words whose capitals
 # look like a name.
@@ -1187,27 +1197,56 @@ NOTE_PROSE = KEYWORDS | {'std', 'auto', 'bool', 'char', 'double', 'else', 'false
                          'unsigned', 'void', 'KiB', 'MiB', 'GiB'}
 
 
+def note_sentences(note: str) -> list[str]:
+    """The note cut after each period or semicolon that ends a clause: one that
+    whitespace follows, outside parentheses. A parenthesis belongs to the
+    sentence it stands in, so the citations of ``(:3; outer :6)`` stay with
+    the words before it. An unclosed parenthesis runs to the end of the note."""
+    sentences, start, depth = [], 0, 0
+    for index, ch in enumerate(note):
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth = max(depth - 1, 0)
+        elif ch in '.;' and not depth and note[index + 1:index + 2].isspace():
+            sentences.append(note[start:index + 1])
+            start = index + 1
+    sentences.append(note[start:])
+    return sentences
+
+
 def note_citations(note: str):
     """Yield (label, path, first, last, sentence, as_site) for every cited line.
 
-    ``label`` is the citation as the note writes it, one per element of a comma
-    list. ``path`` is None for a bare ``:N`` and for ``line N``. ``sentence``
-    is the text up to the next period or semicolon that ends a clause.
-    ``as_site`` is true when the word "site"/"sites" introduces the citation:
-    the name this inventory gives to what an entry records.
+    ``label`` is the citation as the note writes it, one per element of a
+    list. ``path`` is None for ``line N`` and for a bare ``:N``, unless the
+    bare form continues a ``path:N`` with nothing but a list join between them
+    (``path:N and :M``, ``path:N, :M``): then it is a line of that path, and
+    so is the next one joined to it. ``sentence`` is the citation's sentence
+    (``note_sentences``). ``as_site`` is true when the word "site" introduces
+    the citation or the citation joined before it, and for every citation
+    that follows the word "sites" in its sentence: the name this inventory
+    gives to what an entry records.
     """
-    start = 0
-    for end in [m.end() for m in re.finditer(r'[.;](?=\s)', note)] + [len(note)]:
-        sentence = note[start:end]
-        start = end
+    for sentence in note_sentences(note):
+        sites_named = False
+        previous = None  # (end, path, as_site) of the citation before this one
         for match in CITE_RE.finditer(sentence):
             path = match.group('path')
             spec = match.group('pspec') or match.group('bspec') or match.group('wspec')
-            as_site = re.search(r'(?<![\w-])[Ss]ites?\s*\(?\s*$',
-                                sentence[:match.start()]) is not None
+            joined = previous is not None and CITE_JOIN_RE.fullmatch(
+                sentence, previous[0], match.start()) is not None
+            if joined and path is None and match.group('word') is None:
+                path = previous[1]
+            site_word = SITE_WORD_RE.search(sentence[:match.start()])
+            if site_word is not None and site_word.group('plural'):
+                sites_named = True
+            as_site = (site_word is not None or sites_named
+                       or (joined and previous[2]))
+            previous = (match.end(), path, as_site)
             for first, last in re.findall(r'(\d+)(?:-(\d+))?', spec):
                 element = f'{first}-{last}' if last else first
-                if path:
+                if match.group('path'):
                     label = f'{path}:{element}'
                 elif match.group('word'):
                     label = f'{match.group("word")} {element}'
@@ -1224,8 +1263,9 @@ def note_strays(note: str) -> list[str]:
 
 def note_constructs(sentence: str) -> set[str]:
     """Identifiers a sentence spells as code, never its prose words: backticked
-    text, the parts of a ``::`` name, words with an underscore or an inner
-    capital (snake_case, camelCase) and the growth operations this gate
+    text, the parts of a ``::`` name, the parts of a member call
+    (``buffer.substr(...)``, ``it->next()``), words with an underscore or an
+    inner capital (snake_case, camelCase) and the growth operations this gate
     indexes (``emplace``, ``reserve``, ...). A capitalized or upper-case word
     (``Store``, ``NUL``) is prose unless the note backticks it."""
     names: set[str] = set()
@@ -1234,6 +1274,8 @@ def note_constructs(sentence: str) -> set[str]:
     plain = CITE_RE.sub(' ', re.sub(r'`[^`]*`', ' ', sentence))
     for qualified in re.findall(r'[A-Za-z_]\w*(?:::[A-Za-z_]\w*)+', plain):
         names.update(qualified.split('::'))
+    for call in re.findall(r'[A-Za-z_]\w*(?:(?:\.|->)[A-Za-z_]\w*)+(?=\()', plain):
+        names.update(re.split(r'\.|->', call))
     names.update(word for word in IDENT_RE.findall(plain)
                  if '_' in word or re.search(r'[a-z][A-Z]', word) or word in GROW_OPS)
     return names - NOTE_PROSE
@@ -1243,25 +1285,29 @@ def check_citations(manifest: 'Manifest', by_key: dict, texts: dict[str, str], r
     """Check every line an entry note cites.
 
     A bare ``:N`` or ``line N`` is a line of the entry's own file; ``path:N``
-    is a line of that path, written from the root. The cited line (for a
-    range: one of its lines) holds what the note says when it carries
+    is a line of that path, written from the root, and so is a bare ``:M``
+    joined to it (``path:N and :M``). A cited line holds what the note says
+    when it carries
 
     * a site of the entry, when the file is the entry's own;
-    * the entry's symbol, when it is another file (the entry records no site
-      there, so its name is the only spelling of it that file can hold);
     * an identifier the note spells as code in the citation's own sentence.
 
-    A citation that holds none of them is a finding when the note names
-    something to look for there (a spelled construct, or the word "site"). A
-    sentence of prose only names nothing a text check can look for: that
-    citation is UNCHECKED, listed and counted, never taken as holding. A cited
-    path that is not a file under the root, or a line past its end, is a
-    finding. Read-only: no file, count, id or bound changes.
+    In another file the entry's symbol counts only as such an identifier: the
+    entry records no site there, and the same spelling may be another object.
+    A range ``N-M`` holds only when its first line and its last line each do;
+    a line inside it says nothing about where the range begins or ends.
+
+    A citation that does not hold is a finding when the note names something
+    to look for there (a spelled construct, or the word "site"). A sentence of
+    prose only names nothing a text check can look for: that citation is
+    UNCHECKED, listed and counted, never taken as holding; the caller caps
+    their number with the manifest ceiling. A cited path that is not a file
+    under the root, or a line past its end, is a finding. Read-only: no file,
+    count, id or bound changes.
 
     Returns (findings, entry ids with a finding, unchecked lines, cited, held).
     """
     cache: dict[str, list[str] | None] = {}
-    lexed: dict[str, list[str]] = {}
 
     def rows_of(rel: str) -> list[str] | None:
         if rel not in cache:
@@ -1280,13 +1326,9 @@ def check_citations(manifest: 'Manifest', by_key: dict, texts: dict[str, str], r
             cache[rel] = rows
         return cache[rel]
 
-    def code_of(rel: str, rows: list[str]) -> list[str]:
-        """The same lines with C++ comments and literals removed, so a word of a
-        comment is not read as the entry's symbol; other files as they are."""
-        if rel not in lexed:
-            lexed[rel] = ([part[0] for part in cxxlex.lex_lines('\n'.join(rows))]
-                          if Path(rel).suffix in SOURCE_SUFFIXES else rows)
-        return lexed[rel]
+    def shown(row: str) -> str:
+        text = ' '.join(row.split())
+        return text[:137] + '...' if len(text) > 140 else text
 
     findings: list[tuple[str, int, str]] = []
     failed: set[str] = set()
@@ -1298,7 +1340,6 @@ def check_citations(manifest: 'Manifest', by_key: dict, texts: dict[str, str], r
             continue
         eid, own = entry['id'], entry['file']
         site_lines = {site.line for site in by_key.get((own, entry['symbol']), [])}
-        symbol = f' {_tokens(entry["symbol"])} '
         for stray in note_strays(note):
             cited += 1
             unchecked.append(f'entry {eid}: note has {stray!r} in a form no citation rule reads')
@@ -1317,38 +1358,35 @@ def check_citations(manifest: 'Manifest', by_key: dict, texts: dict[str, str], r
                                  f'{len(rows)} line(s)'))
                 failed.add(eid)
                 continue
-            lines = rows[first - 1:last]
-            shown = ' '.join(lines[0].split())
-            if len(shown) > 140:
-                shown = shown[:137] + '...'
-            holds = (f'{rel}:{first} holds "{shown}"' if first == last
-                     else f'{rel}:{first}-{last} begins "{shown}"')
-            if rel == own:
-                if any(first <= line <= last for line in site_lines):
-                    held += 1
-                    continue
-                expected = f'not a site of the entry ({entry["symbol"]!r})'
-            else:
-                if any(symbol in f' {_tokens(row)} '
-                       for row in code_of(rel, rows)[first - 1:last]):
-                    held += 1
-                    continue
-                expected = f'not the entry\'s symbol ({entry["symbol"]!r})'
             named = note_constructs(sentence)
-            if named & {word for row in lines for word in IDENT_RE.findall(row)}:
+            # A range is judged at its two ends, a single line at itself.
+            missing = [line for line in ((first,) if first == last else (first, last))
+                       if not (rel == own and line in site_lines)
+                       and not named & set(IDENT_RE.findall(rows[line - 1]))]
+            if not missing:
                 held += 1
                 continue
+            expected = (f'not a site of the entry ({entry["symbol"]!r})' if rel == own
+                        else 'not in the entry\'s own file')
+            if first == last:
+                holds = f'{rel}:{first} holds "{shown(rows[first - 1])}": {expected}'
+            else:
+                which = (f'line {missing[0]} does not' if len(missing) == 1
+                         else 'neither line does')
+                holds = (f'{rel}:{first}-{last} begins "{shown(rows[first - 1])}" and ends '
+                         f'"{shown(rows[last - 1])}": a range holds only when its first and '
+                         f'its last line both do, and {which}: {expected}')
             if named:
-                findings.append((rel, first, f'entry {eid}: note cites {label}: {holds}: '
-                                 f'{expected} and none of the constructs the note names in '
+                findings.append((rel, first, f'entry {eid}: note cites {label}: {holds} '
+                                 f'and none of the constructs the note names in '
                                  f'that sentence ({", ".join(sorted(named))})'))
                 failed.add(eid)
             elif as_site:
-                findings.append((rel, first, f'entry {eid}: note cites {label}: {holds}: '
-                                 f'{expected}, and the note calls it a site'))
+                findings.append((rel, first, f'entry {eid}: note cites {label}: {holds}, '
+                                 'and the note calls it a site'))
                 failed.add(eid)
             else:
-                unchecked.append(f'entry {eid}: note cites {label}: {holds}: {expected}, and '
+                unchecked.append(f'entry {eid}: note cites {label}: {holds}, and '
                                  'the sentence spells no construct to look for')
     others = [(f'emitter template {template.get("id")}', template.get('note'))
               for template in manifest.templates]
@@ -1456,6 +1494,19 @@ def run(root: Path, manifest_path: Path, strict: bool, json_out: Path | None):
         manifest, by_key, texts, root)
     findings.extend(cite_findings)
     entry_findings.update(cite_failed)
+    manifest_rel = (str(manifest_path.relative_to(root)) if manifest_path.is_relative_to(root)
+                    else str(manifest_path))
+    # An UNCHECKED citation is not a finding, so a reworded sentence could turn
+    # a failing citation into one. The reviewed ceiling refuses any new one.
+    unchecked_ceiling = manifest.ceilings.get('cited_unchecked', 0)
+    if len(unchecked) > unchecked_ceiling:
+        unpinned = ('' if 'cited_unchecked' in manifest.ceilings else
+                    ' (the manifest pins no ceilings.cited_unchecked, so none is allowed)')
+        findings.append((manifest_rel, 0,
+                         f'UNCHECKED note citations {len(unchecked)} exceed the manifest '
+                         f'ceiling {unchecked_ceiling}{unpinned}: name what the cited line '
+                         'holds so the citation is checked, or raise ceilings.cited_unchecked '
+                         'in a reviewed change'))
     pin_text = (root / manifest.pin_source).read_text(errors='replace')
     pin_match = re.search(r'CODEGEN_COMMIT="?([0-9a-f]{40})', pin_text)
     if not pin_match or pin_match.group(1) != manifest.pin:
@@ -1467,8 +1518,7 @@ def run(root: Path, manifest_path: Path, strict: bool, json_out: Path | None):
     states = {s: sum(1 for e in manifest.entries if e['state'] == s) for s in STATES}
     for state in OPEN_STATES:
         if states[state] > manifest.ceilings[state]:
-            findings.append((str(manifest_path.relative_to(root)) if manifest_path.is_relative_to(root)
-                             else str(manifest_path), 0,
+            findings.append((manifest_rel, 0,
                              f'{state} entries {states[state]} exceed the manifest ceiling '
                              f'{manifest.ceilings[state]}: a new OPEN entry needs a reviewed '
                              'ceiling change'))
@@ -1495,8 +1545,13 @@ def run(root: Path, manifest_path: Path, strict: bool, json_out: Path | None):
     out(f'{PREFIX} OPEN detail pending-flat-memory={pending} '
         f'unreviewed={len(opened) - pending}: listed, never counted as PASS')
     out(f'{PREFIX} note citations={cited} cited_holds={cited_holds} '
-        f'cited_fails={len(cite_findings)} cited_unchecked={len(unchecked)}: '
+        f'cited_fails={len(cite_findings)} cited_unchecked={len(unchecked)} '
+        f'cited_unchecked_ceiling={unchecked_ceiling}: '
         'an UNCHECKED citation is listed, never counted as holding')
+    if len(unchecked) < unchecked_ceiling:
+        out(f'{PREFIX} note citations cited_unchecked_slack={unchecked_ceiling - len(unchecked)}: '
+            f'fewer UNCHECKED citations than the manifest ceiling allows; lower '
+            f'ceilings.cited_unchecked to {len(unchecked)}')
     total_open = len(opened) + len(open_templates)
     if findings:
         verdict, code = 'FINDINGS', 1
