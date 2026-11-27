@@ -3403,7 +3403,9 @@ class PostFleetRunnerPolicy(unittest.TestCase):
         # expectation corrected: 2170 -> 2177, because the shard/join contract
         # paragraph adds seven lines to docs/ci.md.
         # expectation corrected: 2177 -> 2188, because the baseline promotion guard extends the CI guide.
-        self.assertEqual(len(docs.splitlines()), 2188)
+        # expectation corrected: 2188 -> 2204, because the stamp guard section
+        # for the C ABI and the engine layout adds sixteen lines to docs/ci.md.
+        self.assertEqual(len(docs.splitlines()), 2204)
         # The test-owned job catalog defines the protected label inventory.
         tables = re.findall(
             r"^\| Workflow \| Events/callers \| Inline jobs' `runs-on` \|\n"
@@ -5183,7 +5185,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
             'source-guard-adapter-spec-shadowing', 'source-guard-dangling-comment-names',
             'source-guard-run-failure-codes', 'source-guard-run-failure-diff',
             'source-guard-selected-window-ownership', 'source-guard-market-admission',
-            'source-guard-cancellation', 'source-guard-cr150-source-bounds',
+            'source-guard-cancellation', 'abi-pin-guard', 'source-guard-cr150-source-bounds',
             'cr150-source-gate-tests', 'rng-draw-order-tests', 'rng-draw-order', 'verifier-tests',
             'preflight-tests', 'unittest-shards-tests', 'verifier-paths-tests',
             'native-c-surface-tests', 'native-x86-release-tests', 'kernel-residuals-tests',
@@ -5212,8 +5214,10 @@ class RunnerGroupAllowlist(unittest.TestCase):
             # main() prepends actionlint-version to all/fast/github-only.
             # expectation corrected: 71 -> 73, 66 -> 68, 7 -> 9 and 64 -> 66,
             # because both added-text stages run in the full and reduced tiers.
-            self.assertEqual(len(expected) + 1, 73)
-            self.assertEqual(len(check_commands(ROOT, tier='fast')), 68)
+            # expectation corrected: 73 -> 74, 68 -> 69 and 66 -> 67, because
+            # the abi-pin-guard stage runs in the full and fast tiers.
+            self.assertEqual(len(expected) + 1, 74)
+            self.assertEqual(len(check_commands(ROOT, tier='fast')), 69)
             self.assertEqual(len(check_commands(ROOT, tier='slow')), 4)
             self.assertEqual(len(check_commands(ROOT, tier='github-only')), 9)
         for platform in ('darwin', 'win32'):
@@ -5222,7 +5226,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
                                      if name not in ('prebuilt-bookworm-tests', 'prebuilt-glibc-tests')]
                 self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})],
                                  expected_platform)
-                self.assertEqual(len(check_commands(ROOT, tier='fast')), 66)
+                self.assertEqual(len(check_commands(ROOT, tier='fast')), 67)
 
 
 class PrebuiltGlibcRegistration(unittest.TestCase):
@@ -5907,7 +5911,9 @@ class PreflightFailures(unittest.TestCase):
         # expectation corrected: 2170 -> 2177, because the shard/join contract
         # paragraph adds seven lines to docs/ci.md.
         # expectation corrected: 2177 -> 2188, because the baseline promotion guard extends the CI guide.
-        self.assertEqual(len(text.splitlines()), 2188)
+        # expectation corrected: 2188 -> 2204, because the stamp guard section
+        # for the C ABI and the engine layout adds sixteen lines to docs/ci.md.
+        self.assertEqual(len(text.splitlines()), 2204)
         slices = tuple(name for name in EXPECTED_PR_SLOW_ROWS
                        if name.startswith('test_ci_verify_slice_'))
         self.assertTrue(slices, 'verifier slice inventory must not be empty')
@@ -13750,6 +13756,885 @@ class GkeSmokeOutputAdmission(unittest.TestCase):
                     with self.subTest(steps=len(ci_preflight._steps(_jobs(workflow)[job])),
                                       job=job, before=before):
                         self.assert_refused(in_job(workflow, job, before, after), finding)
+
+
+class AbiPinGuardStage(unittest.TestCase):
+    """The abi-pin-guard stage, taken from the preflight plan and run on real commit pairs.
+
+    Each case clones a repository whose first commit holds this checkout's own
+    boundary files, commits one real edit of them, and runs the stage the plan
+    names through run_checks, under the pull request event of that pair.
+    """
+    NAME = 'abi-pin-guard'
+    HEADER = 'include/pineforge/pineforge.h'
+    RUNTIME = 'src/c_abi.cpp'
+    ENGINE = 'include/pineforge/engine.hpp'
+    CONSUMER = 'src/native_execution_consumer.hpp'
+    ADAPTER_HOST = 'include/pineforge/source/pine_strategy_host.hpp'
+    PROBE = 'tests/test_abi_layout_probe.cpp'
+    PINS = 'tests/stream_engine_layout_pins.inc'
+    MEASURED = 'tests/test_stream_engine_layout.cpp'
+    LANE = 'tests/lanes.d/stream-engine-layout.cmake'
+    SCRIPTS = ('scripts/check_abi_pin_guard.py', 'scripts/check_doc_reverts.py')
+    ABI = 'PF_ABI_VERSION'
+    STREAM = 'PF_STREAM_ENGINE_LAYOUT_VERSION'
+    RULES = ('c-abi', 'stream-layout', 'stream-pins')
+    SIZE_PIN = 'static_assert(sizeof(pf_metrics_t) == 768, "pf_metrics_t size moved");'
+    WIDE_PIN = '               && offsetof(pf_cache_policy_v1, entries) == 16'
+    # pf_version_t is returned by value and stored nowhere: a C ABI type only.
+    VERSION_FIELD = '    int         patch;       /**< Patch version. */\n'
+    # pf_equity_point_t is also what BacktestEngine stores its equity curve in.
+    POINT_FIELD = '    double  open_profit;   /**< Mark-to-market open P&L at bar close. */\n'
+    ENGINE_MEMBER = '    double position_qty_ = 0.0;\n'
+    NOT_COMPARED = (1, 'failed', 2)
+    _area = None
+    _seed = None
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls._area is not None:
+            cls._area.cleanup()
+        cls._area = cls._seed = None
+
+    @staticmethod
+    def git(repo, *args):
+        environment = {key: value for key, value in os.environ.items()
+                       if not key.startswith('GIT_')}
+        result = subprocess.run(
+            ['git', '-C', str(repo), '-c', 'user.name=Test',
+             '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgSign=false',
+             '-c', f'core.hooksPath={os.devnull}', '-c', 'advice.detachedHead=false', *args],
+            capture_output=True, text=True, env=environment)
+        if result.returncode:
+            raise AssertionError(f'git {" ".join(args)} failed: {result.stderr}')
+        return result.stdout.strip()
+
+    @classmethod
+    def seed(cls):
+        """One repository per test process: the tracked boundary files, as committed here."""
+        if cls._seed is None:
+            cls._area = tempfile.TemporaryDirectory(prefix='pineforge-abi-pin-guard-')
+            seed = Path(cls._area.name) / 'seed'
+            seed.mkdir()
+            listed = subprocess.run(
+                ['git', '-C', str(ROOT), 'ls-files', '-z', '--', 'include', 'src', 'runner',
+                 'CMakeLists.txt', cls.PROBE, cls.PINS], capture_output=True, check=True).stdout
+            paths = [os.fsdecode(path) for path in listed.split(b'\0') if path]
+            for needed in (cls.HEADER, cls.RUNTIME, cls.ENGINE, cls.CONSUMER, cls.ADAPTER_HOST,
+                           cls.PROBE, cls.PINS):
+                if needed not in paths:
+                    raise AssertionError(f'{needed} is not a tracked file of this checkout')
+            for path in [*paths, *cls.SCRIPTS]:
+                target = seed / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT / path, target)
+            cls.git(seed, 'init', '-q', '--initial-branch=main')
+            cls.git(seed, 'add', '-A')
+            cls.git(seed, 'commit', '-q', '-m', 'Seed: the boundary files of this checkout')
+            cls._seed = seed
+        return cls._seed
+
+    def stage(self, source, tier='fast'):
+        entries = [entry for entry in check_commands(source, source / 'build-ci-preflight', tier=tier)
+                   if entry[0] == self.NAME]
+        self.assertEqual(
+            [entry[0] for entry in entries], [self.NAME],
+            f'the {tier} preflight plan must hold exactly one {self.NAME} stage: without it a '
+            'change of a pinned layout reaches main with its stamp unchanged')
+        self.assertEqual(tuple(entries[0]), (self.NAME, [
+            sys.executable, str(source / 'scripts/check_abi_pin_guard.py')]))
+        return entries[0]
+
+    def repository(self):
+        """A clone of the seed; returns it with the seed commit, the base of every pair."""
+        self.stage(ROOT)
+        area = Path(tempfile.mkdtemp(prefix='pineforge-abi-pin-case-'))
+        self.addCleanup(shutil.rmtree, area, True)
+        repo = area / 'repo'
+        self.git(area, 'clone', '-q', str(self.seed()), str(repo))
+        return repo, self.git(repo, 'rev-parse', 'HEAD')
+
+    def edit(self, repo, path, old, new):
+        target = repo / path
+        text = target.read_text(encoding='utf-8')
+        self.assertEqual(text.count(old), 1, f'{path}: expected exactly one {old!r}')
+        target.write_text(text.replace(old, new), encoding='utf-8')
+
+    def stamp_line(self, repo, name):
+        text = (repo / self.HEADER).read_text(encoding='utf-8')
+        lines = re.findall(r'^#define ' + name + r' [0-9]+u?$', text, re.MULTILINE)
+        self.assertEqual(len(lines), 1, name)
+        return lines[0], int(re.search(r'[0-9]+', lines[0].rsplit(' ', 1)[1]).group(0))
+
+    def move_stamp(self, repo, name, by=1, pins=True):
+        """Move a stamp in the header; the stream stamp takes its pins' stamp row along."""
+        line, value = self.stamp_line(repo, name)
+        suffix = 'u' if line.endswith('u') else ''
+        self.edit(repo, self.HEADER, line + '\n', f'#define {name} {value + by}{suffix}\n')
+        if name == self.STREAM and pins:
+            self.edit(repo, self.PINS, f'PF_STREAM_LAYOUT_STAMP({value}u)\n',
+                      f'PF_STREAM_LAYOUT_STAMP({value + by}u)\n')
+        return value + by
+
+    def pin_rows(self, repo):
+        """Every size and member row of the pin file, as written."""
+        rows = re.findall(r'^PF_STREAM_LAYOUT_(?:SIZE|MEMBER)\([^()\n]*\)$',
+                          (repo / self.PINS).read_text(encoding='utf-8'), re.MULTILINE)
+        self.assertGreater(len(rows), 2, 'the pin file holds no rows to edit')
+        return rows
+
+    def pin_row(self, repo, start):
+        """The one pin row that begins with `start`."""
+        rows = [row for row in self.pin_rows(repo) if row.startswith(start)]
+        self.assertEqual(len(rows), 1, start)
+        return rows[0]
+
+    def repin(self, repo, start, by=8, last=True):
+        """Add `by` to the last number of one pin row (a member's size, a class's size),
+        or with last=False to the number before it (a member's offset)."""
+        row = self.pin_row(repo, start)
+        numbers = list(re.finditer(r'(?<=, )[0-9]+(?=[,)])', row))
+        number = numbers[-1 if last else -2]
+        changed = row[:number.start()] + str(int(number.group(0)) + by) + row[number.end():]
+        self.edit(repo, self.PINS, row + '\n', changed + '\n')
+
+    def commit(self, repo, message='Change one boundary file'):
+        self.git(repo, 'add', '-A')
+        self.git(repo, 'commit', '-q', '-m', message)
+        return self.git(repo, 'rev-parse', 'HEAD')
+
+    def pull_request(self, repo, base, head, name='pull_request_target'):
+        path = repo.parent / 'event.json'
+        path.write_text(json.dumps({'pull_request': {'base': {'sha': base}, 'head': {'sha': head}}}))
+        return {'GITHUB_EVENT_NAME': name, 'GITHUB_EVENT_PATH': str(path)}
+
+    def run_stage(self, repo, environment):
+        """Run the plan's own stage in repo; returns the preflight code, the stage row and its log."""
+        entry = self.stage(repo)
+        output = repo.parent / f'logs-{len(list(repo.parent.iterdir()))}'
+        with mock.patch.dict(os.environ, environment):
+            for key in ('GITHUB_EVENT_NAME', 'GITHUB_EVENT_PATH', 'PINEFORGE_DOC_REVERT_BASE'):
+                if key not in environment:
+                    os.environ.pop(key, None)
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = run_checks([entry], output, source=repo)
+        summary = json.loads((output / 'preflight-summary.json').read_text())
+        rows = [(row['name'], row['status'], row['exitCode'], row['advisory'])
+                for row in summary['stages']]
+        self.assertEqual([row[0] for row in rows], [self.NAME], summary)
+        self.assertIs(rows[0][3], False)
+        return (code, rows[0][1], rows[0][2]), (output / (self.NAME + '.log')).read_text()
+
+    def judge(self, *changes, stamps=(), arrange=None):
+        """Commit the edits and the named stamp raises on the seed; judge that pair as a pull request."""
+        repo, base = self.repository()
+        if arrange is not None:
+            arrange(repo)
+            base = self.commit(repo, 'Arrange the base declaration')
+        for change in changes:
+            change(repo)
+        for name in stamps:
+            self.move_stamp(repo, name)
+        head = self.commit(repo)
+        outcome, log = self.run_stage(repo, self.pull_request(repo, base, head))
+        self.assertIn(f'abi pin guard: range base={base} head={head} merge_base={base} head_tree=',
+                      log)
+        self.assertIn('from=pull_request_target event', log)
+        return outcome, log
+
+    def assert_refused(self, result, rule, stamp, also=()):
+        """The named rule owes its stamp, and no rule outside `also` fails beside it."""
+        outcome, log = result
+        self.assertEqual(outcome, (1, 'failed', 1), log)
+        for owing in (rule, *also):
+            self.assertRegex(log, rf'(?m)^abi pin guard: FAIL {owing}: [1-9][0-9]* layout '
+                                  rf'change\(s\) need {stamp} raised above [0-9]+; it is still '
+                                  rf'[0-9]+$')
+        for other in self.RULES:
+            if other != rule and other not in also:
+                self.assertNotIn(f'FAIL {other}: ', log)
+        self.assertNotIn('abi pin guard: OK', log)
+
+    def assert_passed(self, result, changes=None):
+        outcome, log = result
+        self.assertEqual(outcome, (0, 'passed', 0), log)
+        self.assertIn('abi pin guard: OK', log.splitlines())
+        self.assertNotIn('FAIL', log)
+        self.assertNotIn('NOT COMPARED', log)
+        if changes is not None:
+            # One summary line per rule; `changes` names the rules that saw any.
+            counted = dict(re.findall(
+                r'^abi pin guard: ([a-z-]+): [A-Z_]+ base=[0-9]+ head=[0-9]+; .*; '
+                r'changes=([0-9]+)$', log, re.MULTILINE))
+            self.assertLessEqual(set(self.RULES), set(counted), log)
+            self.assertEqual({rule: int(count) for rule, count in counted.items() if int(count)},
+                             changes, log)
+
+    # -- the edits ---------------------------------------------------------
+    def move_size_pin(self, repo):
+        self.edit(repo, self.RUNTIME, self.SIZE_PIN, self.SIZE_PIN.replace('== 768', '== 776'))
+
+    def add_struct_field(self, repo):
+        self.edit(repo, self.HEADER, self.VERSION_FIELD,
+                  self.VERSION_FIELD + '    int         build;\n')
+
+    def add_stored_struct_field(self, repo):
+        self.edit(repo, self.HEADER, self.POINT_FIELD,
+                  self.POINT_FIELD + '    double  realized_profit;\n')
+
+    def add_engine_member(self, repo):
+        self.edit(repo, self.ENGINE, self.ENGINE_MEMBER,
+                  self.ENGINE_MEMBER + '    double position_qty_shadow_ = 0.0;\n')
+
+    def touch_readme(self, repo):
+        (repo / 'NOTES.md').write_text('A file outside both boundaries.\n')
+
+    # -- the stage and its route ------------------------------------------------
+    def test_abi_pin_guard_is_one_binding_stage_of_the_fast_and_full_tiers(self):
+        for tier in ('fast', 'all'):
+            self.assertEqual(len(self.stage(ROOT, tier)), 2, 'a third element declares advisory')
+        for tier in ('slow', 'github-only'):
+            self.assertNotIn(self.NAME, [entry[0] for entry in check_commands(ROOT, tier=tier)])
+
+    def test_abi_pin_guard_boundary_files_always_select_the_fast_pull_request_tier(self):
+        import ci_docs_only
+        self.stage(ROOT)
+        workflow = (ROOT / '.github/workflows/gke-pr.yml').read_text()
+        self.assertEqual(workflow.count('          TIER: ' + ci_preflight.GKE_PREFLIGHT_TIER + '\n'), 1)
+        self.assertEqual(workflow.count(
+            '        run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight '
+            '--tier "$TIER"\n'), 1)
+        for path in (self.HEADER, self.RUNTIME, self.ENGINE, self.CONSUMER):
+            with self.subTest(path=path):
+                docs_only, github_only, _ = ci_docs_only.classify_paths([path])
+                self.assertEqual((docs_only, github_only), (False, False))
+                docs_only, github_only, _ = ci_docs_only.classify_paths(
+                    ['docs/ci.md', '.github/workflows/gke-pr.yml', path])
+                self.assertEqual((docs_only, github_only), (False, False))
+
+    # -- (A) size and offset pins of src/c_abi.cpp -----------------------------------
+    def test_abi_pin_guard_refuses_a_changed_size_pin_without_the_abi_stamp(self):
+        result = self.judge(self.move_size_pin)
+        self.assert_refused(result, 'c-abi', self.ABI)
+        for state, size in (('removed', 768), ('added', 776)):
+            self.assertRegex(result[1], rf'(?m)^abi pin guard: c-abi change: src/c_abi\.cpp: '
+                                        rf'pin {state}: sizeof \( pf_metrics_t \) == {size}$')
+
+    def test_abi_pin_guard_accepts_a_changed_size_pin_with_a_higher_abi_stamp(self):
+        self.assert_passed(self.judge(self.move_size_pin, stamps=(self.ABI,)), changes={'c-abi': 2})
+
+    def test_abi_pin_guard_refuses_a_removed_pin(self):
+        result = self.judge(lambda repo: self.edit(repo, self.RUNTIME, self.SIZE_PIN + '\n', ''))
+        self.assert_refused(result, 'c-abi', self.ABI)
+        self.assertIn('pin removed: sizeof ( pf_metrics_t ) == 768', result[1])
+        self.assertNotIn('pin added', result[1])
+
+    def test_abi_pin_guard_refuses_an_added_pin(self):
+        added = ('static_assert(offsetof(pf_equity_point_t, open_profit) == 16,\n'
+                 '              "pf_equity_point_t::open_profit offset moved");\n')
+        result = self.judge(lambda repo: self.edit(repo, self.RUNTIME, self.SIZE_PIN + '\n',
+                                                   self.SIZE_PIN + '\n' + added))
+        self.assert_refused(result, 'c-abi', self.ABI)
+        self.assertIn('pin added: offsetof ( pf_equity_point_t , open_profit ) == 16', result[1])
+        self.assertNotIn('pin removed', result[1])
+
+    def test_abi_pin_guard_refuses_a_change_inside_a_pin_that_spans_lines(self):
+        result = self.judge(lambda repo: self.edit(
+            repo, self.RUNTIME, self.WIDE_PIN, self.WIDE_PIN.replace('== 16', '== 24')))
+        self.assert_refused(result, 'c-abi', self.ABI)
+        self.assertIn('&& offsetof ( pf_cache_policy_v1 , entries ) == 24', result[1])
+
+    def test_abi_pin_guard_refuses_a_pin_moved_onto_an_alias_of_its_type(self):
+        aliased = ('using metrics_twin = pf_metrics_t;\n'
+                   'static_assert(sizeof(metrics_twin) == 768, "pf_metrics_t size moved");')
+        result = self.judge(lambda repo: self.edit(repo, self.RUNTIME, self.SIZE_PIN, aliased))
+        self.assert_refused(result, 'c-abi', self.ABI)
+        self.assertIn('pin removed: sizeof ( pf_metrics_t ) == 768', result[1])
+
+    def test_abi_pin_guard_accepts_a_pin_reflowed_commented_and_reworded(self):
+        reflowed = ('static_assert(\n'
+                    '    sizeof(pf_metrics_t)  // the composite metrics block\n'
+                    '        == 768,\n'
+                    '    "pf_metrics_t no longer has its pinned size");')
+        self.assert_passed(self.judge(lambda repo: self.edit(repo, self.RUNTIME, self.SIZE_PIN,
+                                                             reflowed)), changes={})
+
+    # -- (A) fields of the pf_* structs of pineforge.h -------------------------------
+    def test_abi_pin_guard_refuses_an_added_struct_field_without_the_abi_stamp(self):
+        result = self.judge(self.add_struct_field)
+        self.assert_refused(result, 'c-abi', self.ABI)
+        self.assertIn('c-abi change: include/pineforge/pineforge.h: pf_version_t: '
+                      'members changed', result[1])
+
+    def test_abi_pin_guard_accepts_an_added_struct_field_with_a_higher_abi_stamp(self):
+        result = self.judge(self.add_struct_field, stamps=(self.ABI,))
+        self.assert_passed(result, changes={'c-abi': 2})
+        self.assertIn('pf_version_t: members changed', result[1])
+
+    def test_abi_pin_guard_refuses_a_renamed_struct_field(self):
+        old = '    int         minor;       /**< Minor version. */'
+        result = self.judge(lambda repo: self.edit(repo, self.HEADER, old,
+                                                   old.replace('minor; ', 'middle;')))
+        self.assert_refused(result, 'c-abi', self.ABI)
+        self.assertIn('pf_version_t: members changed', result[1])
+
+    def test_abi_pin_guard_needs_both_stamps_for_a_struct_the_engine_stores(self):
+        with self.subTest(raised='neither'):
+            outcome, log = self.judge(self.add_stored_struct_field)
+            self.assertEqual(outcome, (1, 'failed', 1), log)
+            self.assertIn('c-abi change: include/pineforge/pineforge.h: pf_equity_point_t: '
+                          'members changed', log)
+            self.assertRegex(log, r'(?m)^abi pin guard: stream-layout change: '
+                                  r'include/pineforge/pineforge\.h: pf_equity_point_s: '
+                                  r'layout changed$')
+            self.assertIn('FAIL c-abi: ', log)
+            self.assertIn('FAIL stream-layout: ', log)
+        with self.subTest(raised=self.ABI):
+            self.assert_refused(self.judge(self.add_stored_struct_field, stamps=(self.ABI,)),
+                                'stream-layout', self.STREAM)
+        with self.subTest(raised='both'):
+            self.assert_passed(self.judge(self.add_stored_struct_field,
+                                          stamps=(self.ABI, self.STREAM)))
+
+    def test_abi_pin_guard_refuses_a_removed_struct_field(self):
+        result = self.judge(lambda repo: self.edit(
+            repo, self.HEADER, '    uint64_t entry_incarnation;\n} pf_stream_order_action_t;',
+            '} pf_stream_order_action_t;'))
+        self.assert_refused(result, 'c-abi', self.ABI)
+        self.assertIn('pf_stream_order_action_t: members changed', result[1])
+
+    def test_abi_pin_guard_refuses_a_field_retyped_on_a_line_it_shares(self):
+        result = self.judge(lambda repo: self.edit(
+            repo, self.HEADER, '    uint32_t slippage_ticks, fee_kind; double fee_value;',
+            '    uint32_t slippage_ticks; uint64_t fee_kind; double fee_value;'))
+        self.assert_refused(result, 'c-abi', self.ABI)
+        self.assertIn('pf_native_run_spec_v1: members changed', result[1])
+
+    def test_abi_pin_guard_accepts_a_comment_edit_inside_a_struct(self):
+        self.assert_passed(self.judge(lambda repo: self.edit(
+            repo, self.HEADER, '    double  open;       /**< Open price.   */',
+            '    double  open;       /**< Opening price of the bar. */')), changes={})
+
+    # -- (B) the engine layout the stream stamp covers -------------------------------
+    def test_abi_pin_guard_refuses_namespace_scope_pack_for_both_stamps(self):
+        def pack_equity_point(repo):
+            opening = "typedef struct pf_equity_point_s {\n"
+            closing = "} pf_equity_point_t;\n"
+            self.edit(repo, self.HEADER, opening, "#pragma pack(push, 1)\n" + opening)
+            self.edit(repo, self.HEADER, closing, closing + "#pragma pack(pop)\n")
+
+        for stamps in ((), (self.ABI, self.STREAM)):
+            with self.subTest(stamps=stamps):
+                outcome, log = self.judge(pack_equity_point, stamps=stamps)
+                self.assertEqual(outcome, (1, 'failed', 1), log)
+                for rule in ('c-abi', 'stream-layout'):
+                    self.assertRegex(log, rf'(?m)^abi pin guard: FAIL {rule}: .*#pragma pack.*$')
+                self.assertNotIn('FAIL stream-pins:', log)
+                self.assertNotIn('abi pin guard: OK', log)
+
+    def test_abi_pin_guard_ignores_pack_text_in_comments(self):
+        self.assert_passed(self.judge(lambda repo: self.edit(
+            repo, self.ENGINE, self.ENGINE_MEMBER,
+            '    /*\n#pragma pack(push, 1)\n    */\n' + self.ENGINE_MEMBER)), changes={})
+
+    def test_abi_pin_guard_refuses_changes_to_layout_declaration_forms(self):
+        cases = (
+            (self.ENGINE_MEMBER, '    alignas(32) double position_qty_ = 0.0;\n',
+             'BacktestEngine'),
+            ('enum class PositionSide { FLAT, LONG, SHORT };',
+             'enum class PositionSide : unsigned char { FLAT, LONG, SHORT };', 'PositionSide'),
+            ('class BacktestEngine {',
+             'struct MeasuredLayoutBase { int value = 0; };\n'
+             'class BacktestEngine : private MeasuredLayoutBase {', 'BacktestEngine'),
+        )
+        for old, new, name in cases:
+            with self.subTest(declaration=new):
+                result = self.judge(lambda repo: self.edit(repo, self.ENGINE, old, new))
+                self.assert_refused(result, 'stream-layout', self.STREAM)
+                self.assertRegex(result[1], r'(?m)^abi pin guard: stream-layout change: '
+                                 rf'include/pineforge/engine\.hpp: (?:\w+::)*{name}: layout changed$')
+
+    def test_abi_pin_guard_refuses_a_changed_bit_field_width(self):
+        member = '    int64_t next_position_cycle_seq_'
+        bit_field = member + ' : 48;\n'
+        result = self.judge(
+            lambda repo: self.edit(repo, self.ENGINE, bit_field, member + ' : 47;\n'),
+            arrange=lambda repo: self.edit(repo, self.ENGINE, member + ' = 1;\n', bit_field))
+        self.assert_refused(result, 'stream-layout', self.STREAM)
+        self.assertRegex(result[1], r'(?m)^abi pin guard: stream-layout change: '
+                         r'include/pineforge/engine\.hpp: (?:\w+::)*BacktestEngine: layout changed$')
+
+    def test_abi_pin_guard_refuses_an_added_engine_member_without_the_stream_stamp(self):
+        result = self.judge(self.add_engine_member)
+        self.assert_refused(result, 'stream-layout', self.STREAM)
+        self.assertRegex(result[1], r'(?m)^abi pin guard: stream-layout change: '
+                                    r'include/pineforge/engine\.hpp: (\w+::)*BacktestEngine: '
+                                    r'layout changed$')
+
+    def test_abi_pin_guard_accepts_an_added_engine_member_with_a_higher_stream_stamp(self):
+        self.assert_passed(self.judge(self.add_engine_member, stamps=(self.STREAM,)),
+                           changes={'stream-layout': 1})
+
+    def test_abi_pin_guard_refuses_a_removed_engine_member(self):
+        result = self.judge(lambda repo: self.edit(
+            repo, self.ENGINE, '    int64_t next_position_cycle_seq_ = 1;\n', ''))
+        self.assert_refused(result, 'stream-layout', self.STREAM)
+        self.assertIn('BacktestEngine: layout changed', result[1])
+
+    def test_abi_pin_guard_refuses_an_engine_member_retyped_across_lines(self):
+        old = '    std::vector<PyramidEntry> pyramid_entries_;  // individual entries for trade reporting\n'
+        new = ('    std::vector<PyramidEntry,\n'
+               '                std::allocator<PyramidEntry>>\n'
+               '        pyramid_entries_;  // individual entries for trade reporting\n')
+        result = self.judge(lambda repo: self.edit(repo, self.ENGINE, old, new))
+        self.assert_refused(result, 'stream-layout', self.STREAM)
+        self.assertIn('BacktestEngine: layout changed', result[1])
+
+    def test_abi_pin_guard_refuses_an_added_virtual_function(self):
+        old = '    virtual void finalize_bar() {}\n'
+        result = self.judge(lambda repo: self.edit(
+            repo, self.ENGINE, old, old + '    virtual void finalize_bar_shadow() {}\n'))
+        self.assert_refused(result, 'stream-layout', self.STREAM)
+        self.assertIn('BacktestEngine: layout changed', result[1])
+
+    def test_abi_pin_guard_refuses_a_member_added_to_the_execution_consumer(self):
+        old = '    bool run_warnings_unavailable_ = false;\n'
+        result = self.judge(lambda repo: self.edit(
+            repo, self.CONSUMER, old, old + '    bool run_warnings_shadow_ = false;\n'))
+        self.assert_refused(result, 'stream-layout', self.STREAM)
+        self.assertRegex(result[1], r'(?m)^abi pin guard: stream-layout change: '
+                                    r'src/native_execution_consumer\.hpp: '
+                                    r'(\w+::)*NativeExecutionConsumer: layout changed$')
+
+    def test_abi_pin_guard_accepts_engine_edits_that_move_no_layout(self):
+        def edits(repo):
+            self.edit(repo, self.ENGINE, '    double net_profit() const { return net_profit_sum_; }',
+                      '    double net_profit() const { return net_profit_sum_ + 0.0; }')
+            self.edit(repo, self.ENGINE, '    void guard_native_mutation(const char* operation);\n',
+                      '    void guard_native_mutation(const char* operation);\n'
+                      '    bool guard_native_mutation_armed() const { return !host_mutation_guard_inert_; }\n'
+                      '    static constexpr int kGuardWitness = 3;\n')
+            self.edit(repo, self.ENGINE, self.ENGINE_MEMBER,
+                      '    // The signed units the position holds.\n'
+                      '    double\n        position_qty_  /* reflowed */\n        = 0.0;\n')
+        self.assert_passed(self.judge(edits), changes={})
+
+    def test_abi_pin_guard_accepts_a_change_of_the_host_and_adapter_probe_only(self):
+        result = self.judge(lambda repo: self.edit(
+            repo, self.PROBE,
+            'static_assert(sizeof(Adapter) == 90760, "PineExecutionAdapter size changed");',
+            'static_assert(sizeof(Adapter) == 90800, "PineExecutionAdapter size changed");'))
+        self.assert_passed(result, changes={})
+        self.assertNotIn('tests/', result[1])
+
+    def test_abi_pin_guard_accepts_a_member_added_to_the_adapter_host(self):
+        old = '    PineExecutionAdapter adapter_;\n'
+        result = self.judge(lambda repo: self.edit(
+            repo, self.ADAPTER_HOST, old, old + '    int adapter_shadow_ = 0;\n'))
+        self.assert_passed(result, changes={})
+        self.assertNotIn('pine_strategy_host', result[1])
+
+    def test_abi_pin_guard_accepts_a_change_outside_both_boundaries(self):
+        self.assert_passed(self.judge(self.touch_readme), changes={})
+
+    def test_abi_pin_guard_refuses_two_engine_members_swapped(self):
+        # An offset move that leaves the class size alone.
+        first = '    int64_t diag_input_bars_processed_ = 0;\n'
+        second = '    int64_t diag_script_bars_processed_ = 0;\n'
+        result = self.judge(lambda repo: self.edit(repo, self.ENGINE, first + second,
+                                                   second + first))
+        self.assert_refused(result, 'stream-layout', self.STREAM)
+        self.assertIn('BacktestEngine: layout changed', result[1])
+
+    # -- (C) the measured pins of the stream layout ----------------------------------
+    PIN_CHANGE = (r'(?m)^abi pin guard: stream-pins change: tests/stream_engine_layout_pins\.inc: '
+                  r'{key}: {state}$')
+
+    def test_abi_pin_guard_refuses_a_changed_offset_pin_without_the_stream_stamp(self):
+        result = self.judge(lambda repo: self.repin(
+            repo, 'PF_STREAM_LAYOUT_MEMBER(BacktestEngine, trades_, ', last=False))
+        self.assert_refused(result, 'stream-pins', self.STREAM)
+        found = re.search(self.PIN_CHANGE.format(
+            key='BacktestEngine::trades_',
+            state=r'offset ([0-9]+) size ([0-9]+) -> offset ([0-9]+) size ([0-9]+)'), result[1])
+        self.assertIsNotNone(found, result[1])
+        self.assertEqual((int(found[3]) - int(found[1]), found[4]), (8, found[2]))
+
+    def test_abi_pin_guard_refuses_a_changed_class_size_pin_without_the_stream_stamp(self):
+        result = self.judge(lambda repo: self.repin(
+            repo, 'PF_STREAM_LAYOUT_SIZE(NativeExecutionConsumer, '))
+        self.assert_refused(result, 'stream-pins', self.STREAM)
+        found = re.search(self.PIN_CHANGE.format(
+            key=r'sizeof\(NativeExecutionConsumer\)', state=r'size ([0-9]+) -> size ([0-9]+)'),
+            result[1])
+        self.assertIsNotNone(found, result[1])
+        self.assertEqual(int(found[2]) - int(found[1]), 8)
+
+    def test_abi_pin_guard_refuses_a_removed_pin_row(self):
+        def remove(repo):
+            row = self.pin_row(repo, 'PF_STREAM_LAYOUT_MEMBER(NativeExecutionConsumer, '
+                                     'rows_current_, ')
+            self.edit(repo, self.PINS, row + '\n', '')
+        result = self.judge(remove)
+        self.assert_refused(result, 'stream-pins', self.STREAM)
+        self.assertRegex(result[1], self.PIN_CHANGE.format(
+            key='NativeExecutionConsumer::rows_current_', state='removed'))
+
+    def test_abi_pin_guard_refuses_an_added_pin_row(self):
+        def add(repo):
+            row = self.pin_row(repo, 'PF_STREAM_LAYOUT_MEMBER(BacktestEngine, trades_, ')
+            self.edit(repo, self.PINS, row + '\n',
+                      row + '\n' + row.replace('trades_, ', 'position_qty_, ') + '\n')
+        result = self.judge(add)
+        self.assert_refused(result, 'stream-pins', self.STREAM)
+        self.assertRegex(result[1], self.PIN_CHANGE.format(
+            key='BacktestEngine::position_qty_', state='added'))
+
+    def test_abi_pin_guard_accepts_changed_pins_with_a_higher_stream_stamp(self):
+        result = self.judge(lambda repo: self.repin(
+            repo, 'PF_STREAM_LAYOUT_MEMBER(BacktestEngine, trades_, ', last=False),
+            stamps=(self.STREAM,))
+        self.assert_passed(result, changes={'stream-pins': 1})
+
+    def test_abi_pin_guard_refuses_changed_pins_under_a_higher_abi_stamp(self):
+        result = self.judge(lambda repo: self.repin(
+            repo, 'PF_STREAM_LAYOUT_MEMBER(BacktestEngine, trades_, ', last=False),
+            stamps=(self.ABI,))
+        self.assert_refused(result, 'stream-pins', self.STREAM)
+
+    def test_abi_pin_guard_refuses_pins_left_behind_by_a_raised_stream_stamp(self):
+        raised = []
+        outcome, log = self.judge(lambda repo: raised.append(
+            self.move_stamp(repo, self.STREAM, pins=False)))
+        self.assertEqual(outcome, (1, 'failed', 1), log)
+        self.assertIn(
+            f'abi pin guard: FAIL stream-pins: {self.PINS} carries stamp {raised[0] - 1}; '
+            f'{self.HEADER} defines {self.STREAM} {raised[0]}: measure the layout for that '
+            'stamp and pin it', log.splitlines())
+        self.assertNotIn('abi pin guard: OK', log)
+
+    def test_abi_pin_guard_refuses_an_engine_change_whose_pins_follow_it_without_the_stamp(self):
+        def member_and_pins(repo):
+            self.add_engine_member(repo)
+            self.repin(repo, 'PF_STREAM_LAYOUT_MEMBER(BacktestEngine, trades_, ', last=False)
+            self.repin(repo, 'PF_STREAM_LAYOUT_SIZE(BacktestEngine, ')
+        with self.subTest(raised='nothing'):
+            result = self.judge(member_and_pins)
+            self.assert_refused(result, 'stream-layout', self.STREAM, also=('stream-pins',))
+        with self.subTest(raised=self.ABI):
+            result = self.judge(member_and_pins, stamps=(self.ABI,))
+            self.assert_refused(result, 'stream-layout', self.STREAM, also=('stream-pins',))
+        with self.subTest(raised=self.STREAM):
+            self.assert_passed(self.judge(member_and_pins, stamps=(self.STREAM,)),
+                               changes={'stream-layout': 1, 'stream-pins': 2})
+
+    def test_abi_pin_guard_accepts_a_comment_edit_in_the_pins(self):
+        def comment(repo):
+            target = repo / self.PINS
+            target.write_text('// A note that pins nothing.\n'
+                              + target.read_text(encoding='utf-8'), encoding='utf-8')
+        self.assert_passed(self.judge(comment), changes={})
+
+    def test_abi_pin_guard_refuses_a_head_without_pins(self):
+        outcome, log = self.judge(lambda repo: self.git(repo, 'rm', '-q', '--', self.PINS))
+        self.assertEqual(outcome, self.NOT_COMPARED, log)
+        self.assertIn(f'has no {self.PINS}', log)
+        self.assertNotIn('abi pin guard: OK', log)
+
+    def test_abi_pin_guard_refuses_pin_text_that_is_not_a_row(self):
+        def malformed(repo):
+            target = repo / self.PINS
+            target.write_text(target.read_text(encoding='utf-8')
+                              + 'PF_STREAM_LAYOUT_MEMBER(BacktestEngine, trades_)\n',
+                              encoding='utf-8')
+        outcome, log = self.judge(malformed, stamps=(self.STREAM,))
+        self.assertEqual(outcome, self.NOT_COMPARED, log)
+        self.assertIn('holds text that is not a pin row', log)
+
+    def test_abi_pin_guard_accepts_new_pins_only_in_the_range_that_brings_the_check(self):
+        checker = self.SCRIPTS[0]
+        for without, expected in (((checker, self.PINS), None),
+                                  ((self.PINS,), f'holds {checker} and no {self.PINS}')):
+            with self.subTest(base_lacks=without):
+                repo, seed = self.repository()
+                self.git(repo, 'rm', '-q', '--', *without)
+                base = self.commit(repo, 'A base from before the pins')
+                self.git(repo, 'checkout', '-q', seed, '--', *without)
+                head = self.commit(repo, 'The pins arrive')
+                outcome, log = self.run_stage(repo, self.pull_request(repo, base, head))
+                self.assertIn(f'range base={base} head={head} merge_base={base} ', log)
+                if expected is None:
+                    self.assert_passed((outcome, log), changes={})
+                    self.assertRegex(log, r'(?m)^abi pin guard: stream-pins: \S+ base=[0-9]+ '
+                                          r'head=[0-9]+; pin rows base=none head=[1-9][0-9]*; '
+                                          r'changes=0$')
+                    self.assertIn('this range introduces the pins', log)
+                else:
+                    self.assertEqual(outcome, self.NOT_COMPARED, log)
+                    self.assertIn(expected, log)
+
+    def test_abi_pin_guard_pins_hold_exactly_the_members_the_measured_row_names(self):
+        # The measured comparison is the CTest row test_stream_engine_layout; this
+        # holds its three files together where that row is not built.
+        self.stage(ROOT)
+        source = (ROOT / self.MEASURED).read_text(encoding='utf-8')
+        listed = re.findall(r'^    X\((\w+), (\w+), \w+, ([.\w]*)\)(?: \\)?$', source, re.MULTILINE)
+        inventory = [f'{kind}::{member}{path}' for kind, member, path in listed]
+        self.assertEqual(len(inventory), len(set(inventory)), 'a member is listed twice')
+        self.assertEqual(
+            [sum(key.startswith(kind + '::') for key in inventory)
+             for kind in ('BacktestEngine', 'NativeExecutionConsumer')], [31, 7])
+        pins = (ROOT / self.PINS).read_text(encoding='utf-8')
+        members = re.findall(r'^PF_STREAM_LAYOUT_MEMBER\((\w+), ([\w.]+), [0-9]+, [0-9]+\)$',
+                             pins, re.MULTILINE)
+        self.assertEqual(sorted(f'{kind}::{member}' for kind, member in members),
+                         sorted(inventory))
+        self.assertEqual(sorted(re.findall(r'^PF_STREAM_LAYOUT_SIZE\((\w+), [0-9]+\)$', pins,
+                                           re.MULTILINE)),
+                         ['BacktestEngine', 'NativeExecutionConsumer'])
+        header = (ROOT / self.HEADER).read_text(encoding='utf-8')
+        self.assertEqual(
+            re.findall(r'^PF_STREAM_LAYOUT_STAMP\(([0-9]+)u\)$', pins, re.MULTILINE),
+            re.findall(r'^#define ' + self.STREAM + r' ([0-9]+)u$', header, re.MULTILINE))
+        lane = (ROOT / self.LANE).read_text(encoding='utf-8')
+        self.assertEqual(lane.count(
+            'if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")\n'
+            '    list(APPEND TEST_SOURCES test_stream_engine_layout)\n'
+            '    pineforge_add_unit_test(test_stream_engine_layout)\n'
+            'endif()\n'), 1)
+
+    def test_abi_pin_guard_reaches_the_engine_class_and_the_types_it_holds(self):
+        repo, base = self.repository()
+        self.touch_readme(repo)
+        head = self.commit(repo)
+        result = subprocess.run(
+            [sys.executable, '-B', str(repo / 'scripts/check_abi_pin_guard.py'),
+             '--base', base, '--head', head, '--list-covered'],
+            cwd=repo, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(result.stdout, r'(?m)^abi pin guard: stream-layout: .*; '
+                                        r'files head=[1-9][0-9]* unreadable=0; changes=0$')
+        covered = re.findall(r'^abi pin guard: covered: (\S+) \((\S+)\)$', result.stdout,
+                             re.MULTILINE)
+        names = {key.rsplit('::', 1)[-1] for key, _ in covered}
+        self.assertGreater(len(covered), 20, result.stdout)
+        self.assertLessEqual({'BacktestEngine', 'TradeLedger', 'SymInfo', 'Bar', 'PyramidEntry',
+                              'TimeframeAggregator', 'RuntimeContextService',
+                              'IExecutionConsumer', 'NativeExecutionConsumer'}, names)
+        self.assertIn(self.ENGINE, {path for key, path in covered
+                                    if key.rsplit('::', 1)[-1] == 'BacktestEngine'})
+        self.assertIn(self.CONSUMER, {path for key, path in covered
+                                      if key.rsplit('::', 1)[-1] == 'NativeExecutionConsumer'})
+        self.assertNotIn('PineStrategyHost', names)
+        self.assertNotIn('PineExecutionAdapter', names)
+        for _, path in covered:
+            self.assertFalse(path.startswith(('include/pineforge/source/', 'include/pineforge/compat/',
+                                              'src/source/', 'src/compat/', 'tests/')), path)
+
+    def test_abi_pin_guard_takes_another_guarded_type_as_one_more_rule_row(self):
+        # Not a shipped rule: the row exists only in this case's copy of the
+        # check. It shows that the range, the stamps and the verdict serve a
+        # third rule unchanged; the shipped table keeps its two rows.
+        self.stage(ROOT)
+        import check_abi_pin_guard
+        self.assertEqual([(rule.name, rule.stamp) for rule in check_abi_pin_guard.RULES],
+                         [('c-abi', self.ABI), ('stream-layout', self.STREAM),
+                          ('stream-pins', self.STREAM)])
+        self.assertEqual(tuple(rule.name for rule in check_abi_pin_guard.RULES), self.RULES)
+        shipped = '         layout_changes(STREAM_ROOTS, KERNEL_ROOTS, ADAPTER_ROOTS)),\n'
+        row = ("    Rule('host-layout', STREAM_STAMP,\n"
+               "         layout_changes((('PineStrategyHost', "
+               "'include/pineforge/source/pine_strategy_host.hpp'),), KERNEL_ROOTS, ())),\n")
+        old = '    PineExecutionAdapter adapter_;\n'
+        for stamps, refused in (((), True), ((self.STREAM,), False)):
+            with self.subTest(stamps=stamps):
+                repo, base = self.repository()
+                self.edit(repo, self.SCRIPTS[0], shipped, shipped + row)
+                base = self.commit(repo, 'The fixture copy of the check gains a third row')
+                self.edit(repo, self.ADAPTER_HOST, old, old + '    int adapter_shadow_ = 0;\n')
+                for name in stamps:
+                    self.move_stamp(repo, name)
+                head = self.commit(repo)
+                result = self.run_stage(repo, self.pull_request(repo, base, head))
+                self.assertIn(f'range base={base} head={head} merge_base={base} ', result[1])
+                self.assertRegex(result[1], r'(?m)^abi pin guard: host-layout: '
+                                            r'PF_STREAM_ENGINE_LAYOUT_VERSION base=[0-9]+ '
+                                            r'head=[0-9]+; .*; changes=1$')
+                self.assertRegex(result[1], r'(?m)^abi pin guard: host-layout change: '
+                                            r'include/pineforge/source/pine_strategy_host\.hpp: '
+                                            r'(\w+::)*PineStrategyHost: layout changed$')
+                if refused:
+                    self.assert_refused(result, 'host-layout', self.STREAM)
+                    self.assertNotIn('FAIL stream-layout', result[1])
+                else:
+                    self.assert_passed(result, changes={'host-layout': 1})
+
+    # -- one stamp never answers for the other ---------------------------------------
+    def test_abi_pin_guard_refuses_the_stream_stamp_raised_for_a_c_abi_change(self):
+        self.assert_refused(self.judge(self.move_size_pin, stamps=(self.STREAM,)),
+                            'c-abi', self.ABI)
+
+    def test_abi_pin_guard_refuses_the_abi_stamp_raised_for_an_engine_layout_change(self):
+        self.assert_refused(self.judge(self.add_engine_member, stamps=(self.ABI,)),
+                            'stream-layout', self.STREAM)
+
+    def test_abi_pin_guard_needs_both_stamps_for_a_change_of_both_layouts(self):
+        both = (self.move_size_pin, self.add_engine_member)
+        with self.subTest(raised='neither'):
+            outcome, log = self.judge(*both)
+            self.assertEqual(outcome, (1, 'failed', 1), log)
+            self.assertIn('FAIL c-abi: ', log)
+            self.assertIn('FAIL stream-layout: ', log)
+        with self.subTest(raised=self.ABI):
+            self.assert_refused(self.judge(*both, stamps=(self.ABI,)), 'stream-layout', self.STREAM)
+        with self.subTest(raised=self.STREAM):
+            self.assert_refused(self.judge(*both, stamps=(self.STREAM,)), 'c-abi', self.ABI)
+        with self.subTest(raised='both'):
+            self.assert_passed(self.judge(*both, stamps=(self.ABI, self.STREAM)),
+                               changes={'c-abi': 2, 'stream-layout': 1})
+
+    def test_abi_pin_guard_refuses_a_lowered_stamp(self):
+        for name, rule in ((self.ABI, 'c-abi'), (self.STREAM, 'stream-layout')):
+            with self.subTest(stamp=name):
+                lowered = []
+                outcome, log = self.judge(
+                    lambda repo: lowered.append(self.move_stamp(repo, name, by=-1)))
+                self.assertEqual(outcome, (1, 'failed', 1), log)
+                self.assertIn(f'abi pin guard: FAIL {rule}: {name} fell from {lowered[0] + 1} '
+                              f'to {lowered[0]}; a stamp never decreases', log.splitlines())
+
+    def test_abi_pin_guard_accepts_stamps_raised_without_a_layout_change(self):
+        self.assert_passed(self.judge(stamps=(self.ABI, self.STREAM)), changes={})
+
+    def test_abi_pin_guard_refuses_a_stamp_value_the_base_tip_already_holds(self):
+        repo, base = self.repository()
+        self.move_size_pin(repo)
+        taken = self.move_stamp(repo, self.ABI)
+        tip = self.commit(repo, 'Main moves a pin and raises the stamp')
+        self.git(repo, 'checkout', '-q', '-b', 'topic', base)
+        self.edit(repo, self.RUNTIME, self.WIDE_PIN, self.WIDE_PIN.replace('== 16', '== 24'))
+        self.assertEqual(self.move_stamp(repo, self.ABI), taken)
+        head = self.commit(repo, 'A branch from the older base moves another pin')
+        outcome, log = self.run_stage(repo, self.pull_request(repo, tip, head))
+        self.assertEqual(outcome, (1, 'failed', 1), log)
+        self.assertIn(f'abi pin guard: range base={tip} head={head} merge_base={base} ', log)
+        self.assertRegex(log, rf"(?m)^abi pin guard: FAIL c-abi: [1-9][0-9]* layout change\(s\) need "
+                              rf"{self.ABI} raised above {taken}, the value at the base's tip; "
+                              rf"it is {taken}$")
+
+    # -- the range comes from the run, and a missing one never passes ----------------
+    def test_abi_pin_guard_refuses_an_event_payload_it_cannot_read(self):
+        repo, base = self.repository()
+        self.move_size_pin(repo)
+        self.commit(repo)
+        outcome, log = self.run_stage(repo, {
+            'GITHUB_EVENT_NAME': 'pull_request_target',
+            'GITHUB_EVENT_PATH': str(repo.parent / 'absent-event.json')})
+        self.assertEqual(outcome, self.NOT_COMPARED, log)
+        self.assertIn('NOT COMPARED: the pull_request_target event payload cannot be read', log)
+
+    def test_abi_pin_guard_refuses_an_event_head_that_is_not_checked_out(self):
+        repo, base = self.repository()
+        self.touch_readme(repo)
+        named = self.commit(repo)
+        self.move_size_pin(repo)
+        self.commit(repo, 'A later commit the event does not name')
+        outcome, log = self.run_stage(repo, self.pull_request(repo, base, named))
+        self.assertEqual(outcome, self.NOT_COMPARED, log)
+        self.assertIn('is not the checked-out commit', log)
+
+    def test_abi_pin_guard_refuses_an_event_base_the_repository_lacks(self):
+        repo, _ = self.repository()
+        self.move_size_pin(repo)
+        head = self.commit(repo)
+        outcome, log = self.run_stage(repo, self.pull_request(repo, '12ab' * 10, head))
+        self.assertEqual(outcome, self.NOT_COMPARED, log)
+        self.assertIn('is not a commit in this repository', log)
+
+    def test_abi_pin_guard_refuses_a_pull_request_range_with_no_commit(self):
+        repo, base = self.repository()
+        outcome, log = self.run_stage(repo, self.pull_request(repo, base, base))
+        self.assertEqual(outcome, self.NOT_COMPARED, log)
+        self.assertIn('holds no commit', log)
+
+    def test_abi_pin_guard_refuses_a_stamp_with_more_than_one_definition(self):
+        def redefined_in_the_runtime(repo):
+            target = repo / self.RUNTIME
+            target.write_text('#undef PF_ABI_VERSION\n#define PF_ABI_VERSION 9\n'
+                              + target.read_text(encoding='utf-8'), encoding='utf-8')
+
+        def defined_twice_in_the_header(repo):
+            target = repo / self.HEADER
+            target.write_text(target.read_text(encoding='utf-8')
+                              + '#define PF_STREAM_ENGINE_LAYOUT_VERSION 9u\n', encoding='utf-8')
+
+        for change, said in ((redefined_in_the_runtime, 'src/c_abi.cpp defines or undefines '
+                              'PF_ABI_VERSION'),
+                             (defined_twice_in_the_header, 'PF_STREAM_ENGINE_LAYOUT_VERSION 2 times')):
+            with self.subTest(change=change.__name__):
+                repo, base = self.repository()
+                change(repo)
+                self.move_size_pin(repo)
+                self.move_stamp(repo, self.ABI)
+                head = self.commit(repo)
+                outcome, log = self.run_stage(repo, self.pull_request(repo, base, head))
+                self.assertEqual(outcome, self.NOT_COMPARED, log)
+                self.assertIn(said, log)
+                self.assertNotIn('abi pin guard: OK', log)
+
+    def test_abi_pin_guard_judges_the_range_of_a_push_event(self):
+        repo, base = self.repository()
+        self.move_size_pin(repo)
+        head = self.commit(repo)
+        path = repo.parent / 'push.json'
+        path.write_text(json.dumps({'before': base, 'after': head}))
+        outcome, log = self.run_stage(repo, {'GITHUB_EVENT_NAME': 'push',
+                                             'GITHUB_EVENT_PATH': str(path)})
+        self.assert_refused((outcome, log), 'c-abi', self.ABI)
+        self.assertIn(f'range base={base} head={head} merge_base={base} ', log)
+        self.assertIn('from=push event', log)
+
+    def test_abi_pin_guard_judges_the_base_a_build_host_is_given(self):
+        repo, base = self.repository()
+        self.add_engine_member(repo)
+        head = self.commit(repo)
+        self.git(repo, 'checkout', '-q', '--detach')
+        self.git(repo, 'branch', '-q', '-D', 'main')
+        self.git(repo, 'update-ref', '-d', 'refs/remotes/origin/main')
+        outcome, log = self.run_stage(repo, {'PINEFORGE_DOC_REVERT_BASE': base})
+        self.assert_refused((outcome, log), 'stream-layout', self.STREAM)
+        self.assertIn(f'range base={base} head={head} merge_base={base} ', log)
+        self.assertIn('from=PINEFORGE_DOC_REVERT_BASE', log)
+
+    def test_abi_pin_guard_judges_the_merge_base_with_main_outside_an_event(self):
+        repo, base = self.repository()
+        self.git(repo, 'checkout', '-q', '-b', 'topic')
+        self.add_struct_field(repo)
+        head = self.commit(repo)
+        outcome, log = self.run_stage(repo, {})
+        self.assert_refused((outcome, log), 'c-abi', self.ABI)
+        self.assertIn(f'range base={base} head={head} merge_base={base} ', log)
+        self.assertIn('from=merge base with refs/remotes/origin/main', log)
+
+    def test_abi_pin_guard_is_skipped_not_passed_at_the_tip_of_main_outside_an_event(self):
+        repo, base = self.repository()
+        outcome, log = self.run_stage(repo, {})
+        self.assertEqual(outcome, (0, 'skipped', 77), log)
+        self.assertIn('NOT COMPARED: HEAD is the tip of main; its commits were judged before the merge',
+                      log.splitlines())
+        self.assertIn(f'abi pin guard: NOT COMPARED: {base} is contained in its base', log)
+        self.assertNotIn('abi pin guard: OK', log)
+
+    def test_abi_pin_guard_refuses_a_run_with_no_event_no_base_and_no_main_ref(self):
+        repo, _ = self.repository()
+        self.move_size_pin(repo)
+        self.commit(repo)
+        self.git(repo, 'checkout', '-q', '--detach')
+        self.git(repo, 'branch', '-q', '-D', 'main')
+        self.git(repo, 'update-ref', '-d', 'refs/remotes/origin/main')
+        outcome, log = self.run_stage(repo, {})
+        self.assertEqual(outcome, self.NOT_COMPARED, log)
+        self.assertIn('the range cannot be established', log)
 
 
 if __name__ == '__main__':

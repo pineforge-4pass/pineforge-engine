@@ -6054,6 +6054,16 @@ def check_commands(source: Path, output: Path | None = None,
          [sys.executable, str(source / 'scripts/check_market_admission_schema.py')]),
         ('source-guard-cancellation',
          [sys.executable, str(source / 'scripts/check_cancellation_hash_coverage.py')]),
+        # The two strategy-module stamps: a change that moves a pinned C ABI
+        # layout raises PF_ABI_VERSION, and one that moves a layout the live
+        # report reader shares, or the measured pins of that layout, raises
+        # PF_STREAM_ENGINE_LAYOUT_VERSION. The stage takes no argument: its
+        # range is the run's own (the pull request or push event, else the
+        # base a build host was given), and a range it cannot establish fails.
+        # Fast and full tiers only: a change that reaches the github-only tier
+        # touches no source file.
+        ('abi-pin-guard',
+         [sys.executable, str(source / 'scripts/check_abi_pin_guard.py')]),
         # Source bounds: a new growable container in the scanned engine, inline
         # header or generated C++ needs a manifest entry whose bound names only
         # declared fixed inputs; the existing sites are listed OPEN, never PASS
@@ -6271,7 +6281,9 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
         index, entry = item
         name, argv = entry[0], entry[1]
         advisory = bool(entry[2]) if len(entry) > 2 else False
-        history_stage = name in ('doc-reverts', 'doc-reverts-net')
+        # Stages that judge a range of commits: at main's own tip, outside a
+        # pull request or push event, they have nothing to compare.
+        history_stage = name in ('doc-reverts', 'doc-reverts-net', 'abi-pin-guard')
         with record_lock:
             print(f'ci_preflight: {name}: {shlex.join(argv)}'
                   + (' [advisory]' if advisory else ''), flush=True)

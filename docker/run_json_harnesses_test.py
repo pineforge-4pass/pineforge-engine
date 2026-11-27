@@ -541,7 +541,7 @@ MALFORMED_LOTS = {
 @pytest.mark.parametrize("name", ["qty_step", "syminfo_metadata.qty_step",
                                   "mincontract", "syminfo_metadata.mincontract"])
 @pytest.mark.parametrize("kind", sorted(MALFORMED_LOTS))
-def test_run_strategy_refuses_a_malformed_lot_key_for_both_runners(tmp_path, tape, name, kind):
+def test_run_strategy_resolver_refuses_a_malformed_lot_key(tmp_path, tape, name, kind):
     # One rule for both lot keys, given directly or under syminfo_metadata: a
     # positive finite JSON number, or null. The refusal comes from the resolver
     # the CLI calls once before it picks a runner, so neither runner starts.

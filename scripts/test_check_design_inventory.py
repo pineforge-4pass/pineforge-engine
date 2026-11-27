@@ -27,6 +27,7 @@ import io
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import check_design_inventory as guard
 
@@ -465,6 +466,30 @@ endif()
             code, out = made.run()
             self.assertEqual(code, 1, out)
             self.assertIn('no kernel-profile test', out)
+
+    def test_processor_guard_registers_a_row_only_on_the_processor_it_names(self):
+        # A row whose pins are measured on one machine architecture is
+        # registered there alone; the witness it supplies follows.
+        cmake = (UNIT_HELPER + FILTER_HELPER + 'set(TEST_SOURCES test_kernel_one)\n'
+                 + SOURCE_FILTER + UNIT_LOOP)
+        fragment = ('if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND '
+                    'CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")\n'
+                    '    list(APPEND TEST_SOURCES test_kernel_two)\n'
+                    '    pineforge_add_unit_test(test_kernel_two)\n'
+                    'endif()\n')
+        row = '| AB | clock | **no** **Closed:** (`tests/test_kernel_two.cpp`) |'
+        for system, machine, registered in (('linux', 'x86_64', True),
+                                            ('linux', 'aarch64', False),
+                                            ('darwin', 'x86_64', False)):
+            with self.subTest(system=system, machine=machine), \
+                    tree(design(row), cmake=cmake + INCLUDES,
+                         extra={'tests/lanes.d/layout.cmake': fragment}) as made:
+                with mock.patch.object(guard.sys, 'platform', system), \
+                        mock.patch.object(guard.platform, 'machine', return_value=machine):
+                    code, out = made.run()
+                self.assertEqual(code, 0 if registered else 1, out)
+                if not registered:
+                    self.assertIn('no kernel-profile test', out)
 
     def test_filter_rejects_a_changed_producer(self):
         row = '| AB | a feature | **yes** |'
