@@ -49,10 +49,9 @@ lists the row and runs it. pineforge_add_unit_test is replaced by a stand-in
 that registers a row printing a known line, so "the real unit test was
 registered" is read back from CTest rather than inferred.
 
-The marker comes from the checker script, and the other marker-row inputs
-from the EXISTS guards of tests/CMakeLists.txt. The exit-binding control names
-two independent inputs so it can detect a guard on the wrong fixture. All
-private stand-ins must be paths in the removed-file inventory.
+This file writes out no private path. The marker comes from the checker
+script, the other private files from the EXISTS guards of tests/CMakeLists.txt,
+and the file a SKIP line names from the block itself.
 
 The test never skips: without cmake and ctest it fails. Its CTest row passes
 both on the command line, with the generator of the build tree; run by hand,
@@ -325,24 +324,6 @@ class PrivateMarkerRowsRegistration(unittest.TestCase):
         row = probe.rows().get(probe.row)
         self.assertIsNotNone(row, f'{probe.row} is not registered at all')
         return row
-
-    def test_exit_binding_registration_requires_its_own_schedule(self):
-        # This row needs a private include. The unrelated cross-side fixture
-        # must neither enable the target nor keep it from being registered.
-        name = 'test_exit_binding_tapes'
-        schedule = 'tests/fixtures/exit_binding/schedules.inc'
-        cross_side = 'tests/fixtures/cross_side_exit/README.md'
-        for private, want_real in (((schedule,), True), ((cross_side,), False),
-                                   ((), False), ((schedule, cross_side), True)):
-            with self.subTest(private=private):
-                probe = self.probe(name, private=private)
-                row = self.registered(probe)
-                verdict, text = probe.verdict()
-                expected = ((real_unit_test(name), [], 'Passed') if want_real else
-                            (['-E', 'echo', SKIP_LITERAL + schedule], [PRIVATE_LABEL], 'Skipped'))
-                self.assertEqual((row['command'][1:], labels(row), verdict), expected,
-                                 describe(row, verdict, text))
-        self.assertEqual(self.probe(name, (schedule, cross_side), kernel_absent=True).rows(), {})
 
     def test_the_private_fixture_marker_alone_registers_the_real_unit_test(self):
         # The state the earlier registration lost: the private fixtures are in
