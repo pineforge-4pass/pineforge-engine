@@ -4842,14 +4842,24 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
         raw_metadata[str(key)] = number if math.isfinite(number) else str(number)
     if raw_metadata:
         syminfo["syminfo_metadata"] = raw_metadata
+    runner_syminfo = {}
+    if run_kwargs.get("syminfo_type"):
+        runner_syminfo["type"] = str(run_kwargs["syminfo_type"])
+    runner_strings = {}
+    for skey, sval in (run_kwargs.get("syminfo_strings") or {}).items():
+        if sval is None or str(sval) == "":
+            continue
+        runner_strings[str(skey)] = str(sval)
+    if runner_strings:
+        runner_syminfo["strings"] = runner_strings
+    if runner_syminfo:
+        # This marker distinguishes explicit runner settings from a full
+        # instrument record, whose extra fields have always been ignored.
+        syminfo["_pineforge_runner_syminfo"] = runner_syminfo
     if run_kwargs.get("syminfo_timezone"):
         syminfo["timezone"] = run_kwargs["syminfo_timezone"]
     if run_kwargs.get("syminfo_session"):
         syminfo["session"] = run_kwargs["syminfo_session"]
-    if run_kwargs.get("syminfo_type"):
-        syminfo["type"] = run_kwargs["syminfo_type"]
-    for skey, sval in (run_kwargs.get("syminfo_strings") or {}).items():
-        syminfo[skey] = sval
     if run_kwargs.get("syminfo_mintick") is not None:
         syminfo["mintick"] = run_kwargs["syminfo_mintick"]
     if run_kwargs.get("syminfo_pointvalue") is not None:
@@ -5084,6 +5094,9 @@ def _main_run(args, resources) -> int:
     # The signal-bar start, when the window opens earlier on TradingView's
     # first computed bar: the run falls back to it (_entered_before_tv).
     signal_start_ms: int | None = None
+    # Whether this run declares the tape's first computed bar to the engine
+    # as the series origin (_series_origin_plan): only with a tape in use.
+    origin_declared = False
     if args.no_trim_output:
         pass
     elif args.emit_window_ohlcv is not None:
@@ -5154,6 +5167,7 @@ def _main_run(args, resources) -> int:
         origin_plan = _series_origin_plan(
             run_kwargs.get("syminfo_metadata"), tv_first_bar, feed_ts)
         run_kwargs["syminfo_metadata"] = origin_plan.metadata
+        origin_declared = origin_plan.declared
         print(f"  series-origin: {origin_plan.detail}")
     trade_start_ms = None
     if emit_window is not None and not args.allow_trading_before_window:
@@ -5207,9 +5221,15 @@ def _main_run(args, resources) -> int:
                 "error: --runner docker does not support --dump-book; "
                 "use --runner ctypes with a freshly built strategy library.")
         strat = None
-        if os.environ.get(MAGNIFIER_FEED_ENV):
-            print("note: --runner docker does not apply a declared bar magnifier; "
+        # Retire the origin/calendar notices once a published image carries
+        # the new reader. A declared magnifier still needs the ctypes runner.
+        if os.environ.get(MAGNIFIER_FEED_ENV) or os.environ.get(SESSION_CALENDAR_ENV):
+            print("note: --runner docker does not apply a declared bar magnifier or session calendar; "
                   "use --runner ctypes", file=sys.stderr)
+        if origin_declared:
+            print("note: --runner docker does not apply the declared series origin (the image "
+                  "takes it only with the request.security warm-up); use --runner ctypes",
+                  file=sys.stderr)
 
         def run_engine(start_ms):
             return _run_via_docker(strategy_dir, ohlcv_path, params, run_kwargs,

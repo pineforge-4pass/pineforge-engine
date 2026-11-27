@@ -196,7 +196,7 @@ import tempfile
 import time
 import traceback
 import types
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from datetime import datetime, timezone
 from itertools import chain, repeat
 from pathlib import Path
@@ -3455,8 +3455,8 @@ def apply_syminfo(lib, strat, syminfo_path):
     first bar open. Absent/null applies nothing; malformed values are
     syminfo_unreadable{reason: value_type}.
     The runner's syminfo_metadata object carries other numeric members in
-    setter order, separate from the flat catalog fields. Type and string
-    members use their own setters. These additional exports are optional.
+    setter order, separate from the flat catalog fields. Only overrides in
+    _pineforge_runner_syminfo use the optional type and string setters.
     Returns the applied lot/origin and ordered raw metadata for
     applied_runtime["syminfo"], or {} when none was applied."""
     def unreadable(text, reason):
@@ -3519,23 +3519,23 @@ def apply_syminfo(lib, strat, syminfo_path):
         meta = setter("strategy_set_syminfo_metadata", "series_origin_ms")
         calls.append((meta, b"series_origin_ms", origin))
         applied["series_origin_ms"] = origin
-    # String facts affect e.g. the chart currency used for broker FX. Older
-    # libraries without these exports continue without the corresponding facts.
-    for key in ("type", "ticker", "tickerid", "currency", "basecurrency",
-                "description", "volumetype"):
-        member = si.get(key)
-        if not isinstance(member, str) or not member:
-            continue
-        try:
-            value = member.encode()
-        except UnicodeEncodeError:
-            continue
-        if key == "type":
-            if hasattr(lib, "strategy_set_syminfo_type"):
-                calls.append((lib.strategy_set_syminfo_type, value))
-        elif hasattr(lib, "strategy_set_syminfo_string"):
-            calls.append((lib.strategy_set_syminfo_string, key.encode(), value))
+    # Unmarked catalog strings remain descriptive. Only named overrides use setters.
+    runner = si.get("_pineforge_runner_syminfo")
+    if isinstance(runner, dict):
+        member = runner.get("type")
+        if member and hasattr(lib, "strategy_set_syminfo_type"):
+            with suppress(UnicodeEncodeError):
+                calls.append((lib.strategy_set_syminfo_type, str(member).encode()))
+        strings = runner.get("strings")
+        if isinstance(strings, dict) and hasattr(lib, "strategy_set_syminfo_string"):
+            for key, member in strings.items():
+                if member is None or str(member) == "":
+                    continue
+                with suppress(UnicodeEncodeError):
+                    calls.append((lib.strategy_set_syminfo_string,
+                                  key.encode(), str(member).encode()))
 
+    # Even raw numbers named "type" or "currency" go to the numeric setter.
     raw = si.get("syminfo_metadata")
     meta = getattr(lib, "strategy_set_syminfo_metadata", None)
     if isinstance(raw, dict) and meta is not None:

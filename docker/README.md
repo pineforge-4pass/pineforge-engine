@@ -519,16 +519,16 @@ An invalid value is refused like `--report-sink-fd` (entrypoint exit 4), and the
 instrument's metadata, either a flat object or `{"syminfo": {...}}`; an object
 with extra keys (for example a full instrument record) can be passed as is, keys
 other than those the harness recognizes are ignored. The harness prepares
-the setter arguments before applying them. The flat document accepts lot
-metadata, `series_origin_ms`, `mintick`, `pointvalue`, `timezone`, `session`,
-`type`, and the string members `ticker`, `tickerid`, `currency`, `basecurrency`,
-`description` and `volumetype`.
+the setter arguments before applying them. The flat catalog fields are lot
+metadata, `series_origin_ms`, `mintick`, `pointvalue`, `timezone` and `session`.
+A full instrument record may also contain `type`, `ticker`, `tickerid`, `currency`,
+`basecurrency`, `description` and `volumetype`; these catalog fields are ignored.
 
 `scripts/run_strategy.py --runner docker` sends the remaining by-name numeric
 settings in a separate `syminfo_metadata` object. For example:
 
 ```json
-{"qty_step":0.25,"currency":"USD","syminfo_metadata":{"account_currency_fx":1.25,"series_origin_ms":1704067200000,"chart_ema_na_warmup":0}}
+{"qty_step":0.25,"_pineforge_runner_syminfo":{"strings":{"currency":"USD"}},"syminfo_metadata":{"account_currency_fx":1.25,"series_origin_ms":1704067200000,"chart_ema_na_warmup":0}}
 ```
 
 The image passes each convertible value to `strategy_set_syminfo_metadata`
@@ -536,9 +536,11 @@ in object order, like ctypes. The example supplies a scalar FX rate, then
 declares an origin, then turns chart EMA warmup off. The same transport works
 for fundamental fields and indexed calendar days. An omitted object adds no
 settings. Null and nonnumeric values are skipped; zero is a setting.
-Type and string members use `strategy_set_syminfo_type` and
-`strategy_set_syminfo_string`. Libraries without these optional exports
-continue without those fields. Earlier image readers ignore the new object;
+The runner puts explicitly requested type and string overrides inside
+`_pineforge_runner_syminfo` (`type` and `strings`, respectively).
+They use `strategy_set_syminfo_type` and `strategy_set_syminfo_string`.
+Libraries without these optional exports continue without those fields.
+Earlier published image readers ignore the new objects;
 use an image built with the matching harness for both runners to agree.
 
 - `qty_step` declares the quantity grid, so order quantities are floored to

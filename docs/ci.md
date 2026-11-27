@@ -145,11 +145,11 @@ python3 -m pip install --require-hashes --only-binary :all: -r scripts/requireme
 python3 scripts/ci_preflight.py
 ```
 
-The pip line installs the pytest CI pins, with its dependencies, each by
-version and wheel hash, into a virtual environment: Homebrew's and Debian's
-Python refuse a system-wide install (PEP 668), and `.venv/` is ignored. The
-`run-json-harness-tests` stage runs every `docker/run_json_*_test.py` under it
-and fails, never skips, without it.
+The pip line installs the pytest CI pins, with its dependencies, each by version and wheel hash, into a virtual environment:
+Homebrew's and Debian's Python refuse a system-wide install (PEP 668), and `.venv/` is ignored.
+The `run-json-harness-tests` stage runs every `docker/run_json_*_test.py` under it and fails, never skips, without it.
+It also runs `tests/test_runner_symbol_metadata_image.py`. For that test, set `PINEFORGE_METADATA_TEST_IMAGE` to the immutable local image ID
+built with this checkout's reader. Missing Docker or a missing image is reported as a skip; a mismatch between completed runner results fails the row.
 
 Actionlint only accepts declared custom self-hosted runner labels; preflight
 checks the declarations in `.github/actionlint.yaml`, which declare an empty self-hosted label list for the hosted workflows. Before a workflow moves onto a `gke-*` label, add its ref to `.github/runner-group-allowlist.txt` (group 14, currently empty because no workflow uses one); protected `gkp-*` refs belong in `.github/runner-group-15-allowlist.txt` (group 15, currently empty). Both mirrors are binding; a maintainer must confirm the corresponding live org workflow/ref entries before enabling the routes.
