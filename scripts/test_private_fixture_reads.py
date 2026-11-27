@@ -24,6 +24,7 @@ and none is traced with made-up values.
 from __future__ import annotations
 
 import argparse
+import functools
 import importlib.util
 import os
 import re
@@ -223,13 +224,45 @@ def build_tree_option(name: str) -> str:
     return '--' + name.lower().replace('_', '-')
 
 
-def expanded_argument(token: str, row: str, values: dict) -> str:
-    """One registration argument with its build-tree names filled in."""
+@functools.lru_cache(maxsize=None)
+def kernel_sweep():
+    """scripts/check_kernel_python_private_reads.py as a module, loaded from
+    its own file. The trace controls take the exempt rows from its table and
+    its row parse, and row_argv reads a registration with its tokenizer and
+    its pattern for a reference, so neither has a second copy here."""
+    spec = importlib.util.spec_from_file_location(
+        'check_kernel_python_private_reads', KERNEL_SWEEP)
+    kernel = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(kernel)
+    return kernel
+
+
+def expanded_argument(word, row: str, values: dict) -> str:
+    """One registration argument with its build-tree names filled in.
+
+    `word` is the argument as the kernel sweep's tokenizer read it: `text`
+    is the argument without its quotes and with its escapes decoded, `raw`
+    the registration's own spelling of it (empty for a bracket argument).
+    """
+    token = word.text
+    # A "$" is read only in an argument the registration spells the way its
+    # text reads, bare or between quotes. Spelled with a backslash escape or
+    # as a bracket argument, the text is not what the registration wrote, and
+    # what CMake makes of a "$" there is not worked out here: the argument is
+    # refused under its own spelling, never filled in.
+    if '$' in token and word.raw not in (token, '"' + token + '"'):
+        raise AssertionError(
+            f'{row}: unexpanded registration argument '
+            f'{(word.raw or token)!r}: it holds a "$" and is spelled with a '
+            'backslash escape or as a bracket argument, which is not read')
     # The odd pieces are the names BUILD_TREE_REFERENCE matched, the even
     # ones the argument's own text around them. Only that text is searched
-    # for another ${...}: a value is used as it is, never read again.
+    # for another reference, with the sweep's own pattern for one CMake has
+    # yet to evaluate (${, $ENV{, $CACHE{ or the $< of a generator
+    # expression): a value is used as it is, never read again.
     pieces = BUILD_TREE_REFERENCE.split(token)
-    if any('${' in text for text in pieces[0::2]):
+    unexpanded = kernel_sweep().CMAKE_UNEXPANDED_REF
+    if any(unexpanded.search(text) for text in pieces[0::2]):
         raise AssertionError(
             f'{row}: unexpanded registration argument {token!r}: only '
             + ', '.join(BUILD_TREE_NAMES) + ' are filled in')
@@ -250,21 +283,22 @@ def expanded_argument(token: str, row: str, values: dict) -> str:
 def row_argv(statement: str, row: str, values=None) -> tuple:
     """The script arguments from this row's own registration.
 
-    The registration text is split into arguments first and each argument is
-    expanded on its own, so a value with a space stays inside its one
-    argument, as it does when ctest runs the row. `values` maps a name of
-    BUILD_TREE_NAMES to the build tree's value; no other name is expanded,
-    whatever `values` holds.
+    The registration is read with the kernel sweep's own tokenizer: a quoted
+    argument is one argument, the spaces of its own text included. Each
+    argument is then expanded on its own, so a value with a space stays
+    inside its one argument, as it does when ctest runs the row. `values`
+    maps a name of BUILD_TREE_NAMES to the build tree's value; no other name
+    is expanded, whatever `values` holds.
     """
-    match = re.search(r'[\w${}/.-]+\.py\b', statement)
-    if match is None:
+    # The statement is add_test(<body>): the body is tokenized the way the
+    # sweep tokenizes it, and the arguments are the words behind the script.
+    fields = list(kernel_sweep().words(statement[len('add_test('):-1], 1))
+    script = next((index for index, word in enumerate(fields)
+                   if word.text.endswith('.py')), None)
+    if script is None:
         raise AssertionError(f'{row}: the registration names no .py script')
-    argv = []
-    for token in statement[match.end():].split():
-        token = token.rstrip(')').strip('"')
-        if token:
-            argv.append(expanded_argument(token, row, values or {}))
-    return tuple(argv)
+    return tuple(expanded_argument(word, row, values or {})
+                 for word in fields[script + 1:])
 
 
 def run_sweep(root: Path) -> subprocess.CompletedProcess:
@@ -1038,10 +1072,7 @@ class ExemptRowTraceControls(unittest.TestCase):
 
     def _exempt_scripts(self) -> dict:
         """row -> (its script, its own ctest registration)."""
-        spec = importlib.util.spec_from_file_location(
-            'check_kernel_python_private_reads', KERNEL_SWEEP)
-        kernel = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(kernel)
+        kernel = kernel_sweep()
         self.assertTrue(kernel.EXEMPT, 'no exempt row: the control is vacuous')
         scripts = {}
         for source, cmd in kernel.registration_statements(REPO / 'tests' / 'CMakeLists.txt'):
@@ -1186,16 +1217,23 @@ class ExemptRowTraceControls(unittest.TestCase):
         self.assertIn('trace: opens under the real private trees: 0',
                       green.stdout)
 
-    # control 16: a row registered with CMake values is traced with them.
+    # control 16: the row registered with CMake values is traced with them,
+    # and its exemption keeps its subject.
     # tests/lanes.d/private-marker-rows-registration.cmake passes its script
     # five values of the build tree (cmake, ctest, the generator, the make
     # program and a work directory), so that row's exemption holds only while
-    # the trace can run it the way the registration does: the row is on the
-    # trace's list, its registration does name build-tree values, row_argv
-    # fills in this build tree's, and the script then runs to its own end
-    # with exit 0 and no open under the real tests/fixtures/ or tests/oracle/.
-    # The trace sees the script's own process; cmake and ctest, its only
-    # children, are native programs no audit hook follows.
+    # the trace can run it the way the registration does. Control 12 runs
+    # that trace, once, as it does for every exempt row. This control checks
+    # what makes it the trace meant here: the row is on the trace's list, and
+    # its registration does name build-tree values, which row_argv fills in
+    # there. It also ties the exemption to what earned it: the script's text
+    # still names both private paths it writes as stand-ins in its scratch
+    # trees. A script that names neither gives the sweep nothing to exempt,
+    # and the entry would go on covering whatever the script names later;
+    # this control fails as soon as one of the two is gone.
+    # Each path is written in two parts here, as tests/test_kernel_python_
+    # population.py writes its own, so that the sweep reads no further
+    # private path in this file on account of the two it only looks for.
     def test_a_row_registered_with_build_tree_values_is_traced_with_them(self):
         row = 'test_private_marker_rows_registration'
         scripts = self._exempt_scripts()
@@ -1205,14 +1243,16 @@ class ExemptRowTraceControls(unittest.TestCase):
         self.assertTrue(BUILD_TREE_REFERENCE.search(statement),
                         f'{row}: the registration names no build-tree value, '
                         'so this control has lost its subject')
-        result = run_under_trace(REPO, self.tmp, script,
-                                 row_argv(statement, row, BUILD_TREE_VALUES))
-        self.assertTraceCompleted(result, row)
-        self.assertIn('trace: the traced script exited 0',
-                      result.stdout, result.stdout + result.stderr)
-        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertIn('trace: opens under the real private trees: 0',
-                      result.stdout)
+        text = script.read_text()
+        for payload in ('tests/' + 'fixtures/exit_binding/schedules.inc',
+                        'tests/' + 'fixtures/cross_side_exit/README.md'):
+            # assertTrue, not assertIn: a failure must not print the script.
+            self.assertTrue(
+                payload in text,
+                f'{row}: {script} no longer names {payload}. The row was '
+                'exempted as a script that names both stand-in paths: read '
+                'its entry in scripts/check_kernel_python_private_reads.py '
+                'against the script again, or take the row off EXEMPT')
 
 
 if __name__ == '__main__':
