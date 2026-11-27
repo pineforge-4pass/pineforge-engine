@@ -296,8 +296,8 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # counted with ctest -N on the integrated tree (kernel profile, 296 registered):
 #   +1 test_run_strategy_magnifier (a script declaring use_bar_magnifier = true
 #      runs magnified over the runner-named finer feed)
-#   +1 test_run_strategy_mincontract (syminfo.mincontract is the lane
-#      template's quantity step)
+#   +1 test_run_strategy_mincontract (the lane template's quantity step
+#      supplies syminfo.mincontract when the probe does not declare it)
 # Both register in release too. 296 registered, 295 run: the WebSocket row
 # still skips on a system libcurl.
 # 296 run = those 295 plus lane W11-ENG-TIME-COLOR's source-free row, counted
@@ -808,8 +808,8 @@ PRIVATE_FIXTURE_SKIP_LITERAL = 'SKIP private fixtures not present: '
 # +28 public rows: verifier 8 + preflight 8 + command-after 8 + report 4; 910 + 28 = 938, 337 + 28 = 365.
 # Scratch attribution: aggregate stays one row; nine individual cases become twelve (+3).
 # Both fixture worlds gain three public Linux rows; pinned populations stay fixed.
-# expectation corrected: Release 943/307 -> 945/309 (full/pinned), because
-# both new source-layer rows run with tapes and skip without them.
+# expectation corrected: Release 943/307 -> 945/309 (full/pinned), for
+# test_entry_runner_explicit and test_entry_runner_all_equity (private tapes).
 RELEASE_MIN_TESTS = 945
 KERNEL_MIN_TESTS = 368
 PRIVATE_FIXTURE_PROFILE_FLOORS = {
