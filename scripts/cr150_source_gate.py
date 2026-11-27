@@ -9,8 +9,10 @@ the index with ``ci/cr150-source-bounds.yaml``.
 
 Exit 0: no finding. Exit 1: a finding (an unlisted site, a stale entry, a
 bounded entry without supported size-guard enforcement, a ceiling or pin drift,
-a note citing a line that does not hold what the note names, a number of
-UNCHECKED note citations other than the one the manifest pins) or,
+an entry whose ``line:`` field is not the line of its first live site, a note
+or a manifest comment citing a line that does not hold what its sentence
+names, a number of UNCHECKED note or comment citations other than the one the
+manifest pins) or,
 with ``--strict``, any OPEN entry left. Exit 2: the gate cannot judge (missing
 or malformed manifest/site inventory, an invalid fixed input or bound syntax,
 zero files, zero sites, a broken pattern set). A bound naming a growth axis is
@@ -485,9 +487,11 @@ class Manifest:
         ceilings = data['ceilings']
         if not isinstance(ceilings, dict):
             raise GateError('ceilings must be a mapping')
-        # cited_unchecked pins the number of UNCHECKED note citations: the
-        # count must equal it. A manifest that does not pin it allows none.
-        _need(ceilings, ('unreviewed', 'pending-flat-memory'), 'ceilings', ('cited_unchecked',))
+        # cited_unchecked pins the number of UNCHECKED note citations and
+        # comment_unchecked that of UNCHECKED comment citations: each count
+        # must equal its pin. A manifest that does not pin one allows none.
+        _need(ceilings, ('unreviewed', 'pending-flat-memory'), 'ceilings',
+              ('cited_unchecked', 'comment_unchecked'))
         for key, value in ceilings.items():
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 raise GateError(f'ceilings.{key} must be a non-negative integer')
@@ -1222,7 +1226,7 @@ def note_sentences(note: str) -> list[str]:
 
 
 def note_citations(note: str):
-    """Yield (label, path, first, last, sentence, as_site) for every cited line.
+    """Yield (label, path, first, last, sentence, as_site, at) for every cited line.
 
     ``label`` is the citation as the note writes it, one per element of a
     list. ``path`` is None for ``line N`` and for a bare ``:N``, unless the
@@ -1232,8 +1236,10 @@ def note_citations(note: str):
     (``note_sentences``). ``as_site`` is true when the word "site" introduces
     the citation or the citation joined before it, and for every citation
     that follows the word "sites" in its sentence: the name this inventory
-    gives to what an entry records.
+    gives to what an entry records. ``at`` is the offset in ``note`` at which
+    the citation is written, the same for every element of a list.
     """
+    base = 0  # the sentences are consecutive slices of the note
     for sentence in note_sentences(note):
         sites_named = False
         previous = None  # (end, path, as_site) of the citation before this one
@@ -1258,13 +1264,22 @@ def note_citations(note: str):
                     label = f'{match.group("word")} {element}'
                 else:
                     label = f':{element}'
-                yield label, path, int(first), int(last or first), sentence, as_site
+                yield (label, path, int(first), int(last or first), sentence, as_site,
+                       base + match.start())
+        base += len(sentence)
+
+
+def stray_matches(note: str) -> list[re.Match]:
+    """``:N`` text that no citation form reads (a clock time is not one), as
+    matches on the note with its citations blanked: each offset is the one
+    the text has in the note."""
+    blank = CITE_RE.sub(lambda match: ' ' * len(match.group(0)), note)
+    return list(re.finditer(r'(?<!\d):\d+', blank))
 
 
 def note_strays(note: str) -> list[str]:
-    """``:N`` text that no citation form reads (a clock time is not one)."""
-    blank = CITE_RE.sub(lambda match: ' ' * len(match.group(0)), note)
-    return [match.group(0) for match in re.finditer(r'(?<!\d):\d+', blank)]
+    """The text of every ``stray_matches`` hit."""
+    return [match.group(0) for match in stray_matches(note)]
 
 
 def note_constructs(sentence: str) -> set[str]:
@@ -1323,8 +1338,53 @@ def construct_end(code: list[str], first: int) -> int | None:
     return None
 
 
-def check_citations(manifest: 'Manifest', by_key: dict, texts: dict[str, str], root: Path):
-    """Check every line an entry note cites.
+def comment_blocks(text: str) -> list[tuple[str, list[int], list[int]]]:
+    """The comments of the manifest text, as blocks of prose.
+
+    A comment is what the manifest parser drops from a line
+    (``_strip_comment``). Consecutive lines that hold a comment and nothing
+    else form one block, read as one text with a space for each line break,
+    so a sentence written over several comment lines is one sentence. A
+    comment with no words, a line without a comment and a line of data each
+    end the block before them; a comment that follows data on its line is a
+    block of its own.
+
+    Returns one (text, starts, numbers) per block: ``starts[i]`` is the offset
+    in ``text`` at which the comment of manifest line ``numbers[i]`` begins.
+    """
+    blocks: list[tuple[str, list[int], list[int]]] = []
+    parts: list[str] = []
+    numbers: list[int] = []
+
+    def close() -> None:
+        if parts:
+            starts, offset = [], 0
+            for part in parts:
+                starts.append(offset)
+                offset += len(part) + 1
+            blocks.append((' '.join(parts), starts, list(numbers)))
+            parts.clear()
+            numbers.clear()
+
+    for number, raw in enumerate(text.split('\n'), 1):
+        data = _strip_comment(raw)
+        words = raw[len(data) + 1:].strip()
+        if not words:
+            close()
+            continue
+        if data.strip():
+            close()
+        parts.append(words)
+        numbers.append(number)
+        if data.strip():
+            close()
+    close()
+    return blocks
+
+
+def check_citations(manifest: 'Manifest', by_key: dict, texts: dict[str, str], root: Path,
+                    comments: list | tuple = (), manifest_rel: str = MANIFEST_REL):
+    """Check every line an entry note or a manifest comment cites.
 
     A bare ``:N`` or ``line N`` is a line of the entry's own file; ``path:N``
     is a line of that path, written from the root, and so is a bare ``:M``
@@ -1354,7 +1414,19 @@ def check_citations(manifest: 'Manifest', by_key: dict, texts: dict[str, str], r
     under the root, or a line past its end, is a finding. Read-only: no file,
     count, id or bound changes.
 
-    Returns (findings, entry ids with a finding, unchecked lines, cited, held).
+    A manifest comment (``comment_blocks``) is judged by the same rules, as a
+    note of no entry. It has no file of its own, so a line it cites is written
+    with its path (``path:N``, or a bare ``:M`` joined to one): a bare ``:N``
+    or ``line N`` that continues no path is a finding. It records no site, so
+    a cited line holds only on an identifier its sentence spells as code, and
+    a citation the comment calls a site never holds. Each finding names the
+    manifest line on which the citation is written. Comment citations are
+    counted apart from note citations, and the caller pins the UNCHECKED ones
+    among them with a ceiling of their own.
+
+    Returns (findings, entry ids with a finding, unchecked lines, cited, held)
+    for the notes, then (findings, unchecked lines, cited, held) for the
+    comments as a sixth member.
     """
     cache: dict[str, list[str] | None] = {}
     code_cache: dict[str, list[str] | None] = {}
@@ -1392,6 +1464,57 @@ def check_citations(manifest: 'Manifest', by_key: dict, texts: dict[str, str], r
         text = ' '.join(row.split())
         return text[:137] + '...' if len(text) > 140 else text
 
+    def judge(who: str, kind: str, label: str, rel: str, first: int, last: int,
+              sentence: str, as_site: bool, site_lines: set[int], expected: str):
+        """One citation of the note or comment that ``who`` names; ``kind`` is
+        the word for it. ``site_lines`` are the lines that are sites for this
+        citation (those of the entry when ``rel`` is its own file, none
+        otherwise) and ``expected`` says what a line that does not hold is
+        not. Returns ('held', None), ('finding', (file, line, message)) or
+        ('unchecked', message)."""
+        rows = rows_of(rel)
+        if rows is None:
+            return 'finding', (rel, first, f'{who} cites {label}: {rel!r} is not '
+                               'a file under the scanned root (a cited path is written from '
+                               'the root)')
+        if not 1 <= first <= last <= len(rows):
+            return 'finding', (rel, first, f'{who} cites {label}: {rel} has '
+                               f'{len(rows)} line(s)')
+        named = note_constructs(sentence)
+        # A claimed site must be a site of the entry: a construct the
+        # sentence spells does not stand in for it.
+        spelled = set() if as_site else named
+        # A range is judged at its two ends, a single line at itself.
+        missing = [line for line in ((first,) if first == last else (first, last))
+                   if line not in site_lines
+                   and not spelled & set(IDENT_RE.findall(rows[line - 1]))]
+        if missing == [last] and first != last:
+            # The first line holds. The last one need not when it is where
+            # the block or statement that begins on the first line ends.
+            code = code_of(rel)
+            if code is not None and construct_end(code, first) == last:
+                missing = []
+        if not missing:
+            return 'held', None
+        if first == last:
+            holds = f'{rel}:{first} holds "{shown(rows[first - 1])}": {expected}'
+        else:
+            which = (f'line {missing[0]} does not' if len(missing) == 1
+                     else 'neither line does')
+            holds = (f'{rel}:{first}-{last} begins "{shown(rows[first - 1])}" and ends '
+                     f'"{shown(rows[last - 1])}": a range holds only when its first line '
+                     'does and its last line either does or ends the block or statement '
+                     f'that begins on the first, and {which}: {expected}')
+        if as_site:
+            return 'finding', (rel, first, f'{who} cites {label}: {holds}, '
+                               f'and the {kind} calls it a site')
+        if named:
+            return 'finding', (rel, first, f'{who} cites {label}: {holds} '
+                               f'and none of the constructs the {kind} names in '
+                               f'that sentence ({", ".join(sorted(named))})')
+        return 'unchecked', (f'{who} cites {label}: {holds}, and '
+                             'the sentence spells no construct to look for')
+
     findings: list[tuple[str, int, str]] = []
     failed: set[str] = set()
     unchecked: list[str] = []
@@ -1405,61 +1528,49 @@ def check_citations(manifest: 'Manifest', by_key: dict, texts: dict[str, str], r
         for stray in note_strays(note):
             cited += 1
             unchecked.append(f'entry {eid}: note has {stray!r} in a form no citation rule reads')
-        for label, path, first, last, sentence, as_site in note_citations(note):
+        for label, path, first, last, sentence, as_site, _ in note_citations(note):
             cited += 1
             rel = path or own
-            rows = rows_of(rel)
-            if rows is None:
-                findings.append((rel, first, f'entry {eid}: note cites {label}: {rel!r} is not '
-                                 'a file under the scanned root (a cited path is written from '
-                                 'the root)'))
-                failed.add(eid)
-                continue
-            if not 1 <= first <= last <= len(rows):
-                findings.append((rel, first, f'entry {eid}: note cites {label}: {rel} has '
-                                 f'{len(rows)} line(s)'))
-                failed.add(eid)
-                continue
-            named = note_constructs(sentence)
-            # A claimed site must be a site of the entry: a construct the
-            # sentence spells does not stand in for it.
-            spelled = set() if as_site else named
-            # A range is judged at its two ends, a single line at itself.
-            missing = [line for line in ((first,) if first == last else (first, last))
-                       if not (rel == own and line in site_lines)
-                       and not spelled & set(IDENT_RE.findall(rows[line - 1]))]
-            if missing == [last] and first != last:
-                # The first line holds. The last one need not when it is where
-                # the block or statement that begins on the first line ends.
-                code = code_of(rel)
-                if code is not None and construct_end(code, first) == last:
-                    missing = []
-            if not missing:
+            verdict, detail = judge(
+                f'entry {eid}: note', 'note', label, rel, first, last, sentence, as_site,
+                site_lines if rel == own else set(),
+                f'not a site of the entry ({entry["symbol"]!r})' if rel == own
+                else 'not in the entry\'s own file')
+            if verdict == 'held':
                 held += 1
+            elif verdict == 'finding':
+                findings.append(detail)
+                failed.add(eid)
+            else:
+                unchecked.append(detail)
+    # A comment is a note of no entry: no file of its own, no site.
+    comment_findings: list[tuple[str, int, str]] = []
+    comment_unchecked: list[str] = []
+    comment_cited = comment_held = 0
+    for text, starts, numbers in comments:
+        for stray in stray_matches(text):
+            comment_cited += 1
+            written = numbers[bisect_right(starts, stray.start()) - 1]
+            comment_unchecked.append(f'manifest line {written}: comment has '
+                                     f'{stray.group(0)!r} in a form no citation rule reads')
+        for label, path, first, last, sentence, as_site, at in note_citations(text):
+            comment_cited += 1
+            written = numbers[bisect_right(starts, at) - 1]
+            who = f'manifest line {written}: comment'
+            if path is None:
+                comment_findings.append((
+                    manifest_rel, written,
+                    f'{who} cites {label}: a comment has no file of its own, so a line it '
+                    'cites is written with its path (path:N)'))
                 continue
-            expected = (f'not a site of the entry ({entry["symbol"]!r})' if rel == own
-                        else 'not in the entry\'s own file')
-            if first == last:
-                holds = f'{rel}:{first} holds "{shown(rows[first - 1])}": {expected}'
+            verdict, detail = judge(who, 'comment', label, path, first, last, sentence,
+                                    as_site, set(), 'a comment records no site')
+            if verdict == 'held':
+                comment_held += 1
+            elif verdict == 'finding':
+                comment_findings.append(detail)
             else:
-                which = (f'line {missing[0]} does not' if len(missing) == 1
-                         else 'neither line does')
-                holds = (f'{rel}:{first}-{last} begins "{shown(rows[first - 1])}" and ends '
-                         f'"{shown(rows[last - 1])}": a range holds only when its first line '
-                         'does and its last line either does or ends the block or statement '
-                         f'that begins on the first, and {which}: {expected}')
-            if as_site:
-                findings.append((rel, first, f'entry {eid}: note cites {label}: {holds}, '
-                                 'and the note calls it a site'))
-                failed.add(eid)
-            elif named:
-                findings.append((rel, first, f'entry {eid}: note cites {label}: {holds} '
-                                 f'and none of the constructs the note names in '
-                                 f'that sentence ({", ".join(sorted(named))})'))
-                failed.add(eid)
-            else:
-                unchecked.append(f'entry {eid}: note cites {label}: {holds}, and '
-                                 'the sentence spells no construct to look for')
+                comment_unchecked.append(detail)
     others = [(f'emitter template {template.get("id")}', template.get('note'))
               for template in manifest.templates]
     others += [(f'fixed input {name}', item.get('note')) for name, item in manifest.fixed.items()]
@@ -1470,7 +1581,8 @@ def check_citations(manifest: 'Manifest', by_key: dict, texts: dict[str, str], r
             cited += 1
             unchecked.append(f'{owner}: note cites {label}: only an entry note is resolved '
                              'against the tree')
-    return findings, failed, unchecked, cited, held
+    return (findings, failed, unchecked, cited, held,
+            (comment_findings, comment_unchecked, comment_cited, comment_held))
 
 
 # --------------------------------------------------------------------------
@@ -1557,37 +1669,74 @@ def run(root: Path, manifest_path: Path, strict: bool, json_out: Path | None):
                              'review the scope/type/multiplicity change'))
             if entry:
                 entry_findings.add(entry['id'])
+    # An entry's line: field is the line of its first live site: the number
+    # --emit-seed writes and --json reports as live_lines[0]. A field the scan
+    # does not give back is a finding. An entry with no live site has no line
+    # to compare its field with: the field is counted as not compared, never
+    # as holding, and the entry is a finding of its own (stale).
+    line_fields = line_holds = line_differs = line_not_compared = 0
     for entry in manifest.entries:
+        declared = entry.get('line')
+        if declared is not None:
+            line_fields += 1
         if entry['id'] not in matched:
+            not_compared = ''
+            if declared is not None:
+                line_not_compared += 1
+                not_compared = (f'; its line: {declared!r} is not compared, the entry has no '
+                                'live site')
             findings.append((entry['file'], int(entry.get('line') or 0),
                              f'entry {entry["id"]} ({entry["symbol"]!r}) matches no site: stale; '
-                             'remove or update it'))
-    cite_findings, cite_failed, unchecked, cited, cited_holds = check_citations(
-        manifest, by_key, texts, root)
-    findings.extend(cite_findings)
-    entry_findings.update(cite_failed)
+                             f'remove or update it{not_compared}'))
+            continue
+        if declared is None:
+            continue
+        first_live = min(site.line for site in by_key[entry['file'], entry['symbol']])
+        if isinstance(declared, int) and not isinstance(declared, bool) and declared == first_live:
+            line_holds += 1
+            continue
+        line_differs += 1
+        findings.append((entry['file'], first_live,
+                         f'entry {entry["id"]}: line: {declared!r} is not the first live site '
+                         f'of the entry ({entry["symbol"]!r}), which is line {first_live}: '
+                         f'write line: {first_live}, the number --emit-seed gives'))
+        entry_findings.add(entry['id'])
     manifest_rel = (str(manifest_path.relative_to(root)) if manifest_path.is_relative_to(root)
                     else str(manifest_path))
-    # An UNCHECKED citation is not a finding, so a reworded sentence could turn
-    # a failing citation into one. The reviewed number is pinned exactly: one
-    # more is refused, and so is one fewer until the pin follows it down, or
-    # the room left under it would take a later UNCHECKED citation unseen.
-    unchecked_ceiling = manifest.ceilings.get('cited_unchecked', 0)
-    if len(unchecked) > unchecked_ceiling:
-        unpinned = ('' if 'cited_unchecked' in manifest.ceilings else
-                    ' (the manifest pins no ceilings.cited_unchecked, so none is allowed)')
-        findings.append((manifest_rel, 0,
-                         f'UNCHECKED note citations {len(unchecked)} exceed the manifest '
-                         f'ceiling {unchecked_ceiling}{unpinned}: name what the cited line '
-                         'holds so the citation is checked, or raise ceilings.cited_unchecked '
-                         'in a reviewed change'))
-    elif len(unchecked) < unchecked_ceiling:
-        findings.append((manifest_rel, 0,
-                         f'UNCHECKED note citations {len(unchecked)} are below the manifest '
-                         f'ceiling {unchecked_ceiling}: lower ceilings.cited_unchecked to '
-                         f'{len(unchecked)} in the same change; the number is pinned exactly, '
-                         'so that the room under it cannot take a later UNCHECKED citation '
-                         'unseen'))
+    (cite_findings, cite_failed, unchecked, cited, cited_holds,
+     (comment_findings, comment_unchecked, comment_cited, comment_holds)) = check_citations(
+        manifest, by_key, texts, root, comment_blocks(manifest_path.read_text()), manifest_rel)
+    findings.extend(cite_findings)
+    findings.extend(comment_findings)
+    entry_findings.update(cite_failed)
+
+    def pinned(kind: str, key: str, count: int) -> int:
+        """Hold the number of UNCHECKED citations of one kind to its manifest
+        ceiling; returns that ceiling. An UNCHECKED citation is not a finding,
+        so a reworded sentence could turn a failing citation into one. The
+        reviewed number is pinned exactly: one more is refused, and so is one
+        fewer until the pin follows it down, or the room left under it would
+        take a later UNCHECKED citation unseen."""
+        ceiling = manifest.ceilings.get(key, 0)
+        if count > ceiling:
+            unpinned = ('' if key in manifest.ceilings else
+                        f' (the manifest pins no ceilings.{key}, so none is allowed)')
+            findings.append((manifest_rel, 0,
+                             f'UNCHECKED {kind} citations {count} exceed the manifest '
+                             f'ceiling {ceiling}{unpinned}: name what the cited line '
+                             f'holds so the citation is checked, or raise ceilings.{key} '
+                             'in a reviewed change'))
+        elif count < ceiling:
+            findings.append((manifest_rel, 0,
+                             f'UNCHECKED {kind} citations {count} are below the manifest '
+                             f'ceiling {ceiling}: lower ceilings.{key} to '
+                             f'{count} in the same change; the number is pinned exactly, '
+                             'so that the room under it cannot take a later UNCHECKED citation '
+                             'unseen'))
+        return ceiling
+
+    unchecked_ceiling = pinned('note', 'cited_unchecked', len(unchecked))
+    comment_ceiling = pinned('comment', 'comment_unchecked', len(comment_unchecked))
     pin_text = (root / manifest.pin_source).read_text(errors='replace')
     pin_match = re.search(r'CODEGEN_COMMIT="?([0-9a-f]{40})', pin_text)
     if not pin_match or pin_match.group(1) != manifest.pin:
@@ -1618,7 +1767,7 @@ def run(root: Path, manifest_path: Path, strict: bool, json_out: Path | None):
         'states: ' + ' '.join(f'{s}={states[s]}' for s in STATES))
     for file, line, message in sorted(findings):
         out(f'{PREFIX} FINDING {file}:{line}: {message}')
-    for line in unchecked:
+    for line in unchecked + comment_unchecked:
         out(f'{PREFIX} UNCHECKED {line}')
     pending = sum(1 for e in opened if e['state'] == 'pending-flat-memory')
     out(f'{PREFIX} counts PASS(bounded)={len(passed)} OPEN={len(opened)} '
@@ -1629,6 +1778,14 @@ def run(root: Path, manifest_path: Path, strict: bool, json_out: Path | None):
         f'cited_fails={len(cite_findings)} cited_unchecked={len(unchecked)} '
         f'cited_unchecked_ceiling={unchecked_ceiling}: '
         'an UNCHECKED citation is listed, never counted as holding')
+    out(f'{PREFIX} comments: comment_citations={comment_cited} comment_holds={comment_holds} '
+        f'comment_fails={len(comment_findings)} comment_unchecked={len(comment_unchecked)} '
+        f'comment_unchecked_ceiling={comment_ceiling}: '
+        'a citation in a manifest comment is judged as one in a note of no entry')
+    out(f'{PREFIX} entry lines: line_fields={line_fields} line_holds={line_holds} '
+        f'line_differs={line_differs} line_not_compared={line_not_compared}: '
+        'a line: field is the first live site of its entry; one with no live site is '
+        'not compared, never counted as holding')
     total_open = len(opened) + len(open_templates)
     if findings:
         verdict, code = 'FINDINGS', 1
