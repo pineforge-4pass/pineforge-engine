@@ -74,12 +74,12 @@ Schema:
       }
     }
 
-applied_runtime (and so provenance.runtime) also holds "syminfo" when --syminfo
-set a lot grid ({"qty_step": float}, with "mincontract" when supplied) or declared a
-series_origin_ms (see series_origin_echo for first-bar, offset and warning
-fields). The origin enables both EMA warmup and request.security aggregation
-from the first whole bucket at/after it, with plain expressions na until
-completion. Without either declaration the key is absent.
+applied_runtime (and so provenance.runtime) also holds "syminfo" for a lot grid
+({"qty_step": float}, with "mincontract" when supplied), a flat series_origin_ms
+(see series_origin_echo), or the runner's ordered syminfo_metadata object.
+The latter is recorded as [name, value] pairs in setter order, including explicit
+zeros; nonfinite doubles use their text spelling. An origin enables both warmup
+contexts; later raw settings win. Without these declarations the key is absent.
 
 applied_runtime also holds "symbol_feeds" when --symbol-feeds installed other
 symbols' bars for request.security (see load_symbol_feeds):
@@ -3043,9 +3043,15 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
     for _n in ("strategy_set_syminfo_mintick", "strategy_set_syminfo_pointvalue"):
         if hasattr(lib, _n):
             getattr(lib, _n).argtypes = [ctypes.c_void_p, ctypes.c_double]
-    for _n in ("strategy_set_syminfo_timezone", "strategy_set_syminfo_session"):
+    for _n in ("strategy_set_syminfo_timezone", "strategy_set_syminfo_session",
+               "strategy_set_syminfo_type"):
         if hasattr(lib, _n):
             getattr(lib, _n).argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+            getattr(lib, _n).restype = None
+    if hasattr(lib, "strategy_set_syminfo_string"):
+        lib.strategy_set_syminfo_string.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
+        lib.strategy_set_syminfo_string.restype = ctypes.c_int
     if hasattr(lib, "strategy_set_syminfo_metadata"):
         lib.strategy_set_syminfo_metadata.argtypes = [
             ctypes.c_void_p, ctypes.c_char_p, ctypes.c_double]
@@ -3448,8 +3454,11 @@ def apply_syminfo(lib, strat, syminfo_path):
     series_origin_ms is a positive JSON integer declaring the reference series'
     first bar open. Absent/null applies nothing; malformed values are
     syminfo_unreadable{reason: value_type}.
-    Returns the applied lot metadata and/or series_origin_ms for
-    applied_runtime["syminfo"], or {} when neither was applied."""
+    The runner's syminfo_metadata object carries other numeric members in
+    setter order, separate from the flat catalog fields. Type and string
+    members use their own setters. These additional exports are optional.
+    Returns the applied lot/origin and ordered raw metadata for
+    applied_runtime["syminfo"], or {} when none was applied."""
     def unreadable(text, reason):
         return SyminfoError(text, "syminfo_unreadable", {"reason": reason})
 
@@ -3510,6 +3519,40 @@ def apply_syminfo(lib, strat, syminfo_path):
         meta = setter("strategy_set_syminfo_metadata", "series_origin_ms")
         calls.append((meta, b"series_origin_ms", origin))
         applied["series_origin_ms"] = origin
+    # String facts affect e.g. the chart currency used for broker FX. Older
+    # libraries without these exports continue without the corresponding facts.
+    for key in ("type", "ticker", "tickerid", "currency", "basecurrency",
+                "description", "volumetype"):
+        member = si.get(key)
+        if not isinstance(member, str) or not member:
+            continue
+        try:
+            value = member.encode()
+        except UnicodeEncodeError:
+            continue
+        if key == "type":
+            if hasattr(lib, "strategy_set_syminfo_type"):
+                calls.append((lib.strategy_set_syminfo_type, value))
+        elif hasattr(lib, "strategy_set_syminfo_string"):
+            calls.append((lib.strategy_set_syminfo_string, key.encode(), value))
+
+    raw = si.get("syminfo_metadata")
+    meta = getattr(lib, "strategy_set_syminfo_metadata", None)
+    if isinstance(raw, dict) and meta is not None:
+        submitted = []
+        for key, value in raw.items():
+            if key in ("qty_step", "mincontract"):
+                continue  # only the validated lot declarations above set the grid
+            try:
+                name, number = key.encode(), float(value)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            calls.append((meta, name, number))
+            # An array preserves last-writer order even in a canonical (sorted)
+            # fingerprint. JSON cannot represent a nonfinite double as a number.
+            submitted.append([key, number if math.isfinite(number) else str(number)])
+        if submitted:
+            applied["syminfo_metadata"] = submitted
     for key, name, present, convert, kind in (
             ("mintick", "strategy_set_syminfo_mintick", "mintick" in si, float, "a number"),
             ("pointvalue", "strategy_set_syminfo_pointvalue", "pointvalue" in si, float,

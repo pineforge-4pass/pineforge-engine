@@ -4823,14 +4823,25 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
     if dist.upper() == "VOLUME_WEIGHTED":
         dist = "ENDPOINTS"
 
-    # Step and minimum stay distinct (inputs_run_kwargs validated both; the
-    # image's parser checks them again and uses the minimum only without a
-    # step). No other syminfo_metadata key or declared magnifier is forwarded.
+    # Keep the validated lot fields in the form older images understand.
+    # Other numeric names may coincide with catalog fields (e.g. "mintick").
+    # Preserve their order: raw warm-up settings after a series origin win.
     syminfo: dict = {}
     metadata = run_kwargs.get("syminfo_metadata") or {}
     for key in ("qty_step", "mincontract"):
         if metadata.get(key) is not None:
             syminfo[key] = metadata[key]
+    raw_metadata = {}
+    for key, value in metadata.items():
+        if key in ("qty_step", "mincontract"):
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        raw_metadata[str(key)] = number if math.isfinite(number) else str(number)
+    if raw_metadata:
+        syminfo["syminfo_metadata"] = raw_metadata
     if run_kwargs.get("syminfo_timezone"):
         syminfo["timezone"] = run_kwargs["syminfo_timezone"]
     if run_kwargs.get("syminfo_session"):
@@ -5073,9 +5084,6 @@ def _main_run(args, resources) -> int:
     # The signal-bar start, when the window opens earlier on TradingView's
     # first computed bar: the run falls back to it (_entered_before_tv).
     signal_start_ms: int | None = None
-    # Whether this run declares the tape's first computed bar to the engine
-    # as the series origin (_series_origin_plan): only with a tape in use.
-    origin_declared = False
     if args.no_trim_output:
         pass
     elif args.emit_window_ohlcv is not None:
@@ -5146,7 +5154,6 @@ def _main_run(args, resources) -> int:
         origin_plan = _series_origin_plan(
             run_kwargs.get("syminfo_metadata"), tv_first_bar, feed_ts)
         run_kwargs["syminfo_metadata"] = origin_plan.metadata
-        origin_declared = origin_plan.declared
         print(f"  series-origin: {origin_plan.detail}")
     trade_start_ms = None
     if emit_window is not None and not args.allow_trading_before_window:
@@ -5200,15 +5207,9 @@ def _main_run(args, resources) -> int:
                 "error: --runner docker does not support --dump-book; "
                 "use --runner ctypes with a freshly built strategy library.")
         strat = None
-        if os.environ.get(MAGNIFIER_FEED_ENV) or os.environ.get(SESSION_CALENDAR_ENV):
-            print("note: --runner docker does not apply a declared bar magnifier or session calendar; "
+        if os.environ.get(MAGNIFIER_FEED_ENV):
+            print("note: --runner docker does not apply a declared bar magnifier; "
                   "use --runner ctypes", file=sys.stderr)
-        if origin_declared:
-            # The image's syminfo takes the origin only with the request.security
-            # warm-up it switches on (_run_via_docker forwards no other key).
-            print("note: --runner docker does not apply the declared series origin (the image "
-                  "takes it only with the request.security warm-up); use --runner ctypes",
-                  file=sys.stderr)
 
         def run_engine(start_ms):
             return _run_via_docker(strategy_dir, ohlcv_path, params, run_kwargs,
