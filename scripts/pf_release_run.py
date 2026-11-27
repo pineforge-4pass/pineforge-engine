@@ -155,9 +155,13 @@ def _image_command(image: str):
                 or len(identity) != 71
                 or any(char not in "0123456789abcdef" for char in identity[7:])):
             raise ValueError("image has no immutable sha256 ID")
+        config = document["Config"]
         command = []
         for name in ("Entrypoint", "Cmd"):
-            part = document["Config"][name]
+            try:
+                part = config[name]
+            except KeyError:
+                part = None  # Docker can omit an unset command field.
             if part is None:
                 continue
             if (not isinstance(part, list)
