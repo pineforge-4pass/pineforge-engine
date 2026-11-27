@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import platform
 import re
 import struct
 import sys
@@ -193,6 +194,9 @@ def _condition(body, root, lists, targets, unit=None):
             value = sys.platform.startswith('linux')
         elif term == 'CMAKE_SIZEOF_VOID_P EQUAL 8':
             value = struct.calcsize('P') == 8
+        elif term == 'CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64"':
+            # A native build: CMake takes the processor from the host's machine name.
+            value = platform.machine() == 'x86_64'
         elif (unit and (m := re.fullmatch(r'(\w+) STREQUAL "([\w.-]+)"', term))
               and m[1] == unit[0]):
             value = unit[1] == m[2]

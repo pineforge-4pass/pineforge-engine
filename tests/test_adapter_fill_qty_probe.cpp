@@ -1,10 +1,10 @@
 /*
  * test_adapter_fill_qty_probe.cpp -- R5 lane B-ADAPTER, item 2 (AUDIT3-opus2 H4).
  *
- * strategy_pending_order_fill_qty (PendingIntentView::probe_fill_qty) promises
- * "the contracts the entry kernel would OPEN if that order filled at
- * fill_price, sized by the engine's own rules so a live runtime never
- * re-implements them" (include/pineforge/pineforge.h). Its partition 3
+ * strategy_pending_order_fill_qty (PendingIntentView::probe_fill_qty) reports
+ * quantity and whether the planned fill opens any units. The quantity can be
+ * the opening leg or the transaction, depending on the order and its sizing
+ * rule (include/pineforge/pineforge.h). Its partition 3
  * (AT_FILL) is a default cash / percent-of-equity entry the adapter sizes at
  * its fill: resolve_terms books default_sizing_units() there -- the kernel's
  * native_sized_units() (CashValue, the percentage fee reserve) under the
@@ -44,6 +44,11 @@
  * and behind a same-bar close -- and compares the report's close_only and
  * quantity with the units the fill of the same row closes and opens and the
  * position it leaves.
+ *
+ * The pending-order matrix also follows the same working incarnation across
+ * placement, the close (where present), and the target's applied event.
+ * The close timing cases distinguish a close ahead of the target from one
+ * staged after it. These are engine observations on synthetic bars.
  */
 
 #include <algorithm>
@@ -840,6 +845,24 @@ struct BookedFill {
     }
 };
 
+void check_reported_transaction(const PendingProbe& probe, const BookedFill& fill) {
+    const double opened = std::abs(fill.opened);
+    const double booked_qty = fill.closed + opened;
+    const bool aligned = probe.index >= 0 && probe.rc == 0 && fill.incarnation != 0
+        && probe.incarnation == fill.incarnation && std::isfinite(booked_qty) && booked_qty > 0.0;
+    if (!aligned) {
+        std::printf("NOT COMPARED transaction: index=%d expected>=0 rc=%d expected=0 "
+                    "report/fill incarnation=%llu/%llu expected equal and nonzero, "
+                    "booked qty=%.17g expected>0 report qty=%.17g\n",
+                    probe.index, probe.rc, static_cast<unsigned long long>(probe.incarnation),
+                    static_cast<unsigned long long>(fill.incarnation), booked_qty, probe.qty);
+        CHECK(aligned);
+        return;
+    }
+    CHECK(probe.close_only == (opened == 0.0));
+    CHECK(near(probe.qty, booked_qty));
+}
+
 // Shape 1 as worded: the position is SHORT and, on one bar, the script closes
 // the short and then places a long stop entry with the default quantity
 // (CloseThenStop above closes a LONG, so its L2 is on the held side and is
@@ -900,14 +923,10 @@ void shape_close_short_then_stop_reports_the_fills_transaction() {
     CHECK(host.last_error().empty());
     // The shape was built: the script closed a short of 1.
     CHECK(near(host.closed_against, -1.0));
-    CHECK(host.probe.index >= 0 && host.probe.rc == 0 && fill.incarnation != 0
-          && fill.incarnation == host.probe.incarnation);
     // The fill: a transaction of L2's own unit against the 0.5 short.
     CHECK(near(fill.closed, 0.5) && near(fill.opened, 0.5));
     CHECK(near(fill.after, 0.5));
-    // The report: that transaction, which opens.
-    CHECK(host.probe.close_only == 0);
-    CHECK(near(host.probe.qty, 1.0));
+    check_reported_transaction(host.probe, fill);
 }
 
 // mirror_order_type exports a strategy.order row as 3.
@@ -960,8 +979,7 @@ private:
 };
 
 // Runs the replay and checks what every variant shares: no error, the order
-// was placed against the short of 1, and the probed row is the row that fills,
-// reported in the explicit partition.
+// was placed against the short of 1, and the report uses the explicit partition.
 void run_own_quantity_order(OwnQuantityOrder& host, const char* shape) {
     host.run(kShapeBars, 5);
     host.probe.print(shape, "O against the short");
@@ -970,8 +988,6 @@ void run_own_quantity_order(OwnQuantityOrder& host, const char* shape) {
                 host.last_error().c_str());
     CHECK(host.last_error().empty());
     CHECK(near(host.placed_against, -1.0));
-    CHECK(host.probe.index >= 0 && host.probe.rc == 0 && host.fill.incarnation != 0
-          && host.fill.incarnation == host.probe.incarnation);
     CHECK(host.probe.partition == PF_FILL_QTY_PARTITION_EXPLICIT);
 }
 
@@ -982,8 +998,7 @@ void shape_own_quantity_order_reports_its_close() {
     run_own_quantity_order(host, "own-quantity order");
     CHECK(near(host.fill.closed, 1.0) && near(host.fill.opened, 0.0));
     CHECK(near(host.fill.after, 0.0));
-    CHECK(host.probe.close_only == 1);
-    CHECK(near(host.probe.qty, 1.0));
+    check_reported_transaction(host.probe, host.fill);
 }
 
 // The other branch of the same transaction: an own quantity of 2 against the
@@ -994,8 +1009,7 @@ void shape_own_quantity_order_larger_than_the_short_opens_the_remainder() {
     run_own_quantity_order(host, "larger own-quantity order");
     CHECK(near(host.fill.closed, 1.0) && near(host.fill.opened, 1.0));
     CHECK(near(host.fill.after, 1.0));
-    CHECK(host.probe.close_only == 0);
-    CHECK(near(host.probe.qty, 2.0));
+    check_reported_transaction(host.probe, host.fill);
 }
 
 // The OCA cancel-group variant of shape 3: host-sized, it closes only.
@@ -1004,8 +1018,7 @@ void shape_own_quantity_oca_cancel_order_reports_its_close() {
     run_own_quantity_order(host, "own-quantity OCA cancel order");
     CHECK(near(host.fill.closed, 1.0) && near(host.fill.opened, 0.0));
     CHECK(near(host.fill.after, 0.0));
-    CHECK(host.probe.close_only == 1);
-    CHECK(near(host.probe.qty, 1.0));
+    check_reported_transaction(host.probe, host.fill);
 }
 
 // An OCA cancel-group order of 2 against the short of 1 still closes only the
@@ -1015,8 +1028,7 @@ void shape_own_quantity_oca_cancel_order_closes_at_most_the_short() {
     run_own_quantity_order(host, "larger own-quantity OCA cancel order");
     CHECK(near(host.fill.closed, 1.0) && near(host.fill.opened, 0.0));
     CHECK(near(host.fill.after, 0.0));
-    CHECK(host.probe.close_only == 1);
-    CHECK(near(host.probe.qty, 1.0));
+    check_reported_transaction(host.probe, host.fill);
 }
 
 // The same order behind a same-bar close: the position is short 1 and, on one
@@ -1064,23 +1076,18 @@ void shape_own_quantity_order_behind_a_same_bar_close_opens() {
     host.run(kShapeBars, 5);
     const auto& fill = host.fill;
     host.probe.print("own-quantity order behind a close", "O before the close fills");
-    std::printf("  own-quantity order behind a close: report close_only=%d expected 0, "
-                "qty=%.17g expected 1; O's fill closed %.17g, opened %.17g, position after "
-                "%.17g, error '%s'\n", host.probe.close_only, host.probe.qty, fill.closed,
-                fill.opened, fill.after, host.last_error().c_str());
+    std::printf("  own-quantity order behind a close: O's fill closed %.17g, "
+                "opened %.17g, position after %.17g, error '%s'\n",
+                fill.closed, fill.opened, fill.after, host.last_error().c_str());
     CHECK(host.last_error().empty());
     // The shape was built: short 1 when the script closed it, and still short 1
     // when the report was read, before the close filled.
     CHECK(near(host.before_close, -1.0) && near(host.at_probe, -1.0));
-    CHECK(host.probe.index >= 0 && host.probe.rc == 0 && fill.incarnation != 0
-          && fill.incarnation == host.probe.incarnation);
     CHECK(host.probe.partition == PF_FILL_QTY_PARTITION_EXPLICIT);
     // The fill: the close filled first, so the order opens a long of 1 from flat.
     CHECK(near(fill.closed, 0.0) && near(fill.opened, 1.0));
     CHECK(near(fill.after, 1.0));
-    // The report: that fill, which opens.
-    CHECK(host.probe.close_only == 0);
-    CHECK(near(host.probe.qty, 1.0));
+    check_reported_transaction(host.probe, fill);
 }
 
 enum class Command { Order, CancelGroup, Entry, CashOrder };
@@ -1113,6 +1120,14 @@ struct AppliedSample {
     double price, closed, opened, before, after;
     std::string command;
 };
+
+void print_close_event(const char* name, const char* side, const AppliedSample& close) {
+    std::printf("FILL %s %s __close__Named#%llu command=%s event=%llu bar=%d "
+                "price=%.17g before=%.17g closed=%.17g opened=%.17g after=%.17g\n",
+                name, side, static_cast<unsigned long long>(close.incarnation), close.command.c_str(),
+                static_cast<unsigned long long>(close.ordinal), close.bar, close.price,
+                close.before, close.closed, close.opened, close.after);
+}
 
 class PendingFillReplay : public source::PineStrategyHost {
 public:
@@ -1228,11 +1243,24 @@ protected:
 // order covers both booked legs; an ordinary reversing entry reports its opening leg.
 void compare_report(const ReportCase& row, bool buy, const ReportSample& s,
                     const AppliedSample& f, const char* phase) {
+    const double opened = std::abs(f.opened); // sell openings are negative
+    const double booked_qty = opened + (row.command == Command::Entry ? 0.0 : f.closed);
+    // This matrix exercises positive report quantities. For an entry it
+    // needs an opening leg; comparing a zero report with none would not
+    // exercise its sizing rule.
+    if (!std::isfinite(booked_qty) || booked_qty <= 0.0) {
+        std::printf("NOT COMPARED %s %s phase=%s: booked qty=%.17g expected>0, "
+                    "report qty=%.17g closed=%.17g opened=%.17g\n",
+                    row.name, buy ? "buy" : "sell", phase, booked_qty, s.qty, f.closed, f.opened);
+        CHECK(std::isfinite(booked_qty) && booked_qty > 0.0);
+        return;
+    }
     const auto field = [&](const char* name, double reported, double booked) {
         ++checks;
         if (reported != booked) ++failures;
-        std::printf("%s %s %s phase=%s field=%s reported=%g actual=%g "
-                    "Target#%llu after_event=%llu fill_event=%llu bar=%d price=%g closed=%g opened=%g\n",
+        std::printf("%s %s %s phase=%s field=%s reported=%.17g actual=%.17g "
+                    "Target#%llu after_event=%llu fill_event=%llu bar=%d "
+                    "price=%.17g closed=%.17g opened=%.17g\n",
                     reported == booked ? "PASS" : "FAIL", row.name, buy ? "buy" : "sell",
                     phase, name, reported, booked, static_cast<unsigned long long>(f.incarnation),
                     static_cast<unsigned long long>(s.last_fill),
@@ -1242,8 +1270,8 @@ void compare_report(const ReportCase& row, bool buy, const ReportSample& s,
         : std::isnan(row.own) ? PF_FILL_QTY_PARTITION_AT_FILL : PF_FILL_QTY_PARTITION_EXPLICIT;
     field("partition", s.partition, partition);
     field("side", s.buy, f.after > f.before);
-    field("qty", s.qty, std::abs(f.opened) + (row.command == Command::Entry ? 0.0 : f.closed));
-    field("close_only", s.close_only, f.opened == 0.0);
+    field("qty", s.qty, booked_qty);
+    field("close_only", s.close_only, opened == 0.0);
     if (row.command == Command::CancelGroup) {
         // An OCA cancel order either reduces the opposite book or opens its own size.
         field("closed", s.close_only ? s.qty : 0.0, f.closed);
@@ -1283,11 +1311,7 @@ void compare_pending_fill(const ReportCase& row, bool buy) {
         const bool identified = close.incarnation != 0
             && close.command == command && std::count_if(pre.pending_closes.begin(), pre.pending_closes.end(),
                 [&](const CloseKey& key) { return key.incarnation == close.incarnation && key.command == command; }) == 1;
-        std::printf("FILL %s %s __close__Named#%llu command=%s event=%llu bar=%d "
-                    "price=%g before=%g closed=%g opened=%g after=%g\n",
-                    row.name, side, static_cast<unsigned long long>(close.incarnation), close.command.c_str(),
-                    static_cast<unsigned long long>(close.ordinal), close.bar, close.price,
-                    close.before, close.closed, close.opened, close.after);
+        print_close_event(row.name, side, close);
         const double expected = row.close == NamedClose::Units ? row.close_operand
             : row.close == NamedClose::Percent ? row.named * row.close_operand / 100.0
             : row.close == NamedClose::HalfThenRest ? row.named / 2.0 : row.named;
@@ -1308,9 +1332,10 @@ void compare_pending_fill(const ReportCase& row, bool buy) {
         if (group) reached &= host.peer_left == (f.closed + std::abs(f.opened) < row.own);
     }
     if (!reached) {
-        std::printf("NOT COMPARED %s %s: target=%zu close=%zu pre/post rc=%d/%d inc=%llu/%llu "
-                    "pos=%g/%g error='%s'\n", row.name, side, host.targets.size(), host.closes.size(),
-                    pre.rc, post.rc,
+        std::printf("NOT COMPARED %s %s: replay did not reach its expected events; "
+                    "target=%zu expected=1, close=%zu expected=%zu, pre/post rc=%d/%d expected=0/0, "
+                    "inc=%llu/%llu pos=%.17g/%.17g error='%s'\n",
+                    row.name, side, host.targets.size(), host.closes.size(), count, pre.rc, post.rc,
                     static_cast<unsigned long long>(pre.incarnation),
                     static_cast<unsigned long long>(post.incarnation),
                     pre.position, post.position, host.last_error().c_str());
@@ -1481,6 +1506,7 @@ void compare_close_timing(const CloseSchedule& s) {
     auto ordinal = pre.last_fill;
     for (std::size_t i = 0; i < host.closes.size(); ++i) {
         const auto& c = host.closes[i];
+        print_close_event(row.name, "buy", c);
         const double units = i == 0 ? row.close_operand : s.second;
         const bool after_target = from_fill && at_open;
         if (after_target && host.targets.size() == 1) {
@@ -1512,9 +1538,12 @@ void compare_close_timing(const CloseSchedule& s) {
         }
     }
     if (!reached) {
-        std::printf("NOT COMPARED %s buy: target=%zu closes=%zu pending=%zu rc=%d/%d "
-                    "pos=%.17g/%.17g error='%s'\n", row.name, host.targets.size(), host.closes.size(),
-                    pre.pending_closes.size(), pre.rc, post.rc, pre.position, post.position,
+        std::printf("NOT COMPARED %s buy: replay did not reach its expected events; "
+                    "target=%zu expected=1, closes=%zu expected=%zu, pending=%zu expected=%u, "
+                    "pre/post rc=%d/%d pos=%.17g/%.17g error='%s'\n",
+                    row.name, host.targets.size(), host.closes.size(), nclose,
+                    pre.pending_closes.size(), immediate ? 0U : two ? 2U : 1U,
+                    pre.rc, post.rc, pre.position, post.position,
                     host.last_error().c_str());
         CHECK(reached);
         return;
@@ -1534,7 +1563,10 @@ void pending_reports_at_the_close_boundary() {
         {order("fill-queued-close", 0.5, 0.75, 0.5, 0), T::Fill},
         {order("fill-queued-close-finer-input", 0.5, 0.75, 0.5, 0), T::FillOnFinerInput, 102},
         {order("open-before-fill-queued-close", 0.5, 0.75, 0.75, 0), T::Fill, 88},
-        {order("order-before-staged-close", kNaN, 1, 1, 0), T::AfterOrder, 94},
+        // The later close is staged when we read Target. Deducting it
+        // incorrectly would predict a buy of 2 from flat instead of a
+        // close of 1, so both report fields distinguish the order.
+        {order("order-before-staged-close", kNaN, 2, 1, 0), T::AfterOrder, 94},
         {order("decimal-closes", 0.7, 0.5, 0, 0.5), T::Pending, 100, 0.3},
         {order("pending-half-tolerance", half, 1, 0, 1), T::Pending},
         {order("pending-twice-tolerance", twice, 1, 1 - twice, 0), T::Pending},
@@ -1567,7 +1599,7 @@ int main() {
     shape_priced_replacement_of_a_market_entry_closes_only();
     shape_sequential_pair_member_is_not_close_only();
     shape_direction_gated_entry_closes_only();
-    std::printf("-- issue 910's shapes 1 and 3 as worded: the report and the fill agree\n");
+    std::printf("-- compare reports with booked transactions for the stop and own-quantity orders\n");
     shape_close_short_then_stop_reports_the_fills_transaction();
     shape_own_quantity_order_reports_its_close();
     shape_own_quantity_order_larger_than_the_short_opens_the_remainder();
