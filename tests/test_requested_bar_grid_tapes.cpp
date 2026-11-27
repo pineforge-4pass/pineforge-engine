@@ -26,6 +26,11 @@
  * Join by entry fill time in UTC + Signal before the first '|', never by row
  * position. Include the report's terminal range-end row (blank exit Signal).
  * Each row must join all 205 entries, with no extras or differences.
+ * For re-capture set initial capital 1,000,000, default size 100% of
+ * equity (the entries specify qty explicitly), pyramiding 1, long/short
+ * margin 100%, zero commission and slippage. Turn off order processing
+ * on close and recalculation on fills. Record the request's actual
+ * timeframe and expression for each export; the chart title is not a key.
  *
  * The bi-* Pine sources make ONE request.security(tickerid, tf, bar_index);
  * qty = 1 + requested_bar_index % 5. The open-* sources make ONE request for

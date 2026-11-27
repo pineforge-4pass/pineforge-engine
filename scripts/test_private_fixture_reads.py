@@ -1021,15 +1021,17 @@ class ExemptRowTraceControls(unittest.TestCase):
     def _two_world_copy(self, name: str, tamper: str) -> Path:
         """A copy of scripts/check_two_world_registration.py under the scratch
         dir's scripts/, with the local modules its imports need (ci_verify,
-        its own prepare_settlement_cpp_abi_base, check_private_fixture_reads
-        -- read off the script's import lines), plus `tamper`: a source
+        its own private_fixture_policy and prepare_settlement_cpp_abi_base,
+        check_private_fixture_reads -- read off the import lines of the
+        script and of ci_verify), plus `tamper`: a source
         snippet (one %r) inserted after the __future__ import, so the copy
         parses and really runs. The copy runs with --root REPO: its __file__
         is the scratch dir, so the REPO it computes would be the scratch
         tree, and the row's evaluation is about the real one."""
         siblings = self.tmp / 'scripts'
         siblings.mkdir(exist_ok=True)
-        for sibling in ('ci_verify.py', 'prepare_settlement_cpp_abi_base.py',
+        for sibling in ('ci_verify.py', 'private_fixture_policy.py',
+                        'prepare_settlement_cpp_abi_base.py',
                         'check_private_fixture_reads.py'):
             if not (siblings / sibling).exists():
                 shutil.copy(REPO / 'scripts' / sibling, siblings / sibling)
