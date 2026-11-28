@@ -5805,7 +5805,8 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     if (not resolved or _step_values(resolved, 'if')
             or any(value not in resolved for value in resolver_env)
             or any(value not in resolver_code for value in resolver_selection)
-            or 'gh api --paginate --slurp' not in resolved
+            # The paged read must be the PR-association lookup itself: the release-commit read pages too.
+            or 'gh api --paginate --slurp \\ "repos/$REPO/commits/$SHA/pulls?per_page=100"' not in resolver_code
             or 'repos/$REPO/commits/$SHA/pulls?per_page=100' not in resolved
             or 'github.event.pull_request' in promote
             or 'pull_request_target' in promote):
