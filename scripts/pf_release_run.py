@@ -363,10 +363,28 @@ def _container_image_config(container: str) -> dict:
     return config
 
 
+def _failure_report(stdout) -> dict | None:
+    """Return the failure report on a failed docker step's last stdout line, if any."""
+    if not isinstance(stdout, str) or not stdout.strip():
+        return None
+    try:
+        failure = json.loads(stdout.strip().splitlines()[-1])
+    except ValueError:
+        return None
+    if isinstance(failure, dict) and failure.get("error"):
+        return failure
+    return None
+
+
 def _run_with_staged_inputs(cmd: list[str], config: dict | None,
                             files: dict[PurePosixPath, bytes]) -> subprocess.CompletedProcess:
     created = subprocess.run(cmd, capture_output=True, text=True)
     if created.returncode:
+        # A failed launch reports through its last stdout line. run_release
+        # reads it after `docker start`; read it here for `docker create` too.
+        failure = _failure_report(created.stdout)
+        if failure is not None:
+            raise ReleaseRunError(f"engine error: {failure['error']}", report=failure)
         raise ReleaseRunError(
             f"docker create failed (exit {created.returncode})\nstderr tail:\n{created.stderr[-2000:]}")
     container = created.stdout.strip()
