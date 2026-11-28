@@ -50,8 +50,8 @@ bool supports_lower_tf_emulation(const std::string& input_tf,
         return false;
     }
 
-    int input_seconds = tf_to_seconds(input_tf);
-    int requested_seconds = tf_to_seconds(requested_tf);
+    int input_seconds = tf_to_clock_seconds(input_tf);
+    int requested_seconds = tf_to_clock_seconds(requested_tf);
     if (input_seconds <= 0 || requested_seconds <= 0 || requested_seconds >= input_seconds) {
         return false;
     }

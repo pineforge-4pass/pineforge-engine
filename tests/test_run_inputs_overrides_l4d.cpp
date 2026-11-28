@@ -446,7 +446,7 @@ void test_override_commission_reduces_pnl() {
 // With an EMPTY input_tf AND empty script_tf, the TF-aware overload runs
 // detect_timeframe over the bar timestamps. detect_timeframe takes the
 // MEDIAN inter-bar delta and snaps to the nearest standard TF label, then
-// fill_report converts that label back to seconds via tf_to_seconds.
+// fill_report converts that label back to seconds via tf_to_clock_seconds.
 void test_empty_tf_triggers_detect_timeframe() {
     std::printf("test_empty_tf_triggers_detect_timeframe\n");
 
