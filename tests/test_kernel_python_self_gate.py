@@ -242,6 +242,92 @@ class ModuleSelfGate(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn(f'reader: reads absent {self.absent} ({module}:3)', out)
 
+    def test_a_guard_after_or_beside_the_read_of_the_bound_path_gates_nothing(self):
+        forms = {
+            'the guard after the read': (2, (
+                'from pathlib import Path\n'
+                'bars = Path("<ABSENT>")\n'
+                'text = bars.read_text()\n'
+                'if not bars.exists():\n'
+                '    print("SKIP private fixtures not present: " + str(bars))\n'
+                '    raise SystemExit(77)\n'
+                'print(text)\n')),
+            'the guard beside the read, in the other branch': (3, (
+                'import sys\n'
+                'from pathlib import Path\n'
+                'bars = Path("<ABSENT>")\n'
+                'if len(sys.argv) > 1:\n'
+                '    print(bars.read_text())\n'
+                'else:\n'
+                '    if not bars.exists():\n'
+                '        print("SKIP private fixtures not present: " + str(bars))\n'
+                '        raise SystemExit(77)\n')),
+            'the guard in main(), the read at module top level': (2, (
+                'from pathlib import Path\n'
+                'bars = Path("<ABSENT>")\n'
+                '\n'
+                '\n'
+                'def main() -> int:\n'
+                '    if not bars.exists():\n'
+                '        print("SKIP private fixtures not present: " + str(bars))\n'
+                '        return 77\n'
+                '    return 0\n'
+                '\n'
+                '\n'
+                'text = bars.read_text()\n'
+                'raise SystemExit(main())\n')),
+        }
+        for form, (bound, text) in forms.items():
+            with self.subTest(form=form):
+                code, out, module = self.sweep_row(self.named(text))
+                self.assertEqual(code, 1, out)
+                self.assertIn(f'reader: reads absent {self.absent} ({module}:{bound})', out)
+                self.assertIn('but it does not stand before the use of bars', out)
+
+    def test_a_guard_that_tests_another_path_gates_nothing(self):
+        text = self.named(
+            'from pathlib import Path\n'
+            'bars = Path("<ABSENT>")\n'
+            'marker = Path("tests/marker.txt")\n'
+            'if not marker.exists():\n'
+            '    print("SKIP private fixtures not present: " + str(marker))\n'
+            '    raise SystemExit(77)\n'
+            'print(bars.read_text())\n')
+        code, out, module = self.sweep_row(text)
+        self.assertEqual(code, 1, out)
+        self.assertIn(f'reader: reads absent {self.absent} ({module}:2)', out)
+        self.assertIn('but its test does not name bars', out)
+
+        # The same statements with the test on the path that is read.
+        probe = 'if not marker.exists():\n'
+        self.assertEqual(text.count(probe), 1)
+        code, out, _ = self.sweep_row(text.replace(probe, 'if not bars.exists():\n'))
+        self.assertEqual(code, 0, out)
+        self.assertIn(COUNT + '0', out.splitlines())
+
+    def test_the_settlement_family_is_gated_by_the_probe_of_its_own_path(self):
+        family = ('check_settlement_cpp_abi.py', 'prepare_settlement_cpp_abi_base.py',
+                  'check_native_cpp_abi.py', 'check_pending_order_prefix.py')
+        for script in family:
+            with self.subTest(script=script):
+                text = (REPO / 'scripts' / script).read_text()
+                code, out, module = self.sweep_row(text)
+                self.assertEqual(code, 0, out)
+                self.assertIn(COUNT + '0', out.splitlines())
+                with patch.object(sweep, 'ROOT', self.root):
+                    rule, unguarded = sweep.admitted_by('reader', {}, {module: text})
+                self.assertEqual((rule, unguarded), ('self-gating', []))
+
+        # One of the four with its probe turned to another path: the guard
+        # still stands where it stood, and it no longer answers for the path
+        # the module reads.
+        text = (REPO / 'scripts' / 'check_pending_order_prefix.py').read_text()
+        probe = 'for path in (FIXTURE,) if'
+        self.assertEqual(text.count(probe), 1)
+        code, out, _ = self.sweep_row(text.replace(probe, 'for path in (ROOT,) if'))
+        self.assertEqual(code, 1, out)
+        self.assertIn('but its test does not name FIXTURE', out)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
