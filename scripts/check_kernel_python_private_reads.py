@@ -469,11 +469,24 @@ EXEMPT = {
 #   2. binding: where the line only binds the path to a name (an assignment
 #      whose value builds the path from operators, containers and a path
 #      builder such as Path(...)), nothing is opened there and the read is
-#      wherever the name goes. Names are not followed: the function that
-#      binds the path must hold a reachable guard, and for a module-level
-#      binding either the module top level does, or a module-level function
-#      the top level calls by name -- the settlement-ABI form (95c27eaff),
-#      `return 77` in main() under `raise SystemExit(main())`.
+#      wherever the name goes. The one bound name is followed through its
+#      scope (bound_gate), with every name an assignment of that scope only
+#      passes it along to. A guard gates the path when all three hold:
+#        a. it can run: it is in the scope that binds the path, or, for a
+#           module-level binding, in a module-level function the top level
+#           calls by name -- the settlement-ABI form (95c27eaff), `return 77`
+#           in main() under `raise SystemExit(main())`;
+#        b. it is a statement of the body or the else-branch of an `if`, and
+#           that `if` tests the bound path: a followed name stands in the
+#           test, in a statement before the `if` that feeds the test
+#           (fed_by), or in the body of a module-level function those call;
+#        c. that `if` dominates every use of a followed name: the use is
+#           inside the `if` statement, or inside a statement that follows the
+#           `if` in the `if`'s own block, or in what feeds the test. A use
+#           in a statement before the `if`, in a sibling branch, or behind
+#           the block the `if` stands in is not dominated. A use inside
+#           another function stands where that function is referred to:
+#           every reference to the function has to be dominated in turn.
 # For the 77 forms the module must also hold the pinned literal in a string
 # constant, as before; whether the guard's own block prints it is not read.
 EXIT_CALLS = ('exit', '_exit')
@@ -592,21 +605,18 @@ def guard_before(block, line: int):
     return None, None
 
 
-def binds_a_path(stmt, line: int) -> bool:
-    """The statement only binds a path to a name: every string constant on
-    `line` sits in the assigned value under nothing but operators, containers,
-    f-strings and the arguments of a path builder."""
-    if not isinstance(stmt, (ast.Assign, ast.AnnAssign)) or stmt.value is None:
-        return False
+def held_plainly(value, wanted) -> bool:
+    """The expression holds a node `wanted` picks, and holds every one of
+    them under nothing but operators, containers, f-strings and the arguments
+    of a path builder."""
     found = False
-    pending = [(stmt.value, True)]
+    pending = [(value, True)]
     while pending:
         node, plain = pending.pop()
-        if isinstance(node, ast.Constant):
-            if isinstance(node.value, str) and node.lineno <= line <= node.end_lineno:
-                if not plain:
-                    return False
-                found = True
+        if wanted(node):
+            if not plain:
+                return False
+            found = True
         elif isinstance(node, ast.Call) and callee(node) in PATH_BUILDERS:
             pending.append((node.func, False))
             pending.extend((arg, plain) for arg in node.args)
@@ -616,6 +626,17 @@ def binds_a_path(stmt, line: int) -> bool:
                                       ast.JoinedStr, ast.FormattedValue))
             pending.extend((child, plain and keeps) for child in ast.iter_child_nodes(node))
     return found
+
+
+def binds_a_path(stmt, line: int) -> bool:
+    """The statement only binds a path to a name: every string constant on
+    `line` sits in the assigned value under nothing but operators, containers,
+    f-strings and the arguments of a path builder."""
+    if not isinstance(stmt, (ast.Assign, ast.AnnAssign)) or stmt.value is None:
+        return False
+    return held_plainly(stmt.value, lambda node: (
+        isinstance(node, ast.Constant) and isinstance(node.value, str)
+        and node.lineno <= line <= node.end_lineno))
 
 
 def top_level_calls(block) -> set:
@@ -656,6 +677,219 @@ def parsed(text: str):
     return tree, around, aliases, literal
 
 
+@functools.lru_cache(maxsize=None)
+def parents_of(text: str) -> dict:
+    """Each node of the module's tree, mapped to the node that holds it."""
+    tree = parsed(text)[0]
+    return {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+
+
+def owner(node, parents):
+    """The innermost def around a node, its decorators, defaults and
+    annotations included; None at module level."""
+    node = parents.get(node)
+    while node is not None and not isinstance(node, DEFS):
+        node = parents.get(node)
+    return node
+
+
+def def_part(node, function, parents):
+    """Where in a def a node sits: the statement of its body, or the default
+    value that holds it. None for a decorator or an annotation, which run
+    where the def stands."""
+    path = [node]
+    while parents.get(path[-1]) is not function:
+        path.append(parents[path[-1]])
+    top = path[-1]
+    if top is function.args and len(path) > 1:
+        defaults = function.args.defaults + function.args.kw_defaults
+        return path[-2] if any(path[-2] is default for default in defaults) else None
+    return top if any(top is stmt for stmt in function.body) else None
+
+
+def names_in(node) -> set:
+    """Every name an expression or a statement mentions."""
+    return {child.id for child in ast.walk(node) if isinstance(child, ast.Name)}
+
+
+def calls_in(nodes) -> set:
+    """The plain names the nodes call."""
+    return {node.func.id for part in nodes for node in ast.walk(part)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+
+
+def flow_statements(block):
+    """Every statement of a scope's own flow, at any depth. The body of a def
+    or of a class binds names of another scope and is left out."""
+    for stmt in block:
+        yield stmt
+        if isinstance(stmt, DEFS + (ast.ClassDef,)):
+            continue
+        for name in ('body', 'orelse', 'finalbody'):
+            yield from flow_statements(getattr(stmt, name, None) or ())
+        for part in (*getattr(stmt, 'handlers', ()), *getattr(stmt, 'cases', ())):
+            yield from flow_statements(part.body)
+
+
+def assigned(stmt):
+    """The targets and the value of an assignment statement, or ((), None)."""
+    if isinstance(stmt, ast.Assign):
+        return stmt.targets, stmt.value
+    if isinstance(stmt, (ast.AnnAssign, ast.AugAssign)) and stmt.value is not None:
+        return [stmt.target], stmt.value
+    return (), None
+
+
+def followed(name: str, block):
+    """The names that stand for one bound path in its scope: the bound name,
+    and every name an assignment of the same scope only passes it along to
+    (held_plainly). Returns them with the uses that do the passing along,
+    which open nothing."""
+    names = {name}
+
+    def passing(stmt) -> bool:
+        targets, value = assigned(stmt)
+        return (isinstance(stmt, (ast.Assign, ast.AnnAssign)) and value is not None
+                and all(isinstance(target, ast.Name) for target in targets)
+                and held_plainly(value, lambda node: isinstance(node, ast.Name)
+                                 and node.id in names))
+
+    while True:
+        more = {target.id for stmt in flow_statements(block) if passing(stmt)
+                for target in assigned(stmt)[0]} - names
+        if not more:
+            break
+        names |= more
+    passed = {node for stmt in flow_statements(block) if passing(stmt)
+              for node in ast.walk(assigned(stmt)[1])
+              if isinstance(node, ast.Name) and node.id in names}
+    return names, passed
+
+
+def probes(block):
+    """The guarded tests of a scope's own flow: every `if` that can run and
+    holds a guard as a statement of its own body or else-branch, with nothing
+    before the guard in that branch that always leaves. Yields the `if`, the
+    block it stands in, the guard's form and the guard's line."""
+    for stmt in block:
+        if isinstance(stmt, ast.If):
+            for branch in sub_blocks(stmt):
+                for inner in branch:
+                    form = guard_form(inner)
+                    if form:
+                        yield stmt, block, form, inner.lineno
+                    if form or leaves(inner):
+                        break
+        for sub in sub_blocks(stmt):
+            yield from probes(sub)
+        if leaves(stmt):
+            break
+
+
+def fed_by(test, block, names):
+    """An `if` test and what feeds it, read backwards from the test through
+    the statements of the scope that stand before it: an assignment to a name
+    the test needs, the sequence of a `for` whose target it needs, and a call
+    statement on a name it needs (`parser.add_argument(...)`) -- unless that
+    name is one of the followed `names`, because a call on the bound path is
+    a use of it. Returns the nodes and every name they mention."""
+    needed = names_in(test)
+    nodes = [test]
+    before = sorted((stmt for stmt in flow_statements(block) if stmt.lineno < test.lineno),
+                    key=lambda stmt: stmt.lineno, reverse=True)
+    for stmt in before:
+        targets, value = assigned(stmt)
+        if isinstance(stmt, (ast.For, ast.AsyncFor)):
+            if needed & names_in(stmt.target):
+                nodes.append(stmt.iter)
+                needed |= names_in(stmt.iter)
+        elif stmt.end_lineno >= test.lineno:
+            continue
+        elif value is not None:
+            if needed & set().union(*map(names_in, targets)):
+                nodes.append(stmt)
+                needed |= names_in(value)
+        elif (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)
+              and isinstance(stmt.value.func, ast.Attribute)
+              and isinstance(stmt.value.func.value, ast.Name)
+              and stmt.value.func.value.id in needed - names):
+            nodes.append(stmt)
+            needed |= names_in(stmt.value)
+    return nodes, needed
+
+
+def bound_gate(text: str, scope, statement, gate) -> Gate:
+    """The verdict for a path that `statement` only binds to a name, in the
+    function or module `scope`: rule 2 of the comment above. `gate` turns the
+    guard that holds into the verdict."""
+    tree = parsed(text)[0]
+    parents = parents_of(text)
+    targets = assigned(statement)[0]
+    if len(targets) != 1 or not isinstance(targets[0], ast.Name):
+        return Gate(False, 'the path is not bound to one plain name, so its uses '
+                           'cannot be followed')
+    if isinstance(parents.get(statement), ast.ClassDef):
+        return Gate(False, 'the path is bound in a class body, where its uses cannot '
+                           'be followed')
+    name = targets[0].id
+    names, passed = followed(name, scope.body)
+    uses = sorted((node for node in ast.walk(scope)
+                   if isinstance(node, ast.Name) and node.id in names
+                   and isinstance(node.ctx, ast.Load) and node not in passed),
+                  key=lambda node: (node.lineno, node.col_offset))
+    helpers = {stmt.name: stmt for stmt in tree.body if isinstance(stmt, DEFS)}
+    places = [(scope, 'in the scope that binds the path to a name')]
+    if scope is tree:
+        called = top_level_calls(tree.body)
+        places += [(function, f'in {function.name}(), which the module top level runs')
+                   for function in tree.body
+                   if isinstance(function, DEFS) and function.name in called]
+    refused = ''
+    for place, where in places:
+        for test_if, block, form, at in probes(place.body):
+            fed, needed = fed_by(test_if.test, place.body, names)
+            if not (names & needed
+                    or any(names & names_in(helpers[helper])
+                           for helper in calls_in(fed) if helper in helpers)):
+                refused = refused or (f'{form} at line {at} {where}, but its test does '
+                                      f'not name {name}')
+                continue
+            probe = {node for part in fed for node in ast.walk(part)}
+            behind = set(ast.walk(test_if))
+            for later in block[block.index(test_if) + 1:]:
+                behind.update(ast.walk(later))
+
+            def dominated(node, entered=()) -> bool:
+                if node in probe or node in behind:
+                    return True
+                function = owner(node, parents)
+                if function is None or function is place:
+                    return False
+                if function in entered:
+                    return True
+                part = def_part(node, function, parents)
+                if (part is None or isinstance(parents.get(function), ast.ClassDef)
+                        or not isinstance(part, ast.stmt) and not held_plainly(
+                            part, lambda held: isinstance(held, ast.Name)
+                            and held.id in names)):
+                    return False
+                home = owner(function, parents) or tree
+                return all(dominated(reference, entered + (function,))
+                           for reference in ast.walk(home)
+                           if isinstance(reference, ast.Name)
+                           and reference.id == function.name
+                           and isinstance(reference.ctx, ast.Load))
+
+            loose = next((use for use in uses if not dominated(use)), None)
+            if loose is None:
+                return gate((form, at), where)
+            refused = refused or (f'{form} at line {at} {where}, but it does not stand '
+                                  f'before the use of {loose.id} at line {loose.lineno}')
+    return Gate(False, refused or f'the path is bound to {name}, and neither its scope nor '
+                                  'a function the module top level runs holds a reachable '
+                                  'guard under an `if`')
+
+
 def read_gate(text: str, line: int) -> Gate:
     """Whether the module `text` gates the private path it names at `line`,
     and the guard that does or the reason none does. A module that does not
@@ -689,19 +923,7 @@ def read_gate(text: str, line: int) -> Gate:
             return gate(guard, 'before the read')
     scope = functions[-1] if functions else tree
     if statement is not None and binds_a_path(statement, line):
-        guard = first_guard(scope.body)
-        if guard:
-            return gate(guard, 'in the scope that binds the path to a name')
-        if scope is tree:
-            called = top_level_calls(tree.body)
-            for function in tree.body:
-                if isinstance(function, DEFS) and function.name in called:
-                    guard = first_guard(function.body)
-                    if guard:
-                        return gate(guard, f'in {function.name}(), which the module '
-                                           'top level runs')
-        return Gate(False, 'the path is bound to a name, and neither its scope nor a '
-                           'function the module top level runs holds a reachable guard')
+        return bound_gate(text, scope, statement, gate)
     return Gate(False, 'no reachable guard stands before the line that names the path')
 
 
