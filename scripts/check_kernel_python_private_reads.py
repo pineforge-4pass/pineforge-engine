@@ -713,17 +713,37 @@ def module_gates_its_own_paths(text: str, line: int) -> bool:
     return read_gate(text, line).guarded
 
 
+@functools.lru_cache(maxsize=None)
+def skip_parts(text: str):
+    """What the row's skip path reads from one module of the closure, as
+    (literal, skip): whether a string constant holds the pinned literal, and
+    whether the syntax tree holds a unittest skip -- a `raise SkipTest`
+    statement (also as unittest.SkipTest(...)) or a call of skipUnless. The
+    same words in a string constant or a comment are neither, and a module
+    that does not parse holds nothing."""
+    try:
+        tree, _, _, literal = parsed(text)
+    except (SyntaxError, ValueError, RecursionError):
+        return False, False
+    skip = any(guard_form(node) == 'raise SkipTest'
+               or isinstance(node, ast.Call) and callee(node) == 'skipUnless'
+               for node in ast.walk(tree))
+    return literal, skip
+
+
 def has_skip_path(properties, closure) -> bool:
     """The row's own skip path: the pinned literal plus a ctest skip property,
-    or a unittest SkipTest/skipUnless around the private read."""
-    texts = closure.values()
-    if not any(SKIP_LITERAL in text for text in texts):
+    or a unittest SkipTest/skipUnless around the private read. The literal and
+    the unittest skip are read from the syntax trees of the closure's modules
+    (skip_parts), not from their text."""
+    parts = [skip_parts(text) for text in closure.values()]
+    if not any(literal for literal, _ in parts):
         return False
     if properties.get('SKIP_RETURN_CODE') == '77':
         return True
     if 'private fixtures not present' in properties.get('SKIP_REGULAR_EXPRESSION', ''):
         return True
-    return any(('SkipTest' in text or 'skipUnless' in text) for text in texts)
+    return any(skip for _, skip in parts)
 
 
 def admitted_by(name, properties, closure, source=None):
