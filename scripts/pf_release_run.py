@@ -14,8 +14,8 @@ speed median/ratio) stays host-side in the caller. This helper only:
     (docker/entrypoint.sh), incl. the validation-parity knobs,
   - for raw corpus params, builds once and reads that module's settings receipt
     before binding input values and starting the engine command,
-  - copies every input into the container (no host bind mount) as files the
-    image user owns and can read, whatever the host umask is,
+  - copies every input into the container (no host bind mount) as files only
+    the image user, their owner, can read, whatever the host umask is,
   - starts the container, parses stdout JSON, surfaces errors.
 
 The caller is responsible for normalization the image does NOT do (e.g. mapping
@@ -45,10 +45,10 @@ _CORPUS_DIRECTORY = PurePosixPath("/pf-corpus-request")
 _STRATEGY_PATH = PurePosixPath("/in/strategy.cpp")
 _OHLCV_PATH = PurePosixPath("/in/ohlcv.csv")
 _SYMINFO_PATH = PurePosixPath("/in/syminfo.json")
-# Fixed tar modes: never a host file's mode and never the host umask. The
-# other-read bits keep the inputs readable when Docker leaves another owner.
-_STAGED_FILE_MODE = 0o644
-_STAGED_DIRECTORY_MODE = 0o755
+# Fixed tar modes: never a host file's mode and never the host umask. Owner
+# only: docker cp -a keeps the image user as owner; no group or other bit.
+_STAGED_FILE_MODE = 0o400
+_STAGED_DIRECTORY_MODE = 0o500
 _IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
 
 
@@ -331,7 +331,7 @@ def _staged_archive(files: dict[PurePosixPath, bytes], uid: int, gid: int) -> by
     with io.BytesIO() as stream:
         with tarfile.open(fileobj=stream, mode="w") as archive:
             # Each directory, /in included, is an entry of its own, so the image
-            # user can search it whatever owner and mode the image gave it.
+            # user owns it and can search it whatever the image gave it before.
             for parent in dict.fromkeys(path.parent for path in files):
                 directory = tarfile.TarInfo(str(parent.relative_to("/")))
                 directory.uid, directory.gid = uid, gid
@@ -374,8 +374,8 @@ def _run_with_staged_inputs(cmd: list[str], config: dict | None,
         if config is None:
             config = _container_image_config(container)
         uid, gid = _image_owner(container, config)
-        # Docker extracts as root; only -a keeps the archive's numeric owners.
-        # The modes travel in the archive either way.
+        # Docker extracts as root; only -a keeps the archive's numeric owners,
+        # and the owner-only modes let that owner alone read the entries.
         copied = subprocess.run(["docker", "cp", "-a", "-", f"{container}:/"],
                                 input=_staged_archive(files, uid, gid), capture_output=True)
         if copied.returncode:

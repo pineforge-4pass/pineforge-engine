@@ -103,13 +103,13 @@ try:
         observed["output_exists"] = (script.parent / "unpublished").exists()
     elif probe == "corpus-helper":
         release = importlib.import_module("pf_release_run")
-        destination = Path(config["parameters"]["destination"])
-        destination.mkdir()
-        helper, request = release._stage_corpus_helper(
-            destination, {"notes": "literal or annotation"})
-        observed["helper"] = str(helper)
-        observed["request"] = json.loads(request.read_bytes())
-        observed["staged"] = sorted(path.name for path in destination.iterdir())
+        # The helper files are staged as bytes for the container's archive;
+        # nothing is written to a host directory.
+        files = release._corpus_helper_files({"notes": "literal or annotation"})
+        (request,) = (data for path, data in files.items()
+                      if path.name == "corpus-params.json")
+        observed["request"] = json.loads(request)
+        observed["staged"] = sorted(path.name for path in files)
     else:
         runpy.run_path(str(script), run_name="__main__")
 finally:
@@ -445,8 +445,7 @@ class PackagedPathsTests(unittest.TestCase):
                 ("missing", {ENV_NAMES["harness_dir"]: str(self.work / "absent-harness")})):
             with self.subTest(selection=label):
                 result, observed = self.child(
-                    "pf_release_run.py", probe="corpus-helper", env=environment,
-                    parameters={"destination": str(self.work / label)})
+                    "pf_release_run.py", probe="corpus-helper", env=environment)
                 self.assert_pass(result)
                 self.assertEqual(observed["request"], {"notes": "literal or annotation"})
                 self.assertEqual(observed["staged"], [
