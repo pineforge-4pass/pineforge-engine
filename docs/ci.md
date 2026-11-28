@@ -104,9 +104,10 @@ classification selects the ordinary fast tier and fails the aggregate.
 also avoids the Doxygen build.
 
 `preflight --tier fast` excludes `verifier-tests`, `kernel-residuals-tests`,
-`unittest-shards-tests` and `run-json-harness-tests`. No GitHub job runs
+`unittest-shards-tests`, `run-json-harness-tests` and
+`promote-guard-lookup-tests`. No GitHub job runs
 `--tier slow` any more: the lab's `preflight` step runs every tier, those
-four stages included. A plain local invocation below retains
+five stages included. A plain local invocation below retains
 all stages and its existing event-aware verifier-class selection. `runner-allowlist` independently scans workflow runner labels against the committed mirror in the fast tier's parallel group; `preflight-tests` runs every discovered method across up to eight shards, sized to available CPUs, with separate logs in `build-ci-preflight/preflight-tests-shards/`.
 
 The smoke configures Release, builds `pineforge_pr_smoke` and directly runs
@@ -1385,7 +1386,13 @@ requires these two commit statuses. GitHub Actions jobs, including `build`,
 tooling) runs `main`'s own copy on a `push` to `main` and runs no PR code.
 It resolves the pushed SHA through the commit's associated PRs, requiring
 exactly one merged PR whose `merge_commit_sha` is that SHA and whose base is
-`main`; no match or ambiguity exits green with a notice. Manual dispatch
+`main`; a non-empty answer with no match, or an ambiguous one, exits green
+with a notice. An empty answer may only be late: it is looked up three times,
+20 seconds apart, and then refused as `DEFERRED_NOT_FOUND` (a red run, the
+baseline unchanged), except for a release commit (pushed by the release App,
+changing only `VERSION`, `docker/run_failure_codes_diff.json` or a root-level
+`CHANGELOG*`), which exits green because the release route records its
+baseline. Manual dispatch
 requires five inputs: the merge commit, PR head, PR number, PR URL and UTC
 merge time (`YYYY-MM-DDTHH:MM:SSZ`). The PR API must confirm all five values
 and that the PR was merged into `main`. Both triggers require the latest

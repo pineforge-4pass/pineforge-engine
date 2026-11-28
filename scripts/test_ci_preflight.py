@@ -3405,7 +3405,9 @@ class PostFleetRunnerPolicy(unittest.TestCase):
         # expectation corrected: 2177 -> 2188, because the baseline promotion guard extends the CI guide.
         # expectation corrected: 2188 -> 2204, because the stamp guard section
         # for the C ABI and the engine layout adds sixteen lines to docs/ci.md.
-        self.assertEqual(len(docs.splitlines()), 2204)
+        # expectation corrected: 2204 -> 2211, because the promotion guard's lookup retry and
+        # release-commit exemption, and the fifth slow preflight stage, add seven lines to docs/ci.md.
+        self.assertEqual(len(docs.splitlines()), 2211)
         # The test-owned job catalog defines the protected label inventory.
         tables = re.findall(
             r"^\| Workflow \| Events/callers \| Inline jobs' `runs-on` \|\n"
@@ -5195,7 +5197,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
             'corpus-admission-variant-tests', 'report-schema-key-tests',
             'selected-window-ownership-tests', 'report-outputs-key-tests', 'release-version-tests',
             'release-gate-tests', 'rerun-preempted-tests', 'prebuilt-bookworm-tests', 'prebuilt-glibc-tests',
-            'run-failure-diff-tests', 'run-json-harness-tests',
+            'run-failure-diff-tests', 'run-json-harness-tests', 'promote-guard-lookup-tests',
             'docs-only-tests', 'design-inventory-tests', 'design-inventory',
             'detached-comments-tests', 'detached-comments', 'native-tempdir-tests',
             'dangling-comment-names-tests', 'doc-anchors-tests', 'doc-anchors',
@@ -5216,9 +5218,11 @@ class RunnerGroupAllowlist(unittest.TestCase):
             # because both added-text stages run in the full and reduced tiers.
             # expectation corrected: 73 -> 74, 68 -> 69 and 66 -> 67, because
             # the abi-pin-guard stage runs in the full and fast tiers.
-            self.assertEqual(len(expected) + 1, 74)
+            # expectation corrected: 74 -> 75 and 4 -> 5, because the
+            # promote-guard-lookup-tests stage runs in the full and slow tiers.
+            self.assertEqual(len(expected) + 1, 75)
             self.assertEqual(len(check_commands(ROOT, tier='fast')), 69)
-            self.assertEqual(len(check_commands(ROOT, tier='slow')), 4)
+            self.assertEqual(len(check_commands(ROOT, tier='slow')), 5)
             self.assertEqual(len(check_commands(ROOT, tier='github-only')), 9)
         for platform in ('darwin', 'win32'):
             with mock.patch.object(ci_preflight.sys, 'platform', platform):
@@ -5913,7 +5917,9 @@ class PreflightFailures(unittest.TestCase):
         # expectation corrected: 2177 -> 2188, because the baseline promotion guard extends the CI guide.
         # expectation corrected: 2188 -> 2204, because the stamp guard section
         # for the C ABI and the engine layout adds sixteen lines to docs/ci.md.
-        self.assertEqual(len(text.splitlines()), 2204)
+        # expectation corrected: 2204 -> 2211, because the promotion guard's lookup retry and
+        # release-commit exemption, and the fifth slow preflight stage, add seven lines to docs/ci.md.
+        self.assertEqual(len(text.splitlines()), 2211)
         slices = tuple(name for name in EXPECTED_PR_SLOW_ROWS
                        if name.startswith('test_ci_verify_slice_'))
         self.assertTrue(slices, 'verifier slice inventory must not be empty')
@@ -7007,7 +7013,8 @@ exit "$lookup_exit"
         # Expectations are independent of SLOW_PREFLIGHT_STAGES: losing a
         # classification must not also remove its control.
         slow_names = {'verifier-tests', 'kernel-residuals-tests',
-                      'unittest-shards-tests', 'run-json-harness-tests'}
+                      'unittest-shards-tests', 'run-json-harness-tests',
+                      'promote-guard-lookup-tests'}
         for event in ('pull_request', 'push', 'schedule', 'workflow_dispatch'):
             for answer in ('false', 'true', ''):
                 with self.subTest(event=event, answer=answer):
@@ -10362,7 +10369,7 @@ class BaselinePromotionResolution(unittest.TestCase):
     def resolver_record(self, pages, *, sha=None, event='push', inputs=None, raw_json=None,
                         details=None, raw_details=None, detail_number=None, detail_exit=0, api_exit=0,
                         ref='refs/heads/main', workflow=None, expected_code=0,
-                        authorize=False, permissions=None):
+                        authorize=False, permissions=None, actor='merger'):
         if workflow is None:
             workflow = (ROOT / CI_SOURCES[2]).read_text()
         script = job_script(workflow, 'promote-guard', 'Resolve the merged PR')
@@ -10404,11 +10411,20 @@ class BaselinePromotionResolution(unittest.TestCase):
                 '    raise SystemExit(code)\n'
                 'raise SystemExit(2)\n')
             gh.chmod(0o755)
+            # The retry interval is recorded, never waited for.
+            sleeper = root / 'sleep'
+            sleeper.write_text('#!' + sys.executable + ' -I\n'
+                'import pathlib, sys\n'
+                'with pathlib.Path(__file__).with_name("sleeps").open("a") as log:\n'
+                '    log.write(" ".join(sys.argv[1:]) + "\\n")\n')
+            sleeper.chmod(0o755)
+            sleeps = root / 'sleeps'
             output = root / 'outputs'
             log = root / 'lookup'
             summary = root / 'summary'
             env = {**os.environ, 'EVENT_NAME': event, 'SHA': self.SHA if sha is None else sha,
                    'GH_TOKEN': 'fixture-token', 'REPO': 'owner/engine', 'REF': ref,
+                   'PUSH_ACTOR': actor,
                    'INPUT_MERGE_SHA': '', 'INPUT_HEAD_SHA': '', 'INPUT_PR_NUMBER': '',
                    'INPUT_PR_URL': '', 'INPUT_MERGED_AT': '', **(inputs or {}),
                    'GITHUB_STEP_SUMMARY': str(summary), 'GITHUB_OUTPUT': str(output),
@@ -10452,6 +10468,7 @@ class BaselinePromotionResolution(unittest.TestCase):
                     'authorization': authorization,
                     'authorized': allowed.read_text() if allowed.exists() else '',
                     'summary': summary.read_text() if summary.exists() else '',
+                    'sleeps': sleeps.read_text() if sleeps.exists() else '',
                     'lookup': log.read_text() if log.exists() else ''}
 
     def run_resolver(self, pages, **kwargs):
@@ -10505,14 +10522,32 @@ class BaselinePromotionResolution(unittest.TestCase):
             ('null base', [[dict(pr, base=None)]]),
             ('missing base', [[{key: value for key, value in pr.items() if key != 'base'}]]),
         )
+        lookup = f'api --paginate --slurp repos/owner/engine/commits/{self.SHA}/pulls?per_page=100'
+        refusal = (f'DEFERRED_NOT_FOUND: no merged PR found for {self.SHA} after 3 attempts; '
+                   'baseline unchanged')
         for name, pages in cases:
             with self.subTest(case=name):
-                values, stdout, called = self.run_resolver(pages)
-                self.assertEqual(values, {'ok': 'false'})
+                # expectation corrected: one lookup and a green skip -> three
+                # lookups, two 20-second sleeps and a refusal for the two empty
+                # answers, because only an empty association answer may be late.
+                empty = name in ('empty list', 'no pages')
+                record = self.resolver_record(pages, expected_code=1 if empty else 0)
+                self.assertEqual(record['values'], {'ok': 'false'})
+                if empty:
+                    self.assertEqual(record['resolver'].stdout, ''.join(
+                        f'::notice::No merged PR found for {self.SHA} (attempt {attempt}/3); '
+                        'retrying in 20 seconds\n' for attempt in (1, 2))
+                        + f'::error title=baseline-promotion::{refusal}\n')
+                    self.assertEqual(record['summary'], f'baseline promotion: {refusal}\n')
+                    self.assertEqual(record['lookup'].splitlines(), [lookup] * 3)
+                    self.assertEqual(record['sleeps'], '20\n20\n')
+                    continue
                 count = 2 if name.startswith('two matches') else 0
-                self.assertEqual(stdout, f'::notice::found {count} merged PRs with merge '
+                self.assertEqual(record['resolver'].stdout,
+                                 f'::notice::found {count} merged PRs with merge '
                                  f'commit {self.SHA} and base main; skipping\n')
-                self.assertTrue(called)
+                self.assertEqual(record['lookup'].splitlines(), [lookup])
+                self.assertEqual(record['sleeps'], '')
 
     def test_push_defers_on_malformed_json_without_metadata(self):
         valid_pages = json.dumps([[self.merged_pr()]])
@@ -10664,12 +10699,15 @@ class BaselinePromotionResolution(unittest.TestCase):
         pr = self.merged_pr()
         for pages in ([], [[dict(pr, merged_at=None)]], [[pr, self.merged_pr(number=466)]]):
             with self.subTest(pages=pages):
-                record = self.resolver_record(pages, authorize=True)
+                # expectation corrected: exit 0 -> 1 and 1 -> 3 lookups for the
+                # empty answer, because it is retried and then refused.
+                record = self.resolver_record(pages, authorize=True,
+                                               expected_code=0 if pages else 1)
                 self.assertEqual(record['values'], {'ok': 'false'})
                 self.assertIsNone(record['authorization'])
                 self.assertEqual(record['authorized'], '')
                 self.assertIn('::notice::', record['resolver'].stdout)
-                self.assertEqual(len(record['lookup'].splitlines()), 1)
+                self.assertEqual(len(record['lookup'].splitlines()), 1 if pages else 3)
 
     def test_push_refuses_unreadable_full_pr_responses_and_api_failures(self):
         for raw in ('', '{', 'null', '[]', '231', 'NaN', '[' * 100_000):

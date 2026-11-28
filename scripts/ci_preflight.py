@@ -619,6 +619,7 @@ echo "$tools_dir" >> "$GITHUB_PATH"'''.splitlines())
 # unfiltered invocation retains every stage; CI runs both disjoint tiers.
 SLOW_PREFLIGHT_STAGES = frozenset((
     'verifier-tests', 'kernel-residuals-tests', 'unittest-shards-tests', 'run-json-harness-tests',
+    'promote-guard-lookup-tests',
 ))
 GITHUB_ONLY_PREFLIGHT_STAGES = frozenset((
     'shellcheck-version', 'actionlint-runner-labels', 'runner-allowlist', 'workflow-lint',
@@ -831,6 +832,8 @@ PROMOTE_GUARD = r'''  promote-guard:
           INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
           INPUT_PR_URL: ${{ github.event.inputs.pr_url }}
           INPUT_MERGED_AT: ${{ github.event.inputs.merged_at }}
+          # The push event's actor, never the commit's author or committer.
+          PUSH_ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
           fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
@@ -891,10 +894,13 @@ PROMOTE_GUARD = r'''  promote-guard:
             push) ;;
             *) fail "event $EVENT_NAME does not run baseline promotion (only push and workflow_dispatch are allowed)" ;;
           esac
-          # Search every page: a second match must defer, never pick a PR.
-          pulls=$(gh api --paginate --slurp \
-            "repos/$REPO/commits/$SHA/pulls?per_page=100")
-          python3 - 3<<<"$pulls" <<'PY'
+          # Only an empty association result may be eventually consistent.
+          for attempt in 1 2 3; do
+            # Search every page: a second match must defer, never pick a PR.
+            pulls=$(gh api --paginate --slurp \
+              "repos/$REPO/commits/$SHA/pulls?per_page=100")
+            lookup_status=0
+            python3 - 3<<<"$pulls" <<'PY' || lookup_status=$?
           import json
           import os
           import re
@@ -941,6 +947,9 @@ PROMOTE_GUARD = r'''  promote-guard:
                      and pr.get("merge_commit_sha") == sha
                      and isinstance(pr.get("base"), dict)
                      and pr["base"].get("ref") == "main"]
+          if not matches and not any(pages):
+              # A valid empty result alone permits another lookup.
+              raise SystemExit(3)
           if len(matches) != 1:
               skip(f"found {len(matches)} merged PRs with merge commit {sha} and base main")
               raise SystemExit(0)
@@ -991,6 +1000,74 @@ PROMOTE_GUARD = r'''  promote-guard:
               for key, value in values.items():
                   output.write(f"{key}={value}\n")
           PY
+            if [ "$lookup_status" -eq 0 ]; then
+              exit 0
+            fi
+            [ "$lookup_status" -eq 3 ] || exit "$lookup_status"
+            if [ "$attempt" -lt 3 ]; then
+              echo "::notice::No merged PR found for $SHA (attempt $attempt/3); retrying in 20 seconds"
+              sleep 20
+            fi
+          done
+          # A release commit has no pull request: release.yml pushes it with the
+          # release App's token. Only that push actor, with every changed path
+          # in RELEASE_COMMIT_PATHS, skips here; anything else is refused below.
+          RELEASE_PUSH_ACTOR='pineforge-app[bot]'
+          release_status=1
+          if [ "$PUSH_ACTOR" = "$RELEASE_PUSH_ACTOR" ]; then
+            # Every page of the pushed commit's file list; a failed read refuses.
+            if commit=$(gh api --paginate --slurp "repos/$REPO/commits/$SHA?per_page=100"); then
+              release_status=0
+              python3 - 3<<<"$commit" <<'RELEASE_PY' || release_status=$?
+          import json
+          import os
+          import re
+
+          # The only paths a release commit changes: release.yml commits the
+          # first two, and a root-level CHANGELOG* is the third.
+          RELEASE_COMMIT_PATHS = re.compile(
+              r"VERSION|docker/run_failure_codes_diff\.json|CHANGELOG[^/]*")
+          # The commit API lists at most 3000 files: a list that long may be cut.
+          FILE_LIST_LIMIT = 3000
+
+          def reject_constant(value):
+              raise ValueError(f"invalid JSON constant: {value}")
+
+          try:
+              with open(3, encoding="utf-8") as stream:
+                  pages = json.load(stream, parse_constant=reject_constant)
+          except (OSError, ValueError, RecursionError):
+              raise SystemExit(1)
+          if not isinstance(pages, list) or not pages:
+              raise SystemExit(1)
+          paths = []
+          for page in pages:
+              files = page.get("files") if isinstance(page, dict) else None
+              if not isinstance(files, list) or page.get("sha") != os.environ["SHA"]:
+                  raise SystemExit(1)
+              for changed in files:
+                  if not isinstance(changed, dict):
+                      raise SystemExit(1)
+                  paths.append(changed.get("filename"))
+                  if "previous_filename" in changed:
+                      # A rename also changes the path it leaves.
+                      paths.append(changed["previous_filename"])
+          if (not paths or len(paths) >= FILE_LIST_LIMIT
+                  or not all(isinstance(path, str) and RELEASE_COMMIT_PATHS.fullmatch(path)
+                             for path in paths)):
+              raise SystemExit(1)
+          RELEASE_PY
+            fi
+          fi
+          if [ "$release_status" -eq 0 ]; then
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "release commit: baseline is recorded by the release_tag route, not post-merge promote"
+            exit 0
+          fi
+          echo "ok=false" >> "$GITHUB_OUTPUT"
+          echo "::error title=baseline-promotion::DEFERRED_NOT_FOUND: no merged PR found for $SHA after 3 attempts; baseline unchanged"
+          echo "baseline promotion: DEFERRED_NOT_FOUND: no merged PR found for $SHA after 3 attempts; baseline unchanged" >> "$GITHUB_STEP_SUMMARY"
+          exit 1
 
       - name: Only our own merged pull requests and dispatches promote the baseline
         id: authorize
@@ -5728,7 +5805,8 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     if (not resolved or _step_values(resolved, 'if')
             or any(value not in resolved for value in resolver_env)
             or any(value not in resolver_code for value in resolver_selection)
-            or 'gh api --paginate --slurp' not in resolved
+            # The paged read must be the PR-association lookup itself: the release-commit read pages too.
+            or 'gh api --paginate --slurp \\ "repos/$REPO/commits/$SHA/pulls?per_page=100"' not in resolver_code
             or 'repos/$REPO/commits/$SHA/pulls?per_page=100' not in resolved
             or 'github.event.pull_request' in promote
             or 'pull_request_target' in promote):
@@ -6174,6 +6252,14 @@ def check_commands(source: Path, output: Path | None = None,
         # scripts/requirements-preflight.txt (pytest 9.1.1, the remote
         # verifier's), and without it the stage fails.
         ('run-json-harness-tests', run_json_harness_command(source)),
+        # Baseline promotion: the guard's real resolve step, run by bash with a
+        # fake gh and a fake sleep, retries an empty pull-request association
+        # and skips green only for a release commit. It needs pytest as well,
+        # so it is a slow-tier stage beside the harness tests above.
+        ('promote-guard-lookup-tests',
+         [sys.executable, '-B', '-m', 'pytest', '-q', '-p', 'no:cacheprovider',
+          '--rootdir', str(source),
+          str(source / 'scripts/test_promote_guard_lookup_retry.py')]),
         # Documentation CI: ci.yml skips its proof jobs on a documentation-only
         # change, and scripts/ci_docs_only.py's rule decides which that is.
         ('docs-only-tests',

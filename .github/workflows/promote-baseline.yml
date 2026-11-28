@@ -24,7 +24,9 @@
 # ref to refs/heads/main, with no event restriction
 # (terraform/gcp/github-wif.tf:133-134), so a push to main satisfies both gates.
 # The pushed SHA must resolve to exactly one merged PR with that merge commit
-# and base main; no match or ambiguity skips promotion. A manual dispatch
+# and base main; a non-empty answer with no match, or an ambiguous one, skips
+# promotion. An empty answer is looked up three times and then refused
+# (DEFERRED_NOT_FOUND), except for a release commit, which skips. A manual dispatch
 # must match the five fields of a PR merged into main. It checks out and runs
 # no PR code: it fetches the PR head's objects only to compare trees.
 #
@@ -134,6 +136,8 @@ jobs:
           INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
           INPUT_PR_URL: ${{ github.event.inputs.pr_url }}
           INPUT_MERGED_AT: ${{ github.event.inputs.merged_at }}
+          # The push event's actor, never the commit's author or committer.
+          PUSH_ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
           fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
@@ -194,10 +198,13 @@ jobs:
             push) ;;
             *) fail "event $EVENT_NAME does not run baseline promotion (only push and workflow_dispatch are allowed)" ;;
           esac
-          # Search every page: a second match must defer, never pick a PR.
-          pulls=$(gh api --paginate --slurp \
-            "repos/$REPO/commits/$SHA/pulls?per_page=100")
-          python3 - 3<<<"$pulls" <<'PY'
+          # Only an empty association result may be eventually consistent.
+          for attempt in 1 2 3; do
+            # Search every page: a second match must defer, never pick a PR.
+            pulls=$(gh api --paginate --slurp \
+              "repos/$REPO/commits/$SHA/pulls?per_page=100")
+            lookup_status=0
+            python3 - 3<<<"$pulls" <<'PY' || lookup_status=$?
           import json
           import os
           import re
@@ -244,6 +251,9 @@ jobs:
                      and pr.get("merge_commit_sha") == sha
                      and isinstance(pr.get("base"), dict)
                      and pr["base"].get("ref") == "main"]
+          if not matches and not any(pages):
+              # A valid empty result alone permits another lookup.
+              raise SystemExit(3)
           if len(matches) != 1:
               skip(f"found {len(matches)} merged PRs with merge commit {sha} and base main")
               raise SystemExit(0)
@@ -294,6 +304,74 @@ jobs:
               for key, value in values.items():
                   output.write(f"{key}={value}\n")
           PY
+            if [ "$lookup_status" -eq 0 ]; then
+              exit 0
+            fi
+            [ "$lookup_status" -eq 3 ] || exit "$lookup_status"
+            if [ "$attempt" -lt 3 ]; then
+              echo "::notice::No merged PR found for $SHA (attempt $attempt/3); retrying in 20 seconds"
+              sleep 20
+            fi
+          done
+          # A release commit has no pull request: release.yml pushes it with the
+          # release App's token. Only that push actor, with every changed path
+          # in RELEASE_COMMIT_PATHS, skips here; anything else is refused below.
+          RELEASE_PUSH_ACTOR='pineforge-app[bot]'
+          release_status=1
+          if [ "$PUSH_ACTOR" = "$RELEASE_PUSH_ACTOR" ]; then
+            # Every page of the pushed commit's file list; a failed read refuses.
+            if commit=$(gh api --paginate --slurp "repos/$REPO/commits/$SHA?per_page=100"); then
+              release_status=0
+              python3 - 3<<<"$commit" <<'RELEASE_PY' || release_status=$?
+          import json
+          import os
+          import re
+
+          # The only paths a release commit changes: release.yml commits the
+          # first two, and a root-level CHANGELOG* is the third.
+          RELEASE_COMMIT_PATHS = re.compile(
+              r"VERSION|docker/run_failure_codes_diff\.json|CHANGELOG[^/]*")
+          # The commit API lists at most 3000 files: a list that long may be cut.
+          FILE_LIST_LIMIT = 3000
+
+          def reject_constant(value):
+              raise ValueError(f"invalid JSON constant: {value}")
+
+          try:
+              with open(3, encoding="utf-8") as stream:
+                  pages = json.load(stream, parse_constant=reject_constant)
+          except (OSError, ValueError, RecursionError):
+              raise SystemExit(1)
+          if not isinstance(pages, list) or not pages:
+              raise SystemExit(1)
+          paths = []
+          for page in pages:
+              files = page.get("files") if isinstance(page, dict) else None
+              if not isinstance(files, list) or page.get("sha") != os.environ["SHA"]:
+                  raise SystemExit(1)
+              for changed in files:
+                  if not isinstance(changed, dict):
+                      raise SystemExit(1)
+                  paths.append(changed.get("filename"))
+                  if "previous_filename" in changed:
+                      # A rename also changes the path it leaves.
+                      paths.append(changed["previous_filename"])
+          if (not paths or len(paths) >= FILE_LIST_LIMIT
+                  or not all(isinstance(path, str) and RELEASE_COMMIT_PATHS.fullmatch(path)
+                             for path in paths)):
+              raise SystemExit(1)
+          RELEASE_PY
+            fi
+          fi
+          if [ "$release_status" -eq 0 ]; then
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "release commit: baseline is recorded by the release_tag route, not post-merge promote"
+            exit 0
+          fi
+          echo "ok=false" >> "$GITHUB_OUTPUT"
+          echo "::error title=baseline-promotion::DEFERRED_NOT_FOUND: no merged PR found for $SHA after 3 attempts; baseline unchanged"
+          echo "baseline promotion: DEFERRED_NOT_FOUND: no merged PR found for $SHA after 3 attempts; baseline unchanged" >> "$GITHUB_STEP_SUMMARY"
+          exit 1
 
       - name: Only our own merged pull requests and dispatches promote the baseline
         id: authorize
