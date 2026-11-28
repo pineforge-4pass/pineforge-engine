@@ -632,7 +632,7 @@ void source::PineStrategyHost::publish_security_eval_state_at_calling_boundary(
     // Its EMA must latch the requested seed even on that first recomputation.
     internal::AmbientEmaSeedingScope warmup(
         NativeExecutionConsumer::bound(*this).pump_ambient(),
-        security_range_start_na_warmup_);
+        security_ema_na_warmup(state));
     dispatch_pine_request(
         state, state.current_bar, true,
         state.ta_bar_index >= 0 ? state.ta_bar_index : state.eval_complete_count,
@@ -805,7 +805,7 @@ void source::PineStrategyHost::pine_drain_native_fixed_security(
         std::int64_t input_ms, std::int64_t next_input_ms) {
     auto& pine = pine_security_state(state.sec_id);
     internal::AmbientEmaSeedingScope warmup(
-        NativeExecutionConsumer::bound(*this).pump_ambient(), security_range_start_na_warmup_);
+        NativeExecutionConsumer::bound(*this).pump_ambient(), security_ema_na_warmup(state));
     while (auto completed = next_native_fixed_security_bar(
                state, horizon_ms, input_ms, next_input_ms)) {
         Bar bar = completed->bar;
@@ -867,7 +867,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
     //       COMPLETED HTF bar from the range start — a consequence of (a): under
     //       lookahead_off no evaluate_security() fires until that first whole
     //       bucket completes; a bucket straddling the range start never counts.
-    // All three collapse to no-ops when the flag is unset (byte-identical).
+    // Flag unset: the default cut keeps (a), and security_ema_na_warmup (b), on a split-feed run.
     if (security_input_precedes_range_start(state, input_bar.timestamp)) {
         return;
     }
@@ -878,7 +878,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
     // On the pump's runtime block when it has one (the per-pump state cache).
     internal::AmbientEmaSeedingScope _na_warmup_scope(
         NativeExecutionConsumer::bound(*this).pump_ambient(),
-        security_range_start_na_warmup_);
+        security_ema_na_warmup(state));
 
     // Heikin-Ashi same-symbol read: replace an aggregated bar's OHLC with its
     // HA candle before evaluating the security expression. The completed
@@ -2278,6 +2278,34 @@ bool source::PineStrategyHost::set_symbol_feed_borrowed(
     refresh_symbol_data_digest();
     clear_run_failure(*this);
     return true;
+}
+
+// Whether a ta.ema inside this evaluator's request.security expression warms
+// up as TradingView's built-in does: na for its first length - 1 requested
+// bars, then their simple average, then the recursion. True under
+// security_range_start_na_warmup_, and for every evaluator whose requested
+// series the default cut of security_input_precedes_range_start starts at the
+// run's first chart bar (security_first_chart_bar_ms_): a request feed is
+// attached and the requested timeframe is the chart's or coarser. No bar
+// precedes the first bar of such a series, so no earlier value can have
+// seeded its EMA. Every other evaluator keeps the seed from its first
+// requested value.
+bool source::PineStrategyHost::security_ema_na_warmup(
+        const SecurityEvalState& state) const {
+    if (security_range_start_na_warmup_) return true;
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    // The same evaluators as the default cut's.
+    const PineSecurityEvalState& pine = pine_security_state(state.sec_id);
+    if (security_first_chart_bar_ms_ <= 0 || !aux_security_feed_enabled()
+        || pine.lower_tf_requested || pine.lower_tf_array_requested
+        || script_tf_seconds_ <= 0) {
+        return false;
+    }
+    const int requested_seconds = safe_tf_to_clock_seconds(state.tf);
+    return requested_seconds == -1 || requested_seconds >= script_tf_seconds_;
+#else
+    return false;
+#endif
 }
 
 }  // namespace pineforge

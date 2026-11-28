@@ -1368,8 +1368,8 @@ private:
     // progressive feed and the historical lookahead projection builder must
     // agree on this predicate so projected child indexes line up with the
     // per-state feed cursor.
-    bool security_input_precedes_range_start(const SecurityEvalState& state,
-                                             int64_t input_ts) const;
+    bool security_input_precedes_range_start(const SecurityEvalState& state, int64_t input_ts) const;
+    bool security_ema_na_warmup(const SecurityEvalState& state) const;  // seeding of a requested ta.ema
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     // True when the auxiliary request.security feed holds a bar in
     // [from_ms, to_ms): the evidence that an HTF bucket whose nominal open
@@ -1652,8 +1652,8 @@ protected:
     // requests also omit their partial first session, using its actual trading
     // open rather than its label. Other single-feed series keep their feed-start
     // behavior; native feeds retain their own rules. Lower-TF evaluators are
-    // untouched (their slices begin at the first chart bar anyway), and the
-    // flag above keeps its explicit epoch plus the EMA na-warmup semantics.
+    // untouched (their slices begin at the first chart bar anyway). The flag
+    // above keeps its explicit epoch; security_ema_na_warmup follows this cut.
     int64_t security_first_chart_bar_ms_ = 0;
 
     // Nominal close (TradingView's time_close) of the CALLING chart bar the
