@@ -236,6 +236,22 @@ def test_release_inputs_are_readable_by_the_image_user(runner_inputs, user, laun
     assert _run_with_docker(docker, runner_inputs, **launch) == docker.report
 
 
+@pytest.mark.parametrize("launch", [
+    {"corpus_params": {}, "syminfo": {"mincontract": 1}}, {"syminfo": {"mincontract": 1}}, {},
+], ids=["corpus-and-metadata", "metadata", "plain"])
+def test_release_stages_every_entry_for_its_owner_only(runner_inputs, launch):
+    docker = _Docker("10001:10001")
+    # The image user owns each entry (docker cp -a), so it still reads them all.
+    assert _run_with_docker(docker, runner_inputs, **launch) == docker.report
+    staged = {name: values[2] for name, values in docker.staged().items()}
+    assert {"in", "in/strategy.cpp", "in/ohlcv.csv"} <= set(staged)
+    # No group or world bit (read, write or search) on any entry of the archive.
+    assert {name: oct(mode) for name, mode in staged.items() if mode & ~stat.S_IRWXU} == {}
+    # Nor does the container end with a parent directory Docker made for root.
+    assert {path: oct(node[2]) for path, node in docker.copied.items()
+            if node[2] & ~stat.S_IRWXU} == {}
+
+
 @pytest.mark.parametrize("user,passwd,gid", [
     ("10001", True, 20002), ("10001", False, 0), ("10001:10001", True, 10001),
 ], ids=["numeric-passwd", "numeric-no-passwd", "numeric-explicit-group"])
@@ -247,11 +263,12 @@ def test_release_copies_inputs_with_image_ownership(runner_inputs, user, passwd,
     assert _run_with_docker(docker, runner_inputs, corpus_params=request,
                             syminfo=syminfo) == docker.report
     files = docker.staged()
-    # expectation corrected: 0o400 -> 0o644 and 0o500 -> 0o755, because the
-    # image user must read the entries whichever owner Docker leaves; in,
-    # in/strategy.cpp and in/ohlcv.csv are new entries, because the strategy
-    # and the feed are copied in instead of bind-mounted.
-    directory, regular = (10001, gid, 0o755), (10001, gid, 0o644)
+    # expectation corrected: 0o644 -> 0o400 and 0o755 -> 0o500, because the
+    # image user owns every entry (docker cp -a keeps the archive's uid and
+    # gid), so no other account is given a read or search bit; in,
+    # in/strategy.cpp and in/ohlcv.csv are entries because the strategy and
+    # the feed are copied in instead of bind-mounted.
+    directory, regular = (10001, gid, 0o500), (10001, gid, 0o400)
     assert {name: values[:3] for name, values in files.items()} == {
         "in": directory,
         "in/strategy.cpp": regular,
@@ -303,13 +320,14 @@ def test_release_keeps_staged_inputs_off_host_mounts(runner_inputs):
 def test_release_accepts_empty_image_user_as_root(runner_inputs):
     docker = _Docker("")
     assert _run_with_docker(docker, runner_inputs, syminfo={"mincontract": 1}) == docker.report
-    # expectation corrected: 0o400 -> 0o644, with in, in/strategy.cpp and
-    # in/ohlcv.csv added, for the two reasons given in the ownership test.
+    # expectation corrected: 0o644 -> 0o400 and 0o755 -> 0o500, for the reason
+    # given in the ownership test; in, in/strategy.cpp and in/ohlcv.csv are
+    # entries for the reason given there too.
     assert {name: values[:3] for name, values in docker.staged().items()} == {
-        "in": (0, 0, 0o755),
-        "in/strategy.cpp": (0, 0, 0o644),
-        "in/ohlcv.csv": (0, 0, 0o644),
-        "in/syminfo.json": (0, 0, 0o644),
+        "in": (0, 0, 0o500),
+        "in/strategy.cpp": (0, 0, 0o400),
+        "in/ohlcv.csv": (0, 0, 0o400),
+        "in/syminfo.json": (0, 0, 0o400),
     }
     assert docker.account_reads == []
 
