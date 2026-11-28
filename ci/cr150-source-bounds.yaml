@@ -38,7 +38,21 @@
 # none fails, as does a path that is no file or a line past its end. A sentence
 # of prose only is listed UNCHECKED: it is counted and printed, never taken as
 # holding, and `ceilings.cited_unchecked` pins how many there are.
-# Citations in these comments are not read.
+# A citation in a comment of this file is read by the same rules, as one in a
+# note of no entry. A comment has no file of its own, so every line it cites
+# is written with its path (`path:N`, or a bare `:M` joined to one); a bare
+# `:N` or `line N` that continues no path fails. A comment records no site, so
+# the cited line must hold a construct its sentence spells, and a comment that
+# calls a cited line a site fails. Consecutive comment lines are one text, in
+# which a sentence may run over several lines; a comment line with no words
+# ends it. A comment citation in a sentence of prose only is listed UNCHECKED
+# as well, and `ceilings.comment_unchecked` pins how many of those there are.
+#
+# An entry's `line:` field is the line of its first site in the scanned tree,
+# the number `--emit-seed` writes. The gate compares every field with the
+# scan: another number fails, and the finding names the entry and both
+# numbers. The field of an entry with no site left is not compared; that
+# entry fails as stale.
 #
 # States
 #   bounded              bound = expression over declared fixed_inputs only (no bars,
@@ -66,6 +80,8 @@
 # therefore changes that number. This covers the citation forms listed above
 # and no other: a line number written another way and without `:N` (`LINE 6`)
 # is not a citation, and the gate neither checks nor counts it.
+# `ceilings.comment_unchecked` pins the number of UNCHECKED comment citations
+# in the same way, apart from the number of the notes.
 # `owner` is the code area that must supply the bound (see `owners`); it is not a
 # person or lane roster.
 #
@@ -215,8 +231,8 @@ ceilings:
   # U1930 (src/ta_volatility_trend.cpp:562) is one copy of at most 64
   # formatted bytes, local to one refusal and not retained. The two empty
   # prefix alternatives it also had when it was added are gone: the prefix
-  # of each message (:546 and :560) is the string run_error_bar_prefix()
-  # returns. The gate cannot express this bound.
+  # of each message (src/ta_volatility_trend.cpp:546 and :560) is the string
+  # run_error_bar_prefix() returns. The gate cannot express this bound.
   # expectation corrected: 1457 -> 1458, because one more unreviewed group
   # (1457 + 1) in include/pineforge/engine.hpp, for the fixed-period request
   # clock (#718). It is not bounded in the gate's sense: no fixed input is
@@ -236,10 +252,12 @@ ceilings:
   # input is declared for it. It says what limits it:
   # U1931 unranked: the positions, in the adapter's list of exit legs that wait
   # for the end of the calculation, of the legs one strategy.exit call gives a
-  # queue slot (src/source/pine_adapter.cpp:13620, filled at :13629). A local
-  # list of one call, built only for a full exit of a named entry placed at
-  # once (:13604-13611) and freed when that call's helper returns (:13662). It
-  # holds at most one position for each leg waiting at that call (:13621), a
+  # queue slot (src/source/pine_adapter.cpp:13620, filled at
+  # src/source/pine_adapter.cpp:13629). A local list of one call, built only
+  # for a full exit of a named entry placed at once
+  # (src/source/pine_adapter.cpp:13604-13611) and freed when that call's helper
+  # returns (src/source/pine_adapter.cpp:13662). It holds at most one position
+  # for each leg waiting at that call (src/source/pine_adapter.cpp:13621), a
   # number the calculation's own strategy.exit calls set and no fixed input
   # bounds; it does not follow the length of the run.
   # expectation corrected: 1460 -> 1462, because the timezone guard adds two
@@ -272,8 +290,10 @@ ceilings:
   # expectation corrected: 1475 -> 1477, because the positional history of the
   # Pine ta.mom / ta.roc objects (PositionalLag in
   # include/pineforge/source/pine_ta_length.hpp) adds two OPEN groups: its ring
-  # (U1967, the member lag_slots_ at :593) and the larger vector one growth step
-  # builds and swaps in (U1966, the local grown at :611). The ring holds at most
+  # (U1967, the member lag_slots_ at
+  # include/pineforge/source/pine_ta_length.hpp:593) and the larger vector one
+  # growth step builds and swaps in (U1966, the local `grown` at
+  # include/pineforge/source/pine_ta_length.hpp:611). The ring holds at most
   # length + 1 values and the length is the call's argument, so neither is
   # bounded in the gate's sense: no fixed input is declared for them. The member
   # is not called slots_: the index resolves no types, and a container member of
@@ -282,7 +302,7 @@ ceilings:
   # as container assignments. Two site identities also enter the existing OPEN
   # group U1108 without adding a group: the whole-state restores of
   # PineDmiReference::recompute and PineSar::recompute
-  # (src/source/pine_ta_length.cpp:663 and :749).
+  # (`state_ = saved_state_`, src/source/pine_ta_length.cpp:663 and :749).
   # expectation corrected: 1477 -> 1479, because the state that keeps the N-day
   # partitions of timeframe.change for one run (TimeframeChangeState in
   # src/source/pine_host_reads.hpp) adds two OPEN groups: its rows (U1969, the
@@ -311,13 +331,15 @@ ceilings:
   # its two counters of the values taken are named value_count_ and
   # saved_value_count_, not values_ and saved_values_. The index resolves no
   # types, and include/pineforge/ta.hpp declares container members of those two
-  # names (U0467, U0463), so it listed the four integer statements of the
-  # counters (:980, :981, :991, :995) as container assignments.
+  # names (U0467, U0463), so it listed the four integer statements of
+  # value_count_ and saved_value_count_
+  # (include/pineforge/source/pine_ta_length.hpp:980, :981, :991, :995) as
+  # container assignments.
   # expectation corrected: 1492 -> 1491, because session_trading_day_open_ms
   # no longer copies eff_tz (U0759 is retired). The wall-minute cache keeps
   # its slot member named tz, so U1184 stays one group: its two cache sites
   # move from tz_offset_ms to session_wall_minute_ms, and the partition's
-  # p.tz assignment (src/timeframe.cpp:857) stays indexed. No group is added.
+  # `p.tz` assignment (src/timeframe.cpp:857) stays indexed. No group is added.
   unreviewed: 1491
   pending-flat-memory: 179
   # cited_unchecked pins the number of note citations the gate lists
@@ -347,6 +369,11 @@ ceilings:
   # entry, or a range that neither holds at both ends nor runs from a site to
   # the end of what begins there.
   cited_unchecked: 88
+  # comment_unchecked pins, in the same way, the number of citations in the
+  # comments of this file that the gate lists UNCHECKED: a comment sentence of
+  # prose only that cites a line and names nothing the gate can look for
+  # there. A manifest without this key allows none.
+  comment_unchecked: 22
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
   - {name: "c-abi", globs: ["src/c_abi.cpp", "src/native_c_host.cpp", "src/selected_window_plan_c.cpp", "include/pineforge/*.h"]}
@@ -356,11 +383,11 @@ owners:
   - {name: "ta-series", globs: ["src/ta_*", "include/pineforge/ta*.hpp", "include/pineforge/series.hpp", "include/pineforge/window_sum.hpp", "include/pineforge/math.hpp", "src/math.cpp"]}
   - {name: "script-state", globs: ["src/matrix.cpp", "include/pineforge/matrix.hpp", "include/pineforge/generic_matrix.hpp", "include/pineforge/map.hpp", "include/pineforge/drawing.hpp", "src/str_utils.cpp", "include/pineforge/str_utils.hpp", "include/pineforge/color.hpp", "include/pineforge/na.hpp"]}
   # The shared capacity primitive, CSV reader and driver are one source area.
-  # CR150 owns their inventory integration; this does not assign WIN product edits.
-  # reserve() constructs failure arguments (src/selected_capacity_core.cpp:17).
-  # CsvReader retains an uncapped field string (src/selected_capacity_csv_reader.hpp:65);
-  # read_field() grows it before record observation (src/selected_capacity_csv_reader.cpp:239).
-  # DriverResult owns diagnostic strings (src/selected_capacity_driver.hpp:126 and :136).
+  # The source census owns their inventory integration; this does not assign product edits.
+  # reserve() constructs failure arguments (`RunFailureArgs`, src/selected_capacity_core.cpp:17).
+  # CsvReader retains an uncapped field string (`field_`, src/selected_capacity_csv_reader.hpp:65);
+  # read_field() grows it with push_back before record observation (src/selected_capacity_csv_reader.cpp:239).
+  # DriverResult owns diagnostic strings (`option` and `message`, src/selected_capacity_driver.hpp:126 and :136).
   # Capacity counters do not establish a fixed byte bound for those allocations.
   # Missing groups must come from --emit-seed and remain unreviewed/unclassified.
   # Concrete identities await off-master --emit-site-inventory and source review.
@@ -763,17 +790,17 @@ entries:
   - {id: "U0400", file: "include/pineforge/source/pine_scheduler.hpp", symbol: "input_tf", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 260}
   - {id: "U0401", file: "include/pineforge/source/pine_scheduler.hpp", symbol: "script_tf", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 261}
   - {id: "U0402", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "<temp:const_iterator>", ops: ["temp"], container: "unresolved by the index: const_iterator", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 830}
-  - {id: "U0403", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "aux_security_bars_", ops: ["decl"], container: "std::vector<Bar>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1488}
-  - {id: "U0404", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "aux_security_chart_begin_", ops: ["decl"], container: "std::vector<std::size_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1490}
-  - {id: "U0405", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "aux_security_chart_end_", ops: ["decl"], container: "std::vector<std::size_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1491}
-  - {id: "U0406", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "aux_security_input_tf_", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1489}
+  - {id: "U0403", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "aux_security_bars_", ops: ["decl"], container: "std::vector<Bar>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1491}
+  - {id: "U0404", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "aux_security_chart_begin_", ops: ["decl"], container: "std::vector<std::size_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1493}
+  - {id: "U0405", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "aux_security_chart_end_", ops: ["decl"], container: "std::vector<std::size_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1494}
+  - {id: "U0406", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "aux_security_input_tf_", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1492}
   - {id: "U0407", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "canonical", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 150}
   - {id: "U0408", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "currency", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 155}
   - {id: "U0409", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "deferred_aux", ops: ["decl"], container: "std::vector<DeferredAuxBar>", owner: "source-layer", phase: "bar", state: "pending-flat-memory", inventory: "F21", grows_with: ["intrabar-rows"], line: 407}
   - {id: "U0410", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "end", ops: ["decl"], container: "const_iterator", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 851}
   - {id: "U0411", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "find", ops: ["decl"], container: "const_iterator", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 844}
-  - {id: "U0412", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "foreign_security_series_", ops: ["decl"], container: "std::vector<int>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1526}
-  - {id: "U0413", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "foreign_security_sites_", ops: ["decl"], container: "std::map<int, ForeignSecuritySite>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1525}
+  - {id: "U0412", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "foreign_security_series_", ops: ["decl"], container: "std::vector<int>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1529}
+  - {id: "U0413", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "foreign_security_sites_", ops: ["decl"], container: "std::map<int, ForeignSecuritySite>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1528}
   - {id: "U0414", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "from_entry", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 650}
   - {id: "U0415", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "historical_projections", ops: ["decl"], container: "std::vector<HistoricalSecurityProjection>", owner: "source-layer", phase: "bar", state: "pending-flat-memory", inventory: "F19", grows_with: ["feed-rows"], line: 323}
   - {id: "U0416", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "id", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 642}
@@ -781,21 +808,21 @@ entries:
   - {id: "U0418", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "market_admission_fields", ops: ["decl"], container: "std::vector<admission::Field>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 557}
   # U0419/U0437 retired: RecordedSeries now owns one FeedProjection of paired
   # timestamp/value rows. Its builder/provider/cache sites are U1613-U1615/U1623.
-  - {id: "U0420", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "pine_security_states_", ops: ["decl", "subscript"], container: "std::map<int, PineSecurityEvalState>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1349}
-  - {id: "U0421", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "recorded_series_", ops: ["decl"], container: "std::map<std::string, RecordedSeries>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1519}
-  - {id: "U0422", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "requested_tf", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1225}
-  - {id: "U0423", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "restore_symbol_feeds_reason", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1319}
+  - {id: "U0420", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "pine_security_states_", ops: ["decl", "subscript"], container: "std::map<int, PineSecurityEvalState>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1352}
+  - {id: "U0421", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "recorded_series_", ops: ["decl"], container: "std::map<std::string, RecordedSeries>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1522}
+  - {id: "U0422", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "requested_tf", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1228}
+  - {id: "U0423", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "restore_symbol_feeds_reason", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1322}
   - {id: "U0424", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "result", ops: ["decl"], container: "const_iterator", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 846}
   - {id: "U0425", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "session", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 154}
   - {id: "U0426", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "sessions", ops: ["decl"], container: "std::vector<std::pair<std::int64_t, std::int64_t>>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 595}
-  - {id: "U0427", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "source_pending_view_cache_", ops: ["decl"], container: "std::vector<FixtureIntentRow>", owner: "source-layer", phase: "bar", state: "pending-flat-memory", inventory: "P40", grows_with: ["live-orders"], line: 1681}
-  - {id: "U0428", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "symbol", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1224}
-  - {id: "U0429", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "symbol_calendar_", ops: ["decl"], container: "std::vector<std::pair<std::int64_t, std::int64_t>>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1585}
-  - {id: "U0430", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "symbol_calendar_closes_", ops: ["decl"], container: "std::map<long long, double>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1587}
-  - {id: "U0431", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "symbol_calendar_opens_", ops: ["decl"], container: "std::map<long long, double>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1586}
-  - {id: "U0432", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "symbol_facts_", ops: ["decl"], container: "std::map<std::string, SymbolFacts>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1518}
-  - {id: "U0433", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "symbol_feeds_", ops: ["decl"], container: "std::vector<NativeInstrumentFeed>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1516}
-  - {id: "U0434", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "tf", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1237}
+  - {id: "U0427", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "source_pending_view_cache_", ops: ["decl"], container: "std::vector<FixtureIntentRow>", owner: "source-layer", phase: "bar", state: "pending-flat-memory", inventory: "P40", grows_with: ["live-orders"], line: 1684}
+  - {id: "U0428", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "symbol", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1227}
+  - {id: "U0429", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "symbol_calendar_", ops: ["decl"], container: "std::vector<std::pair<std::int64_t, std::int64_t>>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1588}
+  - {id: "U0430", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "symbol_calendar_closes_", ops: ["decl"], container: "std::map<long long, double>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1590}
+  - {id: "U0431", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "symbol_calendar_opens_", ops: ["decl"], container: "std::map<long long, double>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1589}
+  - {id: "U0432", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "symbol_facts_", ops: ["decl"], container: "std::map<std::string, SymbolFacts>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1521}
+  - {id: "U0433", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "symbol_feeds_", ops: ["decl"], container: "std::vector<NativeInstrumentFeed>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1519}
+  - {id: "U0434", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "tf", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1240}
   - {id: "U0435", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "timezone", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 153}
   - {id: "U0436", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "type", ops: ["assign", "decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 152}
   # U0438/U0440 retired: HeldHistory's frozen/tail vectors became WindowValues.
@@ -1376,31 +1403,31 @@ entries:
   - {id: "U1021", file: "src/source/pine_scheduler_native.cpp", symbol: "coof_checkpoint_src_volume_", ops: ["assign"], container: "unresolved by the index: coof_checkpoint_src_volume_ = ...", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 106}
   - {id: "U1024", file: "src/source/pine_scheduler_native.cpp", symbol: "pos_view_frozen_entry_qty_", ops: ["subscript"], container: "unresolved by the index: pos_view_frozen_entry_qty_[...]", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 507}
   - {id: "U1025", file: "src/source/pine_security_eval.cpp", symbol: "<temp:string>", ops: ["temp"], container: "unresolved by the index: std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 56}
-  - {id: "U1026", file: "src/source/pine_security_eval.cpp", symbol: "<temp:vector>", ops: ["temp"], container: "unresolved by the index: std::vector<double>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1965}
-  - {id: "U1027", file: "src/source/pine_security_eval.cpp", symbol: "aggregated", ops: ["decl", "grow"], container: "RunFailureArgs", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1628}
-  - {id: "U1028", file: "src/source/pine_security_eval.cpp", symbol: "args", ops: ["decl", "grow"], container: "RunFailureArgs", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1866}
-  - {id: "U1029", file: "src/source/pine_security_eval.cpp", symbol: "bars", ops: ["grow"], container: "unresolved by the index: bars.assign(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1889}
-  - {id: "U1030", file: "src/source/pine_security_eval.cpp", symbol: "canonical_symbol_timeframe", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1488}
-  - {id: "U1031", file: "src/source/pine_security_eval.cpp", symbol: "close_ms", ops: ["grow"], container: "unresolved by the index: close_ms.assign(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1890}
-  - {id: "U1032", file: "src/source/pine_security_eval.cpp", symbol: "columns", ops: ["grow"], container: "unresolved by the index: columns.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1958}
-  - {id: "U1033", file: "src/source/pine_security_eval.cpp", symbol: "declared", ops: ["grow"], container: "unresolved by the index: declared.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1708}
-  - {id: "U1034", file: "src/source/pine_security_eval.cpp", symbol: "foreign_security_series_", ops: ["grow"], container: "unresolved by the index: foreign_security_series_.assign(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1619}
-  - {id: "U1035", file: "src/source/pine_security_eval.cpp", symbol: "foreign_security_sites_", ops: ["subscript"], container: "unresolved by the index: foreign_security_sites_[...]", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1542}
-  - {id: "U1036", file: "src/source/pine_security_eval.cpp", symbol: "judged_feeds", ops: ["decl"], container: "std::vector<NativeInstrumentFeed>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1884}
-  - {id: "U1037", file: "src/source/pine_security_eval.cpp", symbol: "lower_tf_input_buffer", ops: ["grow"], container: "unresolved by the index: lower_tf_input_buffer.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 895}
-  - {id: "U1038", file: "src/source/pine_security_eval.cpp", symbol: "ltf_bars", ops: ["decl", "grow"], container: "std::vector<Bar>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 927}
-  - {id: "U1039", file: "src/source/pine_security_eval.cpp", symbol: "missing", ops: ["decl", "grow"], container: "RunFailureArgs", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1668}
+  - {id: "U1026", file: "src/source/pine_security_eval.cpp", symbol: "<temp:vector>", ops: ["temp"], container: "unresolved by the index: std::vector<double>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1982}
+  - {id: "U1027", file: "src/source/pine_security_eval.cpp", symbol: "aggregated", ops: ["decl", "grow"], container: "RunFailureArgs", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1645}
+  - {id: "U1028", file: "src/source/pine_security_eval.cpp", symbol: "args", ops: ["decl", "grow"], container: "RunFailureArgs", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1883}
+  - {id: "U1029", file: "src/source/pine_security_eval.cpp", symbol: "bars", ops: ["grow"], container: "unresolved by the index: bars.assign(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1906}
+  - {id: "U1030", file: "src/source/pine_security_eval.cpp", symbol: "canonical_symbol_timeframe", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1505}
+  - {id: "U1031", file: "src/source/pine_security_eval.cpp", symbol: "close_ms", ops: ["grow"], container: "unresolved by the index: close_ms.assign(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1907}
+  - {id: "U1032", file: "src/source/pine_security_eval.cpp", symbol: "columns", ops: ["grow"], container: "unresolved by the index: columns.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1975}
+  - {id: "U1033", file: "src/source/pine_security_eval.cpp", symbol: "declared", ops: ["grow"], container: "unresolved by the index: declared.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1725}
+  - {id: "U1034", file: "src/source/pine_security_eval.cpp", symbol: "foreign_security_series_", ops: ["grow"], container: "unresolved by the index: foreign_security_series_.assign(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1636}
+  - {id: "U1035", file: "src/source/pine_security_eval.cpp", symbol: "foreign_security_sites_", ops: ["subscript"], container: "unresolved by the index: foreign_security_sites_[...]", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1559}
+  - {id: "U1036", file: "src/source/pine_security_eval.cpp", symbol: "judged_feeds", ops: ["decl"], container: "std::vector<NativeInstrumentFeed>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1901}
+  - {id: "U1037", file: "src/source/pine_security_eval.cpp", symbol: "lower_tf_input_buffer", ops: ["grow"], container: "unresolved by the index: lower_tf_input_buffer.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 908}
+  - {id: "U1038", file: "src/source/pine_security_eval.cpp", symbol: "ltf_bars", ops: ["decl", "grow"], container: "std::vector<Bar>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 940}
+  - {id: "U1039", file: "src/source/pine_security_eval.cpp", symbol: "missing", ops: ["decl", "grow"], container: "RunFailureArgs", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1685}
   # U1040/U1049 retired: paired recorded rows are appended to U1623's builder,
   # backed by U1615's reader. Neither removed vector assignment remains.
   - {id: "U1041", file: "src/source/pine_security_eval.cpp", symbol: "pine_security_states_", ops: ["subscript"], container: "unresolved by the index: pine_security_states_[...]", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 113}
-  - {id: "U1042", file: "src/source/pine_security_eval.cpp", symbol: "recorded_series_", ops: ["subscript"], container: "std::map<std::string, RecordedSeries>", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "Both copied-array and provider installation publish one tape by key during setup. The array path moved to set_recorded_series_impl; the provider path is a second insertion identity. Map nodes/key bytes grow with installed distinct tape keys; each tape's backing rows grow with its input. Cache capacity does not bound either population.", line: 2070}
-  - {id: "U1043", file: "src/source/pine_security_eval.cpp", symbol: "std::to_string", ops: ["temp"], container: "unresolved by the index: std::to_string(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "Retain existing temporary identities. Recorded-array validation moved to set_recorded_series_impl; provider validation adds an independent row-index diagnostic in set_recorded_series_reader_impl. One temporary per rejected setup row, freed on return; no retained row history or new bounded claim.", line: 453}
-  - {id: "U1044", file: "src/source/pine_security_eval.cpp", symbol: "symbol_facts_", ops: ["subscript"], container: "unresolved by the index: symbol_facts_[...]", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1991}
-  - {id: "U1045", file: "src/source/pine_security_eval.cpp", symbol: "symbol_feeds_", ops: ["grow"], container: "unresolved by the index: symbol_feeds_.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1910}
-  - {id: "U1046", file: "src/source/pine_security_eval.cpp", symbol: "symbol_ticker", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1495}
-  - {id: "U1047", file: "src/source/pine_security_eval.cpp", symbol: "synthetic_bars", ops: ["decl"], container: "std::vector<Bar>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 981}
-  - {id: "U1048", file: "src/source/pine_security_eval.cpp", symbol: "tf", ops: ["assign", "decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "The entry groups every `tf` in this file. The site this change adds to the scan is the local `const auto tf = native_calendar::parse_timeframe(security_input_tf_);` of the fixed-period branch of pine_feed_security_eval_state (src/source/pine_security_eval.cpp:1087, in the pine_native_fixed_security_clock block that opens at :1072): an optional parsed timeframe that one call holds on the auxiliary-feed route only (`calling` is set at :1076 and tested at :1085). It is freed when the block of that test ends (:1090). It owns one copy of the input timeframe spelling (the literal_ of native_calendar::Timeframe, include/pineforge/native_calendar.hpp:85), whose size is that of one timeframe spelling and does not follow the length of the run. The entry's other sites are unchanged. No fixed input bounds them. OPEN.", line: 1087}
-  - {id: "U1050", file: "src/source/pine_security_eval.cpp", symbol: "why", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "Retain existing restore-error locals; move the array-install local to its implementation helper and add the provider-install local. Setup-call lifetime, one returned restore diagnostic of unproved byte length per call. No accumulating history and no bounded proof.", line: 1903}
+  - {id: "U1042", file: "src/source/pine_security_eval.cpp", symbol: "recorded_series_", ops: ["subscript"], container: "std::map<std::string, RecordedSeries>", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "Both copied-array and provider installation publish one tape by key during setup. The array path moved to set_recorded_series_impl; the provider path is a second insertion identity. Map nodes/key bytes grow with installed distinct tape keys; each tape's backing rows grow with its input. Cache capacity does not bound either population.", line: 2087}
+  - {id: "U1043", file: "src/source/pine_security_eval.cpp", symbol: "std::to_string", ops: ["temp"], container: "unresolved by the index: std::to_string(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "Retain existing temporary identities. Recorded-array validation moved to set_recorded_series_impl; provider validation adds an independent row-index diagnostic in set_recorded_series_reader_impl. One temporary per rejected setup row, freed on return; no retained row history or new bounded claim.", line: 466}
+  - {id: "U1044", file: "src/source/pine_security_eval.cpp", symbol: "symbol_facts_", ops: ["subscript"], container: "unresolved by the index: symbol_facts_[...]", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 2008}
+  - {id: "U1045", file: "src/source/pine_security_eval.cpp", symbol: "symbol_feeds_", ops: ["grow"], container: "unresolved by the index: symbol_feeds_.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1927}
+  - {id: "U1046", file: "src/source/pine_security_eval.cpp", symbol: "symbol_ticker", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1512}
+  - {id: "U1047", file: "src/source/pine_security_eval.cpp", symbol: "synthetic_bars", ops: ["decl"], container: "std::vector<Bar>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 994}
+  - {id: "U1048", file: "src/source/pine_security_eval.cpp", symbol: "tf", ops: ["assign", "decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "The entry groups every `tf` in this file. The site this change adds to the scan is the local `const auto tf = native_calendar::parse_timeframe(security_input_tf_);` of the fixed-period branch of pine_feed_security_eval_state (src/source/pine_security_eval.cpp:1104, in the pine_native_fixed_security_clock block that opens at :1089): an optional parsed timeframe that one call holds on the auxiliary-feed route only (`calling` is set at :1093 and tested at :1102). It is freed when the block of that test ends (:1107). It owns one copy of the input timeframe spelling (the literal_ of native_calendar::Timeframe, include/pineforge/native_calendar.hpp:85), whose size is that of one timeframe spelling and does not follow the length of the run. The entry's other sites are unchanged. No fixed input bounds them. OPEN.", line: 1104}
+  - {id: "U1050", file: "src/source/pine_security_eval.cpp", symbol: "why", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "Retain existing restore-error locals; move the array-install local to its implementation helper and add the provider-install local. Setup-call lifetime, one returned restore diagnostic of unproved byte length per call. No accumulating history and no bounded proof.", line: 1920}
   - {id: "U1051", file: "src/source/pine_state_hash.cpp", symbol: "bracket_keys", ops: ["decl", "grow"], container: "std::vector<std::uint64_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 434}
   - {id: "U1054", file: "src/source/pine_state_hash.cpp", symbol: "current_debit_ordinals", ops: ["decl", "grow"], container: "std::vector<std::uint64_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 619}
   - {id: "U1055", file: "src/source/pine_state_hash.cpp", symbol: "input_keys", ops: ["decl", "grow"], container: "std::vector<std::string>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 390}
@@ -1646,7 +1673,7 @@ entries:
   - {id: "U1303", file: "include/pineforge/source/pine_adapter.hpp", symbol: "unresolved_candidates", ops: ["decl"], container: "std::vector<std::size_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 3318}
   - {id: "U1304", file: "include/pineforge/source/pine_scheduler.hpp", symbol: "owned", ops: ["decl"], container: "std::vector<Bar>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 259}
   - {id: "U1305", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "<temp:value_type>", ops: ["temp"], container: "unresolved by the index: value_type", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 829}
-  - {id: "U1306", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "symbol_feed_views_", ops: ["decl"], container: "std::vector<BorrowedFeedSlot>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1544}
+  - {id: "U1306", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "symbol_feed_views_", ops: ["decl"], container: "std::vector<BorrowedFeedSlot>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1547}
   - {id: "U1307", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "value_", ops: ["decl"], container: "value_type", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 842}
   - {id: "U1308", file: "include/pineforge/trade_ledger.hpp", symbol: "<temp:const_iterator>", ops: ["temp"], container: "unresolved by the index: const_iterator", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 86}
   - {id: "U1309", file: "include/pineforge/trade_ledger.hpp", symbol: "begin", ops: ["decl"], container: "const_iterator", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 265}
@@ -1670,9 +1697,10 @@ entries:
   # U1325 retired: both former cache keys are preserved here as history.
   # The grow/shared-control alternative has no surviving emplacement.
   # The alloc/make_unique directory alternative became a nothrow cache.reset
-  # allocation under U1621, which is retired too: the directory is now
+  # allocation under U1621, which is retired too. The directory is now
   # storage from the one nothrow allocation function at
-  # src/engine_orders.cpp:729 (U1691), built in place at :743 (U1690).
+  # src/engine_orders.cpp:729 (U1691), built in place at
+  # src/engine_orders.cpp:743 (U1690).
   - {id: "U1326", file: "src/engine_orders.cpp", symbol: "directory", ops: ["assign", "decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 545}
   - {id: "U1327", file: "src/engine_orders.cpp", symbol: "get_string", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 1051}
   - {id: "U1328", file: "src/engine_orders.cpp", symbol: "materialized", ops: ["decl", "grow"], container: "std::map<size_type, Trade>", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 546}
@@ -1680,7 +1708,7 @@ entries:
   # U1642 retired as a separate key: the former page/make_unique allocation
   # became page.reset under reset/U1621, which is retired too. A page is now
   # storage from the same allocation function (src/engine_orders.cpp:729,
-  # U1691), built in place at :758 (U1690).
+  # U1691), built in place at src/engine_orders.cpp:758 (U1690).
   - {id: "U1330", file: "src/engine_orders.cpp", symbol: "result", ops: ["assign", "decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 447}
   - {id: "U1331", file: "src/engine_orders.cpp", symbol: "state_", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "The existing State allocation includes three fixed percentage folds and one replacement ordinal. Repair reads numeric descriptors, without building a container of trades. OPEN.", line: 1389}
   - {id: "U1332", file: "src/engine_orders.cpp", symbol: "string_field", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 871}
@@ -1820,7 +1848,7 @@ entries:
   - {id: "U1472", file: "src/source/pine_scheduler_native.cpp", symbol: "consumed_script_cursor_", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 287}
   - {id: "U1473", file: "src/source/pine_scheduler_native.cpp", symbol: "input_script_cursor", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 285}
   - {id: "U1474", file: "src/source/pine_scheduler_native.cpp", symbol: "owned", ops: ["grow"], container: "unresolved by the index: owned.assign(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 26}
-  - {id: "U1475", file: "src/source/pine_security_eval.cpp", symbol: "symbol_feed_views_", ops: ["grow"], container: "unresolved by the index: symbol_feed_views_.reserve(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1911}
+  - {id: "U1475", file: "src/source/pine_security_eval.cpp", symbol: "symbol_feed_views_", ops: ["grow"], container: "unresolved by the index: symbol_feed_views_.reserve(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1928}
   - {id: "U1476", file: "src/source/pine_state_hash.cpp", symbol: "page", ops: ["decl"], container: "std::vector<std::byte>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 113}
   - {id: "U1477", file: "src/source/pine_strategy_host.cpp", symbol: "command_scratch", ops: ["alloc"], container: "unresolved by the index: make_shared", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 646}
   - {id: "U1478", file: "src/source/pine_strategy_host.cpp", symbol: "descriptors", ops: ["decl"], container: "std::vector<NativeInstrumentFeedView>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 4540}
@@ -1946,7 +1974,7 @@ entries:
   - {id: "U1618", file: "include/pineforge/series.hpp", symbol: "replacement", ops: ["alloc"], container: "std::shared_ptr<WindowValues<T>::Backing>", owner: "ta-series", phase: "unclassified", state: "unreviewed", note: "First numeric write or a write to shared checkpoint backing creates one replacement ScratchFile/mutex control and copies all logical window pages through one fixed 1024-value transfer. Control count is fixed per clone; backing bytes and copy work scale with logical window size, with old snapshots retained by their owners. No bar/trade-independent whole-history bound. OPEN.", line: 353}
   - {id: "U1619", file: "include/pineforge/series.hpp", symbol: "stored", ops: ["alloc"], container: "std::shared_ptr<WindowValues<T>::Page>", owner: "ta-series", phase: "unclassified", state: "unreviewed", note: "Two write-path make_shared identities: first materialization and copy-on-write of one existing page. Each typed page holds min(1024, remaining logical values); all materialized resident pages together scale with logical window length. Non-arithmetic T can own additional payload bytes. Keep both occurrences OPEN, with page-vector bytes covered by U1620.", line: 163}
   - {id: "U1620", file: "include/pineforge/series.hpp", symbol: "values", ops: ["decl"], container: "std::vector<T>", owner: "ta-series", phase: "unclassified", state: "unreviewed", note: "Each WindowValues::Page constructs its typed vector with 1..1024 elements and its initial value. This per-page element bound does not bound the number of owned pages or arbitrary T payloads; complete resident ownership can scale with logical window length. Member/header declarations are outside guarded bounded admission. OPEN.", line: 258}
-  - {id: "U1623", file: "src/source/pine_security_eval.cpp", symbol: "builder", ops: ["grow"], container: "FeedProjectionBuilder<RecordedSeriesRow>", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "set_recorded_series_impl writes n paired timestamp/value rows during setup, replacing the separate open_ms/values vector assignments U1040/U1049. One fixed transfer page, one provider control and configured read lines; backing remains n*sizeof(RecordedSeriesRow). No cache parameter bounds n. OPEN.", line: 2062}
+  - {id: "U1623", file: "src/source/pine_security_eval.cpp", symbol: "builder", ops: ["grow"], container: "FeedProjectionBuilder<RecordedSeriesRow>", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "set_recorded_series_impl writes n paired timestamp/value rows during setup, replacing the separate open_ms/values vector assignments U1040/U1049. One fixed transfer page, one provider control and configured read lines; backing remains n*sizeof(RecordedSeriesRow). No cache parameter bounds n. OPEN.", line: 2079}
   - {id: "U1624", file: "src/source/pine_ta_length.cpp", symbol: "values_", ops: ["assign"], container: "detail::WindowValues<double> move assignment", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "HeldHistory::ensure_slots replaces the history as observed bars require whole pages. With a finite keep, capacity has at most ceil(keep/1024)+1 pages and retirement preserves the lookback. With no cap, history follows all observed bars, including held gaps. Resident cache policy does not choose retained values. U1616-U1620 cover the common storage allocations. OPEN.", line: 156}
   - {id: "U1625", file: "src/timeframe.cpp", symbol: "month_opens", ops: ["grow"], container: "FeedProjectionBuilder<int64_t> month column", owner: "calendar-time", phase: "setup", state: "pending-flat-memory", inventory: "F14", grows_with: ["days"], note: "Replaces U1175's month_open reserve and two branch pushes with one append per input daily stamp. Fixed builder transfer and independently configured read-cache residency; scratch backing still stores 8 bytes per stamp, O(days). Keep the original F14 growth obligation OPEN.", line: 902}
   - {id: "U1645", file: "src/timeframe.cpp", symbol: "trade_days", ops: ["grow"], container: "FeedProjectionBuilder<int64_t> trade-day column", owner: "calendar-time", phase: "setup", state: "pending-flat-memory", inventory: "F14", grows_with: ["days"], note: "Replaces U1182's trade_day reserve/push with one append per input daily stamp. Fixed builder transfer and configured read lines do not cap the 8-byte-per-stamp backing. p.stamps and p.late_opens remain separately owning vectors. Keep F14/days OPEN.", line: 884}
@@ -2024,10 +2052,10 @@ entries:
   - {id: "U1859", file: "src/ta_volatility_trend.cpp", symbol: "buffer", ops: ["grow"], container: "unresolved by the index: buffer.push_back(...)", owner: "ta-series", phase: "unclassified", state: "unreviewed", line: 197}
   - {id: "U1860", file: "src/native_execution_consumer.hpp", symbol: "run_warnings_live_", ops: ["decl"], container: "std::deque<std::string>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", note: "The run-warning array as rendered each time a warning was first raised while the run executed: one text per such warning, kept so that a text a caller already read stays valid, and cleared at every begin. The count follows the distinct site-and-code keys raised during the run and a text's length follows the warning arguments; no fixed input bounds either. OPEN.", line: 3095}
   - {id: "U1861", file: "src/native_execution_consumer.cpp", symbol: "run_warnings_live_", ops: ["grow"], container: "unresolved by the index: run_warnings_live_.emplace_back(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", note: "record_live_run_warning appends one rendered array when a warning's site-and-code key is new, and removes it again if the rendering fails. One append per distinct key per run; no fixed input bounds the keys or the text. OPEN.", line: 15653}
-  - {id: "U1862", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "runs_", ops: ["decl"], container: "std::map<RequestCallerKey, Run>", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "The source-owned request caller catalog, kept as runs since it became the RequestCallerIds class: its storage moved from the former std::map member request_caller_ids_ (now a RequestCallerIds member, not a scanned container) to this map. One id per distinct producer coordinate that delivered a request value, as before; a row holds one run of consecutive occurrences of one series (same kind, first, third, occurrence and text, consecutive second, constant id stride), and find, for_each and size still answer every logical row. An accepted input occurrence (first is its input index) and an admitted chart bar (first is its script-interval open time) each begin a series of their own, so while requests are active the map gains at least one row per accepted input and per admitted chart bar; foreign deliveries and requested body slots compress while they stay consecutive. Cleared at every run begin (reset_request_delivery_state). Its size follows the run's bars and distinct callers; no fixed input bounds it. OPEN.", line: 1164}
-  - {id: "U1863", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "request_chart_callers_", ops: ["decl"], container: "std::map<std::int64_t, RequestChartCaller>", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "The chart callers of request values: one row per chart bar a request-enabled run admits, keyed by the bar's script-interval open time, holding its caller id, input interval and close. Cleared at every begin. Its size follows the run's chart bars; no fixed input bounds it. OPEN.", line: 1534}
-  - {id: "U1864", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "request_delivery_stack_", ops: ["decl"], container: "std::vector<RequestDeliveryFrame>", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "The request deliveries being evaluated: each PineRequestDeliveryScope pushes one frame and pops it when the scope ends, so the depth is the nesting of request evaluations in progress. Cleared at every begin. The depth follows the script's nesting of request calls; no fixed input is declared for it. OPEN.", line: 1539}
-  - {id: "U1865", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "text", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "RequestCallerKey's text coordinate, compared last. No key built in this tree sets it, so every key carries an empty text; there is one per catalog key. A coordinate that sets it has no declared bound. OPEN.", line: 1071}
+  - {id: "U1862", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "runs_", ops: ["decl"], container: "std::map<RequestCallerKey, Run>", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "The source-owned request caller catalog, kept as runs since it became the RequestCallerIds class: its storage moved from the former std::map member request_caller_ids_ (now a RequestCallerIds member, not a scanned container) to this map. One id per distinct producer coordinate that delivered a request value, as before; a row holds one run of consecutive occurrences of one series (same kind, first, third, occurrence and text, consecutive second, constant id stride), and find, for_each and size still answer every logical row. An accepted input occurrence (first is its input index) and an admitted chart bar (first is its script-interval open time) each begin a series of their own, so while requests are active the map gains at least one row per accepted input and per admitted chart bar; foreign deliveries and requested body slots compress while they stay consecutive. Cleared at every run begin (reset_request_delivery_state). Its size follows the run's bars and distinct callers; no fixed input bounds it. OPEN.", line: 1167}
+  - {id: "U1863", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "request_chart_callers_", ops: ["decl"], container: "std::map<std::int64_t, RequestChartCaller>", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "The chart callers of request values: one row per chart bar a request-enabled run admits, keyed by the bar's script-interval open time, holding its caller id, input interval and close. Cleared at every begin. Its size follows the run's chart bars; no fixed input bounds it. OPEN.", line: 1537}
+  - {id: "U1864", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "request_delivery_stack_", ops: ["decl"], container: "std::vector<RequestDeliveryFrame>", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "The request deliveries being evaluated: each PineRequestDeliveryScope pushes one frame and pops it when the scope ends, so the depth is the nesting of request evaluations in progress. Cleared at every begin. The depth follows the script's nesting of request calls; no fixed input is declared for it. OPEN.", line: 1542}
+  - {id: "U1865", file: "include/pineforge/source/pine_strategy_host.hpp", symbol: "text", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "RequestCallerKey's text coordinate, compared last. No key built in this tree sets it, so every key carries an empty text; there is one per catalog key. A coordinate that sets it has no declared bound. OPEN.", line: 1074}
   - {id: "U1867", file: "src/source/pine_strategy_host.cpp", symbol: "request_caller_ids_", ops: ["grow"], container: "unresolved by the index: request_caller_ids_.emplace(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "The caller catalog's one insertion: request_caller_id adds an id the first time a producer coordinate is met and returns the stored id afterwards. It grows with the distinct callers of a run and is cleared at every begin. OPEN.", line: 2180}
   - {id: "U1868", file: "src/source/pine_strategy_host.cpp", symbol: "request_chart_callers_", ops: ["grow"], container: "unresolved by the index: request_chart_callers_.emplace(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "The chart caller table's insertions: a row is added the first time a chart bar is admitted and updated afterwards. It grows with the run's chart bars and is cleared at every begin. OPEN.", line: 2219}
   - {id: "U1869", file: "src/source/pine_strategy_host.cpp", symbol: "request_delivery_stack_", ops: ["grow"], container: "unresolved by the index: request_delivery_stack_.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "The delivery stack's two current grow sites are one static-delivery push in PineRequestDeliveryScope::PineRequestDeliveryScope(PineStrategyHost&, int, const PineRequestDelivery&, std::int64_t) at src/source/pine_strategy_host.cpp:1934 and one runtime-delivery push in PineStrategyHost::push_request_delivery(const PineRuntimeSecurityCursor&, const PineRequestDelivery&, std::int64_t) at :2437. Each adds one frame for the active scope; pop_request_delivery removes it at scope end and reset clears the stack at every begin. The depth follows nested request evaluations; no fixed input is declared. OPEN.", line: 1934}
@@ -2060,7 +2088,7 @@ entries:
   - {id: "U1962", file: "src/source/pine_adapter.cpp", symbol: "opening_exit_facts_", ops: ["grow", "subscript"], container: "unresolved by the index: opening_exit_facts_.try_emplace(...) / opening_exit_facts_[...]", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "Replaces the shadowed-opening insert U0811. Rows are added at an entry fill, at a percentage take-profit fill, when a bracket debits another entry and when a percentage exit is placed; the storage is U1959. OPEN.", line: 6908}
   - {id: "U1963", file: "src/source/pine_adapter.cpp", symbol: "replace", ops: ["grow"], container: "unresolved by the index: replace.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "Call-scoped selection of one child's legs of one kind, at most the legs of one named tick exit child, in the exit scratch. OPEN.", line: 26060}
   - {id: "U1964", file: "src/source/pine_state_hash.cpp", symbol: "dated_openings", ops: ["grow"], container: "unresolved by the index: dated_openings.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "Hash-fold scratch, declared beside shadowed_openings: the incarnations of the rows of opening_exit_facts_ (U1959) that carry a date or units, sorted for the fold. At most the rows of that table. OPEN.", line: 636}
-  - {id: "U1965", file: "src/source/pine_security_eval.cpp", symbol: "scope", ops: ["grow"], container: "unresolved by the index: scope.emplace(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "One optional PineRequestDeliveryScope local in the lower-timeframe emulation branch of pine_feed_security_eval_state (src/source/pine_security_eval.cpp:1028). The emplace constructs at most one scope object for that invocation, reuses it across the synthetic-bar loop, and releases it when the branch returns; its contained delivery frame is the U1869 storage. No fixed input bounds this call-scoped object. OPEN.", line: 1028}
+  - {id: "U1965", file: "src/source/pine_security_eval.cpp", symbol: "scope", ops: ["grow"], container: "unresolved by the index: scope.emplace(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "One optional PineRequestDeliveryScope local in the lower-timeframe emulation branch of pine_feed_security_eval_state (src/source/pine_security_eval.cpp:1043). The emplace constructs at most one scope object for that invocation, reuses it across the synthetic-bar loop, and releases it when the branch returns; its contained delivery frame is the U1869 storage. No fixed input bounds this call-scoped object. OPEN.", line: 1043}
   # U1966 and U1967: the two containers of PositionalLag, the positional history
   # of the Pine ta.mom / ta.roc objects. Ids in the order --emit-seed gives them
   # (by file, then symbol).

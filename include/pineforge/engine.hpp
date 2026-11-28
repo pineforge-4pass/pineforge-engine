@@ -1429,7 +1429,7 @@ protected:
     // --- Timeframe state ---
     std::string input_tf_;
     std::string script_tf_;
-    // Cached tf_to_seconds(script_tf_). MUST be refreshed immediately after
+    // Cached internal::tf_to_clock_seconds(script_tf_). Refresh immediately after
     // every assignment to script_tf_ (the one writer is the Pine host's
     // scheduler_prepare_script_run). Avoids a string parse per read.
     int script_tf_seconds_ = 0;

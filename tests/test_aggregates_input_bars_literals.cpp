@@ -13,13 +13,13 @@
 // -- over every pair of a literal population that
 // native_calendar::parse_timeframe accepts, as configure_native requires of a
 // run's literals: every suffix at the counts where the unit arithmetic
-// changes shape, the largest count of each unit whose tf_to_seconds still fits
+// changes shape, the largest fixed counts whose seconds still fit
 // an int, and seeded random counts; plus the undetected and spec-less views.
 //
 // Pairs configure_native refuses are counted and skipped: no run holds them,
 // and the former copy's answer for them was never read. On every admitted pair
 // the two agree but two classes, each counted here exactly:
-//   - byte-identical monthly literals ("M" on "M", "3M" on "3M"): tf_to_seconds
+//   - byte-identical monthly literals ("M" on "M", "3M" on "3M"): the clock value
 //     is negative, tf_ratio answers -1 and the former copy said "aggregates";
 //     the kernel pairs them Passthrough, a chart-timeframe run;
 //   - one-bucket pairings the kernel gathers but tf_ratio rounds to 0 or 1
@@ -131,8 +131,8 @@ void check_pair(const std::string& input, const std::string& script, bool undete
     }
 }
 
-// Literals configure_native admits, whose tf_to_seconds fits an int (a larger
-// count is not a timeframe any feed has, and its int product is undefined).
+// Literals configure_native admits, including clock conversion boundaries
+// and month counts up to the parser's limit.
 std::vector<std::string> literal_population() {
     std::vector<std::string> out = {"D", "W", "M"};
     const long long counts[] = {1, 2, 3, 4, 5, 9, 10, 12, 15, 30, 45, 59, 60, 90, 99, 100,

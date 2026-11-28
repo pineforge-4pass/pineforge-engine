@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import check_twin_parity as checker
 
@@ -44,6 +45,33 @@ class TwinParity(unittest.TestCase):
         return checker.check_inventory(
             root=root, inventory=inventory, ledger=ledger,
             base_reader=lambda _: base, names=["test_case"])
+
+    def test_pinned_family_can_skip_only_without_the_overlay(self):
+        root, inventory, ledger = self.fixture(BASE, "")
+        twin = root / "tests/test_case_l4d.cpp"
+        base = root / "tests/test_case.cpp"
+        (root / "tests/private_fixture_rows.txt").write_text("test_case_l4d\n")
+        pin = "d1" * 20
+
+        def compare():
+            return checker.check_inventory(root=root, inventory=inventory, ledger=ledger,
+                                           base_reader=lambda _: BASE, names=["test_case"])
+
+        for missing in (base, twin):
+            with self.subTest(missing=missing.name):
+                if missing == twin:
+                    twin.unlink()
+                    base.write_text(BASE)
+                with mock.patch.dict(os.environ, {"PINEFORGE_PRIVATE_FIXTURES": ""}):
+                    self.assertEqual(compare()["skipped"], 1)
+                with mock.patch.dict(os.environ, {"PINEFORGE_PRIVATE_FIXTURES": pin}):
+                    with self.assertRaises(checker.ParityError) as caught:
+                        compare()
+                    self.assertIn(pin, str(caught.exception))
+                    self.assertIn("tests/" + missing.name, str(caught.exception))
+        twin.write_text(BASE)
+        with mock.patch.dict(os.environ, {"PINEFORGE_PRIVATE_FIXTURES": pin}):
+            self.assertEqual(compare()["matched"], 2)
 
     def test_literal_twin_and_exact_ledger_cover_base(self) -> None:
         result = self.check(

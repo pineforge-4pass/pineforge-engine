@@ -928,14 +928,52 @@ def prototype(st: Structure, o: int, types: set[str]) -> bool:
     toks = st.toks
     if st.parent[o] in st.class_heads:
         return True  # a nonstatic data member cannot have a parenthesized initializer here
-    for a, b in st.split_args(o):
+    args = st.split_args(o)
+    for n, (a, b) in enumerate(args):
+        if b == a + 1 and toks[a].text == '...':
+            if n != len(args) - 1:
+                return False
+            continue
         start, k = parameter_type(st, a, b)
         if k <= start or k > b:
             return False
         known = toks[st.name_before(k)].text in types or start != a
+        pointer = False
         while k < b and toks[k].text in ('const', 'volatile', '&', '&&', '*', '...'):
+            pointer |= toks[k].text in ('&', '&&', '*')
             k += 1
+        if k < b and toks[k].text == '(':
+            # A function-pointer parameter, such as int (*cb)(int), has a
+            # nested declarator and a second parameter list.
+            declarator_end = st.close.get(k)
+            if declarator_end is None or declarator_end >= b:
+                return False
+            p = k + 1
+            while p < declarator_end and toks[p].text in (
+                    '*', '&', '&&', 'const', 'volatile'):
+                p += 1
+            if p < declarator_end:
+                if toks[p].kind != 'id' or toks[p].text in KEYWORDS:
+                    return False
+                p += 1
+                while p < declarator_end and toks[p].text in ('const', 'volatile'):
+                    p += 1
+            if p != declarator_end:
+                return False
+            k = declarator_end + 1
+            if k >= b or toks[k].text != '(':
+                return False
+            function_type_end = st.close.get(k)
+            if (function_type_end is None or function_type_end >= b or
+                    not prototype(st, k, types)):
+                return False
+            k = function_type_end + 1
         if k < b and toks[k].kind == 'id' and toks[k].text not in KEYWORDS:
+            # Without a known type, `a * b` is an initializer expression,
+            # not a pointer parameter. A plain unknown `Type name` remains
+            # accepted for declarations supplied by an external header.
+            if pointer and not known:
+                return False
             known = True
             k += 1
         while k < b and k in st.close and toks[k].text == '[':

@@ -93,7 +93,7 @@ bytes. The `+` below means byte concatenation in file/record order:
 
 | `--verify-bin` value | Behavior | Source |
 |---|---|---|
-| `full` (default) | Checks sidecar metadata, bar-file digest and, for feeds, close-file digest. | `ap` docker/run_json.py:5628; `plain` docker/run_json.py:2864; `close_hash` docker/run_json.py:2865; `check_sidecar` docker/run_json.py:2939 |
+| `full` (default) | Checks sidecar metadata, bar-file digest and, for feeds, close-file digest. | `ap` docker/run_json.py:5629; `plain` docker/run_json.py:2864; `close_hash` docker/run_json.py:2865; `check_sidecar` docker/run_json.py:2939 |
 | `sidecar` | Checks metadata and digest-string shapes, but skips both digest comparisons. Still maps and scans every record and computes provenance. | `_scan_bar_maps` docker/run_json.py:2854; `sha256` docker/pf_bars.py:161; `close_sha256` docker/pf_bars.py:163 |
 
 Both modes require finite OHLC prices, volume that is nonnegative or NaN
@@ -136,11 +136,11 @@ docker/run_json.py:3829, `_index_chart_path` docker/run_json.py:3856 and
 |---|---|---|
 | Root | JSON object with required `symbols` object; `{}` is a valid symbols object. Duplicate JSON keys at any nesting level are refused. Other root keys are not rejected by the parser. | `symbols` docker/run_json.py:3849; `unique` docker/run_json.py:3831; `json.loads` docker/run_json.py:3840 |
 | `chart` | Optional object with **exactly** `symbol`, `tf`, `file`. `symbol` must be a string; `tf` must be accepted by the converter's timeframe validator; `file` must be a nonempty filename ending in lowercase `.bin`. | `chart` docker/run_json.py:3860; `endswith` docker/run_json.py:3863; `canonical_timeframe` docker/run_json.py:3868 |
-| `chart.symbol`, `chart.tf` | Checked for the types/spelling above, then only the file path is returned. They do not set chart syminfo or `--input-tf`, or match sidecar identity. | `_index_chart_path` docker/run_json.py:3856; `index_path` docker/run_json.py:3871; `input_tf` docker/run_json.py:5767 |
+| `chart.symbol`, `chart.tf` | Checked for the types/spelling above, then only the file path is returned. They do not set chart syminfo or `--input-tf`, or match sidecar identity. | `_index_chart_path` docker/run_json.py:3856; `index_path` docker/run_json.py:3871; `input_tf` docker/run_json.py:5768 |
 | `symbols.<symbol>` | Object allowing only `syminfo` and `feeds`; both optional. `feeds` defaults to `{}` and must be an object. Symbol keys are exact UTF-8 text: nonempty, at most 256 characters, no characters below U+0020. | `entry` docker/run_json.py:3920; `feeds` docker/run_json.py:3924; `_symbol_text` docker/run_json.py:3680; `_SYMBOL_KEY_MAX` docker/run_json.py:3644 |
 | `symbols.<symbol>.feeds` | Object mapping timeframe strings to nonempty filename strings. Two keys canonicalizing to the same timeframe are refused. | `symbol_timeframe` docker/run_json.py:3695; `canonical` docker/run_json.py:3934; `_file_name_ok` docker/run_json.py:3667 |
 | `symbols.<symbol>.syminfo` | Optional/null means no facts. A supplied object can be flat or wrapped in `{"syminfo": {...}}`. Recognized keys: `tickerid` (installed as `canonical`), `type`, `timezone`, `session`, `currency`, `mintick`. Unknown keys are ignored; absent/null/empty values set nothing. Text uses the symbol-text constraints; `mintick` must be a positive finite JSON number, excluding boolean. | `_symbol_facts` docker/run_json.py:3798; `si` docker/run_json.py:3804; `_SYMBOL_FACT_KEYS` docker/run_json.py:3647; `value` docker/run_json.py:3810; `ok` docker/run_json.py:3815 |
-| Limits | Default no limit. `--max-symbol-feeds N` bounds both symbols and total extra feeds; unset or `0` is unlimited, positive integers set a limit, and other values are usage errors. `--tv-compat` selects 256 for both counts and 8 MiB inventory; explicit limits win. Inventory bytes are independently set by `--max-inventory-bytes N`. | `TV_COMPAT_LIMITS` docker/run_json.py:5543; `max_symbol_feeds` docker/run_json.py:3914; `total` docker/run_json.py:3928 |
+| Limits | Default no limit. `--max-symbol-feeds N` bounds both symbols and total extra feeds; unset or `0` is unlimited, positive integers set a limit, and other values are usage errors. `--tv-compat` selects 256 for both counts and 8 MiB inventory; explicit limits win. Inventory bytes are independently set by `--max-inventory-bytes N`. | `TV_COMPAT_LIMITS` docker/run_json.py:5544; `max_symbol_feeds` docker/run_json.py:3914; `total` docker/run_json.py:3928 |
 
 Relative chart and feed filenames resolve against the **index's directory**,
 not the current working directory (`index_path` docker/run_json.py:3871;
@@ -175,8 +175,8 @@ are mapped by `load_bars_bin` docker/run_json.py:2915.
 
 | Input location | Selection rule | Source |
 |---|---|---|
-| Explicit chart `--ohlcv PATH` | **Flag**, not extension detection: calls the CSV loader even if PATH ends in `.bin`. | `ohlcv` docker/run_json.py:5562; `load_bars` docker/run_json.py:5789 |
-| Explicit chart `--ohlcv-bin PATH` | **Flag**, not extension detection: calls the binary loader without requiring a particular suffix on PATH. Companion names still follow section 1. | `ap` docker/run_json.py:5626; `load_bars_bin` docker/run_json.py:2915 |
+| Explicit chart `--ohlcv PATH` | **Flag**, not extension detection: calls the CSV loader even if PATH ends in `.bin`. | `ohlcv` docker/run_json.py:5563; `load_bars` docker/run_json.py:5790 |
+| Explicit chart `--ohlcv-bin PATH` | **Flag**, not extension detection: calls the binary loader without requiring a particular suffix on PATH. Companion names still follow section 1. | `ap` docker/run_json.py:5627; `load_bars_bin` docker/run_json.py:2915 |
 | Index `chart.file` | **Extension restriction**: must end with case-sensitive `.bin`; it becomes the binary chart source when no explicit binary chart overrides it with the same file. | `endswith` docker/run_json.py:3863; `binary` docker/run_json.py:3889; `ohlcv_bin` docker/run_json.py:3889 |
 | Each extra-feed path | **Extension only**: exact `Path.suffix == ".bin"` maps a binary feed; anything else, including `.BIN`, uses the CSV feed loader. | `suffix` docker/run_json.py:3947; `_load_symbol_feed` docker/run_json.py:3728 |
 
@@ -194,15 +194,15 @@ docker/run_json.py:3652).
 
 | Request | Refusal / behavior | Source |
 |---|---|---|
-| `--ohlcv` and `--ohlcv-bin` together | `run_request_invalid`, `args.option = "ohlcv_bin"`. | `_request_invalid` docker/run_json.py:5739 |
+| `--ohlcv` and `--ohlcv-bin` together | `run_request_invalid`, `args.option = "ohlcv_bin"`. | `_request_invalid` docker/run_json.py:5740 |
 | `--ohlcv` plus an index containing `chart` | `run_request_invalid`, `args.option = "ohlcv"`. | `_request_invalid` docker/run_json.py:3879 |
 | Explicit binary chart differs from index chart | `run_request_invalid`, `args.option = "ohlcv_bin"`. | `_request_invalid` docker/run_json.py:3888 |
-| Selected-window mode with `--ohlcv-bin` | Refused: “selected-window mode requires a CSV chart”; `run_request_invalid`, `args.option = "ohlcv_bin"`. | `_request_invalid` docker/run_json.py:5757 |
-| Selected-window mode with an index chart | The same CSV-chart refusal after selected-request admission and index chart resolution. | `_resolve_chart_source` docker/run_json.py:3874; `_request_invalid` docker/run_json.py:5138 |
+| Selected-window mode with `--ohlcv-bin` | Refused: “selected-window mode requires a CSV chart”; `run_request_invalid`, `args.option = "ohlcv_bin"`. | `_request_invalid` docker/run_json.py:5758 |
+| Selected-window mode with an index chart | The same CSV-chart refusal after selected-request admission and index chart resolution. | `_resolve_chart_source` docker/run_json.py:3874; `_request_invalid` docker/run_json.py:5139 |
 | Selected-window mode with a CSV chart and binary extra feeds | Extra feeds still use the common loader and borrowed setter. | `_run_symbol_feeds` docker/run_json.py:3965; `install_symbol_feeds` docker/run_json.py:3986; `setter` docker/run_json.py:4022 |
 
 Selected-window selection includes a report policy, any window option or
-`--validate-window-only` (`_selected_requested` docker/run_json.py:4824).
+`--validate-window-only` (`_selected_requested` docker/run_json.py:4825).
 The refusals above use the ordinary request code, not a window-specific
 code (`_request_invalid` docker/run_json.py:4590). The catalog names
 `run_request_invalid` docker/run_failure_codes.json:1651 and includes the
@@ -222,9 +222,9 @@ and invokes `--ohlcv`; renaming its mount alone does not switch routes
 
 Read-only searches covered `docker/`, `scripts/`, `runner/` and repository
 filenames/release notes; `campaign/` and `cloudrun/` are absent. The local
-backtest entry is `main` docker/run_json.py:5472; the catalog itself
+backtest entry is `main` docker/run_json.py:5473; the catalog itself
 identifies the optimizer-only refusal separately (`description`
-docker/run_failure_codes.json:2761). Neither establishes the production HPO
+docker/run_failure_codes.json:2770). Neither establishes the production HPO
 runner's input support.
 
 Check the separate **pineforge-hpo** repository named by this repository's
@@ -237,8 +237,8 @@ needs checking there. No HPO binary-support verdict is established here.
 ## 5. CSV-to-binary converter
 
 The exact CLI forms are below; this subcommand requires no `--so`.
-Dispatch and arguments are implemented by `_csv2bin_main` docker/run_json.py:5436,
-`mode` docker/run_json.py:5448 and `parser` docker/run_json.py:5445.
+Dispatch and arguments are implemented by `_csv2bin_main` docker/run_json.py:5437,
+`mode` docker/run_json.py:5449 and `parser` docker/run_json.py:5446.
 
 ```sh
 python3 docker/run_json.py csv2bin --chart --symbol SYMBOL --tf TF IN.csv OUT.bin
@@ -246,7 +246,7 @@ python3 docker/run_json.py csv2bin --feed --symbol SYMBOL --tf TF IN.csv OUT.bin
 ```
 
 Exactly one of `--chart` / `--feed` is required; abbreviations are disabled
-(`allow_abbrev` docker/run_json.py:5447; `mode` docker/run_json.py:5448).
+(`allow_abbrev` docker/run_json.py:5448; `mode` docker/run_json.py:5449).
 Chart mode writes bars and sidecar; feed mode also writes the close companion
 (`bars` docker/pf_bars.py:329; `closes` docker/pf_bars.py:333;
 `sidecar_bytes` docker/pf_bars.py:371). The explicit output path is used
@@ -302,7 +302,7 @@ docker/pf_bars.py:365; `bar_close_ms` docker/pf_bars.py:218).
 
 **Publication:** the CLI uses the default `fresh_private_directory=False`
 of `convert_csv` docker/pf_bars.py:296 (`convert_csv`
-docker/run_json.py:5457). The parent directory must exist;
+docker/run_json.py:5458). The parent directory must exist;
 the converter opens it rather than creating it (`os.open`
 docker/pf_bars.py:272).
 
@@ -313,7 +313,7 @@ docker/pf_bars.py:272).
 | Stage | Fixed temporary names: `OUT.bin.tmp`, `OUT.close.bin.tmp` for feeds, and `OUT.bin.json.tmp`. One writer must own those names; no locking or unique-generation-name allocation is present. | `bar_tmp` docker/pf_bars.py:328; `close_tmp` docker/pf_bars.py:332; `sidecar_tmp` docker/pf_bars.py:369 |
 | Publish data | Flushes/fsyncs the bar temp, replaces the bar file, then fsyncs the directory; repeats for the feed-close file. | `sync` docker/pf_bars.py:249; `bars.sync` docker/pf_bars.py:357; `os.replace` docker/pf_bars.py:358; `directory.sync` docker/pf_bars.py:359; `closes.sync` docker/pf_bars.py:361; `os.replace` docker/pf_bars.py:362; `directory.sync` docker/pf_bars.py:363 |
 | Publish sidecar last | Writes canonical JSON to its temp, flushes/fsyncs it, replaces the sidecar, then fsyncs the directory. These are individual atomic replacements, not a single atomic replacement of the file set. | `sidecar_bytes` docker/pf_bars.py:371; `fsync` docker/pf_bars.py:373; `os.replace` docker/pf_bars.py:374; `directory.sync` docker/pf_bars.py:375 |
-| Python-only fresh-directory mode | `fresh_private_directory=True` refuses any existing final name and omits directory fsync; file fsync remains. No CLI flag enables it. | `fresh` docker/pf_bars.py:261; `fresh` docker/pf_bars.py:271; `fd` docker/pf_bars.py:276; `fsync` docker/pf_bars.py:252; `convert_csv` docker/run_json.py:5457 |
+| Python-only fresh-directory mode | `fresh_private_directory=True` refuses any existing final name and omits directory fsync; file fsync remains. No CLI flag enables it. | `fresh` docker/pf_bars.py:261; `fresh` docker/pf_bars.py:271; `fd` docker/pf_bars.py:276; `fsync` docker/pf_bars.py:252; `convert_csv` docker/run_json.py:5458 |
 
 Failures can leave partial `.tmp` files or already-replaced data files;
 `convert_csv` has no rollback or temp cleanup (docker/pf_bars.py:296).
@@ -326,17 +326,17 @@ docker/pf_bars.py:378). The comment is therefore stronger than the code.
 
 | Converter result | Exit / output / code | Source |
 |---|---|---|
-| Success | Exit 0; no stdout/stderr success record. | `_csv2bin_main` docker/run_json.py:5436; `return` docker/run_json.py:5469 |
-| Usage error | Exit 2; one JSON failure line on stderr, empty stdout; `run_request_invalid`, `args.option = "arguments"`. | `RunFailure` docker/run_json.py:2199; `sys.stderr.write` docker/run_json.py:5460 |
+| Success | Exit 0; no stdout/stderr success record. | `_csv2bin_main` docker/run_json.py:5437; `return` docker/run_json.py:5470 |
+| Usage error | Exit 2; one JSON failure line on stderr, empty stdout; `run_request_invalid`, `args.option = "arguments"`. | `RunFailure` docker/run_json.py:2199; `sys.stderr.write` docker/run_json.py:5461 |
 | Chart input/output refusal | Exit 2; same stderr framing; `chart_bars_unreadable`, `args.reason`. Converter reasons: `io`, `columns`, `value`, `empty`, `count`, `order`, `timeframe_invalid`. | `code` docker/pf_bars.py:53; `_csv_rows` docker/pf_bars.py:174; `check_order` docker/pf_bars.py:119; `canonical_timeframe` docker/pf_bars.py:57; `BarsError` docker/pf_bars.py:316; `BarsError` docker/pf_bars.py:347 |
-| Feed input/output refusal | Exit 2; same stderr framing; `symbol_feeds_refused`, `args.reason`. Converter reasons: `feed_columns_missing`, `feed_value_not_number`, `feed_value_invalid`, `feed_time_out_of_range`, `feed_close_time_invalid`, `feed_unreadable`, `feed_not_utf8_csv`, `empty`, `count`, `io`, `timeframe_invalid`. | `code` docker/pf_bars.py:53; `_csv_rows` docker/pf_bars.py:174; `_feed_pair_error` docker/pf_bars.py:284; `BarsError` docker/pf_bars.py:355; `BarsError` docker/pf_bars.py:378; `return` docker/run_json.py:5462 |
-| Unexpected exception | Exit 1; one stderr JSON failure line, `harness_internal_error`. | `sys.stderr.write` docker/run_json.py:5464 |
+| Feed input/output refusal | Exit 2; same stderr framing; `symbol_feeds_refused`, `args.reason`. Converter reasons: `feed_columns_missing`, `feed_value_not_number`, `feed_value_invalid`, `feed_time_out_of_range`, `feed_close_time_invalid`, `feed_unreadable`, `feed_not_utf8_csv`, `empty`, `count`, `io`, `timeframe_invalid`. | `code` docker/pf_bars.py:53; `_csv_rows` docker/pf_bars.py:174; `_feed_pair_error` docker/pf_bars.py:284; `BarsError` docker/pf_bars.py:355; `BarsError` docker/pf_bars.py:378; `return` docker/run_json.py:5463 |
+| Unexpected exception | Exit 1; one stderr JSON failure line, `harness_internal_error`. | `sys.stderr.write` docker/run_json.py:5465 |
 
 Failure JSON uses `engine`, `error`, `code`, `args` (`doc`
 docker/run_json.py:2322; `code` docker/run_json.py:2325; `args`
 docker/run_json.py:2326). The catalog entries are `chart_bars_unreadable`
 docker/run_failure_codes.json:60, `symbol_feeds_refused`
-docker/run_failure_codes.json:2301 and `run_request_invalid`
+docker/run_failure_codes.json:2310 and `run_request_invalid`
 docker/run_failure_codes.json:1651. Shared binary-reader helpers additionally
 refuse malformed file `size`, metadata/digests as `sidecar`, and a bad feed
 companion as `close_file` (`bar_count` docker/pf_bars.py:101;
@@ -363,7 +363,7 @@ docker/run_json_pfbar_test.py:737; `pytest.skip`
 docker/run_json_pfbar_test.py:740).
 The chart CLI test's “today's harness has no csv2bin” docstring is historical
 (comment's `csv2bin` docker/run_json_pfbar_test.py:79); the actual dispatch
-exists (`_csv2bin_main` docker/run_json.py:5436).
+exists (`_csv2bin_main` docker/run_json.py:5437).
 
 ## 6. Release and support detection
 
@@ -374,13 +374,13 @@ on a later release**
 History inspection with `git log -S` identifies converter commit
 `0157156d6a` (`BAR_RECORD` docker/pf_bars.py:28) and mapped-loader/capability
 commit `0d05bfa7a8` (`load_bars_bin` docker/run_json.py:2915;
-`bars_bin_version` docker/run_json.py:5098).
+`bars_bin_version` docker/run_json.py:5099).
 `git tag --contains` returns no tags for either commit in this checkout,
 including no `v1.6.2-rc.1`. The checked-in value remains `1.6.1` (VERSION:1;
 version-file reader `_pineforge_read_version_file`
 cmake/PineForgeVersion.cmake:29).
 The `1.7.0` wording in the loader's selected-window comment is not an
-emitted release version (`_request_invalid` docker/run_json.py:5138).
+emitted release version (`_request_invalid` docker/run_json.py:5136-5139).
 
 APP can query the actual runner/library pair without supplying bars:
 
@@ -390,9 +390,9 @@ python3 docker/run_json.py --so LIB --capabilities-json
 
 The exact support field already exists: **`capabilities.bars_bin_version`**,
 JSON integer **`1`**, emitted by `_capabilities_main`
-docker/run_json.py:5087 and `bars_bin_version` docker/run_json.py:5098.
+docker/run_json.py:5088 and `bars_bin_version` docker/run_json.py:5099.
 It is added to the base `swr.capabilities_record` document
-(`capabilities_record` docker/run_json.py:5093;
+(`capabilities_record` docker/run_json.py:5094;
 `capabilities_record` docker/selected_window_report.py:756).
 
 `capabilities.bars_bin_version` does **not** mean selected-window mode accepts
@@ -402,10 +402,10 @@ selected-window `.bin` reader lands.
 
 | Probe condition / interpretation | Source |
 |---|---|
-| Loads `LIB` through the normal strategy-library/ABI checks. Constructs no strategy and reads no bar tape in this path. | `load_strategy` docker/run_json.py:2962; `_capabilities_main` docker/run_json.py:5087 |
-| Emits `bars_bin_version` only when the host is little-endian, `sizeof(BarC) == 48`, and the library has `strategy_set_symbol_facts`, `strategy_set_symbol_feed` and `strategy_set_symbol_feed_borrowed_v1`. Otherwise the field is absent, not `0` or `false`. | `byteorder` docker/run_json.py:5096; `hasattr` docker/run_json.py:5097; `_SYMBOL_FEED_SETTERS` docker/run_json.py:3649; `bars_bin_version` docker/run_json.py:5098 |
-| The binary capability is independent of the selected-window support result; it does not remove the CSV-chart requirement for selected windows. | `capabilities_record` docker/run_json.py:5093; `bars_bin_version` docker/run_json.py:5098; `_request_invalid` docker/run_json.py:5757 |
-| Always emits `capabilities.selected_window_bars_bin_version = 0`, including when the borrowed runtime export is absent. | `selected_window_bars_bin_version` docker/run_json.py:5100; `selected_window_bars_bin_version` tests/test_run_json_bin.py:462 |
+| Loads `LIB` through the normal strategy-library/ABI checks. Constructs no strategy and reads no bar tape in this path. | `load_strategy` docker/run_json.py:2962; `_capabilities_main` docker/run_json.py:5088 |
+| Emits `bars_bin_version` only when the host is little-endian, `sizeof(BarC) == 48`, and the library has `strategy_set_symbol_facts`, `strategy_set_symbol_feed` and `strategy_set_symbol_feed_borrowed_v1`. Otherwise the field is absent, not `0` or `false`. | `byteorder` docker/run_json.py:5097; `hasattr` docker/run_json.py:5098; `_SYMBOL_FEED_SETTERS` docker/run_json.py:3649; `bars_bin_version` docker/run_json.py:5099 |
+| The binary capability is independent of the selected-window support result; it does not remove the CSV-chart requirement for selected windows. | `capabilities_record` docker/run_json.py:5094; `bars_bin_version` docker/run_json.py:5099; `_request_invalid` docker/run_json.py:5758 |
+| Always emits `capabilities.selected_window_bars_bin_version = 0`, including when the borrowed runtime export is absent. | `selected_window_bars_bin_version` docker/run_json.py:5101; `selected_window_bars_bin_version` tests/test_run_json_bin.py:462 |
 
 Version/info surfaces are separate: the C API exposes `pf_version_get`
 include/pineforge/pineforge.h:1962 and `pf_version_string`

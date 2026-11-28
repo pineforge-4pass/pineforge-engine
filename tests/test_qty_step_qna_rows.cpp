@@ -1,6 +1,17 @@
 // CR-726: qty=na percent sizing against private TradingView signal rows
 // for the next release. Fixture sha256 prefix: 8c125a7b6b30.
 // Receipt values are read at run time; no tape values are embedded here.
+// Re-capture the signal and trade exports together on the recorded BTCUSDT
+// 15-minute series. Use qty=na, 100% of equity, zero fees and slippage,
+// 100% margins and next-open fills (no recalculation on fills). Preserve
+// every signal, including those for which TV admitted no entry. Join signal
+// bar index, UTC time, equity before submission and close to the following
+// bar's UTC time/open; match TV's entry to that fill and take its literal
+// size. A declined signal has tv_placed=0 and tv_qty=0. Do not derive
+// either from engine fills or from rule_qty/rule_placed. Those two columns
+// describe the producer's separate calculation and are syntax-checked only.
+// Write the ten read_rows() columns, in order, before filtering any gaps.
+// Archive the original script, signal export and derivation with the TSV.
 
 #include <array>
 #include <cerrno>

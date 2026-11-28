@@ -39,7 +39,7 @@ namespace {
 int request_timeframe_seconds(const std::string& tf, bool lower_tf_array_requested) {
     int requested_seconds = 0;
     try {
-        requested_seconds = tf_to_seconds(tf);
+        requested_seconds = internal::tf_to_clock_seconds(tf);
     } catch (const std::invalid_argument&) {
         // Refuse the unparseable request below.
     } catch (const std::out_of_range&) {
@@ -325,9 +325,22 @@ void source::PineStrategyHost::dispatch_pine_request(
 }
 
 
+#ifndef NDEBUG
+thread_local std::uint64_t source::detail::lower_tf_index_lookups_for_test = 0;
+thread_local bool source::detail::force_lower_tf_index_lookup_for_test = false;
+#endif
+
 int source::PineStrategyHost::security_lower_tf_sub_bar_index(int sec_id) const {
     for (const auto& state : security_eval_states_) {
         if (state.sec_id == sec_id) {
+            if (!request_delivery_stack_.empty()) {
+                const auto& frame = request_delivery_stack_.back();
+                if (frame.sec_id == sec_id && frame.synthesized_index)
+                    return *frame.synthesized_index;
+            }
+#ifndef NDEBUG
+            ++detail::lower_tf_index_lookups_for_test;
+#endif
             return pine_security_state(sec_id).lower_tf_sub_bar_index;
         }
     }
@@ -349,13 +362,13 @@ void source::PineStrategyHost::prune_pine_security_states() {
 }
 
 
-// Safe wrapper around tf_to_seconds: returns <=0 on any parse failure
+// Safe wrapper around the engine clock conversion: returns <=0 on parse failure
 // (including std::invalid_argument from stoi on garbage like "abc").
 // We use this instead of letting stoi escape so we can attach the
 // offending literal to the diagnostic.
-static int safe_tf_to_seconds(const std::string& tf) {
+static int safe_tf_to_clock_seconds(const std::string& tf) {
     try {
-        return tf_to_seconds(tf);
+        return internal::tf_to_clock_seconds(tf);
     } catch (...) {
         return 0;
     }
@@ -377,7 +390,7 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
     // "script timeframe must be coarser than or equal to input timeframe"
     // when the script_tf/input_tf ratio is invalid. We do not re-check
     // that invariant here.
-    int input_seconds = tf_to_seconds(input_tf);
+    int input_seconds = internal::tf_to_clock_seconds(input_tf);
     int script_seconds = script_tf_seconds_;
     for (auto& state : security_eval_states_) {
         PineSecurityEvalState& pine = pine_security_state(state.sec_id);
@@ -710,7 +723,7 @@ bool source::PineStrategyHost::security_input_precedes_range_start(
         || script_tf_seconds_ <= 0) {
         return false;
     }
-    const int requested_seconds = safe_tf_to_seconds(state.tf);
+    const int requested_seconds = safe_tf_to_clock_seconds(state.tf);
     const bool coarser_or_chart = requested_seconds == -1
         || requested_seconds >= script_tf_seconds_;
     if (!coarser_or_chart) {
@@ -756,7 +769,7 @@ bool source::PineStrategyHost::pine_native_fixed_security_clock(
     const auto& pine = pine_security_state(state.sec_id);
     if (pine.lookahead_on
         && (stream_warmup_mode_ || realtime_tail_ || probe_suppress_tail_logic_)) return false;
-    const int requested = tf_to_seconds(state.tf);
+    const int requested = internal::tf_to_clock_seconds(state.tf);
     return requested > script_tf_seconds_ && requested % script_tf_seconds_ != 0;
 }
 
@@ -887,7 +900,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         // of 15). Pure count-based dispatch is preserved as a
         // secondary trigger so dense gap-free feeds still flush
         // promptly when the chunk fills.
-        int input_seconds = tf_to_seconds(security_input_tf_);
+        int input_seconds = internal::tf_to_clock_seconds(security_input_tf_);
         int script_seconds = script_tf_seconds_;
         if (input_seconds <= 0 || script_seconds <= 0) {
             // Cannot compute bucket math — fall back to original
@@ -1002,7 +1015,9 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         const int sec_id = state.sec_id;
         const auto phase = static_cast<std::int64_t>(detail::run_phase(*this));
         RequestCallerIds::StaticTail tail;
+        const int* batch_index = &pine.lower_tf_sub_bar_index;
 #ifndef NDEBUG
+        if (detail::force_lower_tf_index_lookup_for_test) batch_index = nullptr;
         const bool use_tail = !detail::force_static_delivery_setter_for_test;
 #else
         constexpr bool use_tail = true;
@@ -1026,6 +1041,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
                 delivery.caller_valid = delivery.caller != 0;
                 if (!scope) {
                     scope.emplace(*this, sec_id, delivery, synthetic_bar.timestamp);
+                    request_delivery_stack_.back().synthesized_index = batch_index;
                 } else {
                     // A nested callback may grow the stack or change the catalog.
                     auto& frame = request_delivery_stack_.back();
@@ -1036,6 +1052,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
                         frame.body_open_ms = synthetic_bar.timestamp;
                     } else {
                         set_static_request_delivery(frame, sec_id, delivery, synthetic_bar.timestamp);
+                        frame.synthesized_index = batch_index;
                         tail = {};
                     }
                 }
@@ -1309,10 +1326,10 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
     // session-close rule. A minute-spelled day closes at the day's close,
     // deliberately not at an intermediate session window's close.
     const bool minute_day = calendar_period_for(state.tf) == CalendarPeriod::NONE
-        && tf_to_seconds(state.tf) == 86400;
+        && internal::tf_to_clock_seconds(state.tf) == 86400;
     if (!ab.is_complete && minute_day && !pine.lookahead_on
         && state.aggregator.has_pending_partial()) {
-        const int input_seconds = tf_to_seconds(security_input_tf_);
+        const int input_seconds = internal::tf_to_clock_seconds(security_input_tf_);
         const auto session_open = session_period_open_ms(
             input_bar.timestamp, syminfo_.timezone, syminfo_.session,
             CalendarPeriod::DAY);

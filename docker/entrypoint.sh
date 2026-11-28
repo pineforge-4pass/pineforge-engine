@@ -410,9 +410,9 @@ elif [[ -f "${SRC_CPP}" ]]; then
     if [[ "${PINEFORGE_ALLOW_UNATTESTED_CPP:-}" != "1" ]]; then
         want="${PINEFORGE_STRATEGY_CPP_SHA256:-}"
         if command -v sha256sum >/dev/null 2>&1; then
-            have="$(sha256sum -- "${GEN}")"
+            have="$(sha256sum < "${GEN}")"
         else
-            have="$(shasum -a 256 -- "${GEN}")"
+            have="$(shasum -a 256 < "${GEN}")"
         fi
         have="${have%% *}"
         if [[ ! "${want}" =~ ^[0-9a-f]{64}$ || "${have}" != "${want}" ]]; then

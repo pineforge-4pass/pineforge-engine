@@ -740,9 +740,9 @@ int64_t unit_ms(TimeframeUnit unit) {
     }
 }
 
-// Fixed-length seconds matching baseline tf_to_seconds / tf_ratio (D=86400,
-// W=604800). Month is calendar-only (tf_to_seconds == -1); no invented month
-// length is used to refuse D/nD→M or minutes→M.
+// Fixed-length seconds matching the engine clock's day and week lengths
+// (D=86400, W=604800). Months have no fixed length for compatibility checks
+// such as D/nD→M or minutes→M.
 std::optional<int64_t> known_period_seconds(const Timeframe& tf) {
     if (!tf.valid()) return std::nullopt;
     int64_t n = tf.count();

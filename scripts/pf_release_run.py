@@ -40,7 +40,9 @@ DEFAULT_IMAGE = os.environ.get(
     "PINEFORGE_RELEASE_IMAGE", "ghcr.io/pineforge-4pass/pineforge-release:latest")
 # The reviewed engine-step/v1 producer from this tree: docker/entrypoint.sh.
 # An older installed producer could ignore BUILD_ONLY and execute bars.
-_BUILD_ONLY_ENTRYPOINT_SHA256 = "680160eae62aca428de3e4aab418aa59be8d9c46287034092f4dbb888c9517d6"
+_BUILD_ONLY_ENTRYPOINT_SHA256 = "35321abd6044ba6d71c5ca4cd440e0d9883b539e0363524ae66e97f58bb856c4"
+# The previous reviewed producer has the same build-only contract.
+_PREVIOUS_BUILD_ONLY_ENTRYPOINT_SHA256 = "680160eae62aca428de3e4aab418aa59be8d9c46287034092f4dbb888c9517d6"
 _CORPUS_DIRECTORY = PurePosixPath("/pf-corpus-request")
 _STRATEGY_PATH = PurePosixPath("/in/strategy.cpp")
 _OHLCV_PATH = PurePosixPath("/in/ohlcv.csv")
@@ -277,7 +279,8 @@ def _require_installed_entrypoint(command: list[str]) -> None:
     installed = Path(script)
     if not installed.is_absolute():
         raise ReleaseRunError("NEEDS an absolute installed entrypoint path from image config")
-    if hashlib.sha256(installed.read_bytes()).hexdigest() != _BUILD_ONLY_ENTRYPOINT_SHA256:
+    if hashlib.sha256(installed.read_bytes()).hexdigest() not in (
+            _BUILD_ONLY_ENTRYPOINT_SHA256, _PREVIOUS_BUILD_ONLY_ENTRYPOINT_SHA256):
         raise ReleaseRunError(
             "NEEDS installed entrypoint bytes matching the reviewed build-only "
             f"engine-step/v1 source: {installed}")
@@ -536,7 +539,7 @@ def run_release(
             if isinstance(failure, dict) and failure.get("error"):
                 raise ReleaseRunError(
                     f"engine error: {failure['error']}", report=failure)
-        if corpus_params is not None and proc.stdout.strip():
+        if proc.stdout.strip():
             try:
                 failure = json.loads(proc.stdout.strip().splitlines()[-1])
             except ValueError:

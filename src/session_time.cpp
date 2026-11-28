@@ -550,7 +550,7 @@ static int64_t compute_tf_open_ms(int64_t bar_ms,
     if (cp == CalendarPeriod::MONTH)
         return calendar_month_open_local_ms(bar_ms, tz);
 
-    int sec = tf_to_seconds(tf);
+    int sec = internal::tf_to_clock_seconds(tf);
     if (sec > 0 && sec < kSecPerDay)
         return session_intraday_bucket_open_ms(bar_ms, sec, sym_tz, sym_session);
     return bar_ms;
@@ -562,7 +562,7 @@ static int64_t compute_tf_close_ms(int64_t bar_ms,
                                    const std::string& sym_tz,
                                    const std::string& sym_session) {
     CalendarPeriod cp = calendar_period_for(tf);
-    int sec = tf_to_seconds(tf);
+    int sec = internal::tf_to_clock_seconds(tf);
 
     if (sec > 0 && sec < kSecPerDay) {
         // Intraday time_close is the EXACT exclusive bar-close boundary,
@@ -1839,7 +1839,7 @@ static bool session_argument_time(int64_t bar_ms, const std::string& tf,
         held = session_argument_bar(bar_ms, session, session_tz, cp,
                                     tf_is_daily_or_higher(chart_tf), open_ms, close_ms);
     } else {
-        const int sec = tf_to_seconds(tf);
+        const int sec = internal::tf_to_clock_seconds(tf);
         if (sec <= 0 || sec >= kSecPerDay)
             return false;
         held = session_argument_intraday_bar(bar_ms, session, session_tz,

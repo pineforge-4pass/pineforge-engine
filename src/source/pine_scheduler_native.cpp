@@ -209,7 +209,7 @@ void PineScheduler::run_begin(PineStrategyHost& host) {
         feeds.days = chart_tf->count();
         feeds.chart = retained_.bars.data();
         feeds.n_chart = static_cast<int>(retained_.bars.size());
-        feeds.daily_chart = tf_to_seconds(state.spec->input_tf) == 86400;
+        feeds.daily_chart = internal::tf_to_clock_seconds(state.spec->input_tf) == 86400;
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
         if (host.aux_security_feed_enabled()) {
             feeds.aux = host.aux_security_bars_.data();
@@ -765,7 +765,7 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
     script_bar.timestamp = context.script_bar_open_ms;
     if (retained_.is_stream && input_is_observed_ticks_
         && !retained_.bars.empty() && calendar_period_for(retained_.script_tf) == CalendarPeriod::DAY
-        && tf_to_seconds(retained_.input_tf) == 86400
+        && internal::tf_to_clock_seconds(retained_.input_tf) == 86400
         && host.syminfo_.session == "1800-1700"
         && host.syminfo_.timezone == "America/New_York") {
         const auto stamp = session_period_open_ms(script_bar.timestamp,

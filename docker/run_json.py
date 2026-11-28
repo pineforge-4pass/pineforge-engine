@@ -4712,6 +4712,7 @@ _RUN_REQUEST_OPTIONS = frozenset({
     "magnifier_samples", "magnifier_dist", "generated_cpp", "transpiled", "syminfo",
     "trade_start_ms", "chart_tz", "magnifier_volume_weighted", "bench", "warmup",
     "repeats", "symbol_feeds", "ohlcv_bin", "verify_bin", "report_sink", "run_id", "spill_dir",
+    "limit_output_series", "limit_map_pairs",
 })
 
 
@@ -9665,16 +9666,20 @@ class _MetricsOnlyRun:
         return self.result(recovered_settings)
 
 
+def _nonnegative_int64(text, description):
+    digits = text.lstrip("0") or "0"
+    if (not re.fullmatch(r"[0-9]+", text) or len(digits) > 19
+            or int(digits) > (1 << 63) - 1):
+        raise argparse.ArgumentTypeError("expected a nonnegative int64 " + description)
+    return int(digits)
+
+
 def _output_series_count(text):
-    if not re.fullmatch(r"[0-9]+", text) or int(text) > (1 << 63) - 1:
-        raise argparse.ArgumentTypeError("expected a nonnegative int64 series count")
-    return int(text)
+    return _nonnegative_int64(text, "series count")
 
 
 def _map_pairs_count(text):
-    if not re.fullmatch(r"[0-9]+", text) or int(text) > (1 << 63) - 1:
-        raise argparse.ArgumentTypeError("expected a nonnegative int64 map-pair count")
-    return int(text)
+    return _nonnegative_int64(text, "map-pair count")
 
 
 def _live_order_ids_count(text):
@@ -9686,11 +9691,7 @@ def _live_order_ids_count(text):
 
 
 def _ta_lookback_count(text):
-    digits = text.lstrip("0") or "0"
-    if (not re.fullmatch(r"[0-9]+", text) or len(digits) > 19
-            or int(digits) > (1 << 63) - 1):
-        raise argparse.ArgumentTypeError("expected a nonnegative int64 lookback")
-    return int(digits)
+    return _nonnegative_int64(text, "lookback")
 
 
 def tv_compat_from_environment() -> bool:
@@ -9772,6 +9773,8 @@ def _create_strategy_with_output_limit(lib, checked: bool, max_output_series=Non
 
 def create_strategy(lib, checked: bool, max_output_series=None, max_map_pairs=None):
     """Install map policy before construction, then restore the thread default."""
+    if max_map_pairs == 0:
+        max_map_pairs = None
     name = "pf_map_pairs_limit_set_checked"
     if not hasattr(lib, name):
         if max_map_pairs is not None:
@@ -9827,6 +9830,8 @@ def _write_run_failure(failure):
     cause = getattr(failure, "cause", None)
     if cause is None:
         write_failure(str(failure), failure.code, failure.code_args)
+        if isinstance(failure, ChartBarsError) and failure.code_args.get("reason") == "io":
+            _write_diagnostic(f"run_json: {_no_surrogates(str(failure))}\n")
         return
     # This path has the fixed empty strategy_create_failed args and the
     # runtime's scalar series-limit cause; no engine message is parsed.

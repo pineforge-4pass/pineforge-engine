@@ -175,7 +175,7 @@ BAR_VIEW_READS = {
         # (src/engine_security.cpp:103). The read refuses the run when the feed
         # list changed after that routing (src/engine_aux_security.cpp:104, :128
         # and :130, src/native_execution_consumer.cpp:10107) or the index is past
-        # it (src/source/pine_security_eval.cpp:1009-1012).
+        # it (src/source/pine_security_eval.cpp:1160).
         'static_cast<std::size_t>(state.native_feed_index)].bars;',
         'feed.bars = held.bars;',
         'feed.close_ms = held.close_ms;',

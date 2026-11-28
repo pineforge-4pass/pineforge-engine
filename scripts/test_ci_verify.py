@@ -260,6 +260,11 @@ class Scripted:
         self.source = Path(source)
         self.profile = profile
         self.exits = exits
+        # These scenarios script an overlaid checkout. The inventory guard
+        # and the private twin guard have separate real, two-world controls.
+        self.exits.setdefault('private-fixture-paths', 0)
+        if ci_verify.private_fixtures_overlay():
+            self.exits.setdefault('source-guard-twin-parity', 0)
         self.calls: list[list[str]] = []
         # Include discovery calls when checking every profile's dispatch.
         # The runner signature rejects any deadline keyword.
@@ -341,6 +346,7 @@ class Scripted:
                              b'kernel residuals\n', b'')
         if any(Path(part).suffix == '.py' for part in argv):
             needles = {
+                'private-fixture-paths': 'check_private_fixture_reads.py',
                 'source-guard-c-abi': 'check_c_abi_runtime.py',
                 'source-guard-native-source': 'test_native_source_guard.py',
                 'source-guard-broker-hash': 'check_broker_state_hash_coverage.py',
@@ -1920,6 +1926,21 @@ class RowFloorConfig(unittest.TestCase):
                     summaries = self.shard_summaries(2, profile=profile, overlay=overlay)
                     self.assert_lab_shard_contract(summaries)
                     self.assertIsNone(ci_verify.validate_ctest_shard_union(summaries))
+
+    def test_private_union_requires_the_private_checks_on_every_shard(self):
+        summaries = self.shard_summaries(2, profile='native', overlay=True, labelled=())
+        for name in ('private-fixture-paths', 'ctest-private-fixtures'):
+            with self.subTest(missing=name):
+                changed = json.loads(json.dumps(summaries))
+                changed[1]['stages'] = [s for s in changed[1]['stages'] if s['name'] != name]
+                with self.assertRaisesRegex(ValueError, 'required stage ' + name):
+                    ci_verify.validate_ctest_shard_union(changed)
+        changed = json.loads(json.dumps(summaries))
+        row = changed[1]['ctestRan'].pop()
+        changed[1]['ctestRows'] -= 1
+        changed[1]['ctestSkipped'].append(row)
+        with self.assertRaisesRegex(ValueError, re.escape(row)):
+            ci_verify.validate_ctest_shard_union(changed)
 
     def test_debug_exclusion_refuses_unpinned_slow_rows(self):
         # Red-first expectation on c1d10e15e3: extra labels still clear every count.
@@ -4653,11 +4674,12 @@ class RowFloorDriver(unittest.TestCase):
     def test_floor_counts_rows_that_ran_and_lists_a_skipped_row_beside_them(self):
         # The floor counts the rows that RAN: one row more registered than the
         # floor, and that row skipped, leaves the ran count exactly at the
-        # floor -- which passes -- with the skip listed beside the count.
+        # floor. The count itself passes, while the private run refuses the skip.
         code, summary, _, build_dir = self.run_profile(
             'kernel', ctest_rows=FULL_FLOOR['kernel'] + 1,
             ctest_skipped=['test_native_live_websocket'])
-        self.assertEqual(code, 0, summary['failures'])
+        self.assertEqual(code, 1, summary)
+        self.assertEqual(failure_stages(summary), ['ctest-private-fixtures'])
         self.assertEqual(summary['ctestRows'], FULL_FLOOR['kernel'])
         self.assertEqual(summary['ctestTotal'], FULL_FLOOR['kernel'] + 1)
         self.assertEqual(summary['ctestSkipped'], ['test_native_live_websocket'])
@@ -4726,13 +4748,16 @@ class RowFloorDriver(unittest.TestCase):
         # Empty is the unset spelling: the flag counts only when non-empty.
         return mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''})
 
-    def test_min_tests_override_gates_the_rows_that_ran(self):
-        # --min-tests stays the override (fail-closed below 1, see
-        # RowFloorConfig) and gates the same count: 4 rows, 1 skipped.
+    def test_min_tests_override_still_rejects_a_private_skip(self):
+        # --min-tests stays the numeric floor (fail-closed below 1, see
+        # RowFloorConfig), but private mode independently requires every
+        # selected row to run: 4 rows, 1 skipped, and a floor of 3.
         code, summary, _, _ = self.run_profile(
             'native', extra=['--min-tests', '3'], ctest_rows=4, ctest_skipped=['test_skip'])
-        self.assertEqual(code, 0, summary['failures'])
+        self.assertEqual(code, 1)
+        self.assertEqual(failure_stages(summary), ['ctest-private-fixtures'])
         self.assertEqual(summary['ctestRows'], 3)
+        self.assertIn('test_skip', summary['failures'][0]['error'])
         code, summary, _, _ = self.run_profile(
             'native', extra=['--min-tests', '4'], ctest_rows=4, ctest_skipped=['test_skip'])
         self.assertEqual(code, 1)
@@ -5061,6 +5086,73 @@ class PrivateFixtureFloors(unittest.TestCase):
         # Empty is the unset spelling: the flag counts only when non-empty.
         return mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''})
 
+    def test_overlay_is_checked_against_the_declared_paths_before_configure(self):
+        # This runs the real driver and overlay guard against a disposable
+        # source. Stop at tool discovery: no Git, configure or build is needed.
+        pin = 'a2' * 20
+        from test_run_pytest_no_skips import declared_inputs
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            files = root / 'tests' / 'data'
+            files.mkdir(parents=True)
+            (root / 'VERSION').write_text('0.0.0\n')
+            declared = root / 'tests/private_fixture_paths.txt'
+            manifest = ('// dirs: 1\n// files: 2\n// paths: 3\nD tests/data\n'
+                        'F tests/data/left.csv\nF tests/data/right.csv\n')
+            declared.write_text(manifest)
+            (files / 'left.csv').write_text('left\n')
+            right = files / 'right.csv'
+            declared_inputs((ROOT / 'scripts/check_private_fixture_reads.py',
+                             ROOT / 'scripts/private_fixture_policy.py',
+                             root / 'VERSION', declared, files / 'left.csv', right))
+
+            def gate(marker, revision=''):
+                with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': marker}):
+                    driver = ci_verify.Driver(ci_verify.build_config(
+                        ['native', '--build-dir', str(root / 'build')], source=root, stream_output=False))
+                    # Use the shipping checker with the synthetic root; the
+                    # driver still owns whether and when it dispatches it.
+                    def run(argv, **kwargs):
+                        self.assertEqual(Path(argv[1]).name, 'check_private_fixture_reads.py')
+                        return default_runner([argv[0], str(ROOT / 'scripts' / Path(argv[1]).name),
+                                               *argv[2:]], **kwargs)
+                    driver.cfg.runner = run
+                    with mock.patch.dict(os.environ, PINEFORGE_PRIVATE_FIXTURES_SHA=revision), \
+                            mock.patch.object(driver, 'collect_tool_versions', return_value=False):
+                        driver.run()
+                return [(s['status'], (driver.cfg.build_dir / s['log']).read_text())
+                        for s in driver.stages if s['name'] == 'private-fixture-paths']
+
+            self.assertEqual(gate(''), [])
+
+            def refused(reason):
+                stages = gate(pin)
+                self.assertEqual([status for status, log in stages], ['failed'], stages)
+                for token in (pin, 'NOT COMPARED', reason):
+                    self.assertIn(token, stages[0][1])
+
+            refused('tests/data/right.csv')
+            self.assertIn('(revision not supplied)', gate('1')[0][1])
+            self.assertIn(pin, gate('1', pin)[0][1])
+            right.touch()
+            refused('empty')
+            right.write_text('right\n')
+            self.assertEqual([status for status, log in gate(pin)], ['passed'])
+            declared.write_text(manifest.replace('F tests/data/right.csv\n', ''))
+            refused('files')
+            declared.write_text(manifest.replace('tests/data/right.csv', 'tests/data/left.csv'))
+            refused('duplicate')
+            declared.write_text(manifest.replace('tests/data/right.csv', '../escaped.csv'))
+            refused('path')
+            declared.write_text(manifest.replace('tests/data/right.csv', 'tests/data/payload.env'))
+            refused('invalid fixture path')
+            declared.write_text(manifest)
+            right.unlink()
+            right.symlink_to(files / 'left.csv')
+            refused('symlink')
+            declared.write_text('')
+            refused('inventory')
+
     def test_pinned_rows_are_exactly_the_labelled_ctest_rows(self):
         # The skip rule reads the rows by their label, and the label's
         # population is the pinned file P1-B commits. Prove the two agree over
@@ -5220,19 +5312,34 @@ class PrivateFixtureFloors(unittest.TestCase):
         self.assertEqual(summary['ctestRows'], FULL_FLOOR['release'])
 
     def test_red_overlay_present_a_private_row_that_skips_fails(self):
-        # RED (flag set): a private_fixtures row that did not run fails, naming
-        # the row and the literal it printed. One row more than the floor runs,
-        # so only the private_fixtures rule fails -- the floor itself is met.
-        with self.overlay_present():
-            code, summary, _, _ = self.run_profile(
-                'release', ctest_rows=FULL_FLOOR['release'] + 1,
-                ctest_skipped=['test_aapl15_margin_brackets_l4a'])
-        self.assertEqual(code, 1)
-        self.assertEqual(failure_stages(summary), ['ctest-private-fixtures'])
-        error = summary['failures'][0]['error']
-        self.assertIn('test_aapl15_margin_brackets_l4a', error)
-        self.assertIn(ci_verify.PRIVATE_FIXTURE_SKIP_LITERAL, error)
-        self.assertIn('the overlay did not reach the tree', error)
+        # CTest does not print a skipped test's stdout with --output-on-failure.
+        # Model its result log; never associate a neighbour's path with it.
+        pin = 'b3' * 20
+        rows = ('test_alpha', 'test_beta', 'test_gamma')
+        paths = ('tests/invented/one.csv', 'tests/invented/two.csv')
+        with tempfile.TemporaryDirectory() as work, mock.patch.dict(
+                os.environ, {'PINEFORGE_PRIVATE_FIXTURES': pin}):
+            build = Path(work)
+            driver = ci_verify.Driver(ci_verify.build_config(['release', '--build-dir', work]))
+            log = build / 'Testing/Temporary/LastTest.log'
+            log.parent.mkdir(parents=True)
+            log.write_text(''.join(
+                f'{i}/3 Testing: {name}\n{i}/3 Test: {name}\n'
+                f'Command: "cmake" "-E" "echo" "not output"\n'
+                f'Output:\n----------------------------------------------------------\n'
+                + (ci_verify.PRIVATE_FIXTURE_SKIP_LITERAL + paths[i - 1] + '\n' if i <= 2 else '')
+                + '<end of output>\n'
+                for i, name in enumerate(rows, 1)))
+            with mock.patch.object(driver, 'pinned_private_fixture_rows', return_value=set(rows)):
+                driver.enforce_test_floor(Completed(0, ctest_output(
+                    FULL_FLOOR['release'] + 3, skipped=rows[:2], disabled=rows[2:])))
+            self.assertEqual(failure_stages(driver.summary), ['ctest-private-fixtures'])
+            error = driver.failures[0]['error']
+        self.assertIn(pin, error)
+        for name, path in zip(rows, paths):
+            self.assertRegex(error, rf'(?m)^.*{name}.*{re.escape(path)}$')
+        self.assertRegex(error, r'(?m)^.*test_gamma.*Disabled$')
+        self.assertNotIn('did not reach', error)
 
     def test_red_overlay_present_unreadable_row_lists_fail_closed(self):
         # F10: with the overlay present and the row lists unreadable, the rule
@@ -5244,6 +5351,12 @@ class PrivateFixtureFloors(unittest.TestCase):
                 'debug', ctest=8, ctest_raw=b'98% tests passed, 3 tests failed out of 999\n')
         self.assertEqual(code, 1)
         self.assertIn('ctest-private-fixtures', failure_stages(summary))
+
+        with self.overlay_present(), tempfile.TemporaryDirectory() as work:
+            driver = ci_verify.Driver(ci_verify.build_config(['native', '--build-dir', work]))
+            driver.enforce_test_floor(Completed(0, b'100% tests passed, 0 tests failed out of 0\n'))
+            self.assertEqual(failure_stages(driver.summary), ['ctest-private-fixtures'])
+            self.assertIn('reported 0 rows', driver.failures[0]['error'])
 
     def test_red_overlay_present_a_disabled_pinned_row_fails(self):
         # F10: a Disabled pinned row is not run either, and CTest leaves it out
@@ -5281,15 +5394,46 @@ class PrivateFixtureFloors(unittest.TestCase):
         self.assertIn('a truncated pin cannot clear the rows it lost',
                       driver.stages[0]['error'])
 
-    def test_green_overlay_present_ignores_an_unrelated_skip(self):
-        # The rule keys on the pinned rows, not on any skip: a skip outside
-        # them must not trip it.
-        with self.overlay_present():
-            code, summary, _, _ = self.run_profile(
-                'kernel', ctest_rows=FULL_FLOOR['kernel'] + 1,
-                ctest_skipped=['test_native_live_websocket'])
-        self.assertEqual(code, 0, summary['failures'])
-        self.assertNotIn('ctest-private-fixtures', failure_stages(summary))
+    def test_unlisted_skip_cannot_hide_above_the_floor_or_in_a_floorless_profile(self):
+        row = 'unlisted_synthetic_case'
+        for profile in ('release', 'kernel', 'native'):
+            for shard in (None, '1/2'):
+                with self.subTest(profile=profile, shard=shard), self.overlay_present(), \
+                        tempfile.TemporaryDirectory() as work:
+                    args = [profile, '--build-dir', work]
+                    if shard:
+                        args += ['--ctest-shard', shard]
+                    driver = ci_verify.Driver(ci_verify.build_config(args))
+                    names = (row, *(f'ran_{n}' for n in range((driver.cfg.min_tests or 1) + 1)))
+                    result = Completed(0, named_ctest_output(names, skipped=(row,)))
+                    if shard == '1/2':
+                        driver.enforce_sharded_test_floor(result, (*names, 'peer'), (*names, 'peer'),
+                                                          names)
+                    else:
+                        driver.enforce_test_floor(result, registered=len(names), selected=len(names))
+                    self.assertTrue(driver.failures, f'{profile} accepted {row} with {shard=}')
+                    self.assertIn(row, driver.failures[0]['error'])
+                    if shard == '1/2':
+                        self.assertIn('ctest-floor', failure_stages(driver.summary))
+
+    def test_private_exclusion_cannot_remove_a_pinned_row_by_another_label(self):
+        # Counts balance in every case. Use the Driver's real discovery and
+        # selection with invented CTest listings, including the 1/1 route.
+        row = 'test_invented_hidden_row'
+        selected = tuple(f'selected_{i}' for i in range(1005))
+        for shard in (None, '1/1', '2/2'):
+            with self.subTest(shard=shard), self.overlay_present(), mock.patch.object(
+                    ci_verify.Driver, 'pinned_private_fixture_rows', return_value=frozenset({row})), \
+                    mock.patch.object(ci_verify, 'PINNED_SLOW_TEST_ROWS', frozenset({row})):
+                profile, label = ('debug', 'slow') if shard == '2/2' else ('native', 'weekend')
+                extra = ['--exclude-label', label] + (['--ctest-shard', shard] if shard else [])
+                code, summary, _, _ = self.run_profile(
+                    profile, extra=extra, ctest_shard_inventory=(*selected, row),
+                    ctest_shard_labelled=(row,))
+                self.assertEqual(code, 1, summary['failures'])
+                self.assertEqual(failure_stages(summary), ['ctest-private-fixtures'])
+                self.assertIn(row, summary['failures'][0]['error'])
+                self.assertIn(label, summary['failures'][0]['error'])
 
     def absent_run(self, profile, registered, pinned_skips, extra_skips=()):
         """A real Driver run of the absent world with a scripted registry."""
@@ -5448,11 +5592,11 @@ class PrivateFixtureFloors(unittest.TestCase):
     def test_red_overlay_present_any_skipped_row_fails_the_run(self):
         # Control (d): with the overlay present the profile's whole population
         # must run, so ANY row that skips is a lost row -- a pinned one on the
-        # label rule and on the floor, an unpinned one on the floor alone.
+        # private execution rule as well as on the floor.
         for skipped, stages in (
                 (['test_aapl15_margin_brackets_l4a'],
                  ['ctest-private-fixtures', 'ctest-floor']),
-                (['test_native_live_websocket'], ['ctest-floor'])):
+                (['test_native_live_websocket'], ['ctest-private-fixtures', 'ctest-floor'])):
             with self.subTest(skipped=skipped):
                 with self.overlay_present():
                     code, summary, _, _ = self.run_profile(

@@ -8,6 +8,7 @@ import tempfile
 import unittest
 
 import check_settlement_cpp_abi as checker
+from private_fixture_policy import fixture_available
 from cpp_abi_pairing import PairingError, run_synthetic_pair
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PRIVATE_FIXTURE_SKIP_LITERAL = "SKIP private fixtures not present: "
 PRIVATE_FIXTURE_MANIFESTS = (checker.MANIFEST, checker.V16_V18_MANIFEST)
 requires_private_fixtures = unittest.skipUnless(
-    all(path.exists() for path in PRIVATE_FIXTURE_MANIFESTS),
+    all(fixture_available(path.exists(), path.relative_to(ROOT)) for path in PRIVATE_FIXTURE_MANIFESTS),
     PRIVATE_FIXTURE_SKIP_LITERAL + "tests/fixtures/native_cpp_abi")
 
 

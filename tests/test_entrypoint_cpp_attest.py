@@ -10,6 +10,7 @@ documented local-only opt-out. The .pine route is not touched.
 
 The toolchain is stubbed: g++ records that it was called, so "refused before g++" is observable.
 """
+import errno
 import hashlib
 import json
 import os
@@ -109,6 +110,39 @@ def test_cpp_with_the_matching_digest_compiles_and_runs(box):
     assert result.returncode == 0, result.stderr
     assert '"marker": "ran"' in result.stdout
     assert box.called.exists()
+
+
+@pytest.mark.parametrize("dirname", ["work\\dir", "work\ndir"], ids=["backslash", "newline"])
+def test_cpp_attestation_is_independent_of_snapshot_path(box, dirname):
+    box.put_cpp()
+    scratch = box.root / dirname
+    scratch.mkdir()
+    result = box.run({"TMPDIR": str(scratch),
+                      "PINEFORGE_STRATEGY_CPP_SHA256": hashlib.sha256(CPP_BYTES).hexdigest()})
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert result.stdout == REPORT + "\n" and box.called.exists()
+
+
+def test_unreadable_chart_reports_the_os_error_on_stderr(box):
+    # Use the real CSV reader; an unreadable chart fails before it loads the stub .so.
+    box.put_cpp()
+    runner = box.prefix / "bin" / "run_json.py"
+    runner.unlink()
+    runner.symlink_to(ENTRYPOINT.with_name("run_json.py"))
+    chart = box.indir / "ohlcv.csv"
+    mode = chart.stat().st_mode
+    chart.chmod(0)
+    try:
+        assert not os.access(chart, os.R_OK), (
+            f"NOT COMPARED: expected unreadable chart, actually readable by uid {os.geteuid()}")
+        result = box.run({"PINEFORGE_STRATEGY_CPP_SHA256": hashlib.sha256(CPP_BYTES).hexdigest()})
+    finally:
+        chart.chmod(mode)
+    assert result.returncode == 4, (result.stdout, result.stderr)
+    message = f"--ohlcv: {chart}: {os.strerror(errno.EACCES)}"
+    assert json.loads(result.stdout) == {"engine": "pineforge", "error": message,
+                                         "code": "chart_bars_unreadable", "args": {"reason": "io"}}
+    assert message in result.stderr
 
 
 def test_a_changed_byte_after_the_host_hashed_it_is_refused(box):
