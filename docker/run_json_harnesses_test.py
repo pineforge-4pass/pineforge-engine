@@ -15,8 +15,10 @@ import ctypes
 import importlib.util
 import io
 import json
-import sys
 from pathlib import Path
+from subprocess import CompletedProcess
+import sys
+import tarfile
 
 import pytest
 import run_json  # docker/ is on sys.path in the engine test env
@@ -280,41 +282,55 @@ def test_tutorial_sweep_reports_a_run_that_succeeded():
 # --- scripts/run_strategy.py: the lot keys of runtime_overrides (#716) ----------
 
 class FakeDocker:
-    """The docker executable and nothing else: put in place of pf_release_run's
-    subprocess module, it answers `docker image inspect` and `docker run`. For
-    a run it keeps the argv and the text of every file mounted as
-    /in/syminfo.json, read while the launcher still holds the file."""
+    """Replace Docker and record the create args and metadata copied into /in."""
 
-    MOUNTED = ":/in/syminfo.json:ro"
-
-    class Exit0:
-        returncode, stderr = 0, ""
-
-        def __init__(self, stdout):
-            self.stdout = stdout
+    IMAGE = "sha256:" + "0" * 64
+    CONTAINER = "1" * 64
 
     def __init__(self, stdout="{}\n", stderr=""):
         self.argv, self.documents = None, []
         self.stdout = stdout
         self.stderr = stderr
+        self._phase = None
 
     def run(self, cmd, **options):
         if cmd[:3] == ["docker", "image", "inspect"]:
-            config = {"Entrypoint": ["/usr/local/bin/entrypoint.sh"], "Cmd": None}
-            return self.Exit0(json.dumps([{"Id": "sha256:" + "0" * 64, "Config": config}]))
-        self.argv = list(cmd)
-        mounts = [cmd[i + 1] for i, word in enumerate(cmd[:-1]) if word == "-v"]
-        self.documents = [Path(mount[:-len(self.MOUNTED)]).read_text(encoding="utf-8")
-                          for mount in mounts if mount.endswith(self.MOUNTED)]
-        result = self.Exit0(self.stdout)
-        result.stderr = self.stderr
-        return result
+            config = {"Entrypoint": ["/usr/local/bin/entrypoint.sh"], "Cmd": None,
+                      "User": "10001:10001"}
+            return CompletedProcess(cmd, 0, json.dumps([{"Id": self.IMAGE, "Config": config}]), "")
+        if cmd[:2] == ["docker", "create"]:
+            assert self._phase is None
+            self.argv = list(cmd)
+            self.documents = []
+            self._phase = "created"
+            return CompletedProcess(cmd, 0, self.CONTAINER + "\n", "")
+        if cmd == ["docker", "container", "inspect", "--format", "{{.Image}}", self.CONTAINER]:
+            assert self._phase == "created"
+            return CompletedProcess(cmd, 0, self.IMAGE + "\n", "")
+        if cmd == ["docker", "cp", "-a", "-", f"{self.CONTAINER}:/"]:
+            assert self._phase == "created"
+            with tarfile.open(fileobj=io.BytesIO(options["input"]), mode="r:") as archive:
+                for member in archive:
+                    if member.name == "in/syminfo.json":
+                        assert member.isfile()
+                        with archive.extractfile(member) as document:
+                            self.documents.append(document.read().decode("utf-8"))
+            self._phase = "copied"
+            return CompletedProcess(cmd, 0, b"", b"")
+        if cmd == ["docker", "start", "-a", self.CONTAINER]:
+            assert self._phase == "copied"
+            self._phase = "started"
+            return CompletedProcess(cmd, 0, self.stdout, self.stderr)
+        if cmd == ["docker", "rm", "-f", "-v", self.CONTAINER]:
+            assert self._phase is not None
+            self._phase = None
+            return CompletedProcess(cmd, 0, "", "")
+        raise AssertionError(f"unexpected Docker command: {cmd}")
 
 
 def test_release_launcher_mounts_the_symbol_document_with_both_lot_keys(tmp_path, tape,
                                                                          monkeypatch):
-    # pf_release_run.run_release writes the document itself: only the docker
-    # executable is replaced, and it reads the file the launcher mounts.
+    # Keep the existing test name for base/head matching. Read the copied JSON.
     generated = tmp_path / "generated.cpp"
     generated.write_text("// generated\n")
     docker = FakeDocker()
@@ -348,7 +364,7 @@ def test_run_strategy_hands_both_runners_the_same_valid_lot(tmp_path, tape, monk
                                                             overrides, lot):
     # One inputs.json resolved once (inputs_run_kwargs), then each runner's own
     # hand-over: the metadata the ctypes runner sets on the engine, and the
-    # document the docker runner's launcher mounts for the image.
+    # document the Docker launcher copies into the container.
     params = {"runtime_overrides": overrides}
     _, kwargs = run_strategy.inputs_run_kwargs(params, tmp_path, tape, env={})
 
@@ -368,7 +384,7 @@ def test_run_strategy_hands_both_runners_the_same_valid_lot(tmp_path, tape, monk
 
 
 def test_runner_projects_each_symbol_key_to_its_ctypes_setter(tmp_path, tape, monkeypatch):
-    # Capture both the mounted document and the setter arguments it produces.
+    # Capture both the copied document and the setter arguments it produces.
     # Raw numeric names are open-ended and can even coincide with a catalog field.
     numbers = {
         "account_currency_fx": "1.25", "chart_ema_na_warmup": 0,

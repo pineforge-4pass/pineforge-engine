@@ -14,7 +14,8 @@ speed median/ratio) stays host-side in the caller. This helper only:
     (docker/entrypoint.sh), incl. the validation-parity knobs,
   - for raw corpus params, builds once and reads that module's settings receipt
     before binding input values and starting the engine command,
-  - `docker run --rm`, parses stdout JSON, surfaces errors.
+  - copies staged inputs into the container as files owned by the image user,
+  - starts the container, parses stdout JSON, surfaces errors.
 
 The caller is responsible for normalization the image does NOT do (e.g. mapping
 a 'VOLUME_WEIGHTED' magnifier distribution to its real geometric distribution +
@@ -24,18 +25,24 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
+import io
 import json
 import os
+import re
 import subprocess
 import sys
+import tarfile
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 DEFAULT_IMAGE = os.environ.get(
     "PINEFORGE_RELEASE_IMAGE", "ghcr.io/pineforge-4pass/pineforge-release:latest")
 # The reviewed engine-step/v1 producer from this tree: docker/entrypoint.sh.
 # An older installed producer could ignore BUILD_ONLY and execute bars.
 _BUILD_ONLY_ENTRYPOINT_SHA256 = "680160eae62aca428de3e4aab418aa59be8d9c46287034092f4dbb888c9517d6"
+_CORPUS_DIRECTORY = PurePosixPath("/pf-corpus-request")
+_SYMINFO_PATH = PurePosixPath("/in/syminfo.json")
+_IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
 
 
 class ReleaseRunError(RuntimeError):
@@ -138,8 +145,8 @@ def _build_manifest(work: Path, environment: dict):
     return document, slots, shared_object
 
 
-def _image_command(image: str):
-    """Resolve this local image's immutable ID and its real default command."""
+def _inspect_image(image: str) -> tuple[str, dict]:
+    """Read the selected local image's config and bind it to an immutable ID."""
     inspected = subprocess.run(
         ["docker", "image", "inspect", image], capture_output=True, text=True, check=False)
     if inspected.returncode:
@@ -151,11 +158,20 @@ def _image_command(image: str):
             raise ValueError("expected one inspected image")
         document = documents[0]
         identity = document["Id"]
-        if (not isinstance(identity, str) or not identity.startswith("sha256:")
-                or len(identity) != 71
-                or any(char not in "0123456789abcdef" for char in identity[7:])):
+        if not isinstance(identity, str) or not _IMAGE_ID.fullmatch(identity):
             raise ValueError("image has no immutable sha256 ID")
         config = document["Config"]
+        if not isinstance(config, dict):
+            raise ValueError("invalid image Config")
+    except (ValueError, KeyError, TypeError) as error:
+        raise ReleaseRunError(f"NEEDS selected image config: {error}") from error
+    return identity, config
+
+
+def _image_command(image: str) -> tuple[str, list[str], dict]:
+    """Recreate Docker's default command when overriding the entrypoint."""
+    identity, config = _inspect_image(image)
+    try:
         command = []
         for name in ("Entrypoint", "Cmd"):
             try:
@@ -172,7 +188,72 @@ def _image_command(image: str):
             raise ValueError("image has no default command")
     except (ValueError, KeyError, TypeError) as error:
         raise ReleaseRunError(f"NEEDS selected image command: {error}") from error
-    return identity, command
+    return identity, command, config
+
+
+def _account_file(container: str, path: str) -> str:
+    copied = subprocess.run(["docker", "cp", "-L", f"{container}:{path}", "-"],
+                            capture_output=True, check=False)
+    if copied.returncode:
+        detail = copied.stderr.decode("utf-8", "replace").strip()
+        if "could not find the file" in detail.lower():
+            return ""
+        raise ReleaseRunError(f"docker cp could not read image {path}: {detail}")
+    try:
+        with tarfile.open(fileobj=io.BytesIO(copied.stdout), mode="r:*") as archive:
+            member = archive.next()
+            if member is None or not member.isfile() or archive.next() is not None:
+                raise ValueError("expected one regular file")
+            with archive.extractfile(member) as stream:
+                return stream.read().decode("utf-8", "surrogateescape")
+    except (OSError, ValueError, tarfile.TarError) as error:
+        raise ReleaseRunError(f"invalid docker cp archive for image {path}: {error}") from error
+
+
+def _numeric_id(value: str) -> int | None:
+    if not re.fullmatch(r"[+-]?[0-9]+", value):
+        return None
+    number = int(value)
+    return number if number >= 0 else None
+
+
+def _image_owner(container: str, config: dict) -> tuple[int, int]:
+    """Resolve the process UID and primary GID using the container's accounts."""
+    spec = config.get("User")
+    if spec is None or spec == "":
+        return 0, 0
+    try:
+        if not isinstance(spec, str):
+            raise ValueError("expected a user string")
+        # Docker treats an empty component as the default user or group.
+        user, _, group = spec.partition(":")
+        uid = _numeric_id(user or "0")
+        gid = _numeric_id(group)
+        if uid is None or not group:
+            for line in _account_file(container, "/etc/passwd").splitlines():
+                account = line.split(":")
+                if len(account) < 4 or not account[0] or account[0].startswith("#"):
+                    continue
+                account_uid = _numeric_id(account[2])
+                if (account[0] == user if uid is None else account_uid == uid):
+                    uid = account_uid
+                    if not group:
+                        gid = _numeric_id(account[3])
+                    break
+        if uid is None:
+            raise ValueError(f"no matching account in /etc/passwd for {user!r}")
+        if group and gid is None:
+            for line in _account_file(container, "/etc/group").splitlines():
+                account = line.split(":")
+                if len(account) >= 3 and account[0] == group:
+                    gid = _numeric_id(account[2])
+                    break
+            if gid is None:
+                raise ValueError(f"no matching entry in /etc/group for {group!r}")
+        # A numeric UID without a passwd entry still runs under Docker (GID 0).
+        return uid, 0 if gid is None else gid
+    except (ValueError, ReleaseRunError) as error:
+        raise ReleaseRunError(f"cannot resolve image Config.User {spec!r}: {error}") from error
 
 
 def _require_installed_entrypoint(command: list[str]) -> None:
@@ -225,7 +306,7 @@ def _run_corpus_build(command: list[str], params: dict, work: Path) -> int:
     return 0
 
 
-def _stage_corpus_helper(directory: Path, params: dict):
+def _corpus_helper_files(params: dict) -> dict[PurePosixPath, bytes]:
     scripts = Path(__file__).resolve().parent
     sources = (
         scripts / "pf_release_run.py", scripts / "run_strategy.py",
@@ -234,11 +315,71 @@ def _stage_corpus_helper(directory: Path, params: dict):
     for source in sources:
         if not source.is_file():
             raise ReleaseRunError(f"NEEDS corpus pre-execution helper source: {source}")
-    for source in sources:
-        (directory / source.name).write_bytes(source.read_bytes())
-    request = directory / "corpus-params.json"
-    request.write_text(json.dumps(params), encoding="utf-8")
-    return directory / "pf_release_run.py", request
+    files = {_CORPUS_DIRECTORY / source.name: source.read_bytes() for source in sources}
+    files[_CORPUS_DIRECTORY / "corpus-params.json"] = json.dumps(params).encode("utf-8")
+    return files
+
+
+def _staged_archive(files: dict[PurePosixPath, bytes], uid: int, gid: int) -> bytes:
+    with io.BytesIO() as stream:
+        with tarfile.open(fileobj=stream, mode="w") as archive:
+            # /in is already part of the image; leave its owner and mode alone.
+            if any(path.parent == _CORPUS_DIRECTORY for path in files):
+                directory = tarfile.TarInfo(str(_CORPUS_DIRECTORY.relative_to("/")))
+                directory.uid, directory.gid, directory.mode = uid, gid, 0o500
+                directory.type = tarfile.DIRTYPE
+                archive.addfile(directory)
+            for path, data in files.items():
+                member = tarfile.TarInfo(str(path.relative_to("/")))
+                member.uid, member.gid, member.mode = uid, gid, 0o400
+                member.size = len(data)
+                archive.addfile(member, io.BytesIO(data))
+        return stream.getvalue()
+
+
+def _container_image_config(container: str) -> dict:
+    inspected = subprocess.run(
+        ["docker", "container", "inspect", "--format", "{{.Image}}", container],
+        capture_output=True, text=True)
+    if inspected.returncode:
+        raise ReleaseRunError(
+            f"NEEDS image ID for created container {container}: {inspected.stderr.strip()}")
+    identity = inspected.stdout.strip()
+    if not _IMAGE_ID.fullmatch(identity):
+        raise ReleaseRunError("created container has no immutable sha256 image ID")
+    _, config = _inspect_image(identity)
+    return config
+
+
+def _run_with_staged_inputs(cmd: list[str], config: dict | None,
+                            files: dict[PurePosixPath, bytes]) -> subprocess.CompletedProcess:
+    created = subprocess.run(cmd, capture_output=True, text=True)
+    if created.returncode:
+        raise ReleaseRunError(
+            f"docker create failed (exit {created.returncode})\nstderr tail:\n{created.stderr[-2000:]}")
+    container = created.stdout.strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", container):
+        raise ReleaseRunError("docker create did not return a container ID")
+    try:
+        # A metadata-only run can pull the tag during create, like docker run.
+        if config is None:
+            config = _container_image_config(container)
+        uid, gid = _image_owner(container, config)
+        # -a keeps the archive's numeric owners during extraction.
+        copied = subprocess.run(["docker", "cp", "-a", "-", f"{container}:/"],
+                                input=_staged_archive(files, uid, gid), capture_output=True)
+        if copied.returncode:
+            detail = copied.stderr[-2000:].decode("utf-8", "replace")
+            raise ReleaseRunError(
+                f"docker cp failed (exit {copied.returncode})\nstderr tail:\n{detail}")
+        proc = subprocess.run(["docker", "start", "-a", container], capture_output=True, text=True)
+    finally:
+        removed = subprocess.run(["docker", "rm", "-f", "-v", container],
+                                 capture_output=True, text=True)
+    if removed.returncode and proc.returncode == 0:
+        raise ReleaseRunError(
+            f"docker rm failed (exit {removed.returncode})\nstderr tail:\n{removed.stderr[-2000:]}")
+    return proc
 
 
 def run_release(
@@ -269,8 +410,8 @@ def run_release(
 
     ``generated_cpp`` is mounted as /in/strategy.cpp (compile + run, no
     transpile). ``ohlcv`` is mounted as /in/ohlcv.csv. ``syminfo`` (a dict) is
-    written to a temp file and mounted. Knob values must already be resolved by
-    the caller (e.g. magnifier_dist lowercased + not 'VOLUME_WEIGHTED').
+    copied into the container as JSON. Knob values must already be resolved
+    by the caller (e.g. magnifier_dist lowercased + not 'VOLUME_WEIGHTED').
 
     ``corpus_params`` requests metadata/input classification using the actual
     compiled module's pre-execution settings receipt. It is exclusive with
@@ -287,7 +428,8 @@ def run_release(
     if not ohlcv.exists():
         raise ReleaseRunError(f"ohlcv not found: {ohlcv}")
 
-    cmd = ["docker", "run", "--rm"]
+    staged = corpus_params is not None or bool(syminfo)
+    cmd = ["docker", "create"] if staged else ["docker", "run", "--rm"]
     if not network:
         cmd += ["--network=none"]
     cmd += [
@@ -317,43 +459,33 @@ def run_release(
         env["PINEFORGE_WARMUP"] = str(int(warmup))
         env["PINEFORGE_REPEATS"] = str(int(repeats))
 
-    # syminfo dict -> temp JSON mounted into the container.
-    tmp_syminfo: Path | None = None
     if syminfo:
-        fd, p = tempfile.mkstemp(suffix=".json", prefix="pf_syminfo_")
-        tmp_syminfo = Path(p)
-        with os.fdopen(fd, "w") as f:
-            json.dump(syminfo, f)
-        cmd += ["-v", f"{tmp_syminfo}:/in/syminfo.json:ro"]
-        env["PINEFORGE_SYMINFO"] = "/in/syminfo.json"
+        env["PINEFORGE_SYMINFO"] = str(_SYMINFO_PATH)
     if strict_metadata:
         env["PINEFORGE_STRICT_METADATA"] = "1"
 
     for k, v in env.items():
         cmd += ["-e", f"{k}={v}"]
 
-    bundle = None
-    try:
+    if staged:
+        files = {}
+        config = None
+        if syminfo:
+            files[_SYMINFO_PATH] = json.dumps(syminfo).encode("utf-8")
         if corpus_params is not None:
-            bundle = tempfile.TemporaryDirectory(prefix="pf-corpus-request-")
-            directory = Path(bundle.name).resolve()
-            helper, request = _stage_corpus_helper(directory, corpus_params)
-            identity, command = _image_command(image)
+            files.update(_corpus_helper_files(corpus_params))
+            identity, command, config = _image_command(image)
             # Stage Python classification only. Inside the pinned image,
             # verify the installed script against the source pin before invoking
             # the exact Config.Entrypoint + Config.Cmd, with its ordinary cwd/env.
-            cmd += ["-v", f"{directory}:{directory}:ro", "--entrypoint", "python3",
-                    identity, str(helper), json.dumps(command), str(request)]
+            cmd += ["--entrypoint", "python3", identity,
+                    str(_CORPUS_DIRECTORY / "pf_release_run.py"), json.dumps(command),
+                    str(_CORPUS_DIRECTORY / "corpus-params.json")]
         else:
             cmd += [image]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-    finally:
-        try:
-            if bundle is not None:
-                bundle.cleanup()
-        finally:
-            if tmp_syminfo is not None:
-                tmp_syminfo.unlink(missing_ok=True)
+        proc = _run_with_staged_inputs(cmd, config, files)
+    else:
+        proc = subprocess.run([*cmd, image], capture_output=True, text=True)
 
     requested_keys = _runner_syminfo_keys(syminfo)
     reader_protocol = "pineforge: runner syminfo protocol=1"
