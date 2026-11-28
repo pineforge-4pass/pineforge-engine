@@ -11,10 +11,10 @@
 #include <pineforge/run_failure.hpp>
 
 namespace pineforge {
-// ─── Day-length constants ──────────────────────────────────────────────────────
-
 inline constexpr int64_t kSecPerDay = 86400;
 inline constexpr int64_t kMsPerDay  = 86400000;
+// TradingView measured 2026-11-28: timeframe.in_seconds("1M") = 2628003, "2M" = 5256006, "12M" = 31536036.
+inline constexpr int kNominalSecondsPerMonth = 2628003;
 
 // ─── AggregatedBar ─────────────────────────────────────────────────────────────
 
@@ -33,12 +33,12 @@ struct FixedPeriodClock {
 };
 
 // ─── TF string helpers ─────────────────────────────────────────────────────────
-/// Convert a TradingView timeframe string to seconds.
-/// Minute-based: "1","5","15","30","60","120","240" => minutes * 60
-/// Day-based:    "D","1D" => 86400
-/// Week-based:   "W","1W" => 604800
-/// Month-based:  "M","1M" => -1 (calendar-based, not fixed seconds)
-/// Seconds past int: -1 (calendar-only) for a positive D/W count, else out_of_range.
+namespace internal { int tf_to_clock_seconds(const std::string& tf); }
+
+/// Convert a TradingView timeframe string to seconds. A bare count is minutes.
+/// The D, W and S suffixes count days, weeks and seconds.
+/// Month counts use kNominalSecondsPerMonth; invalid months return -1.
+/// Seconds past int: -1 for a positive D/W/M count, else out_of_range.
 int tf_to_seconds(const std::string& tf);
 
 /// Extract the numeric multiplier from a TF string (e.g. "15" -> 15, "D" -> 1).
@@ -58,12 +58,12 @@ inline int tf_multiplier(const std::string& tf) {
 }
 
 inline bool tf_is_intraday(const std::string& tf) {
-    int s = tf_to_seconds(tf);
+    int s = internal::tf_to_clock_seconds(tf);
     return s > 0 && s < kSecPerDay;
 }
 
 inline bool tf_is_daily(const std::string& tf) {
-    return tf.find('D') != std::string::npos || tf_to_seconds(tf) == kSecPerDay;
+    return tf.find('D') != std::string::npos || internal::tf_to_clock_seconds(tf) == kSecPerDay;
 }
 
 inline bool tf_is_weekly(const std::string& tf) {

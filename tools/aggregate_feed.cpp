@@ -155,7 +155,7 @@ int main(int argc, char** argv) {
 
     int64_t last_seen_bucket_start = -1;
     bool last_bucket_completed = false;
-    const int64_t bucket_ms = static_cast<int64_t>(tf_to_seconds(argv[2])) * 1000;
+    const int64_t bucket_ms = static_cast<int64_t>(internal::tf_to_clock_seconds(argv[2])) * 1000;
 
     for (const Bar& b : bars) {
         // Engine call site (src/engine_run.cpp:1950): single-argument feed(),

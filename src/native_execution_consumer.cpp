@@ -13762,7 +13762,7 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
         local.script_bars_processed = engine.diag_script_bars_processed_;
         local.magnifier_sub_bars_total = engine.diag_magnifier_sub_bars_processed_;
         local.magnifier_sample_ticks_total = engine.diag_magnifier_sample_ticks_processed_;
-        local.input_tf_seconds = tf_to_seconds(engine.input_tf_);
+        local.input_tf_seconds = internal::tf_to_clock_seconds(engine.input_tf_);
         local.script_tf_seconds = engine.script_tf_seconds_;
         local.script_tf_ratio = engine.diag_script_tf_ratio_;
         local.needs_aggregation = engine.diag_needs_aggregation_ ? 1 : 0;
@@ -14994,7 +14994,7 @@ void NativeExecutionConsumer::fill_streamed_report(
         local.script_bars_processed = engine.diag_script_bars_processed_;
         local.magnifier_sub_bars_total = engine.diag_magnifier_sub_bars_processed_;
         local.magnifier_sample_ticks_total = engine.diag_magnifier_sample_ticks_processed_;
-        local.input_tf_seconds = tf_to_seconds(engine.input_tf_);
+        local.input_tf_seconds = internal::tf_to_clock_seconds(engine.input_tf_);
         local.script_tf_seconds = engine.script_tf_seconds_;
         local.script_tf_ratio = engine.diag_script_tf_ratio_;
         local.needs_aggregation = engine.diag_needs_aggregation_ ? 1 : 0;
@@ -15095,7 +15095,7 @@ ScriptBucketCursor::Flags ScriptBucketCursor::next(const Bar& bar) {
     const bool told = !source_ && after_.open && aggregator_.supports_fixed_completion();
     if (told) aggregator_.set_early_close_completes(false);  // its other next-input rules stay off
     const auto next_ms = told ? after_.open(after_.holder, position_) : !source_ ? 0
-        : bar.timestamp + static_cast<std::int64_t>(tf_to_seconds(input_tf_)) * 1000;
+        : bar.timestamp + static_cast<std::int64_t>(internal::tf_to_clock_seconds(input_tf_)) * 1000;
     const AggregatedBar aggregate = aggregator_.feed(bar, next_ms);
     last_.complete = aggregate.is_complete ? 1U : 0U;
     last_.boundary = aggregate.is_complete
