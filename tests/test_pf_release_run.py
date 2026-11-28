@@ -2,7 +2,9 @@
 
 import io
 import json
-from pathlib import Path
+import os
+from pathlib import Path, PurePosixPath
+import stat
 import subprocess
 import sys
 import tarfile
@@ -17,6 +19,12 @@ import pf_release_run
 
 IMAGE = "pineforge-release:test"
 IMAGE_ID = "sha256:" + "a" * 64
+# What the real image wrote, with exit 3, when its user could not read the
+# strategy on a Docker 29 host (docker/entrypoint.sh, the snapshot step).
+BOX_FAILURE = (
+    "cp: cannot open '/in/strategy.cpp' for reading: Permission denied\n"
+    "[pineforge] cannot snapshot strategy.cpp into the work dir\n"
+)
 
 
 def _inspect_with_config(config):
@@ -41,7 +49,14 @@ def test_image_command_refuses_a_config_without_command_fields():
 
 
 class _Docker:
-    """Stand in for Docker at subprocess.run, including its tar streams."""
+    """Stand in for Docker at subprocess.run and keep what Docker keeps.
+
+    A bind mount (-v) shows the host file under the host's owner and mode.
+    ``docker cp - CONTAINER:/`` extracts as root: an entry keeps its mode, keeps
+    its uid and gid only with -a, and a parent directory the archive does not
+    name is made 0755 for root. Starting the container opens each input as the
+    image user and fails as the image does when that user may not read one.
+    """
 
     container = "b" * 64
     accounts = {
@@ -49,12 +64,16 @@ class _Docker:
         "/etc/group": b"research:x:30003:\n",
     }
     report = {"trades": []}
+    host_owner = (1000, 1000)  # the launching account; never one of the image's IDs
 
     def __init__(self, user):
         self.user = user
         self.calls = []
         self.account_reads = []
         self.upload = None
+        self.launch = None
+        self.mounts = {}
+        self.copied = {}
 
     def run(self, cmd, **options):
         self.calls.append(cmd)
@@ -64,11 +83,19 @@ class _Docker:
             stdout = json.dumps([{"Id": IMAGE_ID, "Config": config}])
         elif cmd[:3] == ["docker", "container", "inspect"]:
             stdout = IMAGE_ID + "\n"
-        elif cmd[1] == "create":
+        elif cmd[1] in ("create", "run"):
+            self.launch = cmd
+            for option, value in zip(cmd, cmd[1:]):
+                if option == "-v":
+                    source, target = value.split(":")[:2]
+                    self.mounts[target] = source
+            if cmd[1] == "run":
+                return self._start(cmd)
             stdout = self.container + "\n"
         elif cmd[1] == "cp":
             if cmd[-2] == "-":
                 self.upload = options["input"]
+                self._extract(keep_owner="-a" in cmd)
             else:
                 target, path = cmd[-2].split(":", 1)
                 assert target == self.container
@@ -83,12 +110,84 @@ class _Docker:
                         member.size = len(data)
                         archive.addfile(member, io.BytesIO(data))
                     stdout = stream.getvalue()
-        elif cmd[1] in ("start", "run"):
-            stdout = "progress\n" + json.dumps(self.report) + "\n"
+        elif cmd[1] == "start":
+            return self._start(cmd)
         else:
             assert cmd == ["docker", "rm", "-f", "-v", self.container]
         stderr = b"" if isinstance(stdout, bytes) else ""
         return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr=stderr)
+
+    def _extract(self, keep_owner):
+        """Record the owner and mode each archive entry ends with in the container."""
+        with tarfile.open(fileobj=io.BytesIO(self.upload), mode="r:") as archive:
+            for member in archive:
+                path = PurePosixPath("/", member.name)
+                for parent in path.parents:
+                    if str(parent) != "/":
+                        self.copied.setdefault(str(parent), (0, 0, 0o755))
+                owner = (member.uid, member.gid) if keep_owner else (0, 0)
+                self.copied[str(path)] = (*owner, member.mode)
+
+    def _rows(self, path):
+        return [line.split(":") for line in self.accounts.get(path, b"").decode().splitlines()]
+
+    def _process_ids(self):
+        """UID and GID of the image command: Config.User against the image's accounts."""
+        if not self.user:
+            return 0, 0
+        user, _, group = self.user.partition(":")
+        uid, gid = (int(user), 0) if user.isdigit() else (None, 0)
+        for name, _, account_uid, account_gid, *_ in self._rows("/etc/passwd"):
+            if (int(account_uid) == uid) if user.isdigit() else (name == user):
+                uid, gid = int(account_uid), int(account_gid)
+                break
+        if group.isdigit():
+            gid = int(group)
+        elif group:
+            gid = next(int(row[2]) for row in self._rows("/etc/group") if row[0] == group)
+        return uid, gid
+
+    def _node(self, path):
+        """Owner, group and mode the container shows at ``path``; None when absent."""
+        if path in self.mounts:
+            return (*self.host_owner, stat.S_IMODE(os.stat(self.mounts[path]).st_mode))
+        return self.copied.get(path)
+
+    @staticmethod
+    def _allows(uid, gid, node, bit):
+        """POSIX class check: bit 4 reads a file, bit 1 searches a directory."""
+        owner, group, mode = node
+        if uid == 0:
+            return True  # root reads whatever the mode bits say
+        shift = 6 if uid == owner else 3 if gid == group else 0
+        return bool((mode >> shift) & bit)
+
+    def _inputs(self):
+        """Container paths the image command opens, in its own order."""
+        paths = []
+        if "--entrypoint" in self.launch:
+            paths += [self.launch[-3], self.launch[-1]]  # the staged helper, then its request
+        paths += ["/in/strategy.cpp", "/in/ohlcv.csv"]
+        paths += [word.partition("=")[2] for word in self.launch
+                  if word.startswith("PINEFORGE_SYMINFO=")]
+        return paths
+
+    def _start(self, cmd):
+        """Open each input as the image user; the first refusal ends the run."""
+        uid, gid = self._process_ids()
+        for path in self._inputs():
+            node = self._node(path)
+            folder = self.copied.get(str(PurePosixPath(path).parent), (0, 0, 0o755))
+            if (node is not None and self._allows(uid, gid, folder, 1)
+                    and self._allows(uid, gid, node, 4)):
+                continue
+            reason = "Permission denied" if node is not None else "No such file or directory"
+            stderr = f"cp: cannot open '{path}' for reading: {reason}\n"
+            if path == "/in/strategy.cpp":
+                stderr += "[pineforge] cannot snapshot strategy.cpp into the work dir\n"
+            return subprocess.CompletedProcess(cmd, 3, stdout="", stderr=stderr)
+        stdout = "progress\n" + json.dumps(self.report) + "\n"
+        return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
 
     def staged(self):
         assert self.upload is not None, "expected a tar upload of staged inputs, got none"
@@ -106,12 +205,35 @@ def runner_inputs(tmp_path):
     cpp.write_text("// generated\n", encoding="utf-8")
     ohlcv = tmp_path / "ohlcv.csv"
     ohlcv.write_text("timestamp,open,high,low,close,volume\n", encoding="utf-8")
+    # What umask 077 leaves on the launching host: only the owner may read.
+    for path in (cpp, ohlcv):
+        path.chmod(0o600)
     return cpp, ohlcv
 
 
 def _run_with_docker(docker, runner_inputs, **kwargs):
     with mock.patch.object(pf_release_run.subprocess, "run", side_effect=docker.run):
         return pf_release_run.run_release(*runner_inputs, image=IMAGE, **kwargs)
+
+
+def test_docker_stand_in_refuses_a_host_file_the_image_user_cannot_read(runner_inputs):
+    cpp, ohlcv = runner_inputs
+    launch = ["docker", "run", "--rm", "-v", f"{cpp}:/in/strategy.cpp:ro",
+              "-v", f"{ohlcv}:/in/ohlcv.csv:ro", IMAGE]
+    refused = _Docker("10001:10001").run(launch)
+    assert (refused.returncode, refused.stderr) == (3, BOX_FAILURE)
+    # Root reads through the same mount, so an image without a user still runs.
+    assert _Docker("").run(launch).returncode == 0
+
+
+@pytest.mark.parametrize("user", ["10001", "10001:10001", "pineforge", "pineforge:research"])
+@pytest.mark.parametrize("launch", [
+    {"corpus_params": {}, "syminfo": {"mincontract": 1}}, {"syminfo": {"mincontract": 1}}, {},
+], ids=["corpus-and-metadata", "metadata", "plain"])
+def test_release_inputs_are_readable_by_the_image_user(runner_inputs, user, launch):
+    # The host files are 0600 and belong to the launching account, not the image's.
+    docker = _Docker(user)
+    assert _run_with_docker(docker, runner_inputs, **launch) == docker.report
 
 
 @pytest.mark.parametrize("user,passwd,gid", [
@@ -125,15 +247,28 @@ def test_release_copies_inputs_with_image_ownership(runner_inputs, user, passwd,
     assert _run_with_docker(docker, runner_inputs, corpus_params=request,
                             syminfo=syminfo) == docker.report
     files = docker.staged()
+    # expectation corrected: 0o400 -> 0o644 and 0o500 -> 0o755, because the
+    # image user must read the entries whichever owner Docker leaves; in,
+    # in/strategy.cpp and in/ohlcv.csv are new entries, because the strategy
+    # and the feed are copied in instead of bind-mounted.
+    directory, regular = (10001, gid, 0o755), (10001, gid, 0o644)
     assert {name: values[:3] for name, values in files.items()} == {
-        "pf-corpus-request": (10001, gid, 0o500),
-        "pf-corpus-request/pf_release_run.py": (10001, gid, 0o400),
-        "pf-corpus-request/run_strategy.py": (10001, gid, 0o400),
-        "pf-corpus-request/derive_corpus_feeds.py": (10001, gid, 0o400),
-        "pf-corpus-request/parity_paths.py": (10001, gid, 0o400),
-        "pf-corpus-request/corpus-params.json": (10001, gid, 0o400),
-        "in/syminfo.json": (10001, gid, 0o400),
+        "in": directory,
+        "in/strategy.cpp": regular,
+        "in/ohlcv.csv": regular,
+        "in/syminfo.json": regular,
+        "pf-corpus-request": directory,
+        "pf-corpus-request/pf_release_run.py": regular,
+        "pf-corpus-request/run_strategy.py": regular,
+        "pf-corpus-request/derive_corpus_feeds.py": regular,
+        "pf-corpus-request/parity_paths.py": regular,
+        "pf-corpus-request/corpus-params.json": regular,
     }
+    # What the container ends with: -a kept each entry's owner beside its mode.
+    assert docker.copied == {"/" + name: values[:3] for name, values in files.items()}
+    cpp, ohlcv = runner_inputs
+    assert files["in/strategy.cpp"][3] == cpp.read_bytes()
+    assert files["in/ohlcv.csv"][3] == ohlcv.read_bytes()
     assert json.loads(files["pf-corpus-request/corpus-params.json"][3]) == request
     assert json.loads(files["in/syminfo.json"][3]) == syminfo
     assert ["docker", "cp", "-a", "-", f"{docker.container}:/"] in docker.calls
@@ -155,9 +290,12 @@ def test_release_keeps_staged_inputs_off_host_mounts(runner_inputs):
     with mock.patch.object(pf_release_run.os, "chmod") as chmod:
         _run_with_docker(docker, runner_inputs, corpus_params={}, syminfo={"mincontract": 1})
     (launch,) = [cmd for cmd in docker.calls if cmd[1] in ("run", "create")]
-    cpp, ohlcv = runner_inputs
-    mounts = [value for option, value in zip(launch, launch[1:]) if option == "-v"]
-    assert mounts == [f"{cpp.resolve()}:/in/strategy.cpp:ro", f"{ohlcv.resolve()}:/in/ohlcv.csv:ro"]
+    mounts = [value for option, value in zip(launch, launch[1:])
+              if option in ("-v", "--volume", "--mount")]
+    # expectation corrected: the strategy and feed bind mounts -> no mount,
+    # because a bind mount shows the image user the host's owner and mode.
+    assert mounts == []
+    assert not any(word.startswith(("--volume=", "--mount=")) for word in launch)
     assert not any(word in ("-u", "--user") or word.startswith("--user=") for word in launch)
     chmod.assert_not_called()
 
@@ -165,8 +303,13 @@ def test_release_keeps_staged_inputs_off_host_mounts(runner_inputs):
 def test_release_accepts_empty_image_user_as_root(runner_inputs):
     docker = _Docker("")
     assert _run_with_docker(docker, runner_inputs, syminfo={"mincontract": 1}) == docker.report
+    # expectation corrected: 0o400 -> 0o644, with in, in/strategy.cpp and
+    # in/ohlcv.csv added, for the two reasons given in the ownership test.
     assert {name: values[:3] for name, values in docker.staged().items()} == {
-        "in/syminfo.json": (0, 0, 0o400),
+        "in": (0, 0, 0o755),
+        "in/strategy.cpp": (0, 0, 0o644),
+        "in/ohlcv.csv": (0, 0, 0o644),
+        "in/syminfo.json": (0, 0, 0o644),
     }
     assert docker.account_reads == []
 
