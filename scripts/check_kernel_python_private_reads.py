@@ -51,6 +51,7 @@ PRIVATE_PREFIXES = ('tests/fixtures/', 'tests/oracle/')
 ADD_TEST = re.compile(r'add_test\(\s*NAME\s+([A-Za-z0-9_.-]+)', re.MULTILINE)
 CMAKE_ARGUMENT = re.compile(ARGUMENT_LITERAL + r'|(?:\\.|[^\s;\\])+', re.DOTALL)
 CMAKE_REF = re.compile(r'\$\{([^{}]+)\}')
+CMAKE_UNEXPANDED_REF = re.compile(r'(?<!\\)\$(?:\{|ENV\{|CACHE\{|<)')
 PYTHON = '${Python3_EXECUTABLE}'
 CMAKE_ESCAPE = {'n': '\n', 'r': '\r', 't': '\t', '\n': ''}
 TEST_OPTIONS = {'WORKING_DIRECTORY', 'CONFIGURATIONS', 'COMMAND_EXPAND_LISTS'}
@@ -252,7 +253,7 @@ def python_programs(cmake_path, line, name, args, unknown=None):
                 raise SweepError(f'{where} runs Python3_EXECUTABLE '
                                  'but names no .py script and -c has no program; '
                                  'the sweep cannot read it and refuses to skip it')
-            if re.search(r'(?<!\\)\$(?:\{|ENV\{|CACHE\{|<)', program.raw):
+            if CMAKE_UNEXPANDED_REF.search(program.raw):
                 raise unknown or SweepError(f'{where} has an unexpanded '
                                             'inline program; the sweep refuses to skip it')
             return name, [InlineProgram(text, program.line)]
@@ -373,7 +374,11 @@ EXEMPT = {
         'a sys.addaudithook(open) trace the script opens 0 files under the '
         'real tests/fixtures/ and tests/oracle/, in its own process and in the '
         'Python children it starts; control 12 of scripts/test_private_'
-        'fixture_reads.py re-runs that trace'),
+        'fixture_reads.py re-runs that trace; control 16 of that script names '
+        'the two stand-in paths of test_private_marker_rows_registration '
+        '(schedule and cross_side of the exit-binding control) as substring '
+        'needles, looked for in the text of the script of that row and '
+        'never opened'),
     'test_oracle_fixture_checks': (
         'the private paths it names are payloads of the synthetic roots its '
         'controls build: the suite copies tests/oracle/ (the KEPT files) into '
@@ -395,13 +400,15 @@ EXEMPT = {
         'tests/oracle/ is ever opened, present or absent. Without the '
         'fixtures the row exits 0 and prints its own not-run line ("overlay '
         'half not run: private fixtures not present: <marker>"); it carries '
-        'no skip code. The trace control re-runs every row this table '
-        'exempts, with one caveat stated rather than hidden: its invocation '
-        'runs a script through runpy without the script’s own directory on '
-        'sys.path, so THIS script stops at its `import ci_verify` and the '
-        'trace observes no opens either way -- the evidence that holds here '
-        'is the reading above plus the row’s exit 0 on the fixture-less '
-        'tree, and the checker’s sweep re-reads the constant every run'),
+        'no skip code. Control 12 of scripts/test_private_fixture_reads.py '
+        're-runs the script under the trace with the argument of its own '
+        'registration (--both) and with the script’s own directory first on '
+        'sys.path, where `python <script>` puts it, so its `import '
+        'ci_verify` resolves. The control fails unless the script runs to '
+        'its end with exit 0 and the trace records no open of an absent '
+        'file under the real tests/fixtures/ or tests/oracle/. Control 15 '
+        'adds one such open to a copy of the script and fails unless the '
+        'trace names it'),
     'test_private_marker_rows_registration': (
         'the two private paths it names (schedule and cross_side of the '
         'exit-binding control) are scratch-tree payloads, not reads: probe() '

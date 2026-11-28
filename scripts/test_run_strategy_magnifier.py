@@ -95,7 +95,7 @@ EARLY = ENTRY - 10 * MIN
 
 class TfSecondsTests(unittest.TestCase):
     def test_matches_tf_to_seconds(self) -> None:
-        # src/timeframe.cpp tf_to_seconds, case for case.
+        # Feed scheduling follows tf_to_clock_seconds in src/timeframe.cpp.
         for tf, seconds in (("", 0), ("1", 60), ("15", 900), ("240", 14400),
                             ("D", 86400), ("1D", 86400), ("3D", 259200),
                             ("W", 604800), ("1W", 604800), ("M", -1), ("12M", -1),

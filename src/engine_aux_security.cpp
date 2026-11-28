@@ -19,7 +19,7 @@ namespace pineforge {
 // The stored duration preserves the full day/week count and the monthly
 // marker. Several different feed periods can have the same duration.
 static int64_t native_feed_seconds(const std::string& tf) {
-    const int seconds = tf_to_seconds(tf);
+    const int seconds = internal::tf_to_clock_seconds(tf);
     if (seconds == -1 && (tf.back() == 'D' || tf.back() == 'W')) {
         return static_cast<int64_t>(std::stoi(tf)) * (tf.back() == 'W' ? 604800 : 86400);
     }
@@ -258,8 +258,8 @@ void BacktestEngine::prepare_native_security_feeds(const Bar* input_bars,
         // unbacked evaluator retains its established aggregate/passthrough.
         if (!state.aggregator.is_active() && !state.evaluator_input_tf.empty()
             && calendar_period_for(state.tf) == CalendarPeriod::NONE) {
-            const auto requested = tf_to_seconds(state.tf);
-            const auto input = tf_to_seconds(state.evaluator_input_tf);
+            const auto requested = internal::tf_to_clock_seconds(state.tf);
+            const auto input = internal::tf_to_clock_seconds(state.evaluator_input_tf);
             if (input > 0 && requested > input) {
                 for (const auto& np : periods) {
                     if (np.key != requested_key) continue;

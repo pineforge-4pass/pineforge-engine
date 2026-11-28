@@ -1876,7 +1876,7 @@ void source::PineStrategyHost::scheduler_prepare_script_run(
     if (const auto state = native_state(); state.spec) {
         input_tf_ = state.spec->timeframe_undetected ? "" : state.spec->input_tf;
         script_tf_ = state.spec->timeframe_undetected ? "" : state.spec->script_tf;
-        script_tf_seconds_ = tf_to_seconds(script_tf_);
+        script_tf_seconds_ = internal::tf_to_clock_seconds(script_tf_);
     }
     const Bar* const data = bars.empty() ? nullptr : bars.data();
     // A batch preparation fills the script's static TA cache: it seeds as the bar callback does.
@@ -2385,8 +2385,8 @@ bool source::PineStrategyHost::request_runtime_selection_allowed(
     // These are the source-validated clocks. Keep malformed/undetected clocks
     // outside selection without changing their existing BASE validation.
     try {
-        const int requested_seconds = tf_to_seconds(cursor.timeframe);
-        const int calling_seconds = tf_to_seconds(*parent.timeframe);
+        const int requested_seconds = internal::tf_to_clock_seconds(cursor.timeframe);
+        const int calling_seconds = internal::tf_to_clock_seconds(*parent.timeframe);
         return requested_seconds > 0 && calling_seconds > requested_seconds
             && calling_seconds % requested_seconds == 0;
     } catch (const std::invalid_argument&) {
@@ -2488,9 +2488,9 @@ source::PineRuntimeSecurityCursor source::PineStrategyHost::make_runtime_securit
     cursor.gaps_on = gaps;
     cursor.lower_array = lower_array;
     cursor.heikinashi = heikinashi;
-    const int requested_seconds = tf_to_seconds(timeframe);
-    const int input_seconds = tf_to_seconds(input_tf_);
-    const int chart_seconds = tf_to_seconds(cursor.chart_timeframe);
+    const int requested_seconds = internal::tf_to_clock_seconds(timeframe);
+    const int input_seconds = internal::tf_to_clock_seconds(input_tf_);
+    const int chart_seconds = internal::tf_to_clock_seconds(cursor.chart_timeframe);
     if (lower_array && chart_seconds <= 0)
         throw coded<std::runtime_error>(
             RunFailureCode::request_timeframe_unsupported,
@@ -2784,7 +2784,7 @@ void source::PineStrategyHost::scheduler_prepare_security_sequence(
         feeds.days = days;
         feeds.chart = bars.data();
         feeds.n_chart = static_cast<int>(bars.size());
-        feeds.daily_chart = tf_to_seconds(input_tf_) == 86400;
+        feeds.daily_chart = internal::tf_to_clock_seconds(input_tf_) == 86400;
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
         if (aux_security_feed_enabled()) {
             feeds.aux = aux_security_bars_.data();
@@ -2897,7 +2897,7 @@ bool source::PineStrategyHost::same_symbol_sites_routable(
     for (std::size_t i = 0; i < security_eval_states_.size(); ++i) {
         const SecurityEvalState& state = security_eval_states_[i];
         const bool minute_day = calendar_period_for(state.tf) == CalendarPeriod::NONE
-            && tf_to_seconds(state.tf) == 86400;
+            && internal::tf_to_clock_seconds(state.tf) == 86400;
         if (minute_day && !pine_security_state(state.sec_id).lookahead_on
             && script_tf_seconds_ > 0 && script_tf_seconds_ < 86400) {
             return false;
@@ -4433,7 +4433,7 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
     const CalendarPeriod tf_period = calendar_period_for(tf.empty() ? script_tf_ : tf);
     // A day of the symbol calendar is its "D" bar.
     const bool calendar_days = session.empty() && tf_period == CalendarPeriod::DAY
-        && tf_to_seconds(tf.empty() ? script_tf_ : tf) == 86400;
+        && internal::tf_to_clock_seconds(tf.empty() ? script_tf_ : tf) == 86400;
     const auto calendar_open_of = [&](std::int64_t ms) -> std::int64_t {
         if (session.empty() && (tz.empty() || tz == sym_tz)
             && (tf.empty() || tf == script_tf_)) {
@@ -4473,8 +4473,8 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
     // the chart bar holding the instant it reaches: time("60", 0, -1) on a
     // daily bar is that bar, time("60", 0, 1) the bar before
     // (te-time-bb-tf-aapl1d / -btc1d / -eurusd1d).
-    const int tf_seconds = tf_to_seconds(tf.empty() ? script_tf_ : tf);
-    const int chart_seconds = tf_to_seconds(script_tf_);
+    const int tf_seconds = internal::tf_to_clock_seconds(tf.empty() ? script_tf_ : tf);
+    const int chart_seconds = internal::tf_to_clock_seconds(script_tf_);
     if (timeframe_bars_back != 0 && tf_seconds > 0 && chart_seconds > 0
         && tf_seconds < chart_seconds) {
         const std::int64_t at = open - static_cast<std::int64_t>(timeframe_bars_back)
@@ -4806,7 +4806,7 @@ bool source::PineStrategyHost::tf_change(std::int64_t prev_ms, std::int64_t curr
         feeds.days = days;
         feeds.chart = bars.data();
         feeds.n_chart = static_cast<int>(bars.size());
-        feeds.daily_chart = tf_to_seconds(input_tf_) == 86400;
+        feeds.daily_chart = internal::tf_to_clock_seconds(input_tf_) == 86400;
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
         if (aux_security_feed_enabled()) {
             feeds.aux = aux_security_bars_.data();
