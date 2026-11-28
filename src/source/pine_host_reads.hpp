@@ -237,6 +237,9 @@ extern thread_local std::uint64_t request_caller_insertions_for_test;
 extern thread_local std::uint64_t static_delivery_sets_for_test;
 extern thread_local std::uint64_t static_caller_appends_for_test;
 extern thread_local bool force_static_delivery_setter_for_test;
+// Ordered site lookups made by security_lower_tf_sub_bar_index.
+extern thread_local std::uint64_t lower_tf_index_lookups_for_test;
+extern thread_local bool force_lower_tf_index_lookup_for_test;
 #endif
 
 }  // namespace detail

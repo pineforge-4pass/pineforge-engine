@@ -125,8 +125,9 @@ def check(out):
         "Error on bar 1: A map cannot have more than 50000 key-value pairs. "
         "The current size is 50001."), "wrong canonical capacity message")
     negative = documents["negative_option"]
+    # expectation corrected: arguments -> limit_map_pairs, because the parser names this flag.
     require(negative["code"] == "run_request_invalid" and
-            negative["args"] == {"option": "arguments"},
+            negative["args"] == {"option": "limit_map_pairs"},
             "negative option did not fail at the CLI parser")
     quantities = {}
     for name in ("finite_boundary", "omitted_a", "zero_a", "omitted_b", "zero_b"):

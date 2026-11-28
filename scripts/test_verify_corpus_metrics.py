@@ -16,6 +16,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+from private_fixture_policy import fixture_available
 from test_verify_corpus_count_rule import _analyze_tapes, _checked_path
 from test_verify_corpus_trail_profile import TRADE_COLUMNS
 from verify_corpus import (
@@ -718,7 +719,8 @@ PRIVATE_FIXTURE_SKIP_LITERAL = "SKIP private fixtures not present: "
 _coof_cascade_tape = (Path(__file__).resolve().parents[1] / "tests" / "fixtures"
                       / "coof_cascade_identity" / "w7-coof-cascade-identity")
 _coof_cascade_skip = unittest.skipUnless(
-    _coof_cascade_tape.exists(),
+    fixture_available(_coof_cascade_tape.exists(),
+                      _coof_cascade_tape.relative_to(Path(__file__).resolve().parents[1])),
     PRIVATE_FIXTURE_SKIP_LITERAL + "tests/fixtures/coof_cascade_identity/w7-coof-cascade-identity")
 
 

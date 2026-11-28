@@ -13,6 +13,7 @@ import subprocess
 import sys
 
 from check_aggregate_cpp_versions import body
+from private_fixture_policy import fixture_available
 from check_native_cpp_versions import (
     DRIVER_FORWARD, FILES, NATIVE_FX_CURVE_HEADER, NATIVE_FX_CURVE_SOURCE,
     ROOT, PRIVATE_FIXTURE_SKIP_LITERAL as SCRIPT_SKIP_LITERAL,
@@ -29,7 +30,7 @@ DATA = load()
 PRIVATE_FIXTURE_SKIP_LITERAL = "SKIP private fixtures not present: "
 PRIVATE_FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "tests/fixtures/native_cpp_abi"
 requires_private_fixtures = unittest.skipUnless(
-    PRIVATE_FIXTURE_ROOT.exists(),
+    fixture_available(PRIVATE_FIXTURE_ROOT.exists(), PRIVATE_FIXTURE_ROOT.relative_to(ROOT)),
     PRIVATE_FIXTURE_SKIP_LITERAL + "tests/fixtures/native_cpp_abi")
 
 

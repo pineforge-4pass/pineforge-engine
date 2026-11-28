@@ -1061,6 +1061,9 @@ private:
         PineRequestDelivery delivery{};
         std::uint64_t body_caller = 0;
         std::int64_t body_open_ms = std::numeric_limits<std::int64_t>::min();
+        // The live index of the site already resolved by the synthesis loop.
+        // Borrowed only for that batch's delivery scope.
+        const int* synthesized_index = nullptr;
     };
     struct RequestCallerKey {
         std::uint8_t kind = 0;

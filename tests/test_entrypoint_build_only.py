@@ -486,6 +486,20 @@ def base_entrypoint_source():
     return source
 
 
+def test_plain_transpile_only_cpp_bytes_match_the_base(tmp_path, base_entrypoint_source):
+    box = Box(tmp_path)
+    reference = tmp_path / "reference.sh"
+    reference.write_bytes(base_entrypoint_source)
+    options = {"PINEFORGE_TRANSPILE_ONLY": "1"}
+    before = box.run(options, entrypoint=reference)
+    after = box.run(options)
+    assert (before.returncode, after.returncode) == (0, 0), (
+        f"NOT COMPARED: base {before.returncode}: {before.stderr!r}; "
+        f"candidate {after.returncode}: {after.stderr!r}")
+    assert before.stdout == b"// generated source\nint source_size = 34;\n"
+    assert after.stdout == before.stdout
+
+
 @pytest.mark.parametrize("mode", [None, "", "0", "false", "yes", "maybe"])
 @pytest.mark.parametrize("engine_status", [0, 23])
 def test_full_run_is_unchanged(tmp_path, mode, engine_status, base_entrypoint_source):

@@ -325,9 +325,22 @@ void source::PineStrategyHost::dispatch_pine_request(
 }
 
 
+#ifndef NDEBUG
+thread_local std::uint64_t source::detail::lower_tf_index_lookups_for_test = 0;
+thread_local bool source::detail::force_lower_tf_index_lookup_for_test = false;
+#endif
+
 int source::PineStrategyHost::security_lower_tf_sub_bar_index(int sec_id) const {
     for (const auto& state : security_eval_states_) {
         if (state.sec_id == sec_id) {
+            if (!request_delivery_stack_.empty()) {
+                const auto& frame = request_delivery_stack_.back();
+                if (frame.sec_id == sec_id && frame.synthesized_index)
+                    return *frame.synthesized_index;
+            }
+#ifndef NDEBUG
+            ++detail::lower_tf_index_lookups_for_test;
+#endif
             return pine_security_state(sec_id).lower_tf_sub_bar_index;
         }
     }
@@ -1002,7 +1015,9 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         const int sec_id = state.sec_id;
         const auto phase = static_cast<std::int64_t>(detail::run_phase(*this));
         RequestCallerIds::StaticTail tail;
+        const int* batch_index = &pine.lower_tf_sub_bar_index;
 #ifndef NDEBUG
+        if (detail::force_lower_tf_index_lookup_for_test) batch_index = nullptr;
         const bool use_tail = !detail::force_static_delivery_setter_for_test;
 #else
         constexpr bool use_tail = true;
@@ -1026,6 +1041,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
                 delivery.caller_valid = delivery.caller != 0;
                 if (!scope) {
                     scope.emplace(*this, sec_id, delivery, synthetic_bar.timestamp);
+                    request_delivery_stack_.back().synthesized_index = batch_index;
                 } else {
                     // A nested callback may grow the stack or change the catalog.
                     auto& frame = request_delivery_stack_.back();
@@ -1036,6 +1052,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
                         frame.body_open_ms = synthetic_bar.timestamp;
                     } else {
                         set_static_request_delivery(frame, sec_id, delivery, synthetic_bar.timestamp);
+                        frame.synthesized_index = batch_index;
                         tail = {};
                     }
                 }

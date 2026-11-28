@@ -402,6 +402,33 @@ EXEMPT = {
         'trace observes no opens either way -- the evidence that holds here '
         'is the reading above plus the row’s exit 0 on the fixture-less '
         'tree, and the checker’s sweep re-reads the constant every run'),
+    'test_private_marker_rows_registration': (
+        'the two private paths it names (schedule and cross_side of the '
+        'exit-binding control) are scratch-tree payloads, not reads: probe() '
+        'accepts only relative removed files of the pin, and Probe writes '
+        'each as a stand-in under its own tempfile.TemporaryDirectory tree, '
+        'where the block cut from tests/CMakeLists.txt asks only whether the '
+        'file exists. In the real tree the script opens three files, none '
+        'under tests/fixtures/ or tests/oracle/: tests/CMakeLists.txt, '
+        'tests/private_fixture_paths.txt and scripts/check_two_world_'
+        'registration.py (for OVERLAY_MARKER, read from the text, never '
+        'probed). It starts no Python child: its children are cmake and '
+        'ctest on the scratch project, whose rows are cmake -E echo '
+        'commands, and those two are outside an in-process audit hook. It '
+        'has no skip path: on the fixture-less tree it runs every test and '
+        'exits 0. Control 12 of scripts/test_private_fixture_reads.py '
+        're-runs the script under the trace with the arguments of its own '
+        'registration, which passes five CMake values (cmake, ctest, the '
+        'generator, the make program and a work directory under the build '
+        'tree): the ctest row of the controls hands over its build tree’s '
+        'values for those five names, and a run of the controls that was '
+        'not given them fails this row by name instead of tracing it some '
+        'other way. The control fails unless that trace records no open of '
+        'an absent file under the real tests/fixtures/ or tests/oracle/ and '
+        'the script exits 0. The trace covers the script’s own process; '
+        'what cmake and ctest open is outside it and follows from their '
+        'command lines (a scratch source tree and a scratch build tree), '
+        'not from the hook'),
 }
 GATED_BY_MODULE = re.compile(r'(?:return|Exit|exit)\s*\(?\s*77\b')
 
