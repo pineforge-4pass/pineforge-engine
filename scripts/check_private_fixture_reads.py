@@ -72,6 +72,7 @@ from __future__ import annotations
 import argparse
 import ast
 import re
+import stat
 import sys
 from pathlib import Path
 
@@ -129,6 +130,73 @@ def load_removed(root: Path) -> tuple[set[str], set[str]]:
     if not dirs or not files:
         raise Unparseable(f'{path}: the pin parsed empty')
     return dirs, files
+
+
+def check_overlay(root: Path) -> str:
+    """Check the declared inventory, including files no selected row opens."""
+    def metadata(path: Path):
+        try:
+            return path.lstat()
+        except (FileNotFoundError, NotADirectoryError):
+            return None
+
+    tests = metadata(root / 'tests')
+    if tests is None or not stat.S_ISDIR(tests.st_mode):
+        raise Unparseable('inventory requires directory tests; absent, wrong type or symlink')
+    pin = root / REMOVED_PIN
+    info = metadata(pin)
+    if info is None or not stat.S_ISREG(info.st_mode):
+        raise Unparseable(f'inventory requires regular file {REMOVED_PIN}; absent or wrong type')
+    declared = {}
+    entries = {}
+    for line_no, line in enumerate(pin.read_text(encoding='utf-8').splitlines(), 1):
+        header = re.fullmatch(r'// (dirs|files|paths): (\d+)', line)
+        if header:
+            if header[1] in declared:
+                raise Unparseable(f'{REMOVED_PIN}:{line_no}: duplicate {header[1]} declaration')
+            declared[header[1]] = int(header[2])
+        elif line and not line.startswith('//'):
+            kind, _, name = line.partition(' ')
+            # Only canonical names under tests/, never a dot path or an
+            # environment file. No fixture contents are opened.
+            if (kind not in ('F', 'D') or not re.fullmatch(
+                    r'tests/(?:\w[\w.+-]*/)*\w[\w.+-]*', name, re.ASCII)
+                    or any(part.endswith('.env') for part in name.split('/'))):
+                raise Unparseable(f'{REMOVED_PIN}:{line_no}: invalid fixture path {line!r}')
+            if name in entries:
+                raise Unparseable(f'{REMOVED_PIN}:{line_no}: duplicate path {name}')
+            entries[name] = kind
+    files = sum(kind == 'F' for kind in entries.values())
+    actual = {'dirs': len(entries) - files, 'files': files, 'paths': len(entries)}
+    if not files or actual != declared:
+        raise Unparseable(f'{REMOVED_PIN}: inventory declared {declared}, read {actual}')
+
+    # Even ancestors not named by D records must be real directories: no
+    # component may redirect the check to another checkout.
+    directories = {Path('tests'): True}
+
+    def is_directory(relative: Path) -> bool:
+        if relative not in directories:
+            item = metadata(root / relative) if is_directory(relative.parent) else None
+            directories[relative] = item is not None and stat.S_ISDIR(item.st_mode)
+        return directories[relative]
+
+    missing = []
+    for name, kind in entries.items():
+        path = Path(name)
+        if kind == 'D':
+            if not is_directory(path):
+                missing.append(f'{name}: expected directory; absent, symlink or wrong type')
+        else:
+            item = metadata(root / path) if is_directory(path.parent) else None
+            if item is None or not stat.S_ISREG(item.st_mode):
+                missing.append(f'{name}: expected regular file; absent, symlink or wrong type')
+            elif not item.st_size:
+                missing.append(f'{name}: expected nonempty file; empty')
+    if missing:
+        raise Unparseable(f'{REMOVED_PIN}: {len(missing)} of {len(entries)} declared paths '
+                          'unavailable:\n' + '\n'.join(missing))
+    return f'{REMOVED_PIN}: checked {files} nonempty files and {actual["dirs"]} directories'
 
 
 def load_pinned_rows(root: Path) -> dict[str, int]:
@@ -1336,11 +1404,20 @@ def sweep(root: Path) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--root', type=Path, default=REPO)
+    parser.add_argument('--overlay', action='store_true',
+                        help='check promised directories and files against this checkout')
     args = parser.parse_args()
     try:
+        if args.overlay:
+            from private_fixture_policy import fixture_revision
+            print(f'private-fixtures at {fixture_revision()}: {check_overlay(args.root)}')
+            return 0
         return sweep(args.root)
-    except Unparseable as error:
-        print(f'check_private_fixture_reads: {error}')
+    except (OSError, UnicodeError, Unparseable) as error:
+        if args.overlay:
+            print(f'NOT COMPARED: private-fixtures at {fixture_revision()}: {error}')
+        else:
+            print(f'check_private_fixture_reads: {error}')
         return 2
 
 

@@ -18,6 +18,7 @@ import re
 import sys
 from typing import Callable, Iterable
 
+from private_fixture_policy import fixture_revision, private_fixtures_overlay
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE = "ab9714beccb62b796c122cf68986ec9e7dbf4a67"
@@ -404,11 +405,9 @@ def removed_private_test(root: Path, name: str) -> str:
         twin_rows = sorted(row for row in rows
                            if re.fullmatch(re.escape(name) + r"_l4\w*", row))
         return "tests/" + twin_rows[0] + ".cpp" if twin_rows else ""
-    if name in rows:
+    if name in rows or any(re.fullmatch(re.escape(name) + r"_l4\w*", row) for row in rows):
         return "tests/" + base
-    twin_rows = sorted(row for row in rows
-                       if re.fullmatch(re.escape(name) + r"_l4\w*", row))
-    return "tests/" + twin_rows[0] + ".cpp" if twin_rows else ""
+    return ""
 
 
 def validate_covering_row(root: Path, row: LedgerLiteral | RangeLedgerLiteral) -> None:
@@ -471,6 +470,9 @@ def check_inventory(*, root: Path = ROOT, inventory: Path = INVENTORY,
     for name in selected:
         removed = removed_private_test(root, name)
         if removed:
+            if private_fixtures_overlay():
+                raise ParityError(f"NOT COMPARED: family {name} requires {removed}; "
+                                  f"absent with private-fixtures at {fixture_revision()}")
             skipped_private.append((name, removed))
             continue
         base_path = "tests/" + name + ".cpp"

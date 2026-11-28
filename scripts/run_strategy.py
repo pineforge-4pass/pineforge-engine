@@ -1415,6 +1415,13 @@ def _strategy_override_text(value) -> str:
     return str(value)
 
 
+class LotGridError(ValueError):
+    """Invalid declared lot, with the same failure contract as the image."""
+
+    run_failure_code = "lot_grid_rejected"
+    run_failure_args = "{}"
+
+
 def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
                       default_chart_tz: str = "", env=None) -> tuple[Path, dict]:
     """Resolve per-probe ``inputs.json`` metadata into the OHLCV path and the
@@ -1550,7 +1557,7 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
         except OverflowError:  # A JSON integer outside the engine's double range.
             valid = False
         if not valid:
-            raise ValueError(f"runtime_overrides.{name} must be a positive finite number")
+            raise LotGridError(f"runtime_overrides.{name} must be a positive finite number")
         return float(value)
 
     nested = syminfo_metadata or {}
@@ -5529,9 +5536,8 @@ if __name__ == "__main__":
         sys.exit(main())
     except _OhlcvTimestampError as error:
         sys.exit(f"error: {error}")
-    except RuntimeError as error:
-        # The engine's run-failure code, before the traceback: the traceback's
-        # last line stays the engine's text, as before.
+    except (RuntimeError, LotGridError) as error:
+        # The run-failure code precedes the traceback; keep the original text.
         if getattr(error, "run_failure_code", None):
             print(f"run failure code: {error.run_failure_code}", file=sys.stderr)
         raise

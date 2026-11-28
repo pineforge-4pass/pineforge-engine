@@ -1,5 +1,29 @@
 // S1: declare only series_origin_ms; compare both EMA comment fields to the
 // private tape. Expected texts are read at runtime, never copied into source.
+// Capture the chart's continuous 15-minute bars from the calculation start
+// through the terminal fill, plus the three UTC-ms bounds read by read_bounds().
+// Use the original chart symbol and range; the first order bar need not be
+// the bar where EMA starts. For a fresh capture, set the two time inputs
+// below from the recorded bounds; set the calculation range to run_start_ms.
+// This recipe reproduces the two observed fields, not the old export bytes.
+//   //@version=6
+//   strategy("Series origin", initial_capital=1000000, pyramiding=1,
+//       default_qty_type=strategy.fixed, default_qty_value=1, margin_long=100, margin_short=100,
+//       commission_value=0, slippage=0, process_orders_on_close=false, calc_on_order_fills=false)
+//   w = input.time(0, "Order window start")
+//   t = input.time(0, "Capture end (exclusive)")
+//   var int first = time
+//   e = ta.ema(close, 12)
+//   fmt(float x) => na(x) ? "na" : str.tostring(x, "#.####")
+//   inWindow = time >= w and time < t - 15 * 60000
+//   m = minute(time, "UTC")
+//   if inWindow and (m == 0 or m == 30)
+//       strategy.entry("L", strategy.long, qty=1)
+//   if inWindow and (m == 15 or m == 45)
+//       note = fmt(e) + "|" + fmt(e[1]) + "|" + str.tostring(time) + "|" + str.tostring(bar_index)
+//       strategy.close("L", comment=note + "|" + str.tostring(first) + "|" + str.tostring(w) + "|" + str.tostring(t))
+// The last five fields are telemetry. Keep the original Pine source for
+// byte reproduction. Export both trade legs with chart time labels in UTC+8.
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
