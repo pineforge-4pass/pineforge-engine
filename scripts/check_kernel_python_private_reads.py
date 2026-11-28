@@ -374,7 +374,11 @@ EXEMPT = {
         'a sys.addaudithook(open) trace the script opens 0 files under the '
         'real tests/fixtures/ and tests/oracle/, in its own process and in the '
         'Python children it starts; control 12 of scripts/test_private_'
-        'fixture_reads.py re-runs that trace'),
+        'fixture_reads.py re-runs that trace; control 16 of that script names '
+        'the two stand-in paths of test_private_marker_rows_registration '
+        '(schedule and cross_side of the exit-binding control) as substring '
+        'needles, looked for in the text of the script of that row and '
+        'never opened'),
     'test_oracle_fixture_checks': (
         'the private paths it names are payloads of the synthetic roots its '
         'controls build: the suite copies tests/oracle/ (the KEPT files) into '
