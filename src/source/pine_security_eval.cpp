@@ -98,7 +98,8 @@ void source::PineStrategyHost::register_security_eval(
     const std::string& evaluator_input_tf =
         security_input_tf_.empty() ? input_tf : security_input_tf_;
     // Match the kernel's parse condition. With no input yet, validation
-    // remains deferred; an empty request retains its existing passthrough.
+    // remains deferred; an empty request is registered as it is and names the
+    // chart's timeframe (validate_security_timeframes resolves it per run).
     if (!evaluator_input_tf.empty() && !requested_tf.empty()) {
         request_timeframe_seconds(requested_tf, false);
     }
@@ -392,6 +393,11 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
     // that invariant here.
     int input_seconds = internal::tf_to_clock_seconds(input_tf);
     int script_seconds = script_tf_seconds_;
+    // The host supplied bars finer than the chart (the auxiliary slice, or an
+    // input finer than the script TF): the evaluators are fed those bars, not
+    // the chart's.
+    const bool intrabar_bars_supplied = input_seconds > 0
+        && (script_seconds == -1 || input_seconds < script_seconds);
     for (auto& state : security_eval_states_) {
         PineSecurityEvalState& pine = pine_security_state(state.sec_id);
         pine.lower_tf_requested = false;
@@ -408,6 +414,21 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
         pine.first_bucket_published = false;
         pine.request_selection_enabled = false;
         pine.deferred_aux.clear();
+        // An empty request.security timeframe names the chart's timeframe:
+        // the requested series is the chart's, one requested bar per chart
+        // bar. Fed the chart's own bars, a passthrough of the input is that
+        // series and stays. Fed finer bars, a passthrough would evaluate the
+        // site on every one of them and each chart bar would read the last
+        // one inside it, so the site is served as the same request written
+        // with the chart's timeframe, by every rule below and after
+        // (aggregation, the chart's bars as its native feed, the range-start
+        // cut). request.security_lower_tf keeps its empty request: its
+        // lower-timeframe path refuses a timeframe that is not finer than
+        // the script's.
+        if (state.tf.empty() && intrabar_bars_supplied
+            && !pine.lower_tf_array_requested) {
+            state.tf = script_tf_;
+        }
         if (state.tf.empty()) continue;
 
         // Deferred requests must also be checked before the emulation
@@ -442,8 +463,6 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
                 // bar of the requested timeframe (see no_loaded_bars). A chart
                 // fed without intrabar bars keeps the refusal below, which
                 // asks its host for finer bars.
-                const bool intrabar_bars_supplied = input_seconds > 0
-                    && (script_seconds == -1 || input_seconds < script_seconds);
                 if (intrabar_bars_supplied) {
                     pine.no_loaded_bars = true;
                     continue;
