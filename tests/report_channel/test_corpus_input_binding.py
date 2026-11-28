@@ -6,8 +6,9 @@ import contextlib
 import hashlib
 import io
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import sys
+import tarfile
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -370,44 +371,99 @@ class CorpusInputBinding(unittest.TestCase):
             source.write_bytes(b"source\n")
             feed.write_bytes(b"feed\n")
 
-            def docker(argv, **_kwargs):
-                if argv[:3] == ["docker", "image", "inspect"]:
-                    self.assertEqual(argv[3:], ["selected-image"])
-                    return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps([{
-                        "Id": "sha256:" + "a" * 64,
-                        "Config": {"Entrypoint": ["/image/own-entrypoint.sh"], "Cmd": ["image-arg"]},
-                    }]))
-                self.assertIn("--entrypoint", argv)
-                self.assertEqual(argv[argv.index("--entrypoint") + 1], "python3")
-                self.assertEqual(argv[-4], "sha256:" + "a" * 64)
-                helper, request = map(Path, (argv[-3], argv[-1]))
-                self.assertEqual(json.loads(argv[-2]), ["/image/own-entrypoint.sh", "image-arg"])
-                self.assertEqual(helper.read_bytes(), (ROOT / "scripts/pf_release_run.py").read_bytes())
-                self.assertFalse((helper.parent / "entrypoint.sh").exists())
-                self.assertEqual(json.loads(request.read_bytes()), {
-                    "notes": "annotation", "unrecognized": "reject"})
-                return SimpleNamespace(returncode=4, stdout=json.dumps(failure), stderr="failed\n")
-
-            with mock.patch.object(release.subprocess, "run", side_effect=docker) as run:
+            image_id, container = "sha256:" + "a" * 64, "b" * 64
+            config = {"Entrypoint": ["/image/own-entrypoint.sh"], "Cmd": ["image-arg"]}
+            responses = [
+                SimpleNamespace(returncode=0, stdout=json.dumps([{"Id": image_id, "Config": config}]),
+                                stderr=""),
+                SimpleNamespace(returncode=0, stdout=container + "\n", stderr=""),
+                SimpleNamespace(returncode=0, stdout=b"", stderr=b""),
+                SimpleNamespace(returncode=4, stdout=json.dumps(failure), stderr="failed\n"),
+                SimpleNamespace(returncode=0, stdout="", stderr=""),
+            ]
+            with mock.patch.object(release.subprocess, "run", side_effect=responses) as run:
                 with self.assertRaisesRegex(release.ReleaseRunError, "unknown input key") as raised:
                     release.run_release(
                         source, feed, image="selected-image",
                         corpus_params={"notes": "annotation", "unrecognized": "reject"})
             self.assertEqual(raised.exception.report, failure)
-            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_count, 5)
+            inspect, create, copy, start, remove = run.call_args_list
+            self.assertEqual(inspect.args[0], ["docker", "image", "inspect", "selected-image"])
+            argv = create.args[0]
+            self.assertEqual(argv[:2], ["docker", "create"])
+            self.assertIn("--entrypoint", argv)
+            self.assertEqual(argv[argv.index("--entrypoint") + 1], "python3")
+            self.assertEqual(argv[-4], image_id)
+            helper, request = (PurePosixPath(path).relative_to("/") for path in (argv[-3], argv[-1]))
+            self.assertEqual(json.loads(argv[-2]), ["/image/own-entrypoint.sh", "image-arg"])
+            self.assertEqual(copy.args[0], ["docker", "cp", "-a", "-", f"{container}:/"])
+            with tarfile.open(fileobj=io.BytesIO(copy.kwargs["input"]), mode="r:") as archive:
+                with archive.extractfile(str(helper)) as staged_helper:
+                    self.assertEqual(staged_helper.read(),
+                                     (ROOT / "scripts/pf_release_run.py").read_bytes())
+                self.assertNotIn(str(helper.parent / "entrypoint.sh"), archive.getnames())
+                with archive.extractfile(str(request)) as staged_request:
+                    self.assertEqual(json.load(staged_request), {
+                        "notes": "annotation", "unrecognized": "reject"})
+            self.assertEqual(start.args[0], ["docker", "start", "-a", container])
+            self.assertEqual(remove.args[0], ["docker", "rm", "-f", "-v", container])
 
     def test_plain_image_request_keeps_the_chart_io_failure(self):
         failure = {"engine": "pineforge", "error": "--ohlcv: /in/ohlcv.csv: Permission denied",
                    "code": "chart_bars_unreadable", "args": {"reason": "io"}}
+        image_id, container = "sha256:" + "a" * 64, "b" * 64
+        # The release image runs as a UID with no group, so the runner reads the
+        # container's /etc/passwd for that account's primary group.
+        accounts = b"pineforge:x:10001:10001::/home/pineforge:/bin/sh\n"
+        with io.BytesIO() as stream:
+            with tarfile.open(fileobj=stream, mode="w") as archive:
+                member = tarfile.TarInfo("passwd")
+                member.size = len(accounts)
+                archive.addfile(member, io.BytesIO(accounts))
+            passwd = stream.getvalue()
+
+        def answer(returncode, stdout, stderr=""):
+            return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+
+        # One answer per docker call of a plain image request, in the order the
+        # runner makes them. As with real Docker, the create prints a container
+        # ID and only the start carries the engine's failure report.
+        answers = [
+            (["docker", "create"], answer(0, container + "\n")),
+            (["docker", "container", "inspect", "--format", "{{.Image}}", container],
+             answer(0, image_id + "\n")),
+            (["docker", "image", "inspect", image_id],
+             answer(0, json.dumps([{"Id": image_id, "Config": {"User": "10001"}}]))),
+            (["docker", "cp", "-L", f"{container}:/etc/passwd", "-"], answer(0, passwd, b"")),
+            (["docker", "cp", "-a", "-", f"{container}:/"], answer(0, b"", b"")),
+            (["docker", "start", "-a", container],
+             answer(4, json.dumps(failure) + "\n", "[pineforge] backtest failed\n")),
+            (["docker", "rm", "-f", "-v", container], answer(0, container + "\n")),
+        ]
+        calls = []
+
+        def docker(argv, **_options):
+            for command, response in answers:
+                if argv[:len(command)] == command:
+                    calls.append((argv, response.returncode))
+                    return response
+            self.fail(f"docker call with no answer: {argv}")
+
         with tempfile.TemporaryDirectory() as temporary:
             source, feed = Path(temporary) / "generated.cpp", Path(temporary) / "feed.csv"
             source.write_bytes(b"// source\n")
             feed.write_bytes(b"chart\n")
-            process = SimpleNamespace(returncode=4, stdout=json.dumps(failure) + "\n",
-                                      stderr="[pineforge] backtest failed\n")
-            with mock.patch.object(release.subprocess, "run", return_value=process):
+            with mock.patch.object(release.subprocess, "run", side_effect=docker):
                 with self.assertRaises(release.ReleaseRunError) as raised:
                     release.run_release(source, feed, inputs={}, image="selected-image")
+            sent = [argv for argv, _ in calls]
+            # Calls two to seven, argv for argv; the create ends with the plain image.
+            self.assertEqual(sent[1:], [command for command, _ in answers[1:]])
+            self.assertEqual(sent[0][:2] + sent[0][-1:], ["docker", "create", "selected-image"])
+            # The start is the docker call that failed, and the only one.
+            self.assertEqual([argv for argv, returncode in calls if returncode],
+                             [["docker", "start", "-a", container]])
             self.assertEqual(raised.exception.report, failure)
             self.assertIn(failure["error"], str(raised.exception))
 
@@ -444,12 +500,14 @@ class CorpusInputBinding(unittest.TestCase):
                  ["/installed/entrypoint.sh", "--ordinary-argument"]),
                 (None, ["/installed/entrypoint.sh"], ["/installed/entrypoint.sh"])):
             with self.subTest(entrypoint=entrypoint):
+                config = {"Entrypoint": entrypoint, "Cmd": cmd}
                 response = SimpleNamespace(returncode=0, stderr="", stdout=json.dumps([{
                     "Id": "sha256:" + "b" * 64,
-                    "Config": {"Entrypoint": entrypoint, "Cmd": cmd},
+                    "Config": config,
                 }]))
                 with mock.patch.object(release.subprocess, "run", return_value=response) as run:
-                    self.assertEqual(release._image_command("chosen"), ("sha256:" + "b" * 64, expected))
+                    self.assertEqual(release._image_command("chosen"),
+                                     ("sha256:" + "b" * 64, expected, config))
                 run.assert_called_once_with(
                     ["docker", "image", "inspect", "chosen"],
                     capture_output=True, text=True, check=False)

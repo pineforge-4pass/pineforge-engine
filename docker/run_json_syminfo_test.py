@@ -173,6 +173,41 @@ def count(lib, name):
     return [c[0] for c in lib.calls].count(name)
 
 
+@pytest.mark.parametrize("wrapped", [False, True], ids=["flat", "wrapped"])
+def test_catalog_strings_preserve_legacy_report_bytes(harness, monkeypatch, wrapped):
+    # The catalog may describe a different currency/type than the compiled
+    # strategy. Make every accidental string setter observable in the report.
+    monkeypatch.setattr(run_json.time, "time", lambda: 1.0)
+
+    def run(fields):
+        lib = fake_lib(SETTERS + ("strategy_set_syminfo_type", "strategy_set_syminfo_string"))
+        def backtest(state, *args):
+            report = ctypes.cast(args[-1], ctypes.POINTER(run_json.ReportC)).contents
+            report.net_profit = 10.0 + sum(
+                c[0] in ("strategy_set_syminfo_type", "strategy_set_syminfo_string")
+                for c in lib.calls)
+        lib.run_backtest_full = backtest
+        status, out = harness(lib, syminfo={"syminfo": fields} if wrapped else fields)
+        assert status == 0, out
+        return out.encode()
+
+    legacy = dict(FOUR, qty_step=0.25)
+    baseline = run(legacy)
+    assert json.loads(baseline)["summary"]["net_pnl"] == 10.0
+    full_record = dict(legacy, type="forex", ticker="ABC", tickerid="X:ABC",
+                       currency="EUR", basecurrency="USD", description="A/B", volumetype="base")
+    assert run(full_record) == baseline
+
+
+def test_unencodable_runner_text_does_not_prevent_other_overrides(tmp_path):
+    lib = FakeLib(("strategy_set_syminfo_type", "strategy_set_syminfo_string"))
+    request = {"type": "stock", "tickerid": "X:CATALOG", "currency": "JPY",
+               "_pineforge_runner_syminfo": {
+        "type": "\ud800", "strings": {"ticker": "\ud800", "currency": "EUR"}}}
+    run_json.apply_syminfo(lib, ST, write(tmp_path, request))
+    assert lib.calls == [("strategy_set_syminfo_string", ST, b"currency", b"EUR")]
+
+
 @pytest.mark.parametrize("doc", [dict(FOUR), dict(FOUR, mincontract=None)],
                          ids=["absent", "null"])
 def test_main_without_a_grid_reports_as_without_syminfo(harness, doc):

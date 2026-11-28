@@ -9856,17 +9856,20 @@ finally:
         # docker/run_json_*_test.py need pytest: every one, found when the plan
         # is built, with nothing written into the checkout.
         argv = {entry[0]: entry[1] for entry in check_commands(ROOT)}['run-json-harness-tests']
-        self.assertEqual(argv[:9], [sys.executable, '-B', '-m', 'pytest', '-q', '-p',
-                                    'no:cacheprovider', '--rootdir', str(ROOT)])
+        self.assertIn(str(ROOT / 'tests/test_runner_symbol_metadata_image.py'), argv)
+        prefix = [sys.executable, '-B', '-m', 'pytest', '-q', '-rs', '-p',
+                  'no:cacheprovider', '--rootdir']
+        self.assertEqual(argv[:len(prefix) + 1], [*prefix, str(ROOT)])
         tests = sorted(str(path) for path in (ROOT / 'docker').glob('run_json_*_test.py'))
         self.assertGreaterEqual(len(tests), 4)
-        self.assertEqual(argv[9:], tests)
+        self.assertEqual(argv[len(prefix) + 1:],
+                         [*tests, str(ROOT / 'tests/test_runner_symbol_metadata_image.py')])
         # A tree without them names the pattern, which pytest refuses: the stage
         # never falls back to collecting the whole tree.
         argv = {entry[0]: entry[1]
                 for entry in check_commands(Path('/nonexistent-pineforge-src'))}[
                     'run-json-harness-tests']
-        self.assertEqual(argv[9:], ['/nonexistent-pineforge-src/docker/run_json_*_test.py'])
+        self.assertEqual(argv[len(prefix) + 1:], ['/nonexistent-pineforge-src/docker/run_json_*_test.py'])
 
     def test_release_gate_and_rerun_tests_remain_binding(self):
         self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])

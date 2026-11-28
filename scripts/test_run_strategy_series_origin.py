@@ -40,6 +40,7 @@ from pathlib import Path
 from unittest import mock
 
 import run_strategy
+import pf_release_run
 
 MIN15 = 15 * 60 * 1000
 ORIGIN_KEY = "series_origin_ms"
@@ -275,21 +276,26 @@ class DeclaredOriginTests(unittest.TestCase):
         self.assertEqual(list(metadata.items())[:2], [(ORIGIN_KEY, ORIGIN), (SECURITY_KEY, 0)])
         self.assertEqual(metadata.get("mincontract"), 0.25)
 
-    def test_the_docker_runner_says_it_does_not_apply_the_origin(self) -> None:
-        seen: list[dict] = []
-
-        def fake_docker(strategy_dir, ohlcv_path, params, run_kwargs, trade_start_ms, image):
-            seen.append(dict(run_kwargs))
-            return {"trades": [_trade(ENTRY, EXIT)], "trace": [], "trace_names": [],
-                    "net_profit": 0.5, "input_bars_processed": 0}
-
+    def test_the_docker_runner_forwards_the_declared_origin_and_warmup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
             feed, out = _probe(d, _feed(ORIGIN))
-            with mock.patch.object(run_strategy, "_run_via_docker", fake_docker):
+            (d / "generated.cpp").write_text("// generated\n")
+            calendar = d / "calendar.json"
+            calendar.write_text(json.dumps({"schema": run_strategy.SESSION_CALENDAR_SCHEMA,
+                                            "sessions": [[ORIGIN, ORIGIN + MIN15]]}))
+            with mock.patch.dict(run_strategy.os.environ, {
+                    run_strategy.SESSION_CALENDAR_ENV: str(calendar),
+                    run_strategy.SESSION_CALENDAR_SHA256_ENV: "",
+                    run_strategy.MAGNIFIER_FEED_ENV: ""}), \
+                    mock.patch.object(pf_release_run, "run_release", return_value={}) as launch:
                 printed = _run_main(d, feed, out, "--runner", "docker")
-        self.assertEqual(len(seen), 1)
-        self.assertEqual(_metadata(seen[0]).get(ORIGIN_KEY), ORIGIN)
+        launch.assert_called_once()
+        metadata = launch.call_args.kwargs["syminfo"] or {}
+        self.assertEqual(list(metadata["syminfo_metadata"].items())[:2],
+                         [(ORIGIN_KEY, ORIGIN), (SECURITY_KEY, 0)])
+        self.assertEqual(metadata["syminfo_metadata"]["symbol_calendar_days"], 1)
+        self.assertIn("--runner docker does not apply a declared bar magnifier or session calendar", printed)
         self.assertIn("--runner docker does not apply the declared series origin", printed)
 
 

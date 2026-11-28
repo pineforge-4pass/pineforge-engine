@@ -15,8 +15,10 @@ import ctypes
 import importlib.util
 import io
 import json
-import sys
 from pathlib import Path
+from subprocess import CompletedProcess
+import sys
+import tarfile
 
 import pytest
 import run_json  # docker/ is on sys.path in the engine test env
@@ -280,37 +282,55 @@ def test_tutorial_sweep_reports_a_run_that_succeeded():
 # --- scripts/run_strategy.py: the lot keys of runtime_overrides (#716) ----------
 
 class FakeDocker:
-    """The docker executable and nothing else: put in place of pf_release_run's
-    subprocess module, it answers `docker image inspect` and `docker run`. For
-    a run it keeps the argv and the text of every file mounted as
-    /in/syminfo.json, read while the launcher still holds the file."""
+    """Replace Docker and record the create args and metadata copied into /in."""
 
-    MOUNTED = ":/in/syminfo.json:ro"
+    IMAGE = "sha256:" + "0" * 64
+    CONTAINER = "1" * 64
 
-    class Exit0:
-        returncode, stderr = 0, ""
-
-        def __init__(self, stdout):
-            self.stdout = stdout
-
-    def __init__(self):
+    def __init__(self, stdout="{}\n", stderr=""):
         self.argv, self.documents = None, []
+        self.stdout = stdout
+        self.stderr = stderr
+        self._phase = None
 
     def run(self, cmd, **options):
         if cmd[:3] == ["docker", "image", "inspect"]:
-            config = {"Entrypoint": ["/usr/local/bin/entrypoint.sh"], "Cmd": None}
-            return self.Exit0(json.dumps([{"Id": "sha256:" + "0" * 64, "Config": config}]))
-        self.argv = list(cmd)
-        mounts = [cmd[i + 1] for i, word in enumerate(cmd[:-1]) if word == "-v"]
-        self.documents = [Path(mount[:-len(self.MOUNTED)]).read_text(encoding="utf-8")
-                          for mount in mounts if mount.endswith(self.MOUNTED)]
-        return self.Exit0("{}\n")
+            config = {"Entrypoint": ["/usr/local/bin/entrypoint.sh"], "Cmd": None,
+                      "User": "10001:10001"}
+            return CompletedProcess(cmd, 0, json.dumps([{"Id": self.IMAGE, "Config": config}]), "")
+        if cmd[:2] == ["docker", "create"]:
+            assert self._phase is None
+            self.argv = list(cmd)
+            self.documents = []
+            self._phase = "created"
+            return CompletedProcess(cmd, 0, self.CONTAINER + "\n", "")
+        if cmd == ["docker", "container", "inspect", "--format", "{{.Image}}", self.CONTAINER]:
+            assert self._phase == "created"
+            return CompletedProcess(cmd, 0, self.IMAGE + "\n", "")
+        if cmd == ["docker", "cp", "-a", "-", f"{self.CONTAINER}:/"]:
+            assert self._phase == "created"
+            with tarfile.open(fileobj=io.BytesIO(options["input"]), mode="r:") as archive:
+                for member in archive:
+                    if member.name == "in/syminfo.json":
+                        assert member.isfile()
+                        with archive.extractfile(member) as document:
+                            self.documents.append(document.read().decode("utf-8"))
+            self._phase = "copied"
+            return CompletedProcess(cmd, 0, b"", b"")
+        if cmd == ["docker", "start", "-a", self.CONTAINER]:
+            assert self._phase == "copied"
+            self._phase = "started"
+            return CompletedProcess(cmd, 0, self.stdout, self.stderr)
+        if cmd == ["docker", "rm", "-f", "-v", self.CONTAINER]:
+            assert self._phase is not None
+            self._phase = None
+            return CompletedProcess(cmd, 0, "", "")
+        raise AssertionError(f"unexpected Docker command: {cmd}")
 
 
 def test_release_launcher_mounts_the_symbol_document_with_both_lot_keys(tmp_path, tape,
                                                                          monkeypatch):
-    # pf_release_run.run_release writes the document itself: only the docker
-    # executable is replaced, and it reads the file the launcher mounts.
+    # Keep the existing test name for base/head matching. Read the copied JSON.
     generated = tmp_path / "generated.cpp"
     generated.write_text("// generated\n")
     docker = FakeDocker()
@@ -344,7 +364,7 @@ def test_run_strategy_hands_both_runners_the_same_valid_lot(tmp_path, tape, monk
                                                             overrides, lot):
     # One inputs.json resolved once (inputs_run_kwargs), then each runner's own
     # hand-over: the metadata the ctypes runner sets on the engine, and the
-    # document the docker runner's launcher mounts for the image.
+    # document the Docker launcher copies into the container.
     params = {"runtime_overrides": overrides}
     _, kwargs = run_strategy.inputs_run_kwargs(params, tmp_path, tape, env={})
 
@@ -361,6 +381,169 @@ def test_run_strategy_hands_both_runners_the_same_valid_lot(tmp_path, tape, monk
 
     assert engine == lot
     assert [json.loads(text) for text in docker.documents] == ([lot] if lot else [])
+
+
+def test_runner_projects_each_symbol_key_to_its_ctypes_setter(tmp_path, tape, monkeypatch):
+    # Capture both the copied document and the setter arguments it produces.
+    # Raw numeric names are open-ended and can even coincide with a catalog field.
+    numbers = {
+        "account_currency_fx": "1.25", "chart_ema_na_warmup": 0,
+        "series_origin_ms": "1744032600000", "security_range_start_na_warmup": False,
+        "bar_index_offset": -2, "historical_security_lookahead_projection": 1,
+        "margin_long": 25, "margin_short": 30,
+        "flat_retained_child_fresh_parent_order": 0, "intraday_cap_skip_noop_market_fills": 0,
+        "intraday_cap_defer_pooc_close": 1, "intraday_cap_count_pooc_full_close_fills": 0,
+        "symbol_calendar_days": 1, "symbol_calendar_open:0": 1744032600000,
+        "symbol_calendar_close:0": 1744036200000,
+        "report_terminal_quote_time_ms": 1744036200000, "report_terminal_quote_close": 10,
+        "shares_outstanding_total": 47, "target_price_high": "inf", "new_member": -0.75,
+        "mintick": 42,
+    }
+    strings = {"ticker": "TEST", "tickerid": "X:TEST", "currency": "USD",
+               "basecurrency": "BTC", "description": "Tést", "volumetype": "base"}
+    overrides = {"qty_step": 0.25, "mincontract": 0.01, "mintick": 0.5, "pointvalue": 2,
+                 "timezone": "UTC", "session": "24x7", "type": "forex", **strings,
+                 "syminfo_metadata": {**numbers, "absent": None, "bad": "no number"}}
+    _, kwargs = run_strategy.inputs_run_kwargs({"runtime_overrides": overrides},
+                                              tmp_path, tape, env={})
+
+    def observer():
+        lib, calls = FakeLib(**CASES["clean"]), []
+        for field in ("metadata", "timezone", "session", "type", "string", "mintick", "pointvalue"):
+            def record(state, *args, field=field):
+                assert state == ST
+                calls.append((field, *args))
+            setattr(lib, "strategy_set_syminfo_" + field, record)
+        return lib, calls
+
+    host, host_calls = observer()
+    _strategy(host).run(tape, **kwargs)
+    (tmp_path / "generated.cpp").write_text("// generated\n")
+    docker = FakeDocker()
+    monkeypatch.setattr(pf_release_run, "subprocess", docker)
+    run_strategy._run_via_docker(tmp_path, tape, {}, kwargs, None, None)
+    document, = docker.documents
+    symbol = json.loads(document)
+    raw = [(key, float(value)) for key, value in numbers.items()]
+    wire = [(key, "inf" if key == "target_price_high" else value) for key, value in raw]
+    assert list(symbol.get("syminfo_metadata", {}).items()) == wire
+    expected_symbol = {
+        k: v for k, v in overrides.items()
+        if k not in ("syminfo_metadata", "type", *strings)
+    }
+    expected_symbol["_pineforge_runner_syminfo"] = {
+        "type": "forex", "strings": strings}
+    assert {k: v for k, v in symbol.items() if k != "syminfo_metadata"} == expected_symbol
+    assert "PINEFORGE_SYMINFO=/in/syminfo.json" in docker.argv
+
+    path = tmp_path / "received.json"
+    path.write_text(document)
+    image, image_calls = observer()
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        applied = run_json.apply_syminfo(image, ST, path)
+    # Lot setup historically runs first in the image. The relative order
+    # of the other raw settings matters (origin and warm-ups are last-writer wins).
+    by_name = [(call[1].decode(), call[2]) for call in image_calls if call[0] == "metadata"]
+    assert [(k, v) for k, v in by_name if k not in ("qty_step", "mincontract")] == raw
+    assert sorted(image_calls) == sorted(host_calls)
+    assert applied["syminfo_metadata"] == [list(pair) for pair in wire]
+    assert not any(line.startswith("warning:") for line in stderr.getvalue().splitlines())
+
+
+def test_missing_optional_symbol_exports_warn_and_keep_results(tmp_path):
+    path = tmp_path / "symbol.json"
+    path.write_text(json.dumps({"syminfo_metadata": {"account_currency_fx": 1.25},
+                                "_pineforge_runner_syminfo": {
+                                    "type": "forex", "strings": {"currency": "USD"}}}))
+    image = FakeLib()
+    image.strategy_set_syminfo_metadata = lambda state, key, value: None
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        applied = run_json.apply_syminfo(image, ST, path)
+    assert applied == {"syminfo_metadata": [["account_currency_fx", 1.25]]}
+    assert stderr.getvalue().splitlines()[-1:] == [
+        "warning: --runner docker does not apply syminfo key(s): "
+        "type, currency; the results do not apply them."]
+
+
+def test_strict_metadata_refuses_missing_optional_symbol_exports(tmp_path, monkeypatch):
+    path = tmp_path / "symbol.json"
+    path.write_text(json.dumps({
+        "_pineforge_runner_syminfo": {
+            "type": "forex", "strings": {"currency": "USD"}}}))
+    monkeypatch.setenv("PINEFORGE_STRICT_METADATA", "1")
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr), pytest.raises(run_json.SyminfoError) as failure:
+        run_json.apply_syminfo(FakeLib(), ST, path)
+    assert failure.value.code == "strategy_library_incompatible"
+    assert "type, currency" in str(failure.value)
+    assert "strategy_set_syminfo_type" in str(failure.value)
+    assert "strategy_set_syminfo_string" in str(failure.value)
+    assert "--runner ctypes" in str(failure.value)
+    assert not any(line.startswith("warning:") for line in stderr.getvalue().splitlines())
+
+
+def test_old_image_reader_warns_for_forwarded_symbol_keys(tmp_path, tape, monkeypatch):
+    generated = tmp_path / "generated.cpp"
+    generated.write_text("// generated\n")
+    docker = FakeDocker()
+    monkeypatch.setattr(pf_release_run, "subprocess", docker)
+    state = {}
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        result = pf_release_run.run_release(
+            generated, tape,
+            syminfo={"_pineforge_runner_syminfo": {
+                "type": "forex", "strings": {"currency": "USD"}}},
+            metadata_warning_state=state)
+    assert result == {}
+    assert stderr.getvalue() == (
+        "warning: --runner docker image reader does not apply syminfo key(s): "
+        "type, currency; the results do not apply them "
+        "(reader protocol runner-syminfo/v1 unavailable).\n")
+
+
+def test_release_launcher_forwards_one_current_reader_warning(tmp_path, tape, monkeypatch):
+    generated = tmp_path / "generated.cpp"
+    generated.write_text("// generated\n")
+    warning = (
+        "warning: --runner docker does not apply syminfo key(s): "
+        "type, currency; the results do not apply them.\n")
+    docker = FakeDocker(
+        stderr="pineforge: runner syminfo protocol=1\n" + warning + warning)
+    monkeypatch.setattr(pf_release_run, "subprocess", docker)
+    state = {}
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        pf_release_run.run_release(
+            generated, tape,
+            syminfo={"_pineforge_runner_syminfo": {
+                "type": "forex", "strings": {"currency": "USD"}}},
+            metadata_warning_state=state)
+        pf_release_run.run_release(
+            generated, tape,
+            syminfo={"_pineforge_runner_syminfo": {
+                "type": "forex", "strings": {"currency": "USD"}}},
+            metadata_warning_state=state)
+    assert stderr.getvalue() == warning
+    assert state == {"emitted": True}
+
+
+def test_strict_metadata_refuses_old_image_reader(tmp_path, tape, monkeypatch):
+    generated = tmp_path / "generated.cpp"
+    generated.write_text("// generated\n")
+    docker = FakeDocker()
+    monkeypatch.setattr(pf_release_run, "subprocess", docker)
+    with pytest.raises(pf_release_run.ReleaseRunError) as failure:
+        pf_release_run.run_release(
+            generated, tape,
+            syminfo={"_pineforge_runner_syminfo": {
+                "type": "forex", "strings": {"currency": "USD"}}},
+            strict_metadata=True)
+    assert "runner-syminfo/v1 unavailable" in str(failure.value)
+    assert "type, currency" in str(failure.value)
+    assert "--runner ctypes" in str(failure.value)
 
 
 MALFORMED_LOTS = {

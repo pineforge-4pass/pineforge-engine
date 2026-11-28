@@ -6005,13 +6005,15 @@ class CheckCommand(tuple):
 
 
 def run_json_harness_command(source: Path) -> list[str]:
-    """pytest over every docker/run_json_*_test.py, found when the plan is built
-    (a new one is never forgotten); -B and no cacheprovider leave the checkout
+    """pytest over the Docker harness modules and the runner's image comparison.
+    -rs shows why an image comparison was skipped; -B and no cacheprovider leave the checkout
     clean. A missing pytest is an import error, so the stage fails, never
     skips. With no file found the argv names the pattern itself, which pytest
     refuses (file not found), instead of collecting the whole tree."""
     tests = sorted(str(path) for path in (source / 'docker').glob(RUN_JSON_TESTS))
-    return [sys.executable, '-B', '-m', 'pytest', '-q', '-p', 'no:cacheprovider',
+    if tests:
+        tests.append(str(source / 'tests/test_runner_symbol_metadata_image.py'))
+    return [sys.executable, '-B', '-m', 'pytest', '-q', '-rs', '-p', 'no:cacheprovider',
             '--rootdir', str(source), *(tests or [str(source / 'docker' / RUN_JSON_TESTS)])]
 
 

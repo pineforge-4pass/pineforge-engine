@@ -4801,7 +4801,9 @@ def _declared_magnifier_plan(params: dict, chart_ohlcv: Path, run_kwargs: dict,
 # --- docker runner (pineforge-release image) ---------------------------
 
 def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
-                    run_kwargs: dict, trade_start_ms, image) -> dict:
+                    run_kwargs: dict, trade_start_ms, image, *,
+                    strict_metadata: bool = False,
+                    metadata_warning_state: dict | None = None) -> dict:
     """Run the COMMITTED generated.cpp through the pineforge-release container and
     return a report dict shaped like Strategy.run / _report_to_dict, so the
     host-side emit-window filter + write_engine_trades_csv work UNCHANGED.
@@ -4837,22 +4839,43 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
     if dist.upper() == "VOLUME_WEIGHTED":
         dist = "ENDPOINTS"
 
-    # Step and minimum stay distinct (inputs_run_kwargs validated both; the
-    # image's parser checks them again and uses the minimum only without a
-    # step). No other syminfo_metadata key or declared magnifier is forwarded.
+    # Keep the validated lot fields in the form older images understand.
+    # Other numeric names may coincide with catalog fields (e.g. "mintick").
+    # Preserve their order: raw warm-up settings after a series origin win.
     syminfo: dict = {}
     metadata = run_kwargs.get("syminfo_metadata") or {}
     for key in ("qty_step", "mincontract"):
         if metadata.get(key) is not None:
             syminfo[key] = metadata[key]
+    raw_metadata = {}
+    for key, value in metadata.items():
+        if key in ("qty_step", "mincontract"):
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        raw_metadata[str(key)] = number if math.isfinite(number) else str(number)
+    if raw_metadata:
+        syminfo["syminfo_metadata"] = raw_metadata
+    runner_syminfo = {}
+    if run_kwargs.get("syminfo_type"):
+        runner_syminfo["type"] = str(run_kwargs["syminfo_type"])
+    runner_strings = {}
+    for skey, sval in (run_kwargs.get("syminfo_strings") or {}).items():
+        if sval is None or str(sval) == "":
+            continue
+        runner_strings[str(skey)] = str(sval)
+    if runner_strings:
+        runner_syminfo["strings"] = runner_strings
+    if runner_syminfo:
+        # This marker distinguishes explicit runner settings from a full
+        # instrument record, whose extra fields have always been ignored.
+        syminfo["_pineforge_runner_syminfo"] = runner_syminfo
     if run_kwargs.get("syminfo_timezone"):
         syminfo["timezone"] = run_kwargs["syminfo_timezone"]
     if run_kwargs.get("syminfo_session"):
         syminfo["session"] = run_kwargs["syminfo_session"]
-    if run_kwargs.get("syminfo_type"):
-        syminfo["type"] = run_kwargs["syminfo_type"]
-    for skey, sval in (run_kwargs.get("syminfo_strings") or {}).items():
-        syminfo[skey] = sval
     if run_kwargs.get("syminfo_mintick") is not None:
         syminfo["mintick"] = run_kwargs["syminfo_mintick"]
     if run_kwargs.get("syminfo_pointvalue") is not None:
@@ -4883,6 +4906,10 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
         kw["inputs"] = corpus_input_values(params)
     if image:
         kw["image"] = image
+    if strict_metadata:
+        kw["strict_metadata"] = True
+    if metadata_warning_state is not None:
+        kw["metadata_warning_state"] = metadata_warning_state
     try:
         raw = _rel.run_release(generated_cpp, ohlcv_for_image, **kw)
     finally:
@@ -5025,6 +5052,10 @@ def main() -> int:
                          "generated.cpp through the pineforge-release image (no host "
                          "C++ toolchain) — same engine_trades.csv, verified by "
                          "verify_corpus.py tolerance tiers.")
+    ap.add_argument("--strict-metadata", action="store_true",
+                    help="With --runner docker, refuse requested type/string "
+                         "syminfo metadata when the image lacks its optional "
+                         "setter export or reader protocol; default: warn and run.")
     ap.add_argument("--image", default=None,
                     help="pineforge-release image for --runner docker (default: "
                          "$PINEFORGE_RELEASE_IMAGE or ghcr .../pineforge-release:latest).")
@@ -5214,19 +5245,22 @@ def _main_run(args, resources) -> int:
                 "error: --runner docker does not support --dump-book; "
                 "use --runner ctypes with a freshly built strategy library.")
         strat = None
+        metadata_warning_state = {}
+        # Retire the origin/calendar notices once a published image carries
+        # the new reader. A declared magnifier still needs the ctypes runner.
         if os.environ.get(MAGNIFIER_FEED_ENV) or os.environ.get(SESSION_CALENDAR_ENV):
             print("note: --runner docker does not apply a declared bar magnifier or session calendar; "
                   "use --runner ctypes", file=sys.stderr)
         if origin_declared:
-            # The image's syminfo takes the origin only with the request.security
-            # warm-up it switches on (_run_via_docker forwards no other key).
             print("note: --runner docker does not apply the declared series origin (the image "
                   "takes it only with the request.security warm-up); use --runner ctypes",
                   file=sys.stderr)
 
         def run_engine(start_ms):
             return _run_via_docker(strategy_dir, ohlcv_path, params, run_kwargs,
-                                   start_ms, args.image)
+                                   start_ms, args.image,
+                                   strict_metadata=getattr(args, "strict_metadata", False),
+                                   metadata_warning_state=metadata_warning_state)
     else:
         so_path = find_strategy_lib(strategy_dir, args.so_name)
         strat = Strategy(so_path)

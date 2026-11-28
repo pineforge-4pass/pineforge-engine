@@ -249,15 +249,15 @@ completed; 1 means a failed run, harness fault or report that could not be
 written whole; 2 means argparse refused the command line or explicit request
 validation failed. The module describes failures and incomplete publication
 at `docker/run_json.py:117` and `docker/run_json.py:136`; `main()` describes
-its status contract at `docker/run_json.py:5407` and propagates typed failure
-statuses at `docker/run_json.py:5425` and `docker/run_json.py:5434`.
-The argparse error exits 2 at `docker/run_json.py:4669`; explicit sink-option
-refusals also use 2 at `docker/run_json.py:6148`. The standalone `csv2bin`
-refusal returns 2 at `docker/run_json.py:5393`, but the entrypoint never
+its status contract at `docker/run_json.py:5477` and propagates typed failure
+statuses at `docker/run_json.py:5495` and `docker/run_json.py:5504`.
+The argparse error exits 2 at `docker/run_json.py:4739`; explicit sink-option
+refusals also use 2 at `docker/run_json.py:6218`. The standalone `csv2bin`
+refusal returns 2 at `docker/run_json.py:5463`, but the entrypoint never
 selects that subcommand. `_host_main()` returns 1 on report-channel setup
-failure at `docker/run_json.py:8826`, propagates the run status at
-`docker/run_json.py:8859`, and the process exits through
-`sys.exit(_host_main())` at `docker/run_json.py:9819`.
+failure at `docker/run_json.py:8896`, propagates the run status at
+`docker/run_json.py:8929`, and the process exits through
+`sys.exit(_host_main())` at `docker/run_json.py:9889`.
 
 Statuses 3 (compile or bind failure) and 5 (transpile failure) are
 build-phase-only; the engine step never returns them. Status 4 is only the
@@ -518,11 +518,37 @@ An invalid value is refused like `--report-sink-fd` (entrypoint exit 4), and the
 `PINEFORGE_SYMINFO` (the harness's `--syminfo`) names a JSON file holding the
 instrument's metadata, either a flat object or `{"syminfo": {...}}`; an object
 with extra keys (for example a full instrument record) can be passed as is, keys
-other than those the harness recognizes are ignored. The harness validates
-all recognized metadata before calling any setter. It applies quantity-grid
-metadata first, then `series_origin_ms` when declared, then
-`mintick`, `pointvalue`, `timezone` and `session`, each through the strategy
-library's `strategy_set_syminfo_*` setters.
+other than those the harness recognizes are ignored. The harness prepares
+the setter arguments before applying them. The flat catalog fields are lot
+metadata, `series_origin_ms`, `mintick`, `pointvalue`, `timezone` and `session`.
+A full instrument record may also contain `type`, `ticker`, `tickerid`, `currency`,
+`basecurrency`, `description` and `volumetype`; these catalog fields are ignored.
+
+`scripts/run_strategy.py --runner docker` sends the remaining by-name numeric
+settings in a separate `syminfo_metadata` object. For example:
+
+```json
+{"qty_step":0.25,"_pineforge_runner_syminfo":{"strings":{"currency":"USD"}},"syminfo_metadata":{"account_currency_fx":1.25,"series_origin_ms":1704067200000,"chart_ema_na_warmup":0}}
+```
+
+The image passes each convertible value to `strategy_set_syminfo_metadata`
+in object order, like ctypes. The example supplies a scalar FX rate, then
+declares an origin, then turns chart EMA warmup off. The same transport works
+for fundamental fields and indexed calendar days. An omitted object adds no
+settings. Null and nonnumeric values are skipped; zero is a setting.
+The runner puts explicitly requested type and string overrides inside
+`_pineforge_runner_syminfo` (`type` and `strings`, respectively).
+They use `strategy_set_syminfo_type` and `strategy_set_syminfo_string`.
+The current reader acknowledges this object with `runner-syminfo/v1`.
+Libraries without these optional exports continue without those fields and
+print one stderr warning naming the skipped keys. If that acknowledgment is
+absent, the host treats the image reader as too old and prints one warning
+naming the forwarded keys; this is how the host detects a reader that
+predates the marker. `scripts/run_strategy.py --strict-metadata` refuses
+missing optional exports or an old reader, naming the keys and pointing to
+`--runner ctypes`; the default remains warn and run. Earlier published image
+readers ignore the new objects; use an image built with the matching harness
+for both runners to agree.
 
 - `qty_step` declares the quantity grid, so order quantities are floored to
   that step. `mincontract` is the instrument's lot size (TradingView's
@@ -557,11 +583,14 @@ library's `strategy_set_syminfo_*` setters.
   `{"qty_step": <effective_step>, "mincontract": <minimum>}`; the two values
   can differ. The same metadata is recorded in
   `fingerprint.provenance.runtime`: its fingerprint digest differs from the
-  gridless run's. Without a grid or a declared series origin the key is absent
+  gridless run's. Without a grid, declared series origin or raw metadata the key is absent
   and the report, fingerprint included, is what it was before these keys were
   supported, apart from
   `elapsed_seconds` (and, with `--bench`, the timing samples). `mintick`,
-  `pointvalue`, `timezone` and `session` are not recorded.
+  `pointvalue`, `timezone`, `session`, `type` and the string members are not recorded.
+  Raw metadata calls are recorded under `applied_runtime.syminfo.syminfo_metadata`
+  as `[name, value]` pairs so that the fingerprint retains their order. Nonfinite
+  doubles are recorded as `"nan"`, `"inf"` or `"-inf"`.
 
 - `series_origin_ms` declares the open time in epoch
   milliseconds of the **first bar of the series the reference ran on**,
@@ -596,18 +625,18 @@ library's `strategy_set_syminfo_*` setters.
   EMA then starts from its first input and is never `na`, as every run did
   before the rule became the default. It is for a feed that starts later
   than the series the reference ran on and should not wait `length` bars for
-  a value. The harness's `PINEFORGE_SYMINFO` does not carry the raw keys.
+  a value. The runner carries this key in `syminfo_metadata`.
 - To declare the origin without the `request.security` warmup, set
   `series_origin_ms` and then the raw key `security_range_start_na_warmup`
   to `0` through `strategy_set_syminfo_metadata`: `request.security` is as
-  an undeclared run has it. The harness's `PINEFORGE_SYMINFO` applies
-  `series_origin_ms` only, so it always enables that warmup.
+  an undeclared run has it. A flat `series_origin_ms` supplied on its own
+  enables that warmup.
   `scripts/run_strategy.py`, the corpus driver, declares a tape's first
   computed bar this way when the tape's `metrics.json` records one
   (`rangeProvenance.returnedRange.from`); a probe's own
   `chart_ema_na_warmup`, `security_range_start_na_warmup` or
   `series_origin_ms` wins, and the loaded feed is left as it is.
-- Applied metadata echoes `{"series_origin_ms": <v>}` in
+- A flat origin declaration echoes `{"series_origin_ms": <v>}` in
   `applied_runtime.syminfo` and `fingerprint.provenance.runtime`. Once the
   first fed chart bar is known, it also carries `series_origin_first_bar_ms`
   and `series_origin_offset_ms` (first bar minus origin). Origins equal to
