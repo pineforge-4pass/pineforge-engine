@@ -105,6 +105,50 @@ class ModuleSelfGate(unittest.TestCase):
         self.assertIn(f'reader: reads absent {self.absent} ({module}:5)', out)
         self.assertIn(COUNT + '1', out.splitlines())
 
+    def test_a_unittest_skip_spelled_only_in_a_string_constant_admits_no_row(self):
+        code, out, module = self.sweep_row(self.named(
+            'from pathlib import Path\n'
+            'SKIP_AS_DATA = """\n'
+            'if not bars.exists():\n'
+            '    raise unittest.SkipTest("SKIP private fixtures not present: " + str(bars))\n'
+            '"""\n'
+            'print(Path("<ABSENT>").read_text())\n'))
+        self.assertEqual(code, 1, out)
+        self.assertIn(f'reader: reads absent {self.absent} ({module}:6)', out)
+        self.assertIn(COUNT + '1', out.splitlines())
+
+        # The same skip as a statement that runs, in setUp. It is no gate of
+        # the module's own (another function reads the path), and the row's
+        # skip path is what admits it.
+        skip = '            raise unittest.SkipTest("SKIP private fixtures not present: bars")\n'
+        text = self.named(
+            'import unittest\n'
+            'from pathlib import Path\n'
+            '\n'
+            '\n'
+            'class Bars(unittest.TestCase):\n'
+            '    def setUp(self):\n'
+            '        if not Path("tests").is_dir():\n'
+            + skip +
+            '\n'
+            '    def test_bars(self):\n'
+            '        self.assertTrue(Path("<ABSENT>").read_text())\n')
+        code, out, module = self.sweep_row(text)
+        self.assertEqual(code, 0, out)
+        self.assertIn(COUNT + '0', out.splitlines())
+        with patch.object(sweep, 'ROOT', self.root):
+            rule, _ = sweep.admitted_by('reader', {}, {module: text})
+        self.assertEqual(rule, 'skip path')
+
+        # The statement still raises, and the pinned literal is now only in a
+        # comment: no string constant holds it, so the row has no skip path.
+        self.assertEqual(text.count(skip), 1)
+        code, out, module = self.sweep_row(text.replace(
+            skip, '            # SKIP private fixtures not present: bars\n'
+                  '            raise unittest.SkipTest("bars are absent")\n'))
+        self.assertEqual(code, 1, out)
+        self.assertIn(f'reader: reads absent {self.absent} ({module}:12)', out)
+
     def test_the_settlement_gate_form_is_gated_by_its_return_statement(self):
         text = self.named(SETTLEMENT_FORM)
         code, out, _ = self.sweep_row(text)
