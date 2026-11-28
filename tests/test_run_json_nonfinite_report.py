@@ -13,8 +13,8 @@ flattens on the second, and supplies on_lot_excursion. The input excursion_value
 selects finite (favorable=1, adverse=0), nan or infinity (favorable only). The
 module must expose the ordinary run_json strategy exports and execution observer.
 Supply PINEFORGE_REPORT_NONFINITE_HOST_LIBRARY, or put it at the default path
-below. An absent default fixture is an explicit skip, never a fake native run;
-an explicitly configured missing fixture fails. The settlement safety work will require changing
+below. A missing default host skips in either fixture mode. An explicitly
+configured missing host fails. The settlement safety work will require changing
 the process expectation if it guards this native seam before report assembly.
 """
 
@@ -984,7 +984,8 @@ def native_host_library():
     if not library.is_file():
         if configured:
             pytest.fail(f"configured native report fixture is missing: {library}")
-        pytest.skip("SKIP private fixtures not present: native report excursion host library; "
+        # No target builds this host library, and the private overlay does not promise it.
+        pytest.skip(f"No target builds {library.name} and the private overlay does not supply it; "
                     "set PINEFORGE_REPORT_NONFINITE_HOST_LIBRARY")
     return library
 

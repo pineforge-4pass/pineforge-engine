@@ -7,6 +7,7 @@
 #include <pineforge/source/pine_adapter.hpp>
 #include <pineforge/source/pine_scheduler.hpp>
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -587,10 +588,10 @@ public:
     // chart's next day -- for session.islastbar / islastbar_regular and for
     // time() / time_close() reading a later bar, as TradingView reads them;
     // everywhere else (a W, M or multi-day chart's own bars among them), and
-    // with no calendar (the default), the feed's own bars answer. False, and
-    // nothing installed, for sessions out of order; an empty list removes the
-    // calendar. The C ABI carries it as syminfo metadata ("symbol_calendar_*",
-    // set_syminfo_metadata), installed when the run begins.
+    // with no calendar (the default), the feed's own bars answer, with one slot more for time() /
+    // time_close(): a session slot between two feed bars of one session day. False, and nothing
+    // installed, for sessions out of order; an empty list removes the calendar. The C ABI carries
+    // it as syminfo metadata ("symbol_calendar_*", set_syminfo_metadata), installed at run begin.
     bool set_symbol_calendar(std::vector<std::pair<std::int64_t, std::int64_t>> sessions);
     const std::vector<std::pair<std::int64_t, std::int64_t>>& symbol_calendar() const noexcept {
         return symbol_calendar_;
@@ -1060,6 +1061,9 @@ private:
         PineRequestDelivery delivery{};
         std::uint64_t body_caller = 0;
         std::int64_t body_open_ms = std::numeric_limits<std::int64_t>::min();
+        // The live index of the site already resolved by the synthesis loop.
+        // Borrowed only for that batch's delivery scope.
+        const int* synthesized_index = nullptr;
     };
     struct RequestCallerKey {
         std::uint8_t kind = 0;
@@ -1096,6 +1100,23 @@ private:
         // by one. Otherwise it changes nothing and returns false.
         bool append_static_next(int sec_id, std::int64_t slot, std::int64_t phase,
                                 std::uint64_t caller) noexcept;
+        // Bind the current site's last run once. A callback may clear this
+        // catalog; validate the borrow's generation before reading it.
+        // Changing stride is part of extending, never part of binding.
+        struct StaticTail {
+            std::int64_t* last = nullptr;
+            std::uint64_t* stride = nullptr;
+            std::uint64_t generation = 0;
+        };
+        StaticTail static_run_tail(int site, std::int64_t slot, std::int64_t phase,
+                                   std::uint64_t caller) noexcept;
+        static bool extend_static_tail(const StaticTail& tail, std::int64_t slot) noexcept {
+            if (tail.generation != generation_.load(std::memory_order_relaxed) || !tail.last ||
+                slot <= 0 || *tail.last != slot - 1) return false;
+            *tail.last = slot;
+            *tail.stride = 1;
+            return true;
+        }
 
         bool empty() const noexcept { return runs_.empty(); }
         std::size_t size() const noexcept {
@@ -1136,6 +1157,7 @@ private:
         // every use is checked against the live rows, so it cannot change a
         // caller or a row. It is not state of the run and is never hashed.
         struct Hint;
+        static std::atomic<std::uint64_t> generation_;
         static Hint& hint() noexcept;
         static void retire() noexcept;
         Hint* bracket(const RequestCallerKey&) const noexcept;
@@ -1161,8 +1183,8 @@ private:
         const std::string* timeframe = nullptr;
     };
 
-    void push_request_delivery(int sec_id, const PineRequestDelivery&,
-                               std::int64_t body_open_ms);
+    void set_static_request_delivery(RequestDeliveryFrame&, int sec_id, const PineRequestDelivery&,
+                                     std::int64_t body_open_ms);
     void push_request_delivery(const PineRuntimeSecurityCursor&,
                                const PineRequestDelivery&, std::int64_t body_open_ms);
     void pop_request_delivery() noexcept;
@@ -1591,12 +1613,12 @@ protected:
     void apply_realtime_tail_horizon(const Bar* bars, int n, bool script_bar_geometry);
 
     // series_origin_ms sets both warmup contexts below; later raw keys win.
-    // Opt-in chart warmup parity (see set_syminfo_metadata,
-    // "chart_ema_na_warmup"). When enabled, chart-timeframe ta.ema instances
-    // first used by on_bar na-warm per TV built-in semantics. This selector is
-    // scoped independently from request.security so the two execution contexts
-    // cannot leak their warmup mode into each other. Default OFF.
-    bool chart_ema_na_warmup_ = false;
+    // Chart warmup parity (see set_syminfo_metadata, "chart_ema_na_warmup").
+    // While it is on, chart-timeframe ta.ema instances first used by on_bar,
+    // or by the preparation of a batch run, na-warm per TV built-in semantics.
+    // Scoped independently from request.security, so neither context leaks its
+    // warmup mode into the other. Default ON; the key's value 0 switches it off.
+    bool chart_ema_na_warmup_ = true;
     // Independent opt-in HTF warmup parity. When enabled,
     // request.security series aggregate from security_range_start_ms_ instead
     // of the feed start and their embedded ta.ema na-warm per TV built-in
@@ -1674,6 +1696,28 @@ protected:
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     void release_aux_security_chart_ranges();
 #endif
+    // Pine's timeframe.change(tf), as the generated class-scope call spells
+    // it: tf_change(prev_bar_timestamp_, current_bar_.timestamp, tf,
+    // syminfo_.timezone, syminfo_.session). True when the chart bar opening at
+    // `curr_ms` begins a new `tf` period, `prev_ms` being the bar before it
+    // (zero, no bar before it: false). The namespace-level tf_change reads a
+    // calendar timeframe's unit alone, so it answers "2D" as it answers "D".
+    // An N-day timeframe ("2D", "3D", ...) is compared here by the period of
+    // TradingView's N-day partition holding each bar (N trading dates counted
+    // from the year's first, src/source/multi_day_periods.hpp), the partition
+    // an N-day request.security reads. Every other timeframe, another
+    // symbol's requested context, and an N-day timeframe whose partition this
+    // run cannot build keep the namespace-level answer (pine_strategy_host.cpp).
+    // The run's partitions are no member of this class, whose layout is the
+    // generated script's ABI: they are parked with the consumer that serves
+    // the run (TimeframeChangeState, src/source/pine_host_reads.hpp).
+    bool tf_change(std::int64_t prev_ms, std::int64_t curr_ms, const std::string& tf,
+                   const std::string& tz, const std::string& session) const;
+    // A class-scope name hides every namespace-level overload: the UTC form
+    // stays the namespace's.
+    bool tf_change(std::int64_t prev_ms, std::int64_t curr_ms, const std::string& tf) const {
+        return pineforge::tf_change(prev_ms, curr_ms, tf);
+    }
 
 public:
     // During a source calculation, query the configured default entry units

@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "666f1c43816a10a5e346f76a7726b86dc6085f008539b76c2c09782c9eee0308"
+    "catalogSha256": "cfcbb696d9512a205bb35e8d0c3116865fc41f027c9a2ae3b33d999dc8f92129"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -446,6 +446,38 @@
       ]
     },
     {
+      "code": "pine_invalid_argument",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "english",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "line.get_price requires xloc.bar_index",
+            "pivot point levels: the Woodie type has no developing levels (a Woodie period's levels need the open of the period after it)",
+            "pivot point levels: unknown type '{name}'",
+            "stoi",
+            "{bar_prefix}Invalid value of the 'factor' argument ({factor}) in the 'supertrend' function. It must be > 0.",
+            "{bar_prefix}Invalid value of the '{argument}' argument ({value}) in the '{function}' function. It must be > 0.",
+            "{bar_prefix}Invalid value of the '{argument}' argument in the '{function}' function. It must not be na"
+          ],
+          "after": [
+            "line.get_price requires xloc.bar_index",
+            "pivot point levels: the Woodie type has no developing levels (a Woodie period's levels need the open of the period after it)",
+            "pivot point levels: unknown type '{name}'",
+            "stoi",
+            "{bar_prefix}Invalid value of the 'factor' argument ({factor}) in the 'supertrend' function. It must be > 0.",
+            "{bar_prefix}Invalid value of the '{argument}' argument ({value}) in the '{function}' function. It must be > 0.",
+            "{bar_prefix}Invalid value of the '{argument}' argument in the '{function}' function. It must not be na",
+            "{bar_prefix}Invalid value of the '{argument}' argument ({value}) in the '{caller}'->'{function}' function. It must be > 0.",
+            "{bar_prefix}Invalid value of the '{argument}' argument ({value}) in the '{function}' function. It must be greater than 0.",
+            "{bar_prefix}Invalid value of the '{argument}' argument in the '{caller}'->'{function}' function. It must not be na"
+          ]
+        }
+      ]
+    },
+    {
       "code": "pine_map_capacity_exceeded",
       "collection": "codes",
       "fields": [
@@ -517,9 +549,118 @@
       ]
     },
     {
+      "code": "run_request_invalid",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.option.values",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "inputs",
+            "overrides",
+            "magnifier_dist",
+            "magnifier_samples",
+            "so",
+            "ohlcv",
+            "syminfo",
+            "symbol_feeds",
+            "trade_start_ms",
+            "warmup",
+            "repeats",
+            "arguments",
+            "input_tf",
+            "script_tf",
+            "bar_magnifier",
+            "generated_cpp",
+            "transpiled",
+            "chart_tz",
+            "magnifier_volume_weighted",
+            "bench",
+            "ohlcv_bin",
+            "verify_bin",
+            "report_sink",
+            "run_id",
+            "spill_dir"
+          ],
+          "after": [
+            "inputs",
+            "overrides",
+            "magnifier_dist",
+            "magnifier_samples",
+            "so",
+            "ohlcv",
+            "syminfo",
+            "symbol_feeds",
+            "trade_start_ms",
+            "warmup",
+            "repeats",
+            "arguments",
+            "input_tf",
+            "script_tf",
+            "bar_magnifier",
+            "generated_cpp",
+            "transpiled",
+            "chart_tz",
+            "magnifier_volume_weighted",
+            "bench",
+            "ohlcv_bin",
+            "verify_bin",
+            "report_sink",
+            "run_id",
+            "spill_dir",
+            "limit_output_series",
+            "limit_map_pairs"
+          ]
+        }
+      ]
+    },
+    {
       "code": "strategy_library_incompatible",
       "collection": "codes",
       "fields": [
+        {
+          "path": "args.missing.values",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "strategy_set_syminfo_metadata",
+            "strategy_set_symbol_facts",
+            "strategy_set_symbol_feed",
+            "strategy_create",
+            "strategy_set_input",
+            "strategy_set_override",
+            "run_backtest_full",
+            "strategy_free",
+            "report_free",
+            "strategy_set_syminfo_mintick",
+            "strategy_set_syminfo_pointvalue",
+            "strategy_set_syminfo_timezone",
+            "strategy_set_syminfo_session"
+          ],
+          "after": [
+            "strategy_set_syminfo_metadata",
+            "strategy_set_symbol_facts",
+            "strategy_set_symbol_feed",
+            "strategy_create",
+            "strategy_set_input",
+            "strategy_set_override",
+            "run_backtest_full",
+            "strategy_free",
+            "report_free",
+            "strategy_set_syminfo_mintick",
+            "strategy_set_syminfo_pointvalue",
+            "strategy_set_syminfo_timezone",
+            "strategy_set_syminfo_session",
+            "pf_output_series_limit_set_checked",
+            "pf_output_series_limit_failure",
+            "pf_map_pairs_limit_set_checked",
+            "strategy_net_profit_sum",
+            "strategy_report_pointvalue",
+            "strategy_initial_capital",
+            "strategy_set_report_replay_v1"
+          ]
+        },
         {
           "path": "args.reason.values",
           "beforePresent": true,

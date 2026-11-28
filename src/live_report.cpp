@@ -277,7 +277,7 @@ report::LiveReportPatch NativeExecutionConsumer::fill_live_report_patch(
     presented.script_bars_processed = engine.diag_script_bars_processed_;
     presented.magnifier_sub_bars_total = engine.diag_magnifier_sub_bars_processed_;
     presented.magnifier_sample_ticks_total = engine.diag_magnifier_sample_ticks_processed_;
-    presented.input_tf_seconds = tf_to_seconds(engine.input_tf_);
+    presented.input_tf_seconds = internal::tf_to_clock_seconds(engine.input_tf_);
     presented.script_tf_seconds = engine.script_tf_seconds_;
     presented.script_tf_ratio = engine.diag_script_tf_ratio_;
     presented.needs_aggregation = engine.diag_needs_aggregation_ ? 1 : 0;

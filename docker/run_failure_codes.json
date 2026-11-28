@@ -709,7 +709,10 @@
     "stoi",
     "{bar_prefix}Invalid value of the 'factor' argument ({factor}) in the 'supertrend' function. It must be > 0.",
     "{bar_prefix}Invalid value of the '{argument}' argument ({value}) in the '{function}' function. It must be > 0.",
-    "{bar_prefix}Invalid value of the '{argument}' argument in the '{function}' function. It must not be na"
+    "{bar_prefix}Invalid value of the '{argument}' argument in the '{function}' function. It must not be na",
+    "{bar_prefix}Invalid value of the '{argument}' argument ({value}) in the '{caller}'->'{function}' function. It must be > 0.",
+    "{bar_prefix}Invalid value of the '{argument}' argument ({value}) in the '{function}' function. It must be greater than 0.",
+    "{bar_prefix}Invalid value of the '{argument}' argument in the '{caller}'->'{function}' function. It must not be na"
    ],
    "retryable": false,
    "since": "1.4.0"
@@ -1674,7 +1677,9 @@
       "verify_bin",
       "report_sink",
       "run_id",
-      "spill_dir"
+      "spill_dir",
+      "limit_output_series",
+      "limit_map_pairs"
      ]
     }
    },
@@ -2129,7 +2134,14 @@
       "strategy_set_syminfo_mintick",
       "strategy_set_syminfo_pointvalue",
       "strategy_set_syminfo_timezone",
-      "strategy_set_syminfo_session"
+      "strategy_set_syminfo_session",
+      "pf_output_series_limit_set_checked",
+      "pf_output_series_limit_failure",
+      "pf_map_pairs_limit_set_checked",
+      "strategy_net_profit_sum",
+      "strategy_report_pointvalue",
+      "strategy_initial_capital",
+      "strategy_set_report_replay_v1"
      ]
     },
     "reason": {

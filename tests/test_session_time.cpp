@@ -246,6 +246,43 @@ static void test_calendar_preserves_minus_one_second() {
     CHECK(fold && fold->epoch_ms == -1000);
 }
 
+static void test_zoned_calendar_period_boundaries() {
+    // Civil calendar expectations, independent of the engine's mktime path.
+    // Each pair of bars straddles a clock change within the same D, W and M.
+    const auto utc = [](int month, int day, int hour, int minute = 0) -> int64_t {
+        return ((native_calendar::native_civil_days(2026, month, day) * 24 + hour) * 60
+                + minute) * 60000;
+    };
+    const char* ny = "America/New_York";
+    struct Period { const char* tf; int64_t open, close; };
+    const auto measure = [&](int64_t bar, const Period& period) {
+        for (int args : {5, 6}) {
+            // A different exchange zone in the sixth slot must not override NY.
+            const int64_t open = args == 5 ? timeframe_time(bar, period.tf, "", ny, "15")
+                : timeframe_time(bar, period.tf, "", ny, "15", "Asia/Tokyo");
+            const int64_t close = args == 5 ? timeframe_time_close(bar, period.tf, "", ny, "15")
+                : timeframe_time_close(bar, period.tf, "", ny, "15", "Asia/Tokyo");
+            const bool ok = open == period.open && close == period.close;
+            std::printf("%s NY args=%d tf=%s bar=%lld open=%lld want=%lld close=%lld want=%lld\n",
+                        ok ? "PASS" : "FAIL", args, period.tf, static_cast<long long>(bar),
+                        static_cast<long long>(open), static_cast<long long>(period.open),
+                        static_cast<long long>(close), static_cast<long long>(period.close));
+            CHECK(ok);
+        }
+    };
+    const Period march[] = {{"D", utc(3, 8, 5), utc(3, 9, 4)},
+                            {"W", utc(3, 2, 5), utc(3, 9, 4)},
+                            {"M", utc(3, 1, 5), utc(4, 1, 4)}};
+    const Period november[] = {{"D", utc(11, 1, 4), utc(11, 2, 5)},
+                               {"W", utc(10, 26, 4), utc(11, 2, 5)},
+                               {"M", utc(11, 1, 4), utc(12, 1, 5)}};
+    for (const auto& p : march)
+        for (int hour : {6, 7}) measure(utc(3, 8, hour, 30), p);
+    for (const auto& p : november)
+        for (int hour : {5, 6}) measure(utc(11, 1, hour, 30), p);
+    for (int day : {3, 20}) measure(utc(3, day, 14, 30), march[2]);
+}
+
 #if defined(__linux__)
 static void test_calendar_boundary_mktime_failure_is_coded() {
     std::printf("test_calendar_boundary_mktime_failure_is_coded\n");
@@ -286,6 +323,14 @@ static void test_calendar_boundary_mktime_failure_is_coded() {
 }
 #endif
 
+static void test_named_zone_dst_day_open() {
+    std::printf("test_named_zone_dst_day_open\n");
+    // 2025-03-09 16:00 UTC = 12:00 EDT.  That day's New York midnight
+    // was 00:00 EST, or 05:00 UTC.
+    const int64_t bar = 1741536000000LL;
+    CHECK(calendar_day_open_local_ms(bar, "America/New_York") == 1741496400000LL);
+}
+
 int main() {
     test_time_hourly_bucket_utc();
     test_time_session_ny_inside();
@@ -301,6 +346,8 @@ int main() {
     test_time_session_syminfo_tz_dst_aware();
     test_time_syminfo_tz_does_not_move_calendar_open();
     test_calendar_preserves_minus_one_second();
+    test_zoned_calendar_period_boundaries();
+    test_named_zone_dst_day_open();
 #if defined(__linux__)
     test_calendar_boundary_mktime_failure_is_coded();
 #endif

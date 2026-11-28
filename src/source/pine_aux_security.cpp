@@ -37,7 +37,7 @@ bool source::PineStrategyHost::set_aux_security_feed(const Bar* bars, int n,
     }
     int seconds = 0;
     try {
-        seconds = tf_to_seconds(input_tf);
+        seconds = internal::tf_to_clock_seconds(input_tf);
     } catch (...) {
         seconds = 0;
     }
@@ -112,8 +112,8 @@ void source::PineStrategyHost::prepare_aux_security_chart_ranges(
     int chart_seconds = 0;
     int aux_seconds = 0;
     try {
-        chart_seconds = tf_to_seconds(chart_tf);
-        aux_seconds = tf_to_seconds(aux_security_input_tf_);
+        chart_seconds = internal::tf_to_clock_seconds(chart_tf);
+        aux_seconds = internal::tf_to_clock_seconds(aux_security_input_tf_);
     } catch (...) {
         chart_seconds = 0;
         aux_seconds = 0;
@@ -250,7 +250,7 @@ int64_t source::PineStrategyHost::aux_security_calling_close_ms() const {
     }
     int chart_seconds = 0;
     try {
-        chart_seconds = tf_to_seconds(input_tf_);
+        chart_seconds = internal::tf_to_clock_seconds(input_tf_);
     } catch (...) {
         chart_seconds = 0;
     }

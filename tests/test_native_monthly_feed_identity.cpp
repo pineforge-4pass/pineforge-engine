@@ -93,7 +93,7 @@ public:
 
     void split_daily_chart() {
         script_tf_ = "1D";
-        script_tf_seconds_ = tf_to_seconds(script_tf_);
+        script_tf_seconds_ = internal::tf_to_clock_seconds(script_tf_);
         security_input_tf_ = "15";
     }
     bool source_aux_security_feed_enabled() const override { return !security_input_tf_.empty(); }

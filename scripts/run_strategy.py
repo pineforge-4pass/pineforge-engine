@@ -1415,6 +1415,13 @@ def _strategy_override_text(value) -> str:
     return str(value)
 
 
+class LotGridError(ValueError):
+    """Invalid declared lot, with the same failure contract as the image."""
+
+    run_failure_code = "lot_grid_rejected"
+    run_failure_args = "{}"
+
+
 def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
                       default_chart_tz: str = "", env=None) -> tuple[Path, dict]:
     """Resolve per-probe ``inputs.json`` metadata into the OHLCV path and the
@@ -1433,7 +1440,8 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
     raises ``ValueError``; given both ways, the flat step and the nested
     minimum are used. ``env`` (default ``os.environ``) supplies the one lane
     fact the case runner hands every run, the lane template's quantity step
-    (``LANE_QTY_STEP_ENV``): ``syminfo.mincontract`` when none is declared.
+    (``LANE_QTY_STEP_ENV``): a positive finite decimal, optionally with an
+    exponent, used for ``syminfo.mincontract`` when none is declared.
     """
     if not isinstance(params, dict):
         params = {}
@@ -1549,7 +1557,7 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
         except OverflowError:  # A JSON integer outside the engine's double range.
             valid = False
         if not valid:
-            raise ValueError(f"runtime_overrides.{name} must be a positive finite number")
+            raise LotGridError(f"runtime_overrides.{name} must be a positive finite number")
         return float(value)
 
     nested = syminfo_metadata or {}
@@ -1568,7 +1576,13 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
     # none (the two ETH 15m templates), runtime_overrides.qty_step's 0.0001 is
     # a default, not lane evidence. Generated code reads the fact through
     # get_syminfo_metadata("mincontract") once codegen lowers it so.
-    lane_step = _num((os.environ if env is None else env).get(LANE_QTY_STEP_ENV))
+    lane_text = (os.environ if env is None else env).get(LANE_QTY_STEP_ENV)
+    # A lane hint is plain ASCII decimal text, not Python's float syntax.
+    lane_step = None
+    if isinstance(lane_text, str) and re.fullmatch(
+        r"\+?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", lane_text
+    ):
+        lane_step = float(lane_text)
     # Precedence: flat step, then nested; nested minimum, then flat, then lane.
     qty_step = nested_step if flat_step is None else flat_step
     minimum = flat_minimum if nested_minimum is None else nested_minimum
@@ -4269,6 +4283,98 @@ def _tv_first_bar(strategy_dir: Path, meta: dict) -> tuple[int, str] | None:
     return int(first), f"metrics.json {member}.returnedRange.from"
 
 
+# The engine's syminfo metadata keys of the two warm-up contexts
+# (docker/README.md, "Instrument metadata").
+SERIES_ORIGIN_KEY = "series_origin_ms"
+CHART_EMA_WARMUP_KEY = "chart_ema_na_warmup"
+SECURITY_RANGE_START_KEY = "security_range_start_na_warmup"
+
+
+class SeriesOriginPlan(NamedTuple):
+    """What main() declares to the engine as the reference series' origin
+    (_series_origin_plan)."""
+    declared: bool           # the driver wrote series_origin_ms
+    detail: str              # the one line main() logs
+    metadata: dict | None    # the run's syminfo metadata, in the order it is applied
+
+
+def _series_origin_plan(metadata: dict | None, tv_first_bar: tuple[int, str] | None,
+                        feed_ts: list[int]) -> SeriesOriginPlan:
+    """The reference series' origin a TV tape run declares to the engine, as
+    the run's syminfo metadata in the order Strategy.run applies it.
+
+    TradingView computes a script from its first chart bar (_tv_first_bar)
+    and from no earlier one. When the tape records that bar, ``tv_first_bar``,
+    it is declared to the engine as the run's ``series_origin_ms``. The chart
+    ta.ema seeding does not hang on the declaration: the engine's default is
+    TradingView's rule with nothing declared (na for length - 1 bars, then
+    the simple average of the first length values), and the driver never
+    writes ``chart_ema_na_warmup``. What the declaration settles is which bar
+    the origin is:
+
+    * It is the reference's bar and nothing else: not the bar the trading
+      window opens on (_tv_entry_emit_window), not the loaded feed's first
+      bar, not the probe's ``ohlcv_start_ms``. A tape that records none (a
+      date-only export, whose backtest computed bars before its ``from``)
+      declares nothing.
+    * The loaded feed, ``feed_ts``, is not touched. Bars loaded before the
+      origin stay loaded, and the chart ta.ema warm-up starts on the first of
+      them. A feed that starts after the origin lacks bars the reference
+      computed, and nothing recovers them: its ta.ema is na for its first
+      length - 1 loaded bars, where the reference's was already running.
+      ``detail`` says which of the three the run is.
+    * The engine's ``series_origin_ms`` also switches the request.security
+      range-start warm-up on. That is a second rule, measured on its own, so
+      the declaration is followed by ``security_range_start_na_warmup`` = 0,
+      which leaves request.security as an undeclared run has it, unless the
+      probe sets that key itself.
+    * The probe's own metadata is applied after the origin, so its
+      ``chart_ema_na_warmup`` (0 selects the first-value seed on purpose, the
+      choice for a feed without the reference's earlier bars) and its
+      ``security_range_start_na_warmup`` win: the engine's last writer. A
+      probe that sets ``series_origin_ms`` itself has declared its origin, and
+      its metadata is passed on as written."""
+    if tv_first_bar is None:
+        return SeriesOriginPlan(False, (
+            "not declared: the tape records no first computed bar (metrics.json "
+            "rangeProvenance.returnedRange.from); the chart ta.ema default (na for "
+            "length - 1 bars, then their simple average) does not depend on it"), metadata)
+    origin_ms, source = tv_first_bar
+    probe = metadata if isinstance(metadata, dict) else {}
+    if SERIES_ORIGIN_KEY in probe:
+        return SeriesOriginPlan(False, (
+            f"the probe's own {SERIES_ORIGIN_KEY} {probe[SERIES_ORIGIN_KEY]} is kept "
+            f"(TV's first computed bar: {_fmt_utc_ms(origin_ms)}, {source})"), metadata)
+    declared: dict = {SERIES_ORIGIN_KEY: int(origin_ms)}
+    if SECURITY_RANGE_START_KEY not in probe:
+        declared[SECURITY_RANGE_START_KEY] = 0
+    declared.update(probe)
+    detail = f"declared {_fmt_utc_ms(origin_ms)} = TV's first computed bar ({source})"
+    if not feed_ts:
+        detail += "; the loaded feed has no bar in the run's bounds"
+    elif feed_ts[0] == origin_ms:
+        detail += ", where the loaded feed starts"
+    elif feed_ts[0] < origin_ms:
+        earlier = sum(1 for ts in feed_ts if ts < origin_ms)
+        detail += (f"; the loaded feed starts {earlier} bar(s) earlier, at "
+                   f"{_fmt_utc_ms(feed_ts[0])}: they stay loaded, and the chart ta.ema "
+                   "warm-up starts on the first of them")
+    else:
+        detail += (f"; the loaded feed starts later, at {_fmt_utc_ms(feed_ts[0])}, without "
+                   "the reference's earlier bars: chart ta.ema is na for its first "
+                   f"length - 1 loaded bars ({CHART_EMA_WARMUP_KEY}=0 in the probe selects "
+                   "the first-value seed)")
+    if CHART_EMA_WARMUP_KEY in probe:
+        detail += (f"; the probe's {CHART_EMA_WARMUP_KEY}={probe[CHART_EMA_WARMUP_KEY]} "
+                   "is applied after it and wins")
+    if SECURITY_RANGE_START_KEY in probe:
+        detail += ("; request.security warm-up as the probe sets it "
+                   f"({SECURITY_RANGE_START_KEY}={probe[SECURITY_RANGE_START_KEY]})")
+    else:
+        detail += f"; request.security warm-up left off ({SECURITY_RANGE_START_KEY}=0)"
+    return SeriesOriginPlan(True, detail, declared)
+
+
 class TvEntryWindow(NamedTuple):
     """The window a TV tape defines over the loaded chart feed
     (_tv_entry_emit_window)."""
@@ -4420,9 +4526,9 @@ MAGNIFIER_FEED_SHA256_ENV = "PINEFORGE_RUN_MAGNIFIER_FEED_SHA256"
 
 
 def _tf_seconds(tf: str) -> int:
-    """tf_to_seconds (src/timeframe.cpp) for a Pine timeframe string: minutes
-    for a bare number, n * 86400 / 604800 for "nD" / "nW", n for "nS", -1 for a
-    calendar month ("nM"), 0 for an empty or unreadable string."""
+    """Seconds for feed scheduling, using the engine clock convention.
+    A bare count means minutes; D, W and S count days, weeks and seconds.
+    Months use -1; empty or unreadable strings use 0."""
     tf = str(tf or "").strip()
     if not tf:
         return 0
@@ -4981,6 +5087,9 @@ def _main_run(args, resources) -> int:
     # The signal-bar start, when the window opens earlier on TradingView's
     # first computed bar: the run falls back to it (_entered_before_tv).
     signal_start_ms: int | None = None
+    # Whether this run declares the tape's first computed bar to the engine
+    # as the series origin (_series_origin_plan): only with a tape in use.
+    origin_declared = False
     if args.no_trim_output:
         pass
     elif args.emit_window_ohlcv is not None:
@@ -5040,6 +5149,19 @@ def _main_run(args, resources) -> int:
             if signal_start - bar_interval_ms > feed_ts[0]:
                 signal_start_ms = signal_start
         print(f"  emit-window: {_describe_tv_entry_window(tv_window)}")
+        # The reference series' ORIGIN is TradingView's first computed bar when
+        # the tape records it: that bar is declared to the engine as
+        # series_origin_ms, whatever bar the window above opens on and wherever
+        # the loaded feed starts, and the feed is left as it is. The
+        # request.security warm-up is not switched on with it, the chart ta.ema
+        # default does not depend on it, and the probe's own metadata wins
+        # (_series_origin_plan has the rule). Like the range end, only with a
+        # tape in use.
+        origin_plan = _series_origin_plan(
+            run_kwargs.get("syminfo_metadata"), tv_first_bar, feed_ts)
+        run_kwargs["syminfo_metadata"] = origin_plan.metadata
+        origin_declared = origin_plan.declared
+        print(f"  series-origin: {origin_plan.detail}")
     trade_start_ms = None
     if emit_window is not None and not args.allow_trading_before_window:
         if tv_window_used or args.disable_trading_before_window:
@@ -5095,6 +5217,12 @@ def _main_run(args, resources) -> int:
         if os.environ.get(MAGNIFIER_FEED_ENV) or os.environ.get(SESSION_CALENDAR_ENV):
             print("note: --runner docker does not apply a declared bar magnifier or session calendar; "
                   "use --runner ctypes", file=sys.stderr)
+        if origin_declared:
+            # The image's syminfo takes the origin only with the request.security
+            # warm-up it switches on (_run_via_docker forwards no other key).
+            print("note: --runner docker does not apply the declared series origin (the image "
+                  "takes it only with the request.security warm-up); use --runner ctypes",
+                  file=sys.stderr)
 
         def run_engine(start_ms):
             return _run_via_docker(strategy_dir, ohlcv_path, params, run_kwargs,
@@ -5408,9 +5536,8 @@ if __name__ == "__main__":
         sys.exit(main())
     except _OhlcvTimestampError as error:
         sys.exit(f"error: {error}")
-    except RuntimeError as error:
-        # The engine's run-failure code, before the traceback: the traceback's
-        # last line stays the engine's text, as before.
+    except (RuntimeError, LotGridError) as error:
+        # The run-failure code precedes the traceback; keep the original text.
         if getattr(error, "run_failure_code", None):
             print(f"run failure code: {error.run_failure_code}", file=sys.stderr)
         raise

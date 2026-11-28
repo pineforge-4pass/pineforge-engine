@@ -50,8 +50,8 @@ bool supports_lower_tf_emulation(const std::string& input_tf,
         return false;
     }
 
-    int input_seconds = tf_to_seconds(input_tf);
-    int requested_seconds = tf_to_seconds(requested_tf);
+    int input_seconds = tf_to_clock_seconds(input_tf);
+    int requested_seconds = tf_to_clock_seconds(requested_tf);
     if (input_seconds <= 0 || requested_seconds <= 0 || requested_seconds >= input_seconds) {
         return false;
     }
@@ -74,9 +74,15 @@ bool supports_lower_tf_emulation(const std::string& input_tf,
 }
 
 
+#ifndef NDEBUG
+thread_local std::uint64_t lower_tf_syntheses_for_test = 0;
+#endif
 std::vector<Bar> synthesize_lower_tf_bars(const Bar& input_bar,
                                                  int ratio,
                                                  int requested_seconds) {
+#ifndef NDEBUG
+    ++lower_tf_syntheses_for_test;
+#endif
     std::vector<Bar> out;
     if (ratio <= 1 || requested_seconds <= 0) {
         return out;

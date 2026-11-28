@@ -24,7 +24,7 @@ import tempfile
 import threading
 import time
 from typing import Callable
-
+from private_fixture_policy import fixture_revision, private_fixtures_overlay
 from prepare_settlement_cpp_abi_base import (
     BASE_COMMIT,
     BASE_TREE,
@@ -296,8 +296,8 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # counted with ctest -N on the integrated tree (kernel profile, 296 registered):
 #   +1 test_run_strategy_magnifier (a script declaring use_bar_magnifier = true
 #      runs magnified over the runner-named finer feed)
-#   +1 test_run_strategy_mincontract (syminfo.mincontract is the lane
-#      template's quantity step)
+#   +1 test_run_strategy_mincontract (the lane template's quantity step
+#      supplies syminfo.mincontract when the probe does not declare it)
 # Both register in release too. 296 registered, 295 run: the WebSocket row
 # still skips on a system libcurl.
 # 296 run = those 295 plus lane W11-ENG-TIME-COLOR's source-free row, counted
@@ -808,8 +808,8 @@ PRIVATE_FIXTURE_SKIP_LITERAL = 'SKIP private fixtures not present: '
 # +28 public rows: verifier 8 + preflight 8 + command-after 8 + report 4; 910 + 28 = 938, 337 + 28 = 365.
 # Scratch attribution: aggregate stays one row; nine individual cases become twelve (+3).
 # Both fixture worlds gain three public Linux rows; pinned populations stay fixed.
-# expectation corrected: Release 943/307 -> 945/309 (full/pinned), because
-# both new source-layer rows run with tapes and skip without them.
+# expectation corrected: Release 943/307 -> 945/309 (full/pinned), for
+# test_entry_runner_explicit and test_entry_runner_all_equity (private tapes).
 RELEASE_MIN_TESTS = 945
 KERNEL_MIN_TESTS = 368
 PRIVATE_FIXTURE_PROFILE_FLOORS = {
@@ -821,15 +821,6 @@ PRIVATE_FIXTURE_PROFILE_FLOORS = {
 # registered/run rows in every engine profile, in either fixture world).
 # The absent minimums remain 945 - 309 = 636 and 368 - 31 = 337.
 # The PR registration minima and runner-only floors remain lower bounds.
-
-
-def private_fixtures_overlay() -> bool:
-    """True when PINEFORGE_PRIVATE_FIXTURES is set and non-empty.
-
-    The environment variable, not a file, carries the signal: Lab's S-73
-    overlay exports it into the gate that runs with the fixtures present.
-    """
-    return bool(os.environ.get('PINEFORGE_PRIVATE_FIXTURES', '').strip())
 
 
 def profile_full_floor(name: str) -> 'int | None':
@@ -1799,6 +1790,8 @@ def validate_ctest_shard_union(
         raise ValueError('lowered the registration floor')
 
     every = ctest_every_stages(profile)
+    if overlay:
+        every |= {'private-fixture-paths', 'ctest-private-fixtures'}
     shared = ctest_shared_stages(profile, first['requireWebsocket'])
 
     def passed(stage: dict) -> bool:
@@ -1879,6 +1872,9 @@ def validate_ctest_shard_union(
             raise ValueError('CTest shard count/name disagreement')
         if summary['ctestNotRun'] or summary['ctestDisabled']:
             raise ValueError('CTest shard contains not-run or disabled rows')
+        if overlay and not exclude_label and summary['ctestSkipped']:
+            raise ValueError('NOT COMPARED: full private shard expected executed rows; skipped: '
+                             + ', '.join(summary['ctestSkipped']))
         union.update(names)
         counted += summary['ctestRows']
         if (profile not in LIVE_ONLY_PROFILES and not overlay
@@ -2013,6 +2009,7 @@ class VerifyConfig:
     runner: Runner
     stream_output: bool = True
     exclude_label: str | None = None
+    explicit_exclusion: bool = False
     # The effective CTest row floor: --min-tests, else the profile's own.
     min_tests: int | None = None
     # True when --min-tests was given: the floor's own note keys on the table
@@ -2133,6 +2130,35 @@ def ctest_rows(output: bytes) -> CTestRows | None:
     if len(skipped) + len(not_run) > total:
         raise ValueError(f'{len(skipped) + len(not_run)} rows did not run out of {total}')
     return CTestRows(total, skipped, not_run, disabled)
+
+
+def private_skip_output(log: Path, skipped: list[str]) -> dict[str, str]:
+    """Read only skipped rows' own output; the Command line can contain the marker too."""
+    wanted = set(skipped)
+    reasons = {}
+    row = None
+    in_output = False
+    try:
+        with log.open(encoding='utf-8', errors='replace') as handle:
+            for raw in handle:
+                line = raw.rstrip('\r\n')
+                if in_output:
+                    if line == '<end of output>':
+                        in_output = False
+                        row = None
+                    elif row in wanted and line.startswith(PRIVATE_FIXTURE_SKIP_LITERAL):
+                        if line[len(PRIVATE_FIXTURE_SKIP_LITERAL):].strip():
+                            reasons[row] = line
+                elif line == 'Output:':
+                    in_output = True
+                else:
+                    match = re.fullmatch(r'\d+/\d+ Test: (.+)', line)
+                    if match:
+                        row = match[1]
+    except OSError:
+        # The CTest non-result still fails; no path can be attributed to it.
+        return {}
+    return reasons
 
 
 def ctest_supports_junit(runner: Runner) -> bool:
@@ -2330,6 +2356,7 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
                                 (source / 'runner' / 'transport.cpp').is_file())),
         runner=default_runner,
         exclude_label=exclude_label,
+        explicit_exclusion=args.exclude_label is not None,
         min_tests=(args.min_tests if args.min_tests is not None else
                    profile_min_tests(PROFILE[args.profile], source)),
         min_tests_explicit=args.min_tests is not None,
@@ -2977,7 +3004,8 @@ class Driver:
         })
         overlay = private_fixtures_overlay()
         if overlay:
-            self.reject_private_fixture_skips(rows)
+            self.reject_private_fixture_skips(
+                rows, excluded_names=frozenset(self.summary['ctestExcludedNames']))
         stage = 'ctest-floor'
         pinned = frozenset()
         absent = self.cfg.profile.name in PRIVATE_FIXTURE_PROFILE_FLOORS and not overlay
@@ -3015,7 +3043,7 @@ class Driver:
             allowed.update(pinned)
             if self.cfg.min_tests is not None and not self.cfg.exclude_label:
                 allowed.add(WEBSOCKET_SKIP_ROW)
-        check_skips = bool(self.cfg.exclude_label) or self.cfg.min_tests is not None
+        check_skips = overlay or bool(self.cfg.exclude_label) or self.cfg.min_tests is not None
         unpermitted = set(rows.skipped) - allowed if check_skips else set()
         if (rows.not_run or rows.disabled or unpermitted
                 or rows.ran + len(rows.skipped) != len(selected)):
@@ -3324,9 +3352,8 @@ class Driver:
                         return 'failed'
         # The preparer answers a missing private-fixture manifest with the
         # pinned SKIP literal and exit 77 -- the absent-overlay contract. That
-        # is a skip only while the overlay is ABSENT: with
-        # PINEFORGE_PRIVATE_FIXTURES set the manifests are in the tree, so a 77
-        # means the overlay did not reach it and is a failure (R2-F3). A bare
+        # is a skip only in absent mode: private mode requires the provider
+        # to run, regardless of why its manifest is unavailable. A bare
         # 77 without the literal is a failure in both modes: invoke's
         # accept_skip requires the literal.
         prepared = self.invoke(stage, prepare,
@@ -3398,6 +3425,12 @@ class Driver:
         self.logs.mkdir(parents=True, exist_ok=True)
         self.start_disk_telemetry()
         self.write_summary()
+        if private_fixtures_overlay():
+            result = self.invoke('private-fixture-paths', [
+                sys.executable, str(self.cfg.source / 'scripts/check_private_fixture_reads.py'),
+                '--overlay', '--root', str(self.cfg.source)])
+            if result.returncode:
+                return self.finish('failed', 1)
         if not self.collect_tool_versions():
             return self.finish('failed', 1)
         if not self.ensure_corpus_submodule():
@@ -3405,9 +3438,7 @@ class Driver:
         guard_failed = False
         # A guard's exit 77 with the pinned literal is the absent-overlay
         # contract, accepted only while the overlay is absent: with
-        # PINEFORGE_PRIVATE_FIXTURES set the guard's private input is in the
-        # tree, so its skip means the overlay did not reach it and is a
-        # failure (R2-F3), not a smaller green run.
+        # PINEFORGE_PRIVATE_FIXTURES set every guard must produce a verdict.
         for name, argv in source_guard_commands(self.cfg.source):
             if not self.shared_stage(name):
                 continue
@@ -3668,13 +3699,22 @@ class Driver:
                 return self.finish('failed', 1)
         else:
             excluded_names = None
-            if self.cfg.exclude_label == 'slow':
-                labelled = self.invoke('ctest-list-excluded', listing + ['-L', 'slow'],
+            if self.cfg.exclude_label == 'slow' or (
+                    private_fixtures_overlay() and self.cfg.explicit_exclusion):
+                label = self.cfg.exclude_label
+                labelled = self.invoke('ctest-list-excluded', listing + ['-L', label],
                                        stream_output=False)
                 try:
                     if labelled.returncode:
-                        raise ValueError('CTest slow-label discovery command failed')
+                        raise ValueError(f'CTest {label}-label discovery command failed')
                     excluded_names = frozenset(ctest_registry(labelled.stdout + labelled.stderr))
+                    if private_fixtures_overlay() and self.cfg.explicit_exclusion:
+                        registry = set(ctest_registry(all_rows.stdout + all_rows.stderr))
+                        selection = set(ctest_registry(selected_rows.stdout + selected_rows.stderr))
+                        if not excluded_names <= registry or selection != registry - excluded_names:
+                            raise ValueError(f'NOT COMPARED: {label} selected {len(selection)}, '
+                                             f'expected the {len(registry - excluded_names)} names '
+                                             'in the registry minus the labelled rows')
                 except ValueError as error:
                     self.fail_stage('ctest-exclusion', str(error))
                     return self.finish('failed', 1)
@@ -3799,7 +3839,7 @@ class Driver:
         # check is profile-independent (a floorless profile refuses the skip
         # too) and runs before the exclude-label branch returns.
         if private_fixtures_overlay():
-            self.reject_private_fixture_skips(rows)
+            self.reject_private_fixture_skips(rows, excluded_names=excluded_names)
         if self.cfg.exclude_label:
             minimum = max(EXCLUDED_REGISTERED_MIN.get(self.cfg.profile.name, 0),
                           self.cfg.min_tests or 0)
@@ -3988,43 +4028,49 @@ class Driver:
             self.fail_stage(stage, f'cannot expand the equivalence private-fixture pin: {error}')
             return None
 
-    def reject_private_fixture_skips(self, rows: 'CTestRows | None') -> None:
-        """With PINEFORGE_PRIVATE_FIXTURES set, refuse a placeholder that did not run.
-
-        Every row the pinned tests/private_fixture_rows.txt names must RUN when
-        the overlay is present: the profile's floor counts on exactly those
-        rows, so one that skips, is disabled or cannot start leaves a
-        silently-smaller run. The check fails closed on everything it cannot
-        read: row lists that did not parse at all (R2-F10: a floorless profile
-        would otherwise pass this rule vacuously), a pin file that is unreadable
-        or does not carry the PRIVATE_FIXTURE_ROW_COUNT names the file itself
-        records (a truncated pin cannot clear the rows it lost).
-        """
+    def reject_private_fixture_skips(self, rows: 'CTestRows | None', *,
+                                     excluded_names: frozenset[str] | None = None) -> None:
+        """A private run requires execution independently of the numeric floor."""
+        stage = 'ctest-private-fixtures'
         if rows is None:
-            self.fail_stage(
-                'ctest-private-fixtures',
-                'PINEFORGE_PRIVATE_FIXTURES is set but CTest printed no row lists this '
-                'run can read, so the ' + PRIVATE_FIXTURE_LABEL + ' rows cannot be checked')
+            self.fail_stage(stage, 'NOT COMPARED: expected CTest results for the private run; '
+                            'no readable row lists')
             return
-        pinned = self.pinned_private_fixture_rows('ctest-private-fixtures')
+        pinned = self.pinned_private_fixture_rows(stage)
         if pinned is None:
             return
-        offenders = ([name for name in rows.skipped if name in pinned]
-                     + [name for name in rows.disabled if name in pinned]
-                     + [name for name in rows.not_run if name in pinned])
-        if offenders:
-            self.fail_stage(
-                'ctest-private-fixtures',
-                f'PINEFORGE_PRIVATE_FIXTURES is set but these '
-                f'{PRIVATE_FIXTURE_LABEL} rows did not run, a skip printed '
-                + repr(PRIVATE_FIXTURE_SKIP_LITERAL)
-                + ': ' + ', '.join(offenders)
-                + '; the overlay did not reach the tree')
+        if not rows.total and not rows.disabled:
+            self.fail_stage(stage, 'NOT COMPARED: expected a nonempty private CTest selection; '
+                            'reported 0 rows')
+            return
+        findings = []
+        if self.cfg.explicit_exclusion:
+            if excluded_names is None:
+                findings.append(f'--exclude-label {self.cfg.exclude_label}: expected excluded row '
+                                'names, none available')
+            else:
+                findings.extend(f'{name}: excluded by --exclude-label {self.cfg.exclude_label}'
+                                for name in sorted(pinned & excluded_names))
+        # Labelled selections already check every unpinned non-result in
+        # ctest-exclusion (or the multi-shard floor), including the conditional
+        # platform skip. A full run has no such accounting, even on native.
+        skipped = [n for n in rows.skipped if not self.cfg.exclude_label or n in pinned]
+        if skipped:
+            test_dir = self.cfg.build_dir
+            if self.cfg.profile.name in LIVE_ONLY_PROFILES:
+                test_dir /= 'runner'
+            reasons = private_skip_output(test_dir / 'Testing/Temporary/LastTest.log', skipped)
+            for name in skipped:
+                findings.append(f'{name}: Skipped; ' + reasons.get(name, 'no fixture path reported'))
+        findings.extend(f'{name}: {status}' for status, names in (
+            ('Disabled', rows.disabled), ('Not Run', rows.not_run)) for name in names
+            if not self.cfg.exclude_label or name in pinned)
+        if findings:
+            self.fail_stage(stage, f'NOT COMPARED: required rows did not run with private-fixtures '
+                            f'at {fixture_revision()}:\n' + '\n'.join(findings))
         else:
-            self.pass_stage(
-                'ctest-private-fixtures',
-                f'PINEFORGE_PRIVATE_FIXTURES set; none of the {len(pinned)} '
-                f'{PRIVATE_FIXTURE_LABEL} rows skipped')
+            self.pass_stage(stage, f'checked CTest results against {len(pinned)} private row pins; '
+                            f'{rows.ran} executed; {len(rows.skipped)} selected skips')
 
     def finish(self, status: str, code: int) -> int:
         self.finish_disk_telemetry()

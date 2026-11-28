@@ -396,6 +396,21 @@ class CorpusInputBinding(unittest.TestCase):
             self.assertEqual(raised.exception.report, failure)
             self.assertEqual(run.call_count, 2)
 
+    def test_plain_image_request_keeps_the_chart_io_failure(self):
+        failure = {"engine": "pineforge", "error": "--ohlcv: /in/ohlcv.csv: Permission denied",
+                   "code": "chart_bars_unreadable", "args": {"reason": "io"}}
+        with tempfile.TemporaryDirectory() as temporary:
+            source, feed = Path(temporary) / "generated.cpp", Path(temporary) / "feed.csv"
+            source.write_bytes(b"// source\n")
+            feed.write_bytes(b"chart\n")
+            process = SimpleNamespace(returncode=4, stdout=json.dumps(failure) + "\n",
+                                      stderr="[pineforge] backtest failed\n")
+            with mock.patch.object(release.subprocess, "run", return_value=process):
+                with self.assertRaises(release.ReleaseRunError) as raised:
+                    release.run_release(source, feed, inputs={}, image="selected-image")
+            self.assertEqual(raised.exception.report, failure)
+            self.assertIn(failure["error"], str(raised.exception))
+
     def test_installed_entrypoint_mismatch_stops_before_build_query_or_bars(self):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)

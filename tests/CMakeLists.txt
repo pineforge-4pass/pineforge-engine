@@ -275,6 +275,7 @@ set(TEST_SOURCES
     test_ta_rma_warmup
     test_ta_sma_exact_order
     test_ta_sma_window_residual
+    test_sma_window_sum_lands_like_tradingview
     test_ta_na_source_rules
     test_matrix
     test_matrix_identity
@@ -872,6 +873,17 @@ list(APPEND TEST_SOURCES test_native_sizing_price_rule)
 # PineKcw; codegen #291): legacy values for a valid length, the coded
 # invalid-length stop at the first call.
 list(APPEND TEST_SOURCES test_checked_ema_family)
+
+# Checked fixed-argument supertrend source adapter (PineFixedSupertrend): the
+# stop a constant or input factor or atrPeriod of zero or less raises at the
+# first call, the same one PineSupertrend raises, and ta::Supertrend's values
+# for a valid pair.
+list(APPEND TEST_SOURCES test_checked_supertrend)
+
+# Pine ta.dmi by the reference definition (source::PineDmiReference): a bar
+# with a zero averaged true range holds both directional indices and steps
+# ADX, where the kernel class answers three na.
+list(APPEND TEST_SOURCES test_pine_dmi_zero_range)
 
 # R5 R2 re-lowering of the Pine adapter's default quantity onto the core's
 # Sized intent: the classification, the neutrality of the re-lowering and the
@@ -4775,7 +4787,7 @@ add_test(NAME test_private_fixture_reads COMMAND ${Python3_EXECUTABLE} -B
 # instead of letting the rows write into the host's /tmp.
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tmp")
 add_test(NAME test_private_fixture_reads_controls COMMAND ${Python3_EXECUTABLE} -B
-    ${PROJECT_SOURCE_DIR}/scripts/test_private_fixture_reads.py)
+    ${PROJECT_SOURCE_DIR}/scripts/test_private_fixture_reads.py "--cmake-command=${CMAKE_COMMAND}" "--cmake-ctest-command=${CMAKE_CTEST_COMMAND}" "--cmake-generator=${CMAKE_GENERATOR}" "--cmake-make-program=${CMAKE_MAKE_PROGRAM}" "--cmake-current-binary-dir=${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties(test_private_fixture_reads_controls PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
 add_test(NAME test_kernel_python_private_reads COMMAND ${Python3_EXECUTABLE} -B
@@ -5373,10 +5385,10 @@ elseif(NOT test_engine_trade_accessors IN_LIST _pf_kernel_absent_rows)
     set_tests_properties(test_engine_trade_accessors PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
-if(NOT test_exit_binding_tapes IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cross_side_exit/README.md")
+if(NOT test_exit_binding_tapes IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exit_binding/schedules.inc")
     pineforge_add_unit_test(test_exit_binding_tapes)
 elseif(NOT test_exit_binding_tapes IN_LIST _pf_kernel_absent_rows)
-    add_test(NAME test_exit_binding_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/cross_side_exit/README.md")
+    add_test(NAME test_exit_binding_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/exit_binding/schedules.inc")
     set_tests_properties(test_exit_binding_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
@@ -6137,14 +6149,34 @@ elseif(NOT test_qty_step_qna_rows IN_LIST _pf_kernel_absent_rows)
 endif()
 
 if(NOT test_requested_bar_grid_tapes IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/requested_bar_grid/btc60/bi-300/tv_trades.csv")
-    pineforge_add_unit_test(test_requested_bar_grid_tapes)
+    set(_pf_grid_missing "")
+    foreach(_pf_slug IN ITEMS bi-420 bi-600 open-300 open-420 trace-300
+                              bi-120 bi-180 bi-240 bi-360 bi-480 open-120)
+        if(NOT _pf_grid_missing AND NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/requested_bar_grid/btc60/${_pf_slug}/tv_trades.csv")
+            set(_pf_grid_missing "tests/fixtures/requested_bar_grid/btc60/${_pf_slug}/tv_trades.csv")
+        endif()
+    endforeach()
+    if(_pf_grid_missing)
+        add_test(NAME test_requested_bar_grid_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: ${_pf_grid_missing}")
+        set_tests_properties(test_requested_bar_grid_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+    else()
+        pineforge_add_unit_test(test_requested_bar_grid_tapes)
+    endif()
 elseif(NOT test_requested_bar_grid_tapes IN_LIST _pf_kernel_absent_rows)
     add_test(NAME test_requested_bar_grid_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/requested_bar_grid/btc60/bi-300/tv_trades.csv")
     set_tests_properties(test_requested_bar_grid_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
 if(NOT test_series_origin_tailh_tape IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/series_origin/tailh/tv_trades.csv")
-    pineforge_add_unit_test(test_series_origin_tailh_tape)
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/series_origin/tailh/bounds.csv")
+        add_test(NAME test_series_origin_tailh_tape COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/series_origin/tailh/bounds.csv")
+        set_tests_properties(test_series_origin_tailh_tape PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+    elseif(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/series_origin/tailh/bars.csv")
+        add_test(NAME test_series_origin_tailh_tape COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/series_origin/tailh/bars.csv")
+        set_tests_properties(test_series_origin_tailh_tape PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+    else()
+        pineforge_add_unit_test(test_series_origin_tailh_tape)
+    endif()
 elseif(NOT test_series_origin_tailh_tape IN_LIST _pf_kernel_absent_rows)
     add_test(NAME test_series_origin_tailh_tape COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/series_origin/tailh/tv_trades.csv")
     set_tests_properties(test_series_origin_tailh_tape PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
@@ -7890,6 +7922,19 @@ list(SORT LANE_CMAKE)
 foreach(lane_file IN LISTS LANE_CMAKE)
     include("${lane_file}")
 endforeach()
+
+# --- lane lower-tf-request-callers begin ---
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            # Count completed scopes in the compiled evaluator (Itanium C++ ABI, D1 destructor).
+            target_link_options(test_lower_tf_caller_work PRIVATE
+                "-Wl,--wrap=_ZN9pineforge6source24PineRequestDeliveryScopeD1Ev")
+            target_compile_definitions(test_lower_tf_caller_work PRIVATE PF_COUNT_DELIVERY_SCOPES)
+        endif()
+    endif()
+endif()
+# --- lane lower-tf-request-callers end ---
 
 # --- lane issue-920 begin ---
 if(TARGET test_issue_920_bool_input)

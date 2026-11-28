@@ -1876,15 +1876,15 @@ void source::PineStrategyHost::scheduler_prepare_script_run(
     if (const auto state = native_state(); state.spec) {
         input_tf_ = state.spec->timeframe_undetected ? "" : state.spec->input_tf;
         script_tf_ = state.spec->timeframe_undetected ? "" : state.spec->script_tf;
-        script_tf_seconds_ = tf_to_seconds(script_tf_);
+        script_tf_seconds_ = internal::tf_to_clock_seconds(script_tf_);
     }
-    prepare_script_run(bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()),
-                       static_eligible);
-    last_bar_index_ = expected_script_bars - 1;
-    last_bar_time_ = bars.empty() ? 0 : bars.back().timestamp;
-    apply_realtime_tail_horizon(
-        bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()),
-        script_bar_geometry);
+    const Bar* const data = bars.empty() ? nullptr : bars.data();
+    // A batch preparation fills the script's static TA cache: it seeds as the bar callback does.
+    const bool seeding = static_eligible ? chart_ema_na_warmup_ : ta::ema_na_warmup_flag();
+    internal::AmbientEmaSeedingScope preparation_seeding(nullptr, seeding);
+    prepare_script_run(data, static_cast<int>(bars.size()), static_eligible);
+    last_bar_index_ = expected_script_bars - 1; last_bar_time_ = bars.empty() ? 0 : bars.back().timestamp;
+    apply_realtime_tail_horizon(data, static_cast<int>(bars.size()), script_bar_geometry);
     source_last_bar_index_ = last_bar_index_;
 }
 
@@ -1929,7 +1929,9 @@ source::PineRequestDeliveryScope::PineRequestDeliveryScope(
         PineStrategyHost& host, int sec_id,
         const PineRequestDelivery& delivery, std::int64_t body_open_ms)
     : host_(host) {
-    host_.push_request_delivery(sec_id, delivery, body_open_ms);
+    PineStrategyHost::RequestDeliveryFrame frame;
+    host_.set_static_request_delivery(frame, sec_id, delivery, body_open_ms);
+    host_.request_delivery_stack_.push_back(frame);
 }
 
 source::PineRequestDeliveryScope::PineRequestDeliveryScope(
@@ -1947,6 +1949,9 @@ source::PineRequestDeliveryScope::~PineRequestDeliveryScope() {
 // Declared in pine_host_reads.hpp for the control that reads them.
 thread_local std::uint64_t source::detail::request_caller_lookups_for_test = 0;
 thread_local std::uint64_t source::detail::request_caller_insertions_for_test = 0;
+thread_local std::uint64_t source::detail::static_delivery_sets_for_test = 0;
+thread_local std::uint64_t source::detail::static_caller_appends_for_test = 0;
+thread_local bool source::detail::force_static_delivery_setter_for_test = false;
 #endif
 
 bool source::PineStrategyHost::RequestCallerIds::same_series(
@@ -1965,7 +1970,7 @@ std::uint64_t source::PineStrategyHost::RequestCallerIds::caller_at(
 // Counts the catalogs built and cleared on any thread. A hint taken under an
 // earlier count may name released rows, so it is never read again.
 // (<atomic> comes with pineforge/engine.hpp.)
-static std::atomic<std::uint64_t> request_caller_generation{1};
+std::atomic<std::uint64_t> source::PineStrategyHost::RequestCallerIds::generation_{1};
 
 // Per entry: the row at or before the last key this thread placed (`at`), the
 // row after it (`next`), and the row count at which the two were neighbours.
@@ -1994,7 +1999,7 @@ source::PineStrategyHost::RequestCallerIds::hint() noexcept {
 }
 
 void source::PineStrategyHost::RequestCallerIds::retire() noexcept {
-    request_caller_generation.fetch_add(1, std::memory_order_relaxed);
+    generation_.fetch_add(1, std::memory_order_relaxed);
 }
 
 // This thread's hint when its two rows are neighbours with `key` between
@@ -2006,7 +2011,7 @@ source::PineStrategyHost::RequestCallerIds::bracket(
     Hint& mine = hint();
     const std::size_t index = Hint::entry(key.kind, key.first);
     if (mine.owner != this || !mine.known[index]
-        || mine.generation != request_caller_generation.load(std::memory_order_relaxed))
+        || mine.generation != generation_.load(std::memory_order_relaxed))
         return nullptr;
     if (mine.rows[index] != runs_.size()) {
         // A row was added since: read the row after `at` again.
@@ -2041,29 +2046,57 @@ std::optional<std::uint64_t> source::PineStrategyHost::RequestCallerIds::find(
 bool source::PineStrategyHost::RequestCallerIds::append_static_next(
         int sec_id, std::int64_t slot, std::int64_t phase,
         std::uint64_t caller) noexcept {
-    // Every fact is read from the live rows: the hint is this catalog's and
-    // this generation's, no row was added since its two rows were neighbours,
-    // its row is this site's run in this phase ending one slot earlier with
-    // consecutive callers, and no later row of the site follows it.
-    Hint& mine = hint();
+#ifndef NDEBUG
+    ++detail::static_caller_appends_for_test;
+#endif
+    // The rightmost run needs no hint: no later key can overlap it.
+    if (runs_.empty()) return false;
+    auto row = std::prev(runs_.end());
     constexpr std::uint8_t kind = 5;
-    const std::size_t index = Hint::entry(kind, sec_id);
-    if (mine.owner != this || !mine.known[index] || mine.rows[index] != runs_.size()
-        || mine.generation != request_caller_generation.load(std::memory_order_relaxed))
-        return false;
-    const RequestCallerKey& first = mine.at[index]->first;
-    Run& run = mine.at[index]->second;
+    if (row->first.kind != kind || row->first.first != sec_id) {
+        Hint& mine = hint();
+        const auto index = Hint::entry(kind, sec_id);
+        if (mine.owner != this || !mine.known[index] || mine.rows[index] != runs_.size()
+            || mine.generation != generation_.load(std::memory_order_relaxed))
+            return false;
+        const auto next = mine.next[index];
+        if (next != runs_.end() && next->first.kind == kind && next->first.first == sec_id)
+            return false;
+        row = mine.at[index];
+    }
+    const RequestCallerKey& first = row->first;
+    Run& run = row->second;
     if (first.kind != kind || first.first != sec_id || first.third != phase
         || first.occurrence != 0 || !first.text.empty() || slot - 1 != run.last
         || (run.stride != 1 && first.second != run.last)
         || caller != caller_at(first, run, run.last) + 1)
         return false;
-    const auto beyond = mine.next[index];
-    if (beyond != runs_.end() && beyond->first.kind == kind && beyond->first.first == sec_id)
-        return false;
     run.last = slot;
     run.stride = 1;
     return true;
+}
+
+source::PineStrategyHost::RequestCallerIds::StaticTail
+source::PineStrategyHost::RequestCallerIds::static_run_tail(
+        int site, std::int64_t slot, std::int64_t phase, std::uint64_t caller) noexcept {
+    if (runs_.empty()) return {};
+    auto row = std::prev(runs_.end());
+    if (row->first.kind != 5 || row->first.first != site) {
+        const auto* placed = bracket({5, site, slot, phase, 0, {}});
+        if (!placed) return {};
+        const auto index = Hint::entry(5, site);
+        const auto next = placed->next[index];
+        if (next != runs_.end() && next->first.kind == 5 && next->first.first == site)
+            return {};
+        row = placed->at[index];
+    }
+    const auto& first = row->first;
+    auto& run = row->second;
+    if (first.kind != 5 || first.first != site || first.third != phase ||
+        first.occurrence != 0 || !first.text.empty() || run.last != slot ||
+        (run.stride != 1 && first.second != slot) || caller_at(first, run, slot) != caller)
+        return {};
+    return {&run.last, &run.stride, generation_.load(std::memory_order_relaxed)};
 }
 
 void source::PineStrategyHost::RequestCallerIds::emplace(
@@ -2081,7 +2114,7 @@ void source::PineStrategyHost::RequestCallerIds::emplace(
     const auto remember = [&](decltype(next) at) {
         Hint& mine = hint();
         const auto generation =
-            request_caller_generation.load(std::memory_order_relaxed);
+            generation_.load(std::memory_order_relaxed);
         if (mine.owner != this || mine.generation != generation) {
             mine = Hint{};
             mine.owner = this;
@@ -2352,8 +2385,8 @@ bool source::PineStrategyHost::request_runtime_selection_allowed(
     // These are the source-validated clocks. Keep malformed/undetected clocks
     // outside selection without changing their existing BASE validation.
     try {
-        const int requested_seconds = tf_to_seconds(cursor.timeframe);
-        const int calling_seconds = tf_to_seconds(*parent.timeframe);
+        const int requested_seconds = internal::tf_to_clock_seconds(cursor.timeframe);
+        const int calling_seconds = internal::tf_to_clock_seconds(*parent.timeframe);
         return requested_seconds > 0 && calling_seconds > requested_seconds
             && calling_seconds % requested_seconds == 0;
     } catch (const std::invalid_argument&) {
@@ -2369,22 +2402,21 @@ void source::PineStrategyHost::set_request_caller_scope(
     request_active_chart_caller_ = chart_caller;
 }
 
-void source::PineStrategyHost::push_request_delivery(
+void source::PineStrategyHost::set_static_request_delivery(RequestDeliveryFrame& frame,
         int sec_id, const PineRequestDelivery& delivery, std::int64_t body_open_ms) {
-    const auto slot = delivery.requested_slot;
+#ifndef NDEBUG
+    ++detail::static_delivery_sets_for_test;
+#endif
     std::uint64_t body_caller = 0;
-    if (delivery.caller_valid && slot >= 0) {
-        // A callback can fail the run, so read the live phase.
+    if (const auto slot = delivery.requested_slot; delivery.caller_valid && slot >= 0) {
         const auto phase = static_cast<std::int64_t>(detail::run_phase(*this));
-        if (!delivery.replay
-            && request_caller_ids_.append_static_next(
-                sec_id, slot, phase, request_next_caller_)) {
+        if (!delivery.replay && request_caller_ids_.append_static_next(sec_id, slot, phase, request_next_caller_)) {
             body_caller = request_next_caller_++;
         } else {
             body_caller = request_caller_id({5, sec_id, slot, phase, 0, {}}); // static body
         }
     }
-    request_delivery_stack_.push_back({sec_id, nullptr, delivery, body_caller, body_open_ms});
+    frame = {sec_id, nullptr, delivery, body_caller, body_open_ms};
 }
 
 void source::PineStrategyHost::push_request_delivery(
@@ -2456,9 +2488,9 @@ source::PineRuntimeSecurityCursor source::PineStrategyHost::make_runtime_securit
     cursor.gaps_on = gaps;
     cursor.lower_array = lower_array;
     cursor.heikinashi = heikinashi;
-    const int requested_seconds = tf_to_seconds(timeframe);
-    const int input_seconds = tf_to_seconds(input_tf_);
-    const int chart_seconds = tf_to_seconds(cursor.chart_timeframe);
+    const int requested_seconds = internal::tf_to_clock_seconds(timeframe);
+    const int input_seconds = internal::tf_to_clock_seconds(input_tf_);
+    const int chart_seconds = internal::tf_to_clock_seconds(cursor.chart_timeframe);
     if (lower_array && chart_seconds <= 0)
         throw coded<std::runtime_error>(
             RunFailureCode::request_timeframe_unsupported,
@@ -2752,7 +2784,7 @@ void source::PineStrategyHost::scheduler_prepare_security_sequence(
         feeds.days = days;
         feeds.chart = bars.data();
         feeds.n_chart = static_cast<int>(bars.size());
-        feeds.daily_chart = tf_to_seconds(input_tf_) == 86400;
+        feeds.daily_chart = internal::tf_to_clock_seconds(input_tf_) == 86400;
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
         if (aux_security_feed_enabled()) {
             feeds.aux = aux_security_bars_.data();
@@ -2865,7 +2897,7 @@ bool source::PineStrategyHost::same_symbol_sites_routable(
     for (std::size_t i = 0; i < security_eval_states_.size(); ++i) {
         const SecurityEvalState& state = security_eval_states_[i];
         const bool minute_day = calendar_period_for(state.tf) == CalendarPeriod::NONE
-            && tf_to_seconds(state.tf) == 86400;
+            && internal::tf_to_clock_seconds(state.tf) == 86400;
         if (minute_day && !pine_security_state(state.sec_id).lookahead_on
             && script_tf_seconds_ > 0 && script_tf_seconds_ < 86400) {
             return false;
@@ -4181,7 +4213,9 @@ int64_t source::PineStrategyHost::chart_bar_close_ms(int64_t stamp) const {
 // ET slot and Good Friday, the test's no-bar slots). So the host reads the
 // bars from the input it retains (a batch's, or a stream's warmup); past its
 // edges it walks the symbol's session calendar (session_trades_at): a batch's
-// final bar asks the calendar for the bar after it, as a live bar does.
+// final bar asks the calendar for the bar after it, as a live bar does. One slot the input does
+// not hold is read forward all the same: a session slot between two bars the input holds in one
+// session day, or in any days of a session that never closes (unprinted_slot below).
 namespace {
 
 constexpr std::int64_t kTimeOffsetMinuteMs = 60'000;
@@ -4289,8 +4323,38 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
         }
         return na<int64_t>();
     };
+    // A slot of the symbol's session that the input holds no bar for: the first one at or after
+    // `from` and before `held`, the input's next chart bar past the bar or slot `after`.
+    // TradingView reads the bar after a chart bar from its calendar for the symbol, not from the
+    // chart's bars (tests/test_symbol_calendar_tapes.cpp, its opening note), and a calendar day
+    // runs from its open to its close (set_symbol_calendar). A later bar of the same session day
+    // therefore puts every session slot before it inside that day, with no calendar installed too:
+    // the 09:05 bar of a 5-minute chart whose input goes on at 09:15 reads 09:10 next. Only the
+    // calendar says whether a day went on past its last bar (an early close) or whether a day
+    // without bars is one of its days (a holiday): there, on a D, W or M chart, and where no
+    // session slot lies between, this is na and the input's next bar stands. A session that never
+    // closes ("24x7" or none) has neither, so its slots are read across the trading-day roll and
+    // at a day's edge too (observed on TradingView with a synthetic script).
+    const auto unprinted_slot = [&](std::int64_t after, std::int64_t from,
+                                    std::int64_t held) -> std::int64_t {
+        if (daily_chart || chart_step_ms <= 0 || is_na(from) || is_na(held) || from <= after
+            || from >= held
+            || (!(sym_session.empty() || sym_session == "24x7")
+                && pineforge::internal::session_trading_day_index(after, sym_tz, sym_session)
+                    != pineforge::internal::session_trading_day_index(held, sym_tz, sym_session))) {
+            return na<std::int64_t>();
+        }
+        for (std::int64_t t = from; t < held; t += kTimeOffsetMinuteMs) {
+            if (!session_trades_at(sym_session, sym_tz, t)) continue;
+            const std::int64_t slot = chart_slot_of(t);
+            return is_na(slot) || slot < from ? t : slot;
+        }
+        return na<std::int64_t>();
+    };
     // The chart bar after the one opening at `open_ms`: the retained input's
-    // next bar, else the calendar's first traded slot past its close.
+    // next bar, or the session slot before it that the input holds no bar for
+    // (unprinted_slot); past the input, the calendar's first traded slot past
+    // its close.
     const auto next_chart_open = [&](std::int64_t open_ms) -> std::int64_t {
         if (calendar_chart && symbol_calendar_day(open_ms) != nullptr) {
             if (const std::int64_t slot = symbol_calendar_open_from(open_ms + 1); !is_na(slot))
@@ -4302,9 +4366,28 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
                                    });
         while (!input_is_chart && it != input.end() && chart_open_of(it->timestamp) <= open_ms)
             ++it;
-        if (it != input.end()) return chart_open_of(it->timestamp);
+        if (it != input.end()) {
+            const std::int64_t held = chart_open_of(it->timestamp);
+            // A chart bar is at most one step long: nothing fits before a bar
+            // that opens within one step of this one.
+            if (is_na(held) || daily_chart || chart_step_ms <= 0
+                || held - open_ms <= chart_step_ms) {
+                return held;
+            }
+            const std::int64_t slot = unprinted_slot(open_ms, chart_close_of(open_ms), held);
+            return is_na(slot) ? held : slot;
+        }
         const std::int64_t end = chart_close_of(open_ms);
         return chart_open_from(is_na(end) || end <= open_ms ? open_ms + 1 : end);
+    };
+    // The first chart bar opening at or after `at`, stepping on from the bar
+    // or slot `after`: chart_open_from's, or the session slot before it that
+    // the input holds no bar for. The calendar's own slot stands as it is.
+    const auto chart_open_past = [&](std::int64_t after, std::int64_t at) -> std::int64_t {
+        const std::int64_t held = chart_open_from(at);
+        if (calendar_chart && !is_na(symbol_calendar_open_from(at))) return held;
+        const std::int64_t slot = unprinted_slot(after, at, held);
+        return is_na(slot) ? held : slot;
     };
 
     // A chart bar before the current one is one the run has had: the
@@ -4350,7 +4433,7 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
     const CalendarPeriod tf_period = calendar_period_for(tf.empty() ? script_tf_ : tf);
     // A day of the symbol calendar is its "D" bar.
     const bool calendar_days = session.empty() && tf_period == CalendarPeriod::DAY
-        && tf_to_seconds(tf.empty() ? script_tf_ : tf) == 86400;
+        && internal::tf_to_clock_seconds(tf.empty() ? script_tf_ : tf) == 86400;
     const auto calendar_open_of = [&](std::int64_t ms) -> std::int64_t {
         if (session.empty() && (tz.empty() || tz == sym_tz)
             && (tf.empty() || tf == script_tf_)) {
@@ -4390,8 +4473,8 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
     // the chart bar holding the instant it reaches: time("60", 0, -1) on a
     // daily bar is that bar, time("60", 0, 1) the bar before
     // (te-time-bb-tf-aapl1d / -btc1d / -eurusd1d).
-    const int tf_seconds = tf_to_seconds(tf.empty() ? script_tf_ : tf);
-    const int chart_seconds = tf_to_seconds(script_tf_);
+    const int tf_seconds = internal::tf_to_clock_seconds(tf.empty() ? script_tf_ : tf);
+    const int chart_seconds = internal::tf_to_clock_seconds(script_tf_);
     if (timeframe_bars_back != 0 && tf_seconds > 0 && chart_seconds > 0
         && tf_seconds < chart_seconds) {
         const std::int64_t at = open - static_cast<std::int64_t>(timeframe_bars_back)
@@ -4403,7 +4486,7 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
     for (int k = 0; k < -timeframe_bars_back && !is_na(open); ++k) {
         // The first chart bar past this tf bar's end that a tf bar holds.
         const std::int64_t end = tf_close_of(open);
-        std::int64_t at = chart_open_from(is_na(end) || end <= open ? open + 1 : end);
+        std::int64_t at = chart_open_past(open, is_na(end) || end <= open ? open + 1 : end);
         std::int64_t next = na<int64_t>();
         for (int guard = 0; guard < kTimeOffsetBarsPerStep && !is_na(at); ++guard) {
             next = tf_open_of(at);
@@ -4683,6 +4766,70 @@ double source::PineStrategyHost::request_currency_rate(
     if (conversion.identity) return 1.0;
     return conversion.to_account ? conversion.account_per_symbol
                                  : 1.0 / conversion.account_per_symbol;
+}
+
+// Pine's timeframe.change(tf) behind the generated class-scope call. The
+// namespace-level tf_change takes a calendar timeframe's unit from its last
+// character and drops the count, so "2D" answered as "D" does: true on every
+// trading day. TradingView reports the opening of a new requested period, and
+// its N-day periods are N trading dates counted from the year's first
+// (multi_day_periods.hpp). The two bars are therefore compared by the open of
+// the period of that partition holding each: the partition an N-day
+// request.security reads (scheduler_prepare_security_sequence), from the same
+// feeds and symbol facts. The zero-stamp guard, a single-unit or intraday
+// timeframe, a W or M multiple, another symbol's requested context and a
+// partition the rule does not yield stay the namespace-level answer.
+//
+// The run's partitions are parked in the consumer's host-state slot for this
+// host and run (detail::TimeframeChangeState, pine_host_reads.hpp), never in
+// this object, whose layout is the generated script's ABI. Each is planned on
+// the first call naming its timeframe -- a timeframe the rule yields no
+// partition for is kept as that answer -- and read until the consumer drops
+// the state as the next run begins, before that run's prepare: it reads the
+// bars of the run that planned it. Planning walks the run's feeds, so no call
+// repeats it: the slot has no switch, unlike the consumer's host cache, and
+// keeps a row for every N-day timeframe the script names. Outside a running
+// run there is no run to keep a partition for, none is planned, and the
+// answer is the namespace-level one.
+bool source::PineStrategyHost::tf_change(std::int64_t prev_ms, std::int64_t curr_ms,
+                                         const std::string& tf, const std::string& tz,
+                                         const std::string& session) const {
+    if (prev_ms == 0 || curr_ms == 0) return false;
+    const int days = multi_day_count(tf);
+    if (days == 0 || foreign_context_ != nullptr || tz != syminfo_.timezone
+        || session != syminfo_.session) {
+        return pineforge::tf_change(prev_ms, curr_ms, tf, tz, session);
+    }
+    const auto build_partition = [&] {
+        const auto bars = scheduler_.retained_input();
+        MultiDayFeeds feeds;
+        feeds.days = days;
+        feeds.chart = bars.data();
+        feeds.n_chart = static_cast<int>(bars.size());
+        feeds.daily_chart = internal::tf_to_clock_seconds(input_tf_) == 86400;
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+        if (aux_security_feed_enabled()) {
+            feeds.aux = aux_security_bars_.data();
+            feeds.n_aux = aux_security_bars_.size();
+        }
+#endif
+        feeds.tz = syminfo_.timezone;
+        feeds.session = syminfo_.session;
+        feeds.exchange_calendar = session_template_knows_early_close();
+        return make_multi_day_period_source(feeds);
+    };
+    detail::TimeframeChangeState* const change_state = detail::timeframe_change_state(*this);
+    TimeframeAggregator::PeriodSource* const periods = change_state == nullptr
+        ? nullptr
+        : detail::timeframe_change_periods(*change_state, days, build_partition);
+    std::int64_t prev_open = 0;
+    std::int64_t curr_open = 0;
+    bool last = false;
+    if (periods == nullptr || !periods->stamp_at(prev_ms, prev_open, last)
+        || !periods->stamp_at(curr_ms, curr_open, last)) {
+        return pineforge::tf_change(prev_ms, curr_ms, tf, tz, session);
+    }
+    return prev_open != curr_open;
 }
 
 }  // namespace pineforge

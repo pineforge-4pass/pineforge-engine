@@ -46,7 +46,7 @@ void PineStrategyHost::init_security_eval_states_for_run(
 void PineStrategyHost::prepare_historical_security_lookahead_projections(
         const Bar* input_bars, int n_input, const std::string& effective_input_tf) {
     clear_historical_security_lookahead_projections();
-    const int input_seconds = tf_to_seconds(effective_input_tf);
+    const int input_seconds = internal::tf_to_clock_seconds(effective_input_tf);
     const int script_seconds = script_tf_seconds_;
     if (stream_warmup_mode_ || effective_input_tf != script_tf_ || input_bars == nullptr
         || n_input <= 0 || input_seconds <= 0 || script_seconds <= 0) {
@@ -58,7 +58,7 @@ void PineStrategyHost::prepare_historical_security_lookahead_projections(
         PineSecurityEvalState& pine = pine_security_state(state.sec_id);
         if (!historical_security_lookahead_projection_ && !pine.historical_lookahead_projection)
             continue;
-        const int requested_seconds = tf_to_seconds(state.tf);
+        const int requested_seconds = internal::tf_to_clock_seconds(state.tf);
         const auto period = calendar_period_for(state.tf);
         const bool calendar_month = requested_seconds == -1 && period == CalendarPeriod::MONTH;
         const bool eligible = !pine.lower_tf_requested && !pine.lower_tf_emulation

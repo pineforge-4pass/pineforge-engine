@@ -191,6 +191,183 @@ static void test_vwma_window_eviction() {
 }
 
 // --------------------------------------------------------------------
+// VWMA: an addend a running sum rounded away is not lost for good.
+// --------------------------------------------------------------------
+// Each running sum adds the incoming value, then subtracts the evicted one.
+// Beside 2^55 a double cannot hold a 2 (its neighbours are 2^55 - 4 and
+// 2^55 + 8), so a sum that holds 2^55 drops the 2 it is given. Subtracting
+// 2^55 later leaves 0 where the window still holds that 2. Every value below
+// is an exact double, so each expected result is the window's own mean.
+static bool vwma_same(double actual, double expected) {
+    return is_na(expected) ? is_na(actual) : actual == expected;
+}
+
+static void test_vwma_lost_addend() {
+    std::printf("test_vwma_lost_addend\n");
+    const double big = 0x1p55;
+
+    // Numerator. Unit volume, length 2, sources 2, 2, 2^55, 2, 2, 2.
+    {
+        ta::VWMA vwma(2);
+        CHECK(is_na(vwma.compute(2.0, 1.0)));
+        CHECK(vwma.compute(2.0, 1.0) == 2.0);
+        // {2, 2^55} and {2^55, 2}: (2^55 + 2) / 2 rounds to 2^54.
+        CHECK(vwma.compute(big, 1.0) == 0x1p54);
+        CHECK(vwma.compute(2.0, 1.0) == 0x1p54);
+        // {2, 2} twice. The running numerator is (2^55 + 2) - 2^55 = 0 here.
+        const double first = vwma.compute(2.0, 1.0);
+        const double second = vwma.compute(2.0, 1.0);
+        CHECK(first == 2.0);
+        CHECK(second == 2.0);
+        // The same windows in an instance that never saw 2^55.
+        ta::VWMA fresh(2);
+        fresh.compute(2.0, 1.0);
+        const double fresh_first = fresh.compute(2.0, 1.0);
+        const double fresh_second = fresh.compute(2.0, 1.0);
+        CHECK(vwma_same(first, fresh_first));
+        CHECK(vwma_same(second, fresh_second));
+    }
+
+    // Denominator. Volumes 2, 2, 2^55, 2, 2, 2; the source of the large
+    // volume is 2^-54, so the products stay small: 6, 6, 2, 6, 6, 6.
+    {
+        ta::VWMA vwma(2);
+        CHECK(is_na(vwma.compute(3.0, 2.0)));
+        CHECK(vwma.compute(3.0, 2.0) == 3.0);
+        // (6 + 2) / 2^55 and (2 + 6) / 2^55.
+        CHECK(vwma.compute(0x1p-54, big) == 0x1p-52);
+        CHECK(vwma.compute(3.0, 2.0) == 0x1p-52);
+        // {(3, 2), (3, 2)} twice: 12 / 4. The running volume sum is 0 here,
+        // which the zero-volume test reads as "no volume in the window".
+        CHECK(vwma.compute(3.0, 2.0) == 3.0);
+        CHECK(vwma.compute(3.0, 2.0) == 3.0);
+    }
+
+    // Zero volume. 0.1 + 0.2 rounds up by 2^-55, so after both have left the
+    // running volume sum is 2^-55 and the running numerator 2^-54 over a
+    // window that holds no volume at all: their ratio is the stale 2.
+    {
+        ta::VWMA vwma(2);
+        CHECK(is_na(vwma.compute(2.0, 0.1)));
+        CHECK(vwma.compute(2.0, 0.2) == 2.0);
+        CHECK(vwma.compute(7.0, 0.0) == 2.0);   // only (2, 0.2) has weight
+        CHECK(is_na(vwma.compute(9.0, 0.0)));   // {(7, 0), (9, 0)}
+        CHECK(is_na(vwma.compute(11.0, 0.0)));  // {(9, 0), (11, 0)}
+        CHECK(vwma.compute(5.0, 4.0) == 5.0);   // weight is back
+    }
+
+    // A product that is not finite leaves with its pair too.
+    {
+        ta::VWMA vwma(2);
+        vwma.compute(2.0, 1.0);
+        vwma.compute(HUGE_VAL, 1.0);
+        vwma.compute(2.0, 1.0);                 // {inf, 2}
+        CHECK(vwma.compute(2.0, 1.0) == 2.0);   // {2, 2}
+    }
+
+    // Large products that cancel inside the window, around small ones:
+    // 2^55 + 2 - 2^55 + 2 is 4. Adding the window in order loses the first 2
+    // again, so the rebuilt sum takes that loss back in.
+    {
+        ta::VWMA vwma(4);
+        vwma.compute(big, 1.0);
+        vwma.compute(2.0, 1.0);
+        vwma.compute(-big, 1.0);
+        CHECK(vwma.compute(2.0, 1.0) == 1.0);
+    }
+
+    // The replacement of the current bar. {2, 2^55} becomes {2, 6}: the
+    // running numerator is 2^55 - 2^55 + 6 = 6 where the window sums to 8.
+    {
+        ta::VWMA vwma(2);
+        vwma.compute(2.0, 1.0);
+        vwma.compute(2.0, 1.0);
+        vwma.compute(big, 1.0);
+        CHECK(vwma.recompute(6.0, 1.0) == 4.0);
+        CHECK(vwma.compute(10.0, 1.0) == 8.0);  // {6, 10}
+    }
+
+    // A replay of the current bar starts from what the sums had lost before
+    // it. {2^55, 2} holds 2^55 and is short by the 2; an 8 is added exactly,
+    // so only that earlier loss tells that 2^55 + 8 - 2^55 = 8 is short.
+    {
+        ta::VWMA vwma(2);
+        vwma.compute(2.0, 1.0);
+        vwma.compute(2.0, 1.0);
+        vwma.compute(big, 1.0);
+        vwma.compute(2.0, 1.0);                           // {2^55, 2}
+        CHECK(vwma.compute(8.0, 1.0) == 5.0);             // {2, 8}
+        CHECK(is_na(vwma.recompute(na<double>(), 1.0)));  // back to {2^55, 2}
+        CHECK(vwma.recompute(8.0, 1.0) == 5.0);           // {2, 8} again
+    }
+}
+
+// The steps VWMA has always taken, with nothing rebuilt: add the incoming
+// product and volume, subtract the evicted ones; a replacement subtracts the
+// replaced value and adds the new one.
+struct PlainVwma {
+    int length;
+    std::vector<double> products;
+    std::vector<double> volumes;
+    double product_sum = 0.0;
+    double volume_sum = 0.0;
+
+    explicit PlainVwma(int window_length) : length(window_length) {}
+    double value() const {
+        if (static_cast<int>(products.size()) < length || volume_sum == 0.0)
+            return na<double>();
+        return product_sum / volume_sum;
+    }
+    double compute(double src, double vol) {
+        const double product = src * vol;
+        products.push_back(product);
+        volumes.push_back(vol);
+        product_sum += product;
+        volume_sum += vol;
+        while (static_cast<int>(products.size()) > length) {
+            product_sum -= products.front();
+            products.erase(products.begin());
+            volume_sum -= volumes.front();
+            volumes.erase(volumes.begin());
+        }
+        return value();
+    }
+    double recompute(double src, double vol) {
+        const double product = src * vol;
+        product_sum = product_sum - products.back() + product;
+        volume_sum = volume_sum - volumes.back() + vol;
+        products.back() = product;
+        volumes.back() = vol;
+        return value();
+    }
+};
+
+// On a tape of ordinary prices and volumes (decimal fractions, a volume a
+// thousand times its neighbours, single zero volumes) nothing is rebuilt:
+// every result has the bits of the plain running sums. No window here is
+// without volume; that case is the zero-volume row of the test above.
+static void test_vwma_ordinary_tape() {
+    std::printf("test_vwma_ordinary_tape\n");
+    for (const int length : {2, 5, 20}) {
+        ta::VWMA vwma(length);
+        PlainVwma plain(length);
+        for (int bar = 0; bar < 400; ++bar) {
+            const double src = 101.37 + ((17 * bar) % 23) * 0.41 - bar * 0.013;
+            double vol = 1250.5 + ((29 * bar) % 31) * 37.25;
+            if (bar % 97 == 41) vol *= 1000.0;
+            if (bar % 53 == 19) vol = 0.0;
+            CHECK(vwma_same(vwma.compute(src, vol), plain.compute(src, vol)));
+            if (bar % 5 == 3) {
+                const double again = src + 0.27;
+                const double again_vol = vol * 1.5 + 0.125;
+                CHECK(vwma_same(vwma.recompute(again, again_vol),
+                                plain.recompute(again, again_vol)));
+            }
+        }
+    }
+}
+
+// --------------------------------------------------------------------
 // SMA::recompute on the seed bar and on an empty instance.
 // --------------------------------------------------------------------
 static void test_sma_recompute_guards() {
@@ -394,6 +571,7 @@ int main(int argc, char** argv) {
     const std::string row = argc == 2 ? argv[1] : "";
     if (argc > 2 || (!row.empty() && row != "startup-oracle" &&
                     row != "stage-availability" && row != "stage-recompute" &&
+                    row != "vwma-lost-addend" && row != "vwma-ordinary-tape" &&
                     row != "controls")) {
         std::fprintf(stderr, "unknown warm-up row\n");
         return 2;
@@ -405,6 +583,10 @@ int main(int argc, char** argv) {
             test_recursive_stage_availability();
         if (row.empty() || row == "stage-recompute")
             test_recursive_stage_recompute();
+        if (row.empty() || row == "vwma-lost-addend")
+            test_vwma_lost_addend();
+        if (row.empty() || row == "vwma-ordinary-tape")
+            test_vwma_ordinary_tape();
     } catch (const std::exception& error) {
         std::fprintf(stderr, "EVIDENCE ERROR: %s\n", error.what());
         return 2;

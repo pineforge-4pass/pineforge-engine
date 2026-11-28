@@ -8,6 +8,7 @@
 #include <pineforge/source/pine_ta_length.hpp>
 #include <pineforge/na.hpp>
 #include <pineforge/run_failure.hpp>
+#include <pineforge/ta_compare_band.hpp>
 
 #include "window_sum_expansion.hpp"
 
@@ -476,12 +477,12 @@ ta::SupertrendResult PineSupertrend::step(double high, double low, double close,
 ta::SupertrendResult PineSupertrend::compute(double factor, double atr_period, double high,
                                              double low, double close) {
     if (!latched_) {
-        atr_.emplace(simple_ta_length(atr_period, "supertrend", "atrPeriod"));
         // Only the latched factor is checked: an na one is accepted (and read
         // as na), zero or a negative one stops the run on the first execution
         // (tv/edge st-factor-zero / -neg: RE10001 on bar 0); a later 0 or -2
-        // is never read (st-factor-zero-later, 60/60 equal to factor 3).
-        if (!is_na(factor) && factor <= 0.0) factor_not_positive(factor);
+        // is never read (st-factor-zero-later, 60/60 equal to factor 3). The
+        // check itself is supertrend_first_execution_period, at the end.
+        atr_.emplace(supertrend_first_execution_period(factor, atr_period));
         factor_ = factor;
         latched_ = true;
     }
@@ -581,6 +582,245 @@ double SeriesSma::compute(double source, double current_length) {
 
 double SeriesSma::recompute(double source, double current_length) {
     return update(source, checked_length(current_length), true);
+}
+
+// --- ta.supertrend's first-execution check ---
+
+// atrPeriod first, then the factor: the order PineSupertrend::compute always
+// checked them in, so a call with both invalid reports atrPeriod.
+int supertrend_first_execution_period(double factor, double atr_period) {
+    const int period = simple_ta_length(atr_period, "supertrend", "atrPeriod");
+    if (!is_na(factor) && factor <= 0.0) factor_not_positive(factor);
+    return period;
+}
+
+// --- PineDmiReference ---
+
+PineDmiReference::PineDmiReference(int di_length, int adx_smoothing)
+    : rma_plus_(di_length), rma_minus_(di_length), rma_tr_(di_length),
+      rma_adx_(adx_smoothing) {}
+
+ta::DMIResult PineDmiReference::compute(double high, double low, double close) {
+    saved_state_ = state_;
+    rma_plus_.save();
+    rma_minus_.save();
+    rma_tr_.save();
+    rma_adx_.save();
+
+    ta::DMIResult result{na<double>(), na<double>(), na<double>()};
+    if (is_na(high) || is_na(low) || is_na(close)) return result;
+    if (state_.first_bar) {
+        state_.prev_high = high;
+        state_.prev_low = low;
+        state_.prev_close = close;
+        state_.first_bar = false;
+        return result;
+    }
+
+    // The directional movements, the true range and their averages, written
+    // as ta::DMI::compute writes them so both give the same bits.
+    const double up_move = high - state_.prev_high;
+    const double down_move = state_.prev_low - low;
+    const double plus_dm = (float_band_gt(up_move, down_move)
+                            && float_band_gt(up_move, 0.0)) ? up_move : 0.0;
+    const double minus_dm = (float_band_gt(down_move, up_move)
+                             && float_band_gt(down_move, 0.0)) ? down_move : 0.0;
+    const double tr = std::max({high - low,
+                                std::abs(high - state_.prev_close),
+                                std::abs(low - state_.prev_close)});
+    const double smoothed_plus = rma_plus_.compute(plus_dm);
+    const double smoothed_minus = rma_minus_.compute(minus_dm);
+    const double smoothed_tr = rma_tr_.compute(tr);
+    state_.prev_high = high;
+    state_.prev_low = low;
+    state_.prev_close = close;
+
+    // fixnan(100 * rma(DM) / rma(TR)): the quotient is na while an average
+    // is na and on a zero averaged range, and an na quotient keeps the last
+    // value it had.
+    const auto quotient = [smoothed_tr](double smoothed_dm) {
+        if (is_na(smoothed_dm) || is_na(smoothed_tr) || smoothed_tr == 0.0) return na<double>();
+        return 100.0 * smoothed_dm / smoothed_tr;
+    };
+    const double plus = quotient(smoothed_plus);
+    const double minus = quotient(smoothed_minus);
+    if (!is_na(plus)) state_.held_plus = plus;
+    if (!is_na(minus)) state_.held_minus = minus;
+    // Nothing to hold yet: three na, and ADX gets no input.
+    if (is_na(state_.held_plus) || is_na(state_.held_minus)) return result;
+
+    result.diplus = state_.held_plus;
+    result.diminus = state_.held_minus;
+    // sum == 0 ? 1 : sum, compared exactly as ta::DMI compares its sum (a
+    // banded test of the sum is held until a TradingView capture decides it).
+    const double di_sum = result.diplus + result.diminus;
+    const double divisor = di_sum == 0.0 ? 1.0 : di_sum;
+    result.adx = rma_adx_.compute(100.0 * std::abs(result.diplus - result.diminus) / divisor);
+    return result;
+}
+
+ta::DMIResult PineDmiReference::recompute(double high, double low, double close) {
+    state_ = saved_state_;
+    rma_plus_.restore();
+    rma_minus_.restore();
+    rma_tr_.restore();
+    rma_adx_.restore();
+    return compute(high, low, close);
+}
+
+// --- PineSar ---
+
+// ta::SAR::compute statement for statement; the five relational comparisons
+// are Pine's (float_band_gt / float_band_lt), everything else is unchanged.
+double PineSar::step(double high, double low, double close) {
+    if (is_na(high) || is_na(low) || is_na(close)) return na<double>();
+    State& s = state_;
+    if (is_na(s.prev_close)) {
+        s.prev_high = high;
+        s.prev_low = low;
+        s.prev_close = close;
+        return na<double>();
+    }
+
+    bool first_trend_bar = false;
+    if (!s.initialized) {
+        s.initialized = true;
+        s.is_long = float_band_gt(close, s.prev_close);
+        s.ep = s.is_long ? high : low;
+        s.sar = s.is_long ? s.prev_low : s.prev_high;
+        s.af = start_;
+        first_trend_bar = true;
+    }
+
+    double sar = s.sar + s.af * (s.ep - s.sar);
+
+    if (s.is_long) {
+        if (float_band_gt(sar, low)) {
+            first_trend_bar = true;
+            s.is_long = false;
+            sar = std::max(high, s.ep);
+            s.af = start_;
+            s.ep = low;
+        }
+    } else if (float_band_lt(sar, high)) {
+        first_trend_bar = true;
+        s.is_long = true;
+        sar = std::min(low, s.ep);
+        s.af = start_;
+        s.ep = high;
+    }
+
+    if (!first_trend_bar) {
+        if (s.is_long) {
+            if (float_band_gt(high, s.ep)) {
+                s.ep = high;
+                s.af = std::min(s.af + increment_, maximum_);
+            }
+        } else if (float_band_lt(low, s.ep)) {
+            s.ep = low;
+            s.af = std::min(s.af + increment_, maximum_);
+        }
+    }
+
+    // The line stays behind the previous two bars' lows (long) or highs (short).
+    if (s.is_long) {
+        if (!is_na(s.prev_low)) sar = std::min(sar, s.prev_low);
+        if (!is_na(s.prev_prev_low)) sar = std::min(sar, s.prev_prev_low);
+    } else {
+        if (!is_na(s.prev_high)) sar = std::max(sar, s.prev_high);
+        if (!is_na(s.prev_prev_high)) sar = std::max(sar, s.prev_prev_high);
+    }
+
+    s.sar = sar;
+    s.prev_prev_high = s.prev_high;
+    s.prev_prev_low = s.prev_low;
+    s.prev_high = high;
+    s.prev_low = low;
+    s.prev_close = close;
+    return sar;
+}
+
+double PineSar::compute(double high, double low, double close) {
+    saved_state_ = state_;
+    return step(high, low, close);
+}
+
+double PineSar::recompute(double high, double low, double close) {
+    state_ = saved_state_;
+    return step(high, low, close);
+}
+
+// --- TradingView's wording of a length error ---
+
+namespace {
+
+bool same_name(const char* a, const char* b) noexcept {
+    while (*a && *a == *b) {
+        ++a;
+        ++b;
+    }
+    return *a == *b;
+}
+
+// The calls whose error TradingView does not word with the signature's
+// argument name, the call's own function name and ">": the observation
+// documented at PineLengthWording. A function and argument are matched as
+// generated code spells them.
+struct LengthWordingRow {
+    const char* function;
+    const char* argument;
+    PineLengthWording shown;
+};
+constexpr LengthWordingRow kLengthWording[] = {
+    {"rsi", "length", {"", "rsi", "y", ">"}},
+    {"atr", "length", {"'atr'->", "rma", "length", ">"}},
+    {"vwma", "length", {"'vwma'->", "sma", "length", ">"}},
+    {"dmi", "diLength", {"", "dmi", "DI Length", ">"}},
+    {"dmi", "adxSmoothing", {"", "dmi", "ADX Smoothing", "greater than"}},
+};
+
+}  // namespace
+
+PineLengthWording pine_length_wording(const char* function, const char* argument) noexcept {
+    for (const LengthWordingRow& row : kLengthWording) {
+        if (same_name(function, row.function) && same_name(argument, row.argument)) {
+            return row.shown;
+        }
+    }
+    return PineLengthWording{"", function, argument, ">"};
+}
+
+// --- the length check of the checked fixed-length adapters ---
+
+// simple_ta_length's rules and coded failure for a double, with the text
+// worded as TradingView words it for the call (pine_length_wording). The
+// value is printed as length_not_positive prints it. simple_ta_length itself
+// does not come here: its text stays the one it always gave.
+int fixed_ta_length(double value, const char* function, const char* argument) {
+    long long length = 0;
+    const bool present = length_value(value, length);
+    if (present && length > 0) return length > INT_MAX ? INT_MAX : static_cast<int>(length);
+    const PineLengthWording tv = pine_length_wording(function, argument);
+    if (!present) {
+        throw coded<std::runtime_error>(
+            RunFailureCode::pine_invalid_argument,
+            {{"function", function},
+             {"argument", argument},
+             {"rule", "must_not_be_na"}},
+            run_error_bar_prefix() + "Invalid value of the '" + tv.argument +
+                "' argument in the " + tv.caller + "'" + tv.function +
+                "' function. It must not be na");
+    }
+    char shown[32];
+    std::snprintf(shown, sizeof shown, "%lld", length);
+    throw coded<std::runtime_error>(
+        RunFailureCode::pine_invalid_argument,
+        {{"function", function},
+         {"argument", argument},
+         {"rule", "must_be_positive"}},
+        run_error_bar_prefix() + "Invalid value of the '" + tv.argument +
+            "' argument (" + shown + ") in the " + tv.caller + "'" + tv.function +
+            "' function. It must be " + tv.relation + " 0.");
 }
 
 }  // namespace source

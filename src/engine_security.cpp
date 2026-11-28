@@ -102,8 +102,8 @@ void BacktestEngine::dispatch_security_eval(SecurityEvalState& state,
 bool BacktestEngine::native_fixed_security_clock(const SecurityEvalState& state) const {
     if (state.native_feed_index < 0 || !state.aggregator.supports_fixed_completion())
         return false;
-    const auto requested = tf_to_seconds(state.tf);
-    const auto input = tf_to_seconds(state.evaluator_input_tf);
+    const auto requested = internal::tf_to_clock_seconds(state.tf);
+    const auto input = internal::tf_to_clock_seconds(state.evaluator_input_tf);
     if (input > 0 && requested % input != 0) return true;
     // Fine input can divide the request while its observable chart does not.
     // Ordinary divisible and calendar subscriptions keep their old step.

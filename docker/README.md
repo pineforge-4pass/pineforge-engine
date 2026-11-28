@@ -249,15 +249,15 @@ completed; 1 means a failed run, harness fault or report that could not be
 written whole; 2 means argparse refused the command line or explicit request
 validation failed. The module describes failures and incomplete publication
 at `docker/run_json.py:117` and `docker/run_json.py:136`; `main()` describes
-its status contract at `docker/run_json.py:5406` and propagates typed failure
-statuses at `docker/run_json.py:5424` and `docker/run_json.py:5433`.
-The argparse error exits 2 at `docker/run_json.py:4668`; explicit sink-option
-refusals also use 2 at `docker/run_json.py:6147`. The standalone `csv2bin`
-refusal returns 2 at `docker/run_json.py:5392`, but the entrypoint never
+its status contract at `docker/run_json.py:5407` and propagates typed failure
+statuses at `docker/run_json.py:5425` and `docker/run_json.py:5434`.
+The argparse error exits 2 at `docker/run_json.py:4669`; explicit sink-option
+refusals also use 2 at `docker/run_json.py:6148`. The standalone `csv2bin`
+refusal returns 2 at `docker/run_json.py:5393`, but the entrypoint never
 selects that subcommand. `_host_main()` returns 1 on report-channel setup
-failure at `docker/run_json.py:8825`, propagates the run status at
-`docker/run_json.py:8858`, and the process exits through
-`sys.exit(_host_main())` at `docker/run_json.py:9814`.
+failure at `docker/run_json.py:8826`, propagates the run status at
+`docker/run_json.py:8859`, and the process exits through
+`sys.exit(_host_main())` at `docker/run_json.py:9819`.
 
 Statuses 3 (compile or bind failure) and 5 (transpile failure) are
 build-phase-only; the engine step never returns them. Status 4 is only the
@@ -572,13 +572,41 @@ library's `strategy_set_syminfo_*` setters.
   applies nothing: existing behaviour, report and fingerprint are unchanged.
   A library without `strategy_set_syminfo_metadata` fails with
   `strategy_library_incompatible`, as for `mincontract`.
-- Declaring this origin enables both chart EMA warmup (`ta.ema`, and the
-  embedded EMAs in `ta.macd`, `ta.kc` and `ta.tsi`: `na` for the first
-  `length - 1` inputs, then an SMA seed) and
-  `security_range_start_na_warmup`. `request.security` starts at the first
-  whole bucket opening at or after the origin; plain security expressions
-  stay `na` until the first completed higher-timeframe bar. The low-level
-  raw keys remain available; a raw key set afterwards wins for its context.
+- Declaring this origin enables `security_range_start_na_warmup`:
+  `request.security` starts at the first whole bucket opening at or after
+  the origin, plain security expressions stay `na` until the first completed
+  higher-timeframe bar, and an EMA inside a `request.security` expression is
+  `na` for its first `length - 1` inputs and then SMA-seeded. It also
+  switches the chart EMA warmup back on when a raw key had switched it off.
+  The low-level raw keys remain available; a raw key set afterwards wins for
+  its context.
+- The chart EMA warmup needs no declaration. With no metadata at all a chart
+  `ta.ema`, and the EMAs embedded in `ta.macd`, `ta.kc` and `ta.tsi`, follow
+  TradingView's rule: `na` until `length` inputs exist, then their simple
+  average, then the recursion. An input that is `na` is no input: that bar
+  answers `na`, the state is kept and the next input continues from it. The
+  rule holds wherever the script computes a chart EMA: in the per-bar
+  callback, and in the cache a generated strategy fills for its
+  constant-length top-level calls before the first bar of a batch run with
+  no named timeframe, no bar magnifier and no stream. Both give the same
+  series. It depends neither on `series_origin_ms` nor on the
+  `request.security` warmup.
+- The raw key `chart_ema_na_warmup` set to `0` through
+  `strategy_set_syminfo_metadata` switches that rule off on purpose: a chart
+  EMA then starts from its first input and is never `na`, as every run did
+  before the rule became the default. It is for a feed that starts later
+  than the series the reference ran on and should not wait `length` bars for
+  a value. The harness's `PINEFORGE_SYMINFO` does not carry the raw keys.
+- To declare the origin without the `request.security` warmup, set
+  `series_origin_ms` and then the raw key `security_range_start_na_warmup`
+  to `0` through `strategy_set_syminfo_metadata`: `request.security` is as
+  an undeclared run has it. The harness's `PINEFORGE_SYMINFO` applies
+  `series_origin_ms` only, so it always enables that warmup.
+  `scripts/run_strategy.py`, the corpus driver, declares a tape's first
+  computed bar this way when the tape's `metrics.json` records one
+  (`rangeProvenance.returnedRange.from`); a probe's own
+  `chart_ema_na_warmup`, `security_range_start_na_warmup` or
+  `series_origin_ms` wins, and the loaded feed is left as it is.
 - Applied metadata echoes `{"series_origin_ms": <v>}` in
   `applied_runtime.syminfo` and `fingerprint.provenance.runtime`. Once the
   first fed chart bar is known, it also carries `series_origin_first_bar_ms`
@@ -796,6 +824,9 @@ after the part written.
   parser rejects.
 - Exit status 1, or 2 for a command line argparse refuses (its usage still goes
   to stderr); the entrypoint maps both to 4.
+- If the image user cannot read the chart CSV, stderr names the mounted path
+  and the OS error. The failure on stdout is `chart_bars_unreadable` with
+  `reason: io`.
 
 The harness's own failures and their codes:
 

@@ -380,8 +380,8 @@ defined at `src/native_order.cpp:3375` omits kept-handle replacements and append
 root only when a newly issued definition has one. The 64-row RAM tail makes
 charging every issued row conservative. Partial closes create one trade
 row per affected lot: `src/engine_execution.cpp:1241`. Bracket definitions
-have limit, stop and trailing families; per-entry expansion is visible at
-`src/source/pine_adapter.cpp:26002`. A closed-trade count cannot bound
+have limit, stop and trailing families; each child is submitted by
+`submit_per_entry_child` at `src/source/pine_adapter.cpp:26026`. A closed-trade count cannot bound
 unfilled placement history or the replacement-root history.
 
 The ordered fold retains distinct-ever keys, including erased keys.

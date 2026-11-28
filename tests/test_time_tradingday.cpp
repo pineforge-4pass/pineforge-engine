@@ -104,6 +104,13 @@ static void test_nyse_rth_dst_transition_bar() {
     // Expected: 2024-03-10 09:30 EDT = 13:30 UTC
     int64_t expected = utc_ms(2024, 3, 10, 13, 30, 0);
     CHECK(td == expected);
+    // 00:30 was still on EST; 09:30 on the same date was already on EDT.
+    CHECK(session_trading_day_open_ms(bar, "0030-1600", "America/New_York")
+          == utc_ms(2024, 3, 10, 5, 30, 0));
+    // Monday 00:30 EDT is before the new session. Subtracting 24 elapsed
+    // hours would land on *Saturday* 23:30 EST and skip Sunday's open.
+    CHECK(session_trading_day_open_ms(utc_ms(2024, 3, 11, 4, 30, 0),
+                                      "0930-1600", "America/New_York") == expected);
 }
 
 static void test_havana_dst_spring_forward() {

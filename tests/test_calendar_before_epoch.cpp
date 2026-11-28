@@ -99,5 +99,52 @@ int main() {
     check_overflow("offset cache UTC midnight", [=] { return session_day_index(first, "Etc/GMT", "24x7"); });
     check_overflow("UTC week open", [=] { return timeframe_time(first, "W", "", "UTC", "15"); });
     check_overflow("UTC month open", [=] { return timeframe_time(first, "M", "", "UTC", "15"); });
+
+    // ONE rule at both ends and in every zone: a date, a clock value or a day boundary that is not
+    // a millisecond timestamp is refused with the coded EOVERFLOW; nothing wraps. The last UTC date
+    // is partial like the first (it has no noon to read the zone's offset at), a UTC day on it has
+    // no end, and Tokyo's day holding the first whole UTC date began before the first instant. A
+    // reading that needs none of these returns: that date's ordinal.
+    constexpr auto last = std::numeric_limits<std::int64_t>::max();
+    constexpr std::int64_t first_whole_date = -106751991167 * day;  // its 00:00 UTC
+    check_overflow("last date has no noon", [=] { return session_day_index(last, "Etc/GMT", "24x7"); });
+    check_overflow("UTC last date has no end", [=] { return tf_change(last - 1, last, "60"); });
+    check_overflow("Tokyo day opens before the first instant", [=] {
+        return tf_change(first_whole_date, first_whole_date + 1, "60", "Asia/Tokyo", "24x7");
+    });
+    check("first whole date ordinal", session_day_index(first_whole_date, "Asia/Tokyo", "24x7"),
+          -106751991167);
+
+    // EXPECTATION: engine behaviour, not a TradingView measurement.
+    // A zone at +12:00 or east of it reads its own local date, as every other zone does. Tuesday
+    // 2025-06-10 12:00 in Auckland (NZST) and in the fixed zone Etc/GMT-12 is 00:00 UTC of day
+    // 20249: the session day is 20249, the week opened on Monday 06-09 00:00 local and the month on
+    // 06-01 00:00 local. The offset cache this clock replaced dated these zones one day behind
+    // (20248), which opened their weeks on Tuesday (1749470400000) and their months on the 2nd.
+    for (const char* zone : {"Pacific/Auckland", "Etc/GMT-12"}) {
+        std::printf("local dates at +12:00 in %s\n", zone);
+        constexpr std::int64_t tuesday_noon = 20249 * day;
+        constexpr std::int64_t monday = 20248 * day - 12 * hour;         // 1749384000000
+        constexpr std::int64_t first_of_june = 20240 * day - 12 * hour;  // 1748692800000
+        check("session day", session_day_index(tuesday_noon, zone, "24x7"), 20249);
+        check("week open",
+              session_period_open_ms(tuesday_noon, zone, "24x7", CalendarPeriod::WEEK), monday);
+        check("month open",
+              session_period_open_ms(tuesday_noon, zone, "24x7", CalendarPeriod::MONTH),
+              first_of_june);
+        check("week changes on Monday",
+              crosses_boundary(monday - 1, monday + 1, CalendarPeriod::WEEK, zone, "24x7"), true);
+        check("week holds Tuesday's midnight",
+              crosses_boundary(monday + day - 1, monday + day + 1, CalendarPeriod::WEEK, zone, "24x7"),
+              false);
+        check("month changes on the 1st",
+              crosses_boundary(first_of_june - 1, first_of_june + 1, CalendarPeriod::MONTH, zone,
+                               "24x7"),
+              true);
+        check("month holds the 2nd's midnight",
+              crosses_boundary(first_of_june + day - 1, first_of_june + day + 1,
+                               CalendarPeriod::MONTH, zone, "24x7"),
+              false);
+    }
     return failures != 0;
 }

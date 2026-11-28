@@ -11,10 +11,10 @@
 #include <pineforge/run_failure.hpp>
 
 namespace pineforge {
-// ─── Day-length constants ──────────────────────────────────────────────────────
-
 inline constexpr int64_t kSecPerDay = 86400;
 inline constexpr int64_t kMsPerDay  = 86400000;
+// TradingView measured 2026-11-28: timeframe.in_seconds("1M") = 2628003, "2M" = 5256006, "12M" = 31536036.
+inline constexpr int kNominalSecondsPerMonth = 2628003;
 
 // ─── AggregatedBar ─────────────────────────────────────────────────────────────
 
@@ -33,12 +33,12 @@ struct FixedPeriodClock {
 };
 
 // ─── TF string helpers ─────────────────────────────────────────────────────────
-/// Convert a TradingView timeframe string to seconds.
-/// Minute-based: "1","5","15","30","60","120","240" => minutes * 60
-/// Day-based:    "D","1D" => 86400
-/// Week-based:   "W","1W" => 604800
-/// Month-based:  "M","1M" => -1 (calendar-based, not fixed seconds)
-/// Seconds past int: -1 (calendar-only) for a positive D/W count, else out_of_range.
+namespace internal { int tf_to_clock_seconds(const std::string& tf); }
+
+/// Convert a TradingView timeframe string to seconds. A bare count is minutes.
+/// The D, W and S suffixes count days, weeks and seconds.
+/// Month counts use kNominalSecondsPerMonth; invalid months return -1.
+/// Seconds past int: -1 for a positive D/W/M count, else out_of_range.
 int tf_to_seconds(const std::string& tf);
 
 /// Extract the numeric multiplier from a TF string (e.g. "15" -> 15, "D" -> 1).
@@ -58,12 +58,12 @@ inline int tf_multiplier(const std::string& tf) {
 }
 
 inline bool tf_is_intraday(const std::string& tf) {
-    int s = tf_to_seconds(tf);
+    int s = internal::tf_to_clock_seconds(tf);
     return s > 0 && s < kSecPerDay;
 }
 
 inline bool tf_is_daily(const std::string& tf) {
-    return tf.find('D') != std::string::npos || tf_to_seconds(tf) == kSecPerDay;
+    return tf.find('D') != std::string::npos || internal::tf_to_clock_seconds(tf) == kSecPerDay;
 }
 
 inline bool tf_is_weekly(const std::string& tf) {
@@ -151,8 +151,8 @@ bool tf_change(int64_t prev_ms, int64_t curr_ms, const std::string& tf,
 // stay Monday-partitioned and months calendar-partitioned exactly as before.
 // W/M opens are nominal (the Monday / 1st session-day); they do not consult
 // a holiday calendar.
-/// Ordinal of the session day containing `ms` (days since epoch on the
-/// session clock). UTC + no session: ms / kMsPerDay.
+/// Ordinal of the session day containing `ms` (days since epoch on the session clock: in a named zone
+/// its local date by the UTC date's noon offset, at +12:00 and east too). UTC + no session: ms / kMsPerDay.
 int64_t session_day_index(int64_t ms, const std::string& tz,
                           const std::string& session);
 
@@ -192,9 +192,9 @@ int64_t session_period_open_ms(int64_t ms, const std::string& tz,
 /// asserted to be a raw first input. Aggregators retain their actual first
 /// input separately and supply it to the shared writer for a stable prefix
 /// label. Neither a grid label nor first printed data defines a session origin.
-/// Legacy per-UTC-day timezone offsets remain in force; session-less DST
-/// transition edges can share a key with differing bounds across queries,
-/// and remain unmeasured against TradingView.
+/// This reader and the end reader resolve the day stamp and the session close at their own local times
+/// and count widths as elapsed time from it, also on a day whose clock skips or repeats an hour. In a named
+/// zone the aggregator, tf_change and the range-start cut keep one offset per UTC date (its noon's).
 int64_t session_intraday_bucket_open_ms(int64_t ms, int64_t bucket_sec,
                                         const std::string& tz,
                                         const std::string& session);
@@ -219,7 +219,7 @@ int64_t session_covered_instant_ms(int64_t ms, const std::string& tz,
                                    const std::string& session);
 
 /// Exclusive close (Unix ms) of the symbol's D/W/M bar that contains `ms`:
-/// DAY -> session-day open + session length (16:00 ET on equities, the next
+/// DAY -> the session's local closing time (16:00 ET on equities, the next
 /// 17:00 ET on forex, next midnight on 24x7); WEEK / MONTH -> the open of
 /// the next period's first session-day. CalendarPeriod::NONE returns `ms`.
 int64_t session_period_close_ms(int64_t ms, const std::string& tz,
@@ -716,6 +716,14 @@ namespace internal {
 /// Compare the intraday bucket keys of two known timestamps on the symbol clock.
 bool intraday_bucket_changes(int64_t prev_ms, int64_t curr_ms, int secs,
                              const std::string& tz, const std::string& session);
+
+/// Open (Unix ms) of the `bucket_sec`-wide intraday bucket holding `ms` on the clock the aggregator
+/// KEYS on: session_intraday_bucket_open_ms's grid, late day opens and point context, but in a named
+/// zone with one offset per UTC date (its noon's) instead of the civil stamp. It is the stamp-only
+/// form of TimeframeAggregator::bucket_open_ms. The request.security range-start cut reads it, so the
+/// bucket it drops or keeps is the bucket the aggregator builds, also on a clock-change date.
+int64_t aggregate_bucket_open_ms(int64_t ms, int64_t bucket_sec, const std::string& tz,
+                                 const std::string& session);
 } // namespace internal
 
 } // namespace pineforge

@@ -16,6 +16,12 @@ double Sum::compute(double src) {
         }
         return na<double>();
     }
+    // A length of zero or less has no window: no source enters it (the
+    // window sum takes a positive length only) and the value is na on every
+    // bar, as it already is above for a missing source.
+    if (length_ <= 0) {
+        return na<double>();
+    }
     double sum = window_.push(src);
     if (!window_.seeded()) {
         return na<double>();
@@ -32,6 +38,10 @@ double Sum::recompute(double src) {
         if (length_ > 0 && window_.seeded()) {
             return window_.sum();
         }
+        return na<double>();
+    }
+    // As in compute(): no replacement source enters a window of no length.
+    if (length_ <= 0) {
         return na<double>();
     }
     double sum = window_.repush(src);

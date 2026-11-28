@@ -1783,6 +1783,113 @@ void intraday_n_day_population() {
         }
     }
 }
+
+// timeframe.change(tf) in the spelling generated code gives it: a class-scope
+// tf_change over the opens of the previous and the current chart bar, on the
+// symbol's timezone and session. Synthetic bars and invented prices; the
+// expected pulses are worked by hand from the N-day rule, not replayed.
+class ChangeProbe final : public source::PineStrategyHost {
+public:
+    struct Row {
+        std::int64_t stamp;
+        double close;
+        bool first;
+        std::vector<int> changed; // One flag per requested timeframe.
+    };
+    std::vector<Row> rows;
+
+    explicit ChangeProbe(std::vector<std::string> timeframes)
+        : timeframes_(std::move(timeframes)) {
+        source::PineStrategyConfig config;
+        config.initial_capital = 1000000.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        configure_pine_strategy(config);
+    }
+
+    void on_source_bar(const Bar& bar) override {
+        Row row{bar.timestamp, bar.close, pine_bar_index() == 0, {}};
+        for (const auto& tf : timeframes_) {
+            row.changed.push_back(tf_change(prev_bar_timestamp_, current_bar_.timestamp, tf,
+                                            syminfo_.timezone, syminfo_.session) ? 1 : 0);
+        }
+        rows.push_back(std::move(row));
+    }
+
+private:
+    std::vector<std::string> timeframes_;
+};
+
+void run_change(ChangeProbe& probe, const std::vector<Bar>& bars, const std::string& tf) {
+    auto handle = static_cast<pf_strategy_t>(&probe);
+    strategy_set_syminfo_timezone(handle, "UTC");
+    strategy_set_syminfo_session(handle, "24x7");
+    probe.run(bars.data(), static_cast<int>(bars.size()), tf, tf, false, 4,
+              MagnifierDistribution::ENDPOINTS);
+    assert(probe.last_error().empty());
+    assert(probe.rows.size() == bars.size());
+}
+
+void timeframe_change_n_day_daily(const std::vector<Bar>& bars) {
+    // The plot of `bar_index == 0 ? 0 : timeframe.change(tf) ? close : 0` on
+    // six daily bars from the year's first trading date, closes 4..9. A 2D
+    // period holds two trading dates, so its pulse is on days 3 and 5 alone;
+    // a D period opens on every day.
+    {
+        std::vector<Bar> six;
+        for (int i = 0; i < 6; ++i) {
+            const double close = 4.0 + i;
+            six.push_back({close, close, close, close, 1.0, date(2024, 1, 1) + i * day});
+        }
+        ChangeProbe probe({"2D", "D"});
+        run_change(probe, six, "1D");
+        const std::vector<double> two_day{0.0, 0.0, 6.0, 0.0, 8.0, 0.0};
+        const std::vector<double> one_day{0.0, 5.0, 6.0, 7.0, 8.0, 9.0};
+        for (std::size_t i = 0; i < six.size(); ++i) {
+            const auto& row = probe.rows[i];
+            const auto plot = [&row](std::size_t column) {
+                return row.first ? 0.0 : row.changed[column] ? row.close : 0.0;
+            };
+            assert(plot(0) == two_day[i]);
+            assert(plot(1) == one_day[i]);
+        }
+    }
+    // Every daily bar of the fixture, across the turn of the year: the pulse
+    // is on the bars that open a period of the year-relative grid the N-day
+    // chart rows above are dated by. The year's last period is cut at its
+    // end, so for N = 2 both 31 December and 1 January open one.
+    for (const int n : {2, 3, 5}) {
+        const auto opens = grid(n);
+        ChangeProbe probe({std::to_string(n) + "D", "D"});
+        run_change(probe, bars, "1D");
+        for (std::size_t i = 0; i < bars.size(); ++i) {
+            const auto& row = probe.rows[i];
+            assert(row.stamp == bars[i].timestamp);
+            const bool opens_period = std::binary_search(opens.begin(), opens.end(), row.stamp);
+            assert(row.changed[0] == (i > 0 && opens_period ? 1 : 0));
+            assert(row.changed[1] == (i > 0 ? 1 : 0));
+        }
+    }
+}
+
+void timeframe_change_n_day_intraday() {
+    // Four-hour bars over the first four days of a year: a 2D period opens
+    // with the first bar of day 3 (day 1's is the run's first bar, which has
+    // no bar before it), a D period with the first bar of every later day.
+    std::vector<Bar> bars;
+    for (int i = 0; i < 24; ++i) {
+        const double close = 20.0 + i;
+        bars.push_back({close, close, close, close, 1.0, date(2024, 1, 1) + i * (day / 6)});
+    }
+    ChangeProbe probe({"2D", "D"});
+    run_change(probe, bars, "240");
+    for (std::size_t i = 0; i < bars.size(); ++i) {
+        const auto& row = probe.rows[i];
+        assert(row.stamp == bars[i].timestamp);
+        assert(row.changed[0] == (i == 12 ? 1 : 0));
+        assert(row.changed[1] == (i > 0 && i % 6 == 0 ? 1 : 0));
+    }
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1792,7 +1899,8 @@ int main(int argc, char** argv) {
     // expectation corrected: 22 -> 26, because four existing witnesses are selectable alone.
     // expectation corrected: 26 -> 27, because selector 27 checks auxiliary calendar routing.
     // expectation corrected: 27 -> 28, because selector 28 covers intraday N-day input.
-    assert(row >= 0 && row <= 28);
+    // expectation corrected: 28 -> 30, because selectors 29 and 30 check timeframe.change over N-day periods.
+    assert(row >= 0 && row <= 30);
     const auto bars = daily_bars();
     if (row <= 4) three_days(bars, row);
     if (row == 0 || row == 5) {
@@ -1822,4 +1930,6 @@ int main(int argc, char** argv) {
     if (row >= 23 && row <= 26) monthidx_monthly_witness(row);
     if (row == 0 || row == 27) auxiliary_calendar_feed_timeframe();
     if (row == 0 || row == 28) intraday_n_day_population();
+    if (row == 0 || row == 29) timeframe_change_n_day_daily(bars);
+    if (row == 0 || row == 30) timeframe_change_n_day_intraday();
 }

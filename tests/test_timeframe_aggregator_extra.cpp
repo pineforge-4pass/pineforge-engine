@@ -111,10 +111,10 @@ static void test_tf_change_intraday_bucket() {
 
 static void test_tf_change_secs_guard() {
     std::printf("test_tf_change_secs_guard\n");
-    // Bare "S" parses to 0 seconds (no canonical meaning) -> tf_to_seconds==0,
+    // Bare "S" has no canonical meaning and parses to 0 clock seconds,
     // so tf_change hits the `secs <= 0` guard and returns false even across an
     // otherwise large timestamp jump.
-    CHECK(tf_to_seconds("S") == 0);
+    CHECK(internal::tf_to_clock_seconds("S") == 0);
     CHECK(tf_change(MON_2024_01_15_00, THU_2024_02_01_00, "S") == false);
     // Empty string -> 0 seconds -> same guard.
     CHECK(tf_change(MON_2024_01_15_00, THU_2024_02_01_00, "") == false);

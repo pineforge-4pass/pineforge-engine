@@ -19678,7 +19678,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
                 && !config_.process_orders_on_close;
             if (true_flat_gap_scope
                 && fill_required > source.sizing.equity + float_guard
-                && !price_gap_affordable) {
+                && !price_gap_affordable && !level_sized_stop_fill_admits(source, view)) {
                 return NativePrecommitVerdict::Refuse;
             }
             if (source.family == PineOrderFamily::Entry
@@ -24808,7 +24808,7 @@ bool rested_stop_family(const PlacementSnapshot& row) noexcept {
         && std::isnan(row.exit_levels.trail_offset);
 }
 } // namespace
-
+static void rest_stop_entries_at_tick_reach(NativeStrategyHost&, const std::vector<native_order::RequestHandle>&, const PlacementTable&, const Bar&, bool, double); // defined at the end of this file
 void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionContext& context) {
     // The script bar this opening follows, before it is replaced below: a
     // short process_orders_on_close filled at its close is margined at that
@@ -24982,7 +24982,7 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
                 {definition.handle, NativeCurrentPriceRule::NearestTick});
         }
     }
-    retune_carried_trails_for_tick_reach(bar, context);
+    retune_carried_trails_for_tick_reach(bar, context); if (config_.calc_on_order_fills && has_live_family(PineOrderFamily::Entry) && modeled_input() && !context.driver_statistics.intrabar_path_enabled) rest_stop_entries_at_tick_reach(require_host(), live_handles_, placement_, bar, source_path_uses_high_first(bar), staged_.syminfo.mintick);
     // The C observer snapshots the ordinary flat two-stop arbitration at the
     // bar boundary, before either native request can fill or be declined.
     // COOF has its own callback scheduling and deliberately leaves this
@@ -33695,6 +33695,142 @@ bool PineExecutionAdapter::another_child_fills_on_leg(
         }
     }
     return reached;
+}
+
+// validate_precommit's true-flat gap check, for a default percent-of-equity
+// stop entry that fills at the level it was sized at (engine issue 1031);
+// kept after the adapter's cited implementation regions as the bodies above
+// are.
+//
+// Such an order is sized at its own level from the ten-significant-digit
+// money (default_sizing_cash, default_stop_sizing_price), so at that level it
+// costs no more than that money. Where the rounding raised the money above
+// the binary equity, the cost exceeds the equity by less than half a unit of
+// the tenth digit, and the gap check -- the cost against the binary equity
+// and a 1e-12 float guard -- refused the whole order. TradingView fills it
+// and calls the excess on the fill bar: 80000 units at a stop of 1.15625 cost
+// 92500 on a capital of 92499.9999999; it opens 80000 and closes 1 unit by
+// "Margin call" on that bar, keeping 79999, while a capital of 92500 or of
+// 92500.01 opens 80000 with no call.
+//
+// So that order is not refused for its money where the price-scale fill
+// check admits it (unified_fill_admits: sig10(sig10(E) / Q) is not below the
+// fill's tick): it fills whole, and the opening margin check takes the unit
+// (schedule_priced_opening_margin, source_margin_units). True only for the
+// measured shape: a commission-free long stop placed and filled from flat at
+// 100 % of equity and full margin, without slippage, calc_on_order_fills or
+// the bar magnifier, point value 1, no FX, a power-of-ten lot step of at most
+// one unit, no risk rule, filled on the tick it was sized at. A fill through
+// a gap, a short, a limit leg, a commission, slippage, another percentage or
+// margin are not measured and keep the gap check; so does an order the
+// price-scale check refuses.
+bool PineExecutionAdapter::level_sized_stop_fill_admits(
+        const PlacementSnapshot& source, const NativePrecommitView& view) const {
+    const double tick = staged_.syminfo.mintick;
+    if (source.family != PineOrderFamily::Entry || !source.is_long
+        || std::isfinite(source.requested_qty) || source.sizing.at_fill
+        || !finite_positive(source.exit_levels.stop) || finite_positive(source.exit_levels.limit)
+        || !source.oca_name.empty() || source.birth.from_fill() || !view.definition
+        || !std::holds_alternative<native_order::Stop>(view.definition->request.trigger)
+        || config_.default_qty_type != static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+        || config_.default_qty_value != 100.0 || config_.margin_long != 100.0
+        || config_.commission_value != 0.0 || config_.slippage != 0
+        || config_.pyramiding < 0 || config_.pyramiding > 1
+        || config_.process_orders_on_close || config_.calc_on_order_fills || bar_magnifier_
+        || !lot_grid_pinned_ || *staged_.quantity_grid > 1.0
+        || staged_.syminfo.pointvalue != 1.0 || source.sizing.fx != 1.0
+        || staged_.account_fx != 1.0 || !staged_.account_fx_effective_from_ms.empty()
+        || cap.active() || risk_.max_intraday_loss > 0.0 || risk_.max_drawdown > 0.0
+        || risk_.max_cons_loss_days > 0 || risk_.max_position_size > 0.0
+        || !finite_positive(tick) || !finite_positive(source.sizing.frozen_units)
+        || !finite_positive(source.sizing.price) || !std::isfinite(source.sizing.equity)
+        || !finite_positive(view.resolved_price)) {
+        return false;
+    }
+    // On the tick it was sized at: a fill through a gap keeps the gap check.
+    if (nearest_tick(view.resolved_price, tick) != nearest_tick(source.sizing.price, tick))
+        return false;
+    return unified_fill_admits(source, source.sizing.frozen_units, view.resolved_price);
+}
+
+// A calc_on_order_fills stop entry at a bar's opening (on_bar_open), engine
+// issues 1015 and 1007; kept after the adapter's cited implementation regions
+// as the bodies above are.
+//
+// TradingView tests a resting stop against the bar's open, high, low and
+// close rounded to the nearest tick. Without calc_on_order_fills entry()
+// rests a pure stop entry where that rounded bar reaches it
+// (source_trigger_threshold). With it the entry rests at its own level, and a
+// stop on the tick grid half a tick beyond a half-tick extreme never filled
+// (test_issue_1015_coof_stop_entry_tick_reach,
+// test_issue_1007_coof_revised_stop_tick_reach).
+//
+// This is the carried trail's rule (retune_carried_trails_for_tick_reach) for
+// the stop a bar's own calculation left resting. The bar's path is walked as
+// the kernel will walk it: only where the tick-built path reaches the stop at
+// an earlier point than the raw compare would (the open or an extreme within
+// half a tick of the level, whose tick is the level's) does the request rest
+// at the tick-built threshold from this opening, so the kernel's own compare
+// fires at that point. The source fill still books the level (resolve_terms).
+// On a bar whose raw path reaches the level no later, and so on every bar of
+// a feed that sits on the tick grid, nothing is replaced and the request is
+// the one entry() placed. A raw reach the tick-built path would not make
+// stays the kernel's, as no record decides it. A stop entry born in a fill
+// recalculation, strategy.order, a stop with a limit and an intrabar path are
+// left out, as no record covers them.
+static void rest_stop_entries_at_tick_reach(
+        NativeStrategyHost& host, const std::vector<native_order::RequestHandle>& live,
+        const PlacementTable& placement, const Bar& bar, bool high_first, double tick) {
+    if (!finite_positive(tick) || !finite_positive(bar.open) || !finite_positive(bar.high)
+        || !finite_positive(bar.low) || !finite_positive(bar.close)) {
+        return;
+    }
+    const double path[4] = {bar.open, high_first ? bar.high : bar.low,
+                            high_first ? bar.low : bar.high, bar.close};
+    // The tick-built threshold of a row this rule covers, on a bar whose
+    // tick-built path reaches it before the raw path reaches the level; NaN
+    // for every other row and bar.
+    const auto tick_reach = [&](const PlacementSnapshot& row) {
+        if (row.family != PineOrderFamily::Entry || row.projection_created_during_coof
+            || row.birth.from_fill()
+            || !finite_positive(row.exit_levels.stop) || finite_positive(row.exit_levels.limit)) {
+            return kNaN;
+        }
+        const double threshold = source_trigger_threshold(
+            row.exit_levels.stop, tick, row.is_long, false);
+        const auto first_point = [&](double trigger) {
+            int point = 0;
+            while (point < 4 && !(row.is_long ? path[point] >= trigger : path[point] <= trigger))
+                ++point;
+            return point;
+        };
+        return first_point(threshold) < first_point(row.exit_levels.stop) ? threshold : kNaN;
+    };
+    // Nothing is read from the kernel, and nothing allocated, on a bar that
+    // moves no stop.
+    if (!any_live_row(live, placement, [&](const PlacementSnapshot& row) {
+            return std::isfinite(tick_reach(row));
+        })) {
+        return;
+    }
+    native_order::ReplaceOptions keep;
+    keep.keep_handle = true;
+    keep.keep_binding = detail::carry_reissue_bindings();
+    for (const auto& working : host.native_working_requests()) {
+        const auto& definition = *working.definition;
+        const auto* stop = std::get_if<native_order::Stop>(&definition.request.trigger);
+        const auto found = placement.find(definition.handle.incarnation);
+        if (!stop || found == placement.end()) continue;
+        const double threshold = tick_reach(found->second);
+        // Only a stop still resting at the level entry() gave it is moved.
+        if (!std::isfinite(threshold)
+            || !same_double_bits(stop->price, found->second.exit_levels.stop)) {
+            continue;
+        }
+        native_order::Request request = definition.request;
+        request.trigger = native_order::Stop{threshold};
+        (void)host.replace(definition.handle, request, keep);
+    }
 }
 
 } // namespace pineforge::source
