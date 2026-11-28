@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
 
 import run_json
-from run_json_codes_test import assert_run_json_codes_catalogued
+from run_json_codes_test import assert_run_json_codes_catalogued, catalogued, fake_lib
 import test_run_json_sink as ordinary
 from test_run_json_sink import frozen  # noqa: F401
 
@@ -80,6 +81,73 @@ def test_default_route_on_tmpfs_tmpdir(tmp_path, monkeypatch, frozen, kind, sink
 
 def test_every_run_json_code_is_catalogued():
     assert_run_json_codes_catalogued()
+
+
+_SERIES_EXPORTS = ("pf_output_series_limit_set_checked", "pf_output_series_limit_failure")
+_MAP_EXPORT = "pf_map_pairs_limit_set_checked"
+_REPLAY_EXPORTS = ("strategy_net_profit_sum", "strategy_report_pointvalue",
+                   "strategy_initial_capital", "strategy_set_report_replay_v1")
+
+
+@pytest.mark.parametrize("missing", [*_SERIES_EXPORTS, _MAP_EXPORT, *_REPLAY_EXPORTS])
+def test_missing_optional_export_names_are_in_the_published_catalog(missing):
+    exports = (*_SERIES_EXPORTS, _MAP_EXPORT, *_REPLAY_EXPORTS)
+    lib = fake_lib(*(name for name in exports if name != missing),
+                   returns={_MAP_EXPORT: run_json.PF_SETTINGS_OK})
+    with pytest.raises(run_json.StrategyLibraryError) as refusal:
+        if missing in _REPLAY_EXPORTS:
+            run_json._ReplayCapture(lib, 7, SimpleNamespace(), None)
+        else:
+            run_json.create_strategy(lib, False, max_output_series=3, max_map_pairs=2)
+    assert refusal.value.code == "strategy_library_incompatible"
+    assert refusal.value.code_args == {"reason": "symbol_missing", "missing": missing}
+    assert catalogued(refusal.value.code, refusal.value.code_args)
+
+
+@pytest.mark.parametrize("has_setter", [False, True], ids=["legacy", "current"])
+@pytest.mark.parametrize("maximum", [None, 0, 17], ids=["omitted", "zero", "positive"])
+def test_map_limit_at_strategy_construction(has_setter, maximum):
+    applied = []
+
+    def set_limit(pointer, error, capacity):
+        applied.append(ctypes.cast(pointer, ctypes.POINTER(ctypes.c_int64))[0]
+                       if pointer is not None else None)
+        return run_json.PF_SETTINGS_OK
+
+    lib = fake_lib(impl={_MAP_EXPORT: set_limit} if has_setter else {})
+    if maximum and not has_setter:
+        with pytest.raises(run_json.StrategyLibraryError) as refusal:
+            run_json.create_strategy(lib, False, max_map_pairs=maximum)
+        assert refusal.value.code_args == {"reason": "symbol_missing", "missing": _MAP_EXPORT}
+        assert lib.names() == []
+    else:
+        assert run_json.create_strategy(lib, False, max_map_pairs=maximum) == 7
+        assert lib.names() == ([_MAP_EXPORT, "strategy_create", _MAP_EXPORT]
+                               if has_setter else ["strategy_create"])
+        assert applied == ([maximum or None, None] if has_setter else [])
+
+
+@pytest.mark.parametrize("option,label", [("limit-output-series", "series count"),
+                                           ("limit-map-pairs", "map-pair count")])
+@pytest.mark.parametrize("value", ["1.25", str(1 << 63), "9" * 5000],
+                         ids=["fraction", "overflow", "long-decimal"])
+def test_bad_decimal_limit_names_the_option_and_exits_two(capsys, option, label, value):
+    with pytest.raises(SystemExit) as stop:
+        run_json.main(["--so", "unused.so", "--ohlcv", "unused.csv", "--" + option, value])
+    out, err = capsys.readouterr()
+    assert stop.value.code == 2
+    document = json.loads(out)
+    assert document["code"] == "run_request_invalid"
+    assert document["args"] == {"option": option.replace("-", "_")}
+    assert catalogued(document["code"], document["args"])
+    assert f"argument --{option}: expected a nonnegative int64 {label}" in document["error"]
+    assert err.endswith(document["error"] + "\n")
+
+
+@pytest.mark.parametrize("convert", [run_json._output_series_count, run_json._map_pairs_count])
+def test_decimal_limits_use_the_value_after_leading_zeroes(convert):
+    for text, expected in (("0", 0), ("37", 37), ("0" * 5000 + str(2**63 - 1), 2**63 - 1)):
+        assert convert(text) == expected
 
 
 @pytest.mark.parametrize("mode", ["SUMMARY_ONLY", "STREAMED"])

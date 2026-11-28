@@ -379,14 +379,19 @@ class PrivateFixtureManifests(unittest.TestCase):
         # N7: with PINEFORGE_PRIVATE_FIXTURES set the overlay is in the tree,
         # so the preparer's absent-manifest answer is a failure even though it
         # carries the literal -- RED on the pre-fix code, which accepted it.
-        literal = 'SKIP private fixtures not present: ' + self.manifest('v18-frozen')
+        path = 'tests/invented/manifest.json'
+        literal = 'SKIP private fixtures not present: ' + path
+        pin = 'a1' * 20
         with tempfile.TemporaryDirectory() as temporary:
             build = Path(temporary)
-            with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': '1'}):
+            with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': pin}):
                 ok, out = self.prepare_with(build, returncode=77, stdout=literal)
         self.assertFalse(ok, out)
-        self.assertIn('refused: exit 77', out)
-        self.assertIn('the overlay did not reach this provider', out)
+        for role in skips.PROVIDER_ROLES:
+            refusal = next(line for line in out.splitlines() if f'{role}: refused: exit 77' in line)
+            self.assertIn(pin, refusal)
+            self.assertIn(path, refusal)
+        self.assertNotIn('did not reach', out)
         self.assertNotIn('skipped (exit 77)', out)
         # The same shape without the overlay stays the absent world's skip.
         with tempfile.TemporaryDirectory() as temporary:
