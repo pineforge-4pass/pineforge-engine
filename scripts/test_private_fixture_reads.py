@@ -974,6 +974,14 @@ class RowArgvControls(unittest.TestCase):
             ('--name=two words', '--label=made with Invented'),
             row_argv(statement, self.ROW, self.VALUES))
 
+    # an empty quoted argument is an argument: "" is kept as an empty string
+    # in its own place, not dropped, so what stands behind it stays where the
+    # registration puts it
+    def test_an_empty_quoted_argument_is_kept_as_an_argument(self):
+        statement = self.registration('""', '--after')
+        self.assertEqual(('', '--after'),
+                         row_argv(statement, self.ROW, self.VALUES))
+
     # an empty value is a value: its name is filled in with nothing, and the
     # argument is not refused as one whose value was not given
     def test_an_empty_value_fills_its_name_with_nothing(self):
@@ -1229,9 +1237,12 @@ class ExemptRowTraceControls(unittest.TestCase):
     # trees. A script that names neither gives the sweep nothing to exempt,
     # and the entry would go on covering whatever the script names later;
     # this control fails as soon as one of the two is gone.
-    # Each path is written in two parts here, as tests/test_kernel_python_
-    # population.py writes its own, so that the sweep reads no further
-    # private path in this file on account of the two it only looks for.
+    # Both paths are written whole here, and the kernel sweep reads them in
+    # this file as it reads any private path a script names. That is fine:
+    # this file's own row, test_private_fixture_reads_controls, is an exempt
+    # row of that sweep, and its entry names the two. They are needles: the
+    # control looks for each as a substring of the marker-rows script's text
+    # and never opens it.
     def test_a_row_registered_with_build_tree_values_is_traced_with_them(self):
         row = 'test_private_marker_rows_registration'
         scripts = self._exempt_scripts()
@@ -1242,8 +1253,8 @@ class ExemptRowTraceControls(unittest.TestCase):
                         f'{row}: the registration names no build-tree value, '
                         'so this control has lost its subject')
         text = script.read_text()
-        for payload in ('tests/' + 'fixtures/exit_binding/schedules.inc',
-                        'tests/' + 'fixtures/cross_side_exit/README.md'):
+        for payload in ('tests/fixtures/exit_binding/schedules.inc',
+                        'tests/fixtures/cross_side_exit/README.md'):
             # assertTrue, not assertIn: a failure must not print the script.
             self.assertTrue(
                 payload in text,
