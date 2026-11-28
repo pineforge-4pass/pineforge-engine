@@ -36,9 +36,12 @@ missing.
 from __future__ import annotations
 
 import argparse
+import ast
 import fnmatch
+import functools
 import re
 import sys
+import warnings
 from pathlib import Path
 from typing import NamedTuple
 
@@ -437,13 +440,277 @@ EXEMPT = {
         'command lines (a scratch source tree and a scratch build tree), '
         'not from the hook'),
 }
-GATED_BY_MODULE = re.compile(r'(?:return|Exit|exit)\s*\(?\s*77\b')
+# ---- a module's own gate, read from its syntax tree -------------------------
+# A module gates a private path it names when a guard that can run stands
+# before the read. The module is parsed with ast: a guard spelled inside a
+# string constant or a comment is not a statement and gates nothing.
+#
+# The guards (guard_form): `return 77`, `raise SystemExit(77)`, a call
+# statement `sys.exit(77)` / `exit(77)` / `os._exit(77)`, and `raise SkipTest`
+# (also as unittest.SkipTest(...)). The 77 is the literal: a name bound to 77
+# is not read. `skipUnless` gates as a decorator, on the function that names
+# the path or on a class or function around that function, written as a call
+# or as a module-level name bound to such a call.
+#
+# Reachable (first_guard): the guard is a statement of the scope's own flow,
+# at any depth under if / else / for / while / with / try / class. It does not
+# count behind a statement that always leaves its block (return, raise, break,
+# continue, an exit call, an `if` whose two branches both leave), in a branch
+# a constant test rules out (`if False:`, the else of `if True:`, `while 0:`),
+# or in the body of another def.
+#
+# Guards the read (read_gate), by the line that names the path:
+#   1. order: the guard is in an earlier statement of the block that holds
+#      the line, or of a block around it, in the function that names the path
+#      or in a scope around that function (a guard at module top level gates
+#      what the module defines after it). A guard behind the read does not
+#      count, nor one in a sibling branch. The test of the `if` whose branches
+#      hold the guard is the probe, and a path named there is gated;
+#   2. binding: where the line only binds the path to a name (an assignment
+#      whose value builds the path from operators, containers and a path
+#      builder such as Path(...)), nothing is opened there and the read is
+#      wherever the name goes. Names are not followed: the function that
+#      binds the path must hold a reachable guard, and for a module-level
+#      binding either the module top level does, or a module-level function
+#      the top level calls by name -- the settlement-ABI form (95c27eaff),
+#      `return 77` in main() under `raise SystemExit(main())`.
+# For the 77 forms the module must also hold the pinned literal in a string
+# constant, as before; whether the guard's own block prints it is not read.
+EXIT_CALLS = ('exit', '_exit')
+PATH_BUILDERS = ('Path', 'PurePath', 'PurePosixPath', 'joinpath', 'str')
+DEFS = (ast.FunctionDef, ast.AsyncFunctionDef)
 
 
-def module_gates_its_own_paths(text: str) -> bool:
-    """The module that names the path also carries the pinned literal and a
-    77 exit -- the settlement-ABI family's own gate (95c27eaff)."""
-    return SKIP_LITERAL in text and GATED_BY_MODULE.search(text) is not None
+class Gate(NamedTuple):
+    """Whether a module gates one private path it names, and why."""
+    guarded: bool
+    reason: str
+
+
+def callee(call) -> str:
+    """The last name of what a call calls: `exit` for sys.exit(...)."""
+    func = call.func
+    return func.attr if isinstance(func, ast.Attribute) else getattr(func, 'id', '')
+
+
+def is_skip_code(node) -> bool:
+    return isinstance(node, ast.Constant) and type(node.value) is int and node.value == 77
+
+
+def guard_form(stmt) -> str:
+    """The guard this one statement is, or ''."""
+    if isinstance(stmt, ast.Return) and is_skip_code(stmt.value):
+        return 'return 77'
+    if isinstance(stmt, ast.Raise) and stmt.exc is not None:
+        raised = stmt.exc.func if isinstance(stmt.exc, ast.Call) else stmt.exc
+        name = raised.attr if isinstance(raised, ast.Attribute) else getattr(raised, 'id', '')
+        if name == 'SkipTest':
+            return 'raise SkipTest'
+        if (name == 'SystemExit' and isinstance(stmt.exc, ast.Call)
+                and len(stmt.exc.args) == 1 and is_skip_code(stmt.exc.args[0])):
+            return 'raise SystemExit(77)'
+    if (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)
+            and callee(stmt.value) in EXIT_CALLS and len(stmt.value.args) == 1
+            and is_skip_code(stmt.value.args[0])):
+        return callee(stmt.value) + '(77)'
+    return ''
+
+
+def leaves(stmt) -> bool:
+    """The statement never hands over to the next statement of its block."""
+    if isinstance(stmt, (ast.Return, ast.Raise, ast.Continue, ast.Break)):
+        return True
+    if isinstance(stmt, ast.Expr):
+        return isinstance(stmt.value, ast.Call) and callee(stmt.value) in EXIT_CALLS
+    if isinstance(stmt, ast.If):
+        if isinstance(stmt.test, ast.Constant):
+            return any(map(leaves, stmt.body if stmt.test.value else stmt.orelse))
+        return any(map(leaves, stmt.body)) and any(map(leaves, stmt.orelse))
+    return False
+
+
+def sub_blocks(stmt) -> list:
+    """The blocks a compound statement runs in its own scope: a def's body is
+    another scope, and a branch a constant test rules out never runs."""
+    if isinstance(stmt, DEFS):
+        return []
+    if isinstance(stmt, (ast.If, ast.While)) and isinstance(stmt.test, ast.Constant):
+        blocks = [stmt.body] if stmt.test.value else []
+        if isinstance(stmt, ast.While) or not stmt.test.value:
+            blocks.append(stmt.orelse)
+    else:
+        blocks = [getattr(stmt, name, None) for name in ('body', 'orelse', 'finalbody')]
+        blocks += [handler.body for handler in getattr(stmt, 'handlers', ())]
+        blocks += [case.body for case in getattr(stmt, 'cases', ())]
+    return [block for block in blocks if block]
+
+
+def first_guard(block):
+    """The first guard a block can reach, as (form, line), or None."""
+    for stmt in block:
+        form = guard_form(stmt)
+        if form:
+            return form, stmt.lineno
+        for sub in sub_blocks(stmt):
+            found = first_guard(sub)
+            if found:
+                return found
+        if leaves(stmt):
+            break
+    return None
+
+
+def guard_before(block, line: int):
+    """Follow a scope's statements, in order, to the one that holds `line`.
+
+    Returns (guard, statement): the first guard anchored before the line, as
+    (form, line) or None, and the innermost statement of this scope that
+    holds the line (None for a line between statements, and when a guard was
+    found first).
+    """
+    live = True
+    for stmt in block:
+        if stmt.end_lineno < line:
+            if live:
+                found = first_guard([stmt])
+                if found:
+                    return found, None
+                live = not leaves(stmt)
+            continue
+        if stmt.lineno > line:
+            break
+        if (live and isinstance(stmt, ast.If)
+                and stmt.test.lineno <= line <= stmt.test.end_lineno):
+            for sub in sub_blocks(stmt):
+                found = first_guard(sub)
+                if found:
+                    return found, stmt
+        for sub in sub_blocks(stmt):
+            if sub[0].lineno <= line <= sub[-1].end_lineno:
+                return guard_before(sub, line)
+        return None, stmt
+    return None, None
+
+
+def binds_a_path(stmt, line: int) -> bool:
+    """The statement only binds a path to a name: every string constant on
+    `line` sits in the assigned value under nothing but operators, containers,
+    f-strings and the arguments of a path builder."""
+    if not isinstance(stmt, (ast.Assign, ast.AnnAssign)) or stmt.value is None:
+        return False
+    found = False
+    pending = [(stmt.value, True)]
+    while pending:
+        node, plain = pending.pop()
+        if isinstance(node, ast.Constant):
+            if isinstance(node.value, str) and node.lineno <= line <= node.end_lineno:
+                if not plain:
+                    return False
+                found = True
+        elif isinstance(node, ast.Call) and callee(node) in PATH_BUILDERS:
+            pending.append((node.func, False))
+            pending.extend((arg, plain) for arg in node.args)
+            pending.extend((keyword.value, False) for keyword in node.keywords)
+        else:
+            keeps = isinstance(node, (ast.BinOp, ast.Tuple, ast.List, ast.Set, ast.Dict,
+                                      ast.JoinedStr, ast.FormattedValue))
+            pending.extend((child, plain and keeps) for child in ast.iter_child_nodes(node))
+    return found
+
+
+def top_level_calls(block) -> set:
+    """The plain names a block's own flow calls: no def or class body, no
+    branch that cannot run, nothing behind a statement that always leaves."""
+    names = set()
+    for stmt in block:
+        if not isinstance(stmt, DEFS + (ast.ClassDef,)):
+            for sub in sub_blocks(stmt):
+                names |= top_level_calls(sub)
+            compound = isinstance(getattr(stmt, 'body', None), list) or hasattr(stmt, 'cases')
+            parts = ([child for child in ast.iter_child_nodes(stmt)
+                      if isinstance(child, ast.expr)] if compound else [stmt])
+            names |= {node.func.id for part in parts for node in ast.walk(part)
+                      if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+        if leaves(stmt):
+            break
+    return names
+
+
+@functools.lru_cache(maxsize=None)
+def parsed(text: str):
+    """The module's tree, its defs and classes, the names its top level binds
+    to a skipUnless(...) call, and whether a string constant holds the pinned
+    literal."""
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        tree = ast.parse(text)
+    nodes = list(ast.walk(tree))
+    around = [node for node in nodes if isinstance(node, DEFS + (ast.ClassDef,))]
+    aliases = frozenset(
+        target.id for stmt in tree.body
+        if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Call)
+        and callee(stmt.value) == 'skipUnless'
+        for target in stmt.targets if isinstance(target, ast.Name))
+    literal = any(isinstance(node, ast.Constant) and isinstance(node.value, str)
+                  and SKIP_LITERAL in node.value for node in nodes)
+    return tree, around, aliases, literal
+
+
+def read_gate(text: str, line: int) -> Gate:
+    """Whether the module `text` gates the private path it names at `line`,
+    and the guard that does or the reason none does. A module that does not
+    parse gates nothing."""
+    try:
+        tree, around, aliases, literal = parsed(text)
+    except (SyntaxError, ValueError, RecursionError) as error:
+        return Gate(False, 'the module does not parse, so no guard can be read '
+                           f'from it: {error}')
+
+    def gate(guard, where: str) -> Gate:
+        form, at = guard
+        if form != 'raise SkipTest' and not literal:
+            return Gate(False, f'{form} at line {at} {where}, but no string constant '
+                               f'of the module holds {SKIP_LITERAL!r}')
+        return Gate(True, f'{form} at line {at} {where}')
+
+    holders = sorted((node for node in around if node.lineno <= line <= node.end_lineno),
+                     key=lambda node: node.lineno)
+    functions = [node for node in holders if isinstance(node, DEFS)]
+    if functions:
+        for node in holders[:holders.index(functions[-1]) + 1]:
+            for decorator in node.decorator_list:
+                if (isinstance(decorator, ast.Call) and callee(decorator) == 'skipUnless'
+                        or isinstance(decorator, ast.Name) and decorator.id in aliases):
+                    return Gate(True, f'skipUnless on {node.name} (line {node.lineno})')
+    statement = None
+    for scope in [tree] + functions:
+        guard, statement = guard_before(scope.body, line)
+        if guard:
+            return gate(guard, 'before the read')
+    scope = functions[-1] if functions else tree
+    if statement is not None and binds_a_path(statement, line):
+        guard = first_guard(scope.body)
+        if guard:
+            return gate(guard, 'in the scope that binds the path to a name')
+        if scope is tree:
+            called = top_level_calls(tree.body)
+            for function in tree.body:
+                if isinstance(function, DEFS) and function.name in called:
+                    guard = first_guard(function.body)
+                    if guard:
+                        return gate(guard, f'in {function.name}(), which the module '
+                                           'top level runs')
+        return Gate(False, 'the path is bound to a name, and neither its scope nor a '
+                           'function the module top level runs holds a reachable guard')
+    return Gate(False, 'no reachable guard stands before the line that names the path')
+
+
+def module_gates_its_own_paths(text: str, line: int) -> bool:
+    """The module that names a private path at `line` reaches a guard before
+    it reads the path -- the settlement-ABI family's own gate (95c27eaff).
+    The guard is read from the module's syntax tree (read_gate): text in a
+    string constant or a comment is not a guard."""
+    return read_gate(text, line).guarded
 
 
 def has_skip_path(properties, closure) -> bool:
@@ -457,6 +724,28 @@ def has_skip_path(properties, closure) -> bool:
     if 'private fixtures not present' in properties.get('SKIP_REGULAR_EXPRESSION', ''):
         return True
     return any(('SkipTest' in text or 'skipUnless' in text) for text in texts)
+
+
+def admitted_by(name, properties, closure, source=None):
+    """The rule that admits one program of a row, and the reads its own
+    modules do not gate. The rules, in the order they are asked: 'no private
+    read', 'self-gating' (every read is gated by the module that names it),
+    'exempt' (the row's EXEMPT entry), 'skip path' (has_skip_path); None when
+    no rule admits the program. An inline program (`source`) has no module of
+    its own, so its reads are never self-gating."""
+    reads = private_reads(closure)
+    unguarded = [read for read in reads
+                 if read[0] == source
+                 or not module_gates_its_own_paths(closure[read[0]], read[1])]
+    if not reads:
+        return 'no private read', unguarded
+    if not unguarded:
+        return 'self-gating', unguarded
+    if name in EXEMPT:
+        return 'exempt', unguarded
+    if has_skip_path(properties, closure):
+        return 'skip path', unguarded
+    return None, unguarded
 
 
 def main() -> int:
@@ -495,23 +784,25 @@ def main() -> int:
                     errors.append(f'{source}:{cmd.line}: row {name}: {error}')
                     continue
                 programs_seen += 1
-                unguarded = [read for read in private_reads(closure)
-                             if read[0] == source or not module_gates_its_own_paths(closure[read[0]])]
-                if (unguarded and name not in EXEMPT
-                        and not has_skip_path(properties.get(name, {}), closure)):
+                rule, unguarded = admitted_by(name, properties.get(name, {}), closure, source)
+                if rule is None:
                     path, line, reference = unguarded[0]
                     if path == source:
+                        reason = 'an inline program has no module of its own'
                         line += program.line - 1
-                    offenders.append((name, (path, line, reference)))
+                    else:
+                        reason = read_gate(closure[path], line).reason
+                    offenders.append((name, (path, line, reference), reason))
         except UnknownCommand as error:
             name, message = error.args
             print(f'NOT COMPARED: {message}', file=sys.stderr)
             unknown_command |= '${' not in name
         except (OSError, SweepError) as error:
             errors.append(str(error))
-    for name, (path, line, reference) in offenders:
+    for name, (path, line, reference), reason in offenders:
         print(f'{name}: reads absent {reference} ({path}:{line}) '
               f'without printing {SKIP_LITERAL!r} and skipping')
+        print(f'{name}: {path}:{line} is not gated by its own module: {reason}')
     for name, reason in sorted(EXEMPT.items()):
         print(f'exempt: {name} -- {reason}')
     if not programs_seen and not errors:
@@ -520,7 +811,7 @@ def main() -> int:
         for error in errors:
             print(f'check_kernel_python_private_reads: NOT COMPARED: {error}', file=sys.stderr)
         return 2
-    count = len({name for name, _ in offenders})
+    count = len({name for name, *_ in offenders})
     print(f'kernel python rows reading an absent private file: {count}')
     return 1 if offenders else 0
 
