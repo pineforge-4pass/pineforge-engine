@@ -87,7 +87,7 @@ std::string run_throw(ThrowHarness& strat,
 }
 
 // 1. line ~191: LTF, requested TF == input (not finer, so reaches the
-//    input-passthrough block) while script_tf="M" -> tf_to_seconds("M")
+//    input-passthrough block) while script_tf="M" -> tf_to_clock_seconds("M")
 //    is -1 (calendar marker), so script_seconds <= 0 fires the
 //    "script timeframe is unknown" arm. run()'s ratio check sees
 //    tf_ratio("15","M") == -1 (calendar HTF) and does NOT throw early,

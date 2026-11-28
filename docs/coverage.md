@@ -769,10 +769,12 @@ Drawing objects are data in `drawing.hpp` (see the summary table); the runtime h
 ## Timeframes
 
 `tf_to_seconds(tf)` covers minute strings (`"1"`, `"5"`, `"60"`, `"240"`, …),
-day strings (`"D"`, `"1D"` → 86400), and week strings (`"W"`, `"1W"` →
-604800). Month (`"M"`, `"1M"`) and positive day or week counts whose seconds
-exceed `int` return `-1` to flag calendar mode. This flag is not a feed key:
-`"3551W"` and `"M"` can supply different prices.
+day strings (`"D"`, `"1D"` → 86400), week strings (`"W"`, `"1W"` → 604800),
+and second strings (`"1S"` → 1). A valid month count is multiplied by
+`kNominalSecondsPerMonth`, with `-1` if the result exceeds `int`. For its
+clocks, the engine returns `-1` for all months and for positive day or week
+counts whose seconds exceed `int`. This flag is not a feed key: `"3551W"`
+and `"M"` can supply different prices.
 `tf_multiplier`, `tf_is_intraday / _daily / _weekly / _monthly / _seconds`
 are inline string predicates.
 

@@ -498,8 +498,8 @@ public:
     void evaluate_security(int, const Bar& bar, bool) override {
         ++evaluated;
         evaluated_bars.push_back(bar);
-        latest = {bar, session_intraday_bucket_end_ms(
-            bar.timestamp, tf_to_seconds(requested), syminfo_.timezone, syminfo_.session), true};
+        latest = {bar, session_intraday_bucket_end_ms(bar.timestamp,
+            internal::tf_to_clock_seconds(requested), syminfo_.timezone, syminfo_.session), true};
         deliveries.push_back(current_request_delivery(0));
     }
     void clear_security(int) override { latest = {}; ++clears; }
