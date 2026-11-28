@@ -28,10 +28,11 @@ The population is every Python ctest row registered by tests/CMakeLists.txt
 (a superset of any one profile's rows, so the kernel profile cannot be missed
 by a row that registers only elsewhere). A "private path read" is a path under
 tests/fixtures/ or tests/oracle/ named by the script's own text -- as one
-literal ("tests/fixtures/...") or as the composition the tree writes them with
-("tests" / "fixtures" / "...") -- that the tree does not have. A path the tree
-HAS is not a private read: the sweep never flags a read it cannot prove is
-missing.
+quoted literal that starts with tests/fixtures/, or as the composition the tree
+writes them with ("tests" / "fixtures" / <name>) -- that the tree does not have.
+This docstring spells neither form in full, so the sweep's own text names no
+private path. A path the tree HAS is not a private read: the sweep never flags
+a read it cannot prove is missing.
 """
 from __future__ import annotations
 
