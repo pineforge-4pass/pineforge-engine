@@ -308,7 +308,7 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
         pine.last_published_label = calling_bar->timestamp;
         internal::AmbientEmaSeedingScope warmup_scope(
             NativeExecutionConsumer::bound(*this).pump_ambient(),
-            security_range_start_na_warmup_);
+            security_ema_na_warmup(state));
         dispatch_pine_request(state, *calling_bar, true,
                               state.eval_complete_count - 1, true);
     }
@@ -377,7 +377,7 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
                             pine.last_published_label = tail.bar.timestamp;
                             internal::AmbientEmaSeedingScope tail_warmup_scope(
                                 NativeExecutionConsumer::bound(*this).pump_ambient(),
-                                security_range_start_na_warmup_);
+                                security_ema_na_warmup(state));
                             const std::uint64_t prior_caller =
                                 pine.last_request_delivery.caller;
                             PineRequestCallerScope tail_scope(

@@ -98,7 +98,8 @@ void source::PineStrategyHost::register_security_eval(
     const std::string& evaluator_input_tf =
         security_input_tf_.empty() ? input_tf : security_input_tf_;
     // Match the kernel's parse condition. With no input yet, validation
-    // remains deferred; an empty request retains its existing passthrough.
+    // remains deferred; an empty request is registered as it is and names the
+    // chart's timeframe (validate_security_timeframes resolves it per run).
     if (!evaluator_input_tf.empty() && !requested_tf.empty()) {
         request_timeframe_seconds(requested_tf, false);
     }
@@ -392,6 +393,11 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
     // that invariant here.
     int input_seconds = internal::tf_to_clock_seconds(input_tf);
     int script_seconds = script_tf_seconds_;
+    // The host supplied bars finer than the chart (the auxiliary slice, or an
+    // input finer than the script TF): the evaluators are fed those bars, not
+    // the chart's.
+    const bool intrabar_bars_supplied = input_seconds > 0
+        && (script_seconds == -1 || input_seconds < script_seconds);
     for (auto& state : security_eval_states_) {
         PineSecurityEvalState& pine = pine_security_state(state.sec_id);
         pine.lower_tf_requested = false;
@@ -408,6 +414,21 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
         pine.first_bucket_published = false;
         pine.request_selection_enabled = false;
         pine.deferred_aux.clear();
+        // An empty request.security timeframe names the chart's timeframe:
+        // the requested series is the chart's, one requested bar per chart
+        // bar. Fed the chart's own bars, a passthrough of the input is that
+        // series and stays. Fed finer bars, a passthrough would evaluate the
+        // site on every one of them and each chart bar would read the last
+        // one inside it, so the site is served as the same request written
+        // with the chart's timeframe, by every rule below and after
+        // (aggregation, the chart's bars as its native feed, the range-start
+        // cut). request.security_lower_tf keeps its empty request: its
+        // lower-timeframe path refuses a timeframe that is not finer than
+        // the script's.
+        if (state.tf.empty() && intrabar_bars_supplied
+            && !pine.lower_tf_array_requested) {
+            state.tf = script_tf_;
+        }
         if (state.tf.empty()) continue;
 
         // Deferred requests must also be checked before the emulation
@@ -442,8 +463,6 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
                 // bar of the requested timeframe (see no_loaded_bars). A chart
                 // fed without intrabar bars keeps the refusal below, which
                 // asks its host for finer bars.
-                const bool intrabar_bars_supplied = input_seconds > 0
-                    && (script_seconds == -1 || input_seconds < script_seconds);
                 if (intrabar_bars_supplied) {
                     pine.no_loaded_bars = true;
                     continue;
@@ -613,7 +632,7 @@ void source::PineStrategyHost::publish_security_eval_state_at_calling_boundary(
     // Its EMA must latch the requested seed even on that first recomputation.
     internal::AmbientEmaSeedingScope warmup(
         NativeExecutionConsumer::bound(*this).pump_ambient(),
-        security_range_start_na_warmup_);
+        security_ema_na_warmup(state));
     dispatch_pine_request(
         state, state.current_bar, true,
         state.ta_bar_index >= 0 ? state.ta_bar_index : state.eval_complete_count,
@@ -786,7 +805,7 @@ void source::PineStrategyHost::pine_drain_native_fixed_security(
         std::int64_t input_ms, std::int64_t next_input_ms) {
     auto& pine = pine_security_state(state.sec_id);
     internal::AmbientEmaSeedingScope warmup(
-        NativeExecutionConsumer::bound(*this).pump_ambient(), security_range_start_na_warmup_);
+        NativeExecutionConsumer::bound(*this).pump_ambient(), security_ema_na_warmup(state));
     while (auto completed = next_native_fixed_security_bar(
                state, horizon_ms, input_ms, next_input_ms)) {
         Bar bar = completed->bar;
@@ -848,7 +867,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
     //       COMPLETED HTF bar from the range start — a consequence of (a): under
     //       lookahead_off no evaluate_security() fires until that first whole
     //       bucket completes; a bucket straddling the range start never counts.
-    // All three collapse to no-ops when the flag is unset (byte-identical).
+    // Flag unset: the default cut keeps (a), and security_ema_na_warmup (b), on a split-feed run.
     if (security_input_precedes_range_start(state, input_bar.timestamp)) {
         return;
     }
@@ -859,7 +878,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
     // On the pump's runtime block when it has one (the per-pump state cache).
     internal::AmbientEmaSeedingScope _na_warmup_scope(
         NativeExecutionConsumer::bound(*this).pump_ambient(),
-        security_range_start_na_warmup_);
+        security_ema_na_warmup(state));
 
     // Heikin-Ashi same-symbol read: replace an aggregated bar's OHLC with its
     // HA candle before evaluating the security expression. The completed
@@ -2259,6 +2278,34 @@ bool source::PineStrategyHost::set_symbol_feed_borrowed(
     refresh_symbol_data_digest();
     clear_run_failure(*this);
     return true;
+}
+
+// Whether a ta.ema inside this evaluator's request.security expression warms
+// up as TradingView's built-in does: na for its first length - 1 requested
+// bars, then their simple average, then the recursion. True under
+// security_range_start_na_warmup_, and for every evaluator whose requested
+// series the default cut of security_input_precedes_range_start starts at the
+// run's first chart bar (security_first_chart_bar_ms_): a request feed is
+// attached and the requested timeframe is the chart's or coarser. No bar
+// precedes the first bar of such a series, so no earlier value can have
+// seeded its EMA. Every other evaluator keeps the seed from its first
+// requested value.
+bool source::PineStrategyHost::security_ema_na_warmup(
+        const SecurityEvalState& state) const {
+    if (security_range_start_na_warmup_) return true;
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    // The same evaluators as the default cut's.
+    const PineSecurityEvalState& pine = pine_security_state(state.sec_id);
+    if (security_first_chart_bar_ms_ <= 0 || !aux_security_feed_enabled()
+        || pine.lower_tf_requested || pine.lower_tf_array_requested
+        || script_tf_seconds_ <= 0) {
+        return false;
+    }
+    const int requested_seconds = safe_tf_to_clock_seconds(state.tf);
+    return requested_seconds == -1 || requested_seconds >= script_tf_seconds_;
+#else
+    return false;
+#endif
 }
 
 }  // namespace pineforge

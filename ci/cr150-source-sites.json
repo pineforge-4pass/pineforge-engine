@@ -45873,6 +45873,19 @@
   },
   {
    "file": "src/source/pine_security_eval.cpp",
+   "symbol": "tf",
+   "scope": [
+    "namespace pineforge #1",
+    "void source :: PineStrategyHost :: validate_security_timeframes ( const std :: string & input_tf ) #1",
+    "for ( auto & state : security_eval_states_ ) #1",
+    "if ( state . tf . empty ( ) && intrabar_bars_supplied && ! pine . lower_tf_array_requested ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "tf = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_security_eval.cpp",
    "symbol": "std::to_string",
    "scope": [
     "namespace pineforge #1",
