@@ -4519,9 +4519,9 @@ MAGNIFIER_FEED_SHA256_ENV = "PINEFORGE_RUN_MAGNIFIER_FEED_SHA256"
 
 
 def _tf_seconds(tf: str) -> int:
-    """tf_to_seconds (src/timeframe.cpp) for a Pine timeframe string: minutes
-    for a bare number, n * 86400 / 604800 for "nD" / "nW", n for "nS", -1 for a
-    calendar month ("nM"), 0 for an empty or unreadable string."""
+    """Seconds for feed scheduling, using the engine clock convention.
+    A bare count means minutes; D, W and S count days, weeks and seconds.
+    Months use -1; empty or unreadable strings use 0."""
     tf = str(tf or "").strip()
     if not tf:
         return 0

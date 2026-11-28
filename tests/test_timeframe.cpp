@@ -56,6 +56,9 @@ static void test_tf_to_seconds() {
     CHECK(tf_to_seconds("M")   == kNominalSecondsPerMonth);
     CHECK(tf_to_seconds("2M")  == 2 * kNominalSecondsPerMonth);
     CHECK(tf_to_seconds("12M") == 12 * kNominalSecondsPerMonth);
+    CHECK(kNominalSecondsPerMonth == 2628003);  // TradingView: in_seconds("1M") = 2628003 (2026-11-28)
+    CHECK(tf_to_seconds("2M")  == 5256006);
+    CHECK(tf_to_seconds("12M") == 31536036);
 }
 
 static void test_tf_ratio() {
@@ -135,12 +138,12 @@ static void test_tf_to_seconds_int_overflow() {
     CHECK(seconds_refused("-35791395"));
     // Weeks.
     CHECK(tf_to_seconds("3550W") == 2147040000);
-    CHECK(tf_to_seconds("3551W") == -1);
+    CHECK(internal::tf_to_clock_seconds("3551W") == -1);
     CHECK(tf_to_seconds("-3550W") == -2147040000);
     CHECK(seconds_refused("-3551W"));
     // Days: the existing guard; a negative count past the int.
     CHECK(tf_to_seconds("24855D") == 2147472000);
-    CHECK(tf_to_seconds("24856D") == -1);
+    CHECK(internal::tf_to_clock_seconds("24856D") == -1);
     CHECK(tf_to_seconds("-24855D") == -2147472000);
     CHECK(seconds_refused("-24856D"));
     // tf_ratio: a minute target past the int is refused, never read as a

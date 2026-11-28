@@ -108,7 +108,7 @@ int timeframe_seconds(int count, int unit_seconds, const std::string& tf) {
 
 }  // namespace
 
-int tf_to_seconds(const std::string& tf) {
+int internal::tf_to_clock_seconds(const std::string& tf) {  // Months use the calendar marker.
     if (tf.empty()) return 0;
 
     // Check for trailing letter
@@ -153,8 +153,8 @@ int tf_to_seconds(const std::string& tf) {
 }
 
 int tf_ratio(const std::string& input_tf, const std::string& target_tf) {
-    int input_s = tf_to_seconds(input_tf);
-    int target_s = tf_to_seconds(target_tf);
+    int input_s = internal::tf_to_clock_seconds(input_tf);
+    int target_s = internal::tf_to_clock_seconds(target_tf);
 
     // Calendar-only durations include a day or week count too large for the
     // legacy seconds API (-1). Equal day literals, and equal calendar-only
@@ -1129,7 +1129,7 @@ bool tf_change(int64_t prev_ms, int64_t curr_ms, const std::string& tf,
     if (period != CalendarPeriod::NONE) {
         return crosses_boundary(prev_ms, curr_ms, period, tz, session);
     }
-    int secs = tf_to_seconds(tf);
+    int secs = internal::tf_to_clock_seconds(tf);
     if (secs <= 0) return false;
     return internal::intraday_bucket_changes(prev_ms, curr_ms, secs, tz, session);
 }
@@ -1166,14 +1166,14 @@ TimeframeAggregator::TimeframeAggregator(const std::string& target_tf,
         if (r > 0) {
             mode_ = Mode::RATIO;
             ratio_ = r;
-            target_seconds_ = tf_to_seconds(target_tf);
+            target_seconds_ = internal::tf_to_clock_seconds(target_tf);
         } else {
             // Fallback to passthrough on error
             mode_ = Mode::PASSTHROUGH;
             ratio_ = 1;
         }
     }
-    int in_s = tf_to_seconds(input_tf);
+    int in_s = internal::tf_to_clock_seconds(input_tf);
     if (in_s > 0) input_seconds_ = in_s;
 }
 
@@ -2324,6 +2324,15 @@ static int64_t calendar_key_clock_ms(int64_t ms, const std::string& tz, const st
 int64_t internal::aggregate_bucket_open_ms(int64_t ms, int64_t bucket_sec, const std::string& tz,
                                            const std::string& session) {
     return intraday_bucket_open_ms(ms, bucket_sec, tz, session, chart_late_day_opens(tz, session), ms);
+}
+
+int tf_to_seconds(const std::string& tf) {
+    if (!tf_is_monthly(tf)) return internal::tf_to_clock_seconds(tf);
+
+    const auto month = native_calendar::parse_timeframe(tf);
+    if (!month || month->count() > std::numeric_limits<int>::max() / kNominalSecondsPerMonth)
+        return -1;
+    return month->count() * kNominalSecondsPerMonth;
 }
 
 } // namespace pineforge
