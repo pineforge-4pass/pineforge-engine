@@ -412,15 +412,58 @@ class CorpusInputBinding(unittest.TestCase):
     def test_plain_image_request_keeps_the_chart_io_failure(self):
         failure = {"engine": "pineforge", "error": "--ohlcv: /in/ohlcv.csv: Permission denied",
                    "code": "chart_bars_unreadable", "args": {"reason": "io"}}
+        image_id, container = "sha256:" + "a" * 64, "b" * 64
+        # The release image runs as a UID with no group, so the runner reads the
+        # container's /etc/passwd for that account's primary group.
+        accounts = b"pineforge:x:10001:10001::/home/pineforge:/bin/sh\n"
+        with io.BytesIO() as stream:
+            with tarfile.open(fileobj=stream, mode="w") as archive:
+                member = tarfile.TarInfo("passwd")
+                member.size = len(accounts)
+                archive.addfile(member, io.BytesIO(accounts))
+            passwd = stream.getvalue()
+
+        def answer(returncode, stdout, stderr=""):
+            return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+
+        # One answer per docker call of a plain image request, in the order the
+        # runner makes them. As with real Docker, the create prints a container
+        # ID and only the start carries the engine's failure report.
+        answers = [
+            (["docker", "create"], answer(0, container + "\n")),
+            (["docker", "container", "inspect", "--format", "{{.Image}}", container],
+             answer(0, image_id + "\n")),
+            (["docker", "image", "inspect", image_id],
+             answer(0, json.dumps([{"Id": image_id, "Config": {"User": "10001"}}]))),
+            (["docker", "cp", "-L", f"{container}:/etc/passwd", "-"], answer(0, passwd, b"")),
+            (["docker", "cp", "-a", "-", f"{container}:/"], answer(0, b"", b"")),
+            (["docker", "start", "-a", container],
+             answer(4, json.dumps(failure) + "\n", "[pineforge] backtest failed\n")),
+            (["docker", "rm", "-f", "-v", container], answer(0, container + "\n")),
+        ]
+        calls = []
+
+        def docker(argv, **_options):
+            for command, response in answers:
+                if argv[:len(command)] == command:
+                    calls.append((argv, response.returncode))
+                    return response
+            self.fail(f"docker call with no answer: {argv}")
+
         with tempfile.TemporaryDirectory() as temporary:
             source, feed = Path(temporary) / "generated.cpp", Path(temporary) / "feed.csv"
             source.write_bytes(b"// source\n")
             feed.write_bytes(b"chart\n")
-            process = SimpleNamespace(returncode=4, stdout=json.dumps(failure) + "\n",
-                                      stderr="[pineforge] backtest failed\n")
-            with mock.patch.object(release.subprocess, "run", return_value=process):
+            with mock.patch.object(release.subprocess, "run", side_effect=docker):
                 with self.assertRaises(release.ReleaseRunError) as raised:
                     release.run_release(source, feed, inputs={}, image="selected-image")
+            sent = [argv for argv, _ in calls]
+            # Calls two to seven, argv for argv; the create ends with the plain image.
+            self.assertEqual(sent[1:], [command for command, _ in answers[1:]])
+            self.assertEqual(sent[0][:2] + sent[0][-1:], ["docker", "create", "selected-image"])
+            # The start is the docker call that failed, and the only one.
+            self.assertEqual([argv for argv, returncode in calls if returncode],
+                             [["docker", "start", "-a", container]])
             self.assertEqual(raised.exception.report, failure)
             self.assertIn(failure["error"], str(raised.exception))
 
