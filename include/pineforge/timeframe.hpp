@@ -11,6 +11,9 @@
 #include <pineforge/run_failure.hpp>
 
 namespace pineforge {
+
+// A TradingView reading will confirm whether a month is 2628000 or 2628003 seconds.
+inline constexpr int kNominalSecondsPerMonth = 2628000;
 // ─── Day-length constants ──────────────────────────────────────────────────────
 
 inline constexpr int64_t kSecPerDay = 86400;

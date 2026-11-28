@@ -48,8 +48,14 @@ static void test_tf_to_seconds() {
     CHECK(tf_to_seconds("1D")  == 86400);
     CHECK(tf_to_seconds("W")   == 604800);
     CHECK(tf_to_seconds("1W")  == 604800);
-    CHECK(tf_to_seconds("M")   == -1);    // calendar-based
-    CHECK(tf_to_seconds("1M")  == -1);
+    CHECK(tf_to_seconds("1S")  == 1);
+    // expectation corrected: -1 -> kNominalSecondsPerMonth, because the
+    // conversion reports a nominal duration for a month.
+    const double one_month = tf_to_seconds("1M");
+    CHECK(std::isfinite(one_month) && one_month > 0 && one_month == kNominalSecondsPerMonth);
+    CHECK(tf_to_seconds("M")   == kNominalSecondsPerMonth);
+    CHECK(tf_to_seconds("2M")  == 2 * kNominalSecondsPerMonth);
+    CHECK(tf_to_seconds("12M") == 12 * kNominalSecondsPerMonth);
 }
 
 static void test_tf_ratio() {
@@ -110,8 +116,8 @@ static bool seconds_refused(const char* tf) {
 }
 
 // A count the parser admits whose seconds do not fit the int this API
-// returns. Minutes take the refusal of a count past int; a day or week count
-// is calendar-only (-1), like M; a negative count past the int is refused.
+// returns. Minutes take the refusal of a count past int; a positive calendar
+// count whose seconds exceed int returns -1. A negative overflow is refused.
 // The last count that fits keeps its exact seconds.
 static void test_tf_to_seconds_int_overflow() {
     std::printf("test_tf_to_seconds_int_overflow\n");
