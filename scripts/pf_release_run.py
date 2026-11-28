@@ -7,14 +7,15 @@ drivers.
 The image is a PURE RUNNER: it transpiles/compiles/runs and emits raw JSON.
 ALL analysis (tv emit-window, trade trimming, CSV formatting, parity verdict,
 speed median/ratio) stays host-side in the caller. This helper only:
-  - mounts the pre-transpiled generated.cpp (NEVER re-transpiles .pine — the
+  - hands over the pre-transpiled generated.cpp (NEVER re-transpiles .pine — the
     bundled codegen may differ from the one that produced the committed cpp),
-  - mounts the OHLCV (caller pre-trims for ohlcv_start_ms),
+  - hands over the OHLCV (caller pre-trims for ohlcv_start_ms),
   - maps already-resolved/normalized run knobs to the container's env contract
     (docker/entrypoint.sh), incl. the validation-parity knobs,
   - for raw corpus params, builds once and reads that module's settings receipt
     before binding input values and starting the engine command,
-  - copies staged inputs into the container as files owned by the image user,
+  - copies every input into the container (no host bind mount) as files the
+    image user owns and can read, whatever the host umask is,
   - starts the container, parses stdout JSON, surfaces errors.
 
 The caller is responsible for normalization the image does NOT do (e.g. mapping
@@ -41,7 +42,13 @@ DEFAULT_IMAGE = os.environ.get(
 # An older installed producer could ignore BUILD_ONLY and execute bars.
 _BUILD_ONLY_ENTRYPOINT_SHA256 = "680160eae62aca428de3e4aab418aa59be8d9c46287034092f4dbb888c9517d6"
 _CORPUS_DIRECTORY = PurePosixPath("/pf-corpus-request")
+_STRATEGY_PATH = PurePosixPath("/in/strategy.cpp")
+_OHLCV_PATH = PurePosixPath("/in/ohlcv.csv")
 _SYMINFO_PATH = PurePosixPath("/in/syminfo.json")
+# Fixed tar modes: never a host file's mode and never the host umask. The
+# other-read bits keep the inputs readable when Docker leaves another owner.
+_STAGED_FILE_MODE = 0o644
+_STAGED_DIRECTORY_MODE = 0o755
 _IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
 
 
@@ -323,15 +330,17 @@ def _corpus_helper_files(params: dict) -> dict[PurePosixPath, bytes]:
 def _staged_archive(files: dict[PurePosixPath, bytes], uid: int, gid: int) -> bytes:
     with io.BytesIO() as stream:
         with tarfile.open(fileobj=stream, mode="w") as archive:
-            # /in is already part of the image; leave its owner and mode alone.
-            if any(path.parent == _CORPUS_DIRECTORY for path in files):
-                directory = tarfile.TarInfo(str(_CORPUS_DIRECTORY.relative_to("/")))
-                directory.uid, directory.gid, directory.mode = uid, gid, 0o500
+            # Each directory, /in included, is an entry of its own, so the image
+            # user can search it whatever owner and mode the image gave it.
+            for parent in dict.fromkeys(path.parent for path in files):
+                directory = tarfile.TarInfo(str(parent.relative_to("/")))
+                directory.uid, directory.gid = uid, gid
+                directory.mode = _STAGED_DIRECTORY_MODE
                 directory.type = tarfile.DIRTYPE
                 archive.addfile(directory)
             for path, data in files.items():
                 member = tarfile.TarInfo(str(path.relative_to("/")))
-                member.uid, member.gid, member.mode = uid, gid, 0o400
+                member.uid, member.gid, member.mode = uid, gid, _STAGED_FILE_MODE
                 member.size = len(data)
                 archive.addfile(member, io.BytesIO(data))
         return stream.getvalue()
@@ -365,7 +374,8 @@ def _run_with_staged_inputs(cmd: list[str], config: dict | None,
         if config is None:
             config = _container_image_config(container)
         uid, gid = _image_owner(container, config)
-        # -a keeps the archive's numeric owners during extraction.
+        # Docker extracts as root; only -a keeps the archive's numeric owners.
+        # The modes travel in the archive either way.
         copied = subprocess.run(["docker", "cp", "-a", "-", f"{container}:/"],
                                 input=_staged_archive(files, uid, gid), capture_output=True)
         if copied.returncode:
@@ -408,10 +418,12 @@ def run_release(
 ) -> dict:
     """Run one strategy in the container; return the parsed JSON report dict.
 
-    ``generated_cpp`` is mounted as /in/strategy.cpp (compile + run, no
-    transpile). ``ohlcv`` is mounted as /in/ohlcv.csv. ``syminfo`` (a dict) is
-    copied into the container as JSON. Knob values must already be resolved
-    by the caller (e.g. magnifier_dist lowercased + not 'VOLUME_WEIGHTED').
+    ``generated_cpp`` is copied into the container as /in/strategy.cpp (compile
+    + run, no transpile), ``ohlcv`` as /in/ohlcv.csv and ``syminfo`` (a dict)
+    as JSON. Nothing is bind-mounted from the host, so the host files' owner
+    and mode never decide what the image user can read. Knob values must
+    already be resolved by the caller (e.g. magnifier_dist lowercased + not
+    'VOLUME_WEIGHTED').
 
     ``corpus_params`` requests metadata/input classification using the actual
     compiled module's pre-execution settings receipt. It is exclusive with
@@ -428,18 +440,17 @@ def run_release(
     if not ohlcv.exists():
         raise ReleaseRunError(f"ohlcv not found: {ohlcv}")
 
-    staged = corpus_params is not None or bool(syminfo)
-    cmd = ["docker", "create"] if staged else ["docker", "run", "--rm"]
+    cmd = ["docker", "create"]
     if not network:
         cmd += ["--network=none"]
-    cmd += [
-        "-v", f"{generated_cpp}:/in/strategy.cpp:ro",
-        "-v", f"{ohlcv}:/in/ohlcv.csv:ro",
-    ]
+    # A bind mount would show the image user the host file under the host's
+    # owner and mode (0600 under umask 077). Copy the bytes in instead.
+    source = generated_cpp.read_bytes()
+    files = {_STRATEGY_PATH: source, _OHLCV_PATH: ohlcv.read_bytes()}
 
     env = {
         # The release harness generated this file itself; vouch for exactly these bytes.
-        "PINEFORGE_STRATEGY_CPP_SHA256": hashlib.sha256(generated_cpp.read_bytes()).hexdigest(),
+        "PINEFORGE_STRATEGY_CPP_SHA256": hashlib.sha256(source).hexdigest(),
         "PINEFORGE_INPUTS": json.dumps(inputs or {}),
         "PINEFORGE_OVERRIDES": json.dumps(overrides or {}),
         "PINEFORGE_INPUT_TF": input_tf or "",
@@ -467,25 +478,21 @@ def run_release(
     for k, v in env.items():
         cmd += ["-e", f"{k}={v}"]
 
-    if staged:
-        files = {}
-        config = None
-        if syminfo:
-            files[_SYMINFO_PATH] = json.dumps(syminfo).encode("utf-8")
-        if corpus_params is not None:
-            files.update(_corpus_helper_files(corpus_params))
-            identity, command, config = _image_command(image)
-            # Stage Python classification only. Inside the pinned image,
-            # verify the installed script against the source pin before invoking
-            # the exact Config.Entrypoint + Config.Cmd, with its ordinary cwd/env.
-            cmd += ["--entrypoint", "python3", identity,
-                    str(_CORPUS_DIRECTORY / "pf_release_run.py"), json.dumps(command),
-                    str(_CORPUS_DIRECTORY / "corpus-params.json")]
-        else:
-            cmd += [image]
-        proc = _run_with_staged_inputs(cmd, config, files)
+    config = None
+    if syminfo:
+        files[_SYMINFO_PATH] = json.dumps(syminfo).encode("utf-8")
+    if corpus_params is not None:
+        files.update(_corpus_helper_files(corpus_params))
+        identity, command, config = _image_command(image)
+        # Stage Python classification only. Inside the pinned image,
+        # verify the installed script against the source pin before invoking
+        # the exact Config.Entrypoint + Config.Cmd, with its ordinary cwd/env.
+        cmd += ["--entrypoint", "python3", identity,
+                str(_CORPUS_DIRECTORY / "pf_release_run.py"), json.dumps(command),
+                str(_CORPUS_DIRECTORY / "corpus-params.json")]
     else:
-        proc = subprocess.run([*cmd, image], capture_output=True, text=True)
+        cmd += [image]
+    proc = _run_with_staged_inputs(cmd, config, files)
 
     requested_keys = _runner_syminfo_keys(syminfo)
     reader_protocol = "pineforge: runner syminfo protocol=1"
